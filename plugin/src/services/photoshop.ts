@@ -160,3 +160,55 @@ export async function purgeColorSmashArtifacts(): Promise<number> {
 }
 
 export { action, app };
+
+// Write a .cube file into the plugin's data folder. Returns the path + raw bytes — Color Lookup
+// batchPlay needs both (file path for display + inline bytes as Uint8Array).
+export async function writeLutFile(text: string, filename = "color-smash.cube"): Promise<{ path: string; bytes: Uint8Array }> {
+  const uxp = require("uxp");
+  const fs = uxp.storage.localFileSystem;
+  const dataFolder = await fs.getDataFolder();
+  const file = await dataFolder.createFile(filename, { overwrite: true });
+  await file.write(text, { format: uxp.storage.formats.utf8 });
+  return { path: file.nativePath, bytes: stringToUtf8(text) };
+}
+
+function stringToUtf8(s: string): Uint8Array {
+  // Cube files are pure ASCII, so charCodeAt is safe and fast.
+  const out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i) & 0x7f;
+  return out;
+}
+
+// Create a Color Lookup adjustment layer, then set it with the inline LUT bytes.
+// Targets the new layer by ID to avoid ambiguity in `targetEnum`.
+export async function createColorLookupLayer(cube: { path: string; bytes: Uint8Array }, name = "Color Smash LUT"): Promise<any> {
+  const doc = getActiveDoc();
+
+  await action.batchPlay([{
+    _obj: "make",
+    _target: [{ _ref: "adjustmentLayer" }],
+    using: { _obj: "adjustmentLayer", type: { _obj: "colorLookup" }, name },
+  }], {});
+
+  const newLayer = doc.activeLayers?.[0] ?? doc.layers[0];
+  if (!newLayer) throw new Error("Could not locate newly created Color Lookup layer.");
+
+  const setResult = await action.batchPlay([{
+    _obj: "set",
+    _target: [{ _ref: "adjustmentLayer", _id: newLayer.id }],
+    to: {
+      _obj: "colorLookup",
+      lookupType: { _enum: "colorLookupType", _value: "3DLUT" },
+      LUTFormat: { _enum: "LUTFormatType", _value: "LUTFormatCUBE" },
+      dataOrder: { _enum: "colorLookupOrder", _value: "rgbOrder" },
+      tableOrder: { _enum: "colorLookupOrder", _value: "bgrOrder" },
+      LUT3DFileName: cube.path,
+      LUT3DFileData: cube.bytes.buffer,
+      name: cube.path,
+      dither: true,
+    },
+  }], {});
+  // Surface what PS returned for diagnostics.
+  console.log("ColorSmash set result:", JSON.stringify(setResult));
+  return newLayer;
+}

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { applyTransfer } from "../app/applyTransfer";
+import { applyAsLut } from "../app/applyAsLut";
 import { runRoundTrip } from "../app/runRoundTrip";
 import { exportCube } from "../app/exportCube";
 import { useLayers } from "./useLayers";
@@ -43,19 +44,27 @@ export function Panel() {
     }
   }, [layers]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const buildWeights = () => ({
+    amount: amountRef.current / 100,
+    luminance: lumRef.current / 100,
+    chroma: chromaRef.current / 100,
+    neutralize: neutRef.current / 100,
+  });
+
   const onApply = async () => {
     if (sourceId == null || targetId == null) { setStatus("Pick layers."); return; }
     setStatus("Running...");
     try {
-      const msg = await applyTransfer({
-        sourceLayerId: sourceId, targetLayerId: targetId,
-        weights: {
-          amount: amountRef.current / 100,
-          luminance: lumRef.current / 100,
-          chroma: chromaRef.current / 100,
-          neutralize: neutRef.current / 100,
-        },
-      });
+      const msg = await applyTransfer({ sourceLayerId: sourceId, targetLayerId: targetId, weights: buildWeights() });
+      setStatus(msg);
+    } catch (e) { setStatus(`Error: ${(e as Error).message}`); }
+  };
+
+  const onApplyLut = async () => {
+    if (sourceId == null || targetId == null) { setStatus("Pick layers."); return; }
+    setStatus("Building LUT...");
+    try {
+      const msg = await applyAsLut({ sourceLayerId: sourceId, targetLayerId: targetId, weights: buildWeights() });
       setStatus(msg);
     } catch (e) { setStatus(`Error: ${(e as Error).message}`); }
   };
@@ -71,13 +80,7 @@ export function Panel() {
     setStatus("Building LUT...");
     try {
       const msg = await exportCube({
-        sourceLayerId: sourceId, targetLayerId: targetId, size: 33,
-        weights: {
-          amount: amountRef.current / 100,
-          luminance: lumRef.current / 100,
-          chroma: chromaRef.current / 100,
-          neutralize: neutRef.current / 100,
-        },
+        sourceLayerId: sourceId, targetLayerId: targetId, size: 33, weights: buildWeights(),
       });
       setStatus(msg);
     } catch (e) { setStatus(`Error: ${(e as Error).message}`); }
@@ -115,7 +118,8 @@ export function Panel() {
       <Slider label="Color Int." defaultValue={100} valueRef={chromaRef} />
       <Slider label="Neutralize" defaultValue={0} valueRef={neutRef} />
 
-      <button onClick={onApply} style={btn}>Apply</button>
+      <button onClick={onApplyLut} style={btn}>Apply (LUT layer)</button>
+      <button onClick={onApply} style={btnSecondary}>Apply (baked pixels)</button>
       <button onClick={onExportCube} style={btnSecondary}>Export .cube (33³)</button>
       <button onClick={onRoundTrip} style={btnSecondary}>Debug round-trip</button>
 
