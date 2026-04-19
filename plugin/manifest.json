@@ -24,7 +24,7 @@
     }
   ],
   "requiredPermissions": {
-    "localFileSystem": "plugin"
+    "localFileSystem": "request"
   },
   "icons": [
     { "width": 23, "height": 23, "path": "icons/icon-light.png", "scale": [1, 2], "theme": ["lightest", "light", "medium"] },

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { applyTransfer } from "../app/applyTransfer";
 import { runRoundTrip } from "../app/runRoundTrip";
+import { exportCube } from "../app/exportCube";
 import { useLayers } from "./useLayers";
 
 // Plain HTML only — no Spectrum components. Live label updates via DOM ref (no React re-render).
@@ -65,6 +66,23 @@ export function Panel() {
     catch (e) { setStatus(`Error: ${(e as Error).message}`); }
   };
 
+  const onExportCube = async () => {
+    if (sourceId == null || targetId == null) { setStatus("Pick layers."); return; }
+    setStatus("Building LUT...");
+    try {
+      const msg = await exportCube({
+        sourceLayerId: sourceId, targetLayerId: targetId, size: 33,
+        weights: {
+          amount: amountRef.current / 100,
+          luminance: lumRef.current / 100,
+          chroma: chromaRef.current / 100,
+          neutralize: neutRef.current / 100,
+        },
+      });
+      setStatus(msg);
+    } catch (e) { setStatus(`Error: ${(e as Error).message}`); }
+  };
+
   const row: React.CSSProperties = { display: "flex", alignItems: "center", gap: 6, marginBottom: 6, fontSize: 11 };
   const lbl: React.CSSProperties = { width: 64, opacity: 0.7, flexShrink: 0 };
   const sel: React.CSSProperties = { flex: 1, padding: "2px 4px", fontSize: 11, minWidth: 0, background: "#333", color: "#ddd", border: "1px solid #555" };
@@ -98,6 +116,7 @@ export function Panel() {
       <Slider label="Neutralize" defaultValue={0} valueRef={neutRef} />
 
       <button onClick={onApply} style={btn}>Apply</button>
+      <button onClick={onExportCube} style={btnSecondary}>Export .cube (33³)</button>
       <button onClick={onRoundTrip} style={btnSecondary}>Debug round-trip</button>
 
       <div style={{ marginTop: "auto", fontSize: 10, opacity: 0.7, whiteSpace: "pre-wrap" }}>{status}</div>
