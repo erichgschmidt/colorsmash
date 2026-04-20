@@ -273,6 +273,31 @@ export async function makeChannelMixerLayer(
   return doc.activeLayers?.[0] ?? doc.layers[0];
 }
 
+// Set the Blend If "underlying" splits on a layer. The four values are the four positions of
+// the split sliders in 0..255: black-min (full-gated below), black-max (full-effect from), white-min
+// (full-effect to), white-max (full-gated above). Standard PS Blend If trapezoid.
+export async function setLayerBlendIf(
+  layer: any,
+  underlying: { blackMin: number; blackMax: number; whiteMin: number; whiteMax: number },
+): Promise<void> {
+  const u = underlying;
+  await action.batchPlay([{
+    _obj: "set",
+    _target: [{ _ref: "layer", _id: layer.id }],
+    to: {
+      _obj: "layer",
+      blendRange: [{
+        _obj: "blendRange",
+        channel: { _ref: "channel", _enum: "channel", _value: "gray" },
+        srcBlackMin: 0, srcBlackMax: 0,
+        srcWhiteMin: 255, srcWhiteMax: 255,
+        destBlackMin: u.blackMin, destBlackMax: u.blackMax,
+        destWhiteMin: u.whiteMin, destWhiteMax: u.whiteMax,
+      }],
+    },
+  }], {});
+}
+
 export async function makeHueSatLayer(name: string, master: { saturation: number; hue?: number; lightness?: number }): Promise<any> {
   const doc = getActiveDoc();
   await action.batchPlay([{

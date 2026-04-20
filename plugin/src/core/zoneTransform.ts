@@ -3,12 +3,17 @@
 // applied in HSL space.
 
 export interface ZoneState {
-  hue: number;        // -180..180
-  sat: number;        // -100..100
-  lift: number;       // -100..100  (output offset at the zone's L midpoint, scaled to ±0.4)
-  rangeStart: number; // 0..100 (full-effect start, in % luma)
-  rangeEnd: number;   // 0..100 (full-effect end)
-  feather: number;    // 0..50  (transition width on both sides, in % luma)
+  hue: number;          // -180..180
+  sat: number;          // -100..100
+  lift: number;         // -100..100  (output offset at the zone's L midpoint, scaled to ±0.4)
+  tintR: number;        // 0..255 — RGB tint applied within zone, mixed by tintAmount
+  tintG: number;
+  tintB: number;
+  tintAmount: number;   // 0..100 — how much of the tint color to mix in
+  rangeStart: number;   // 0..100 (full-effect start, in % luma)
+  rangeEnd: number;     // 0..100 (full-effect end)
+  featherLeft: number;  // 0..100 (transition width on the low side)
+  featherRight: number; // 0..100 (transition width on the high side)
 }
 
 export interface ZonesState {
@@ -47,14 +52,15 @@ function hslToRgb(h: number, s: number, l: number) {
   return { r: hue2(p, q, h + 1/3), g: hue2(p, q, h), b: hue2(p, q, h - 1/3) };
 }
 
-// Trapezoidal weight: 0 outside range±feather, 1 inside [start, end], linear ramp on both edges.
+// Trapezoidal weight: 0 outside [a-fL, b+fR], 1 inside [a, b], linear ramp on each edge.
 function zoneWeight(L100: number, z: ZoneState): number {
   const a = Math.min(z.rangeStart, z.rangeEnd);
   const b = Math.max(z.rangeStart, z.rangeEnd);
-  const f = Math.max(0, z.feather);
-  if (L100 < a - f || L100 > b + f) return 0;
-  if (L100 < a) return f === 0 ? 1 : (L100 - (a - f)) / f;
-  if (L100 > b) return f === 0 ? 1 : ((b + f) - L100) / f;
+  const fL = Math.max(0, z.featherLeft);
+  const fR = Math.max(0, z.featherRight);
+  if (L100 < a - fL || L100 > b + fR) return 0;
+  if (L100 < a) return fL === 0 ? 1 : (L100 - (a - fL)) / fL;
+  if (L100 > b) return fR === 0 ? 1 : ((b + fR) - L100) / fR;
   return 1;
 }
 
@@ -65,8 +71,21 @@ function applyZone(input: { r: number; g: number; b: number }, z: ZoneState, w: 
   if (hsl.h < 0) hsl.h += 1;
   hsl.s = clamp01(hsl.s * (1 + (z.sat / 100) * w));
   hsl.l = clamp01(hsl.l + (z.lift / 100) * 0.4 * w);
-  const out = hslToRgb(hsl.h, hsl.s, hsl.l);
-  // Blend by w so partially-weighted zones soften their effect.
+  let out = hslToRgb(hsl.h, hsl.s, hsl.l);
+  // Tint: mix toward the picked color by tintAmount * weight, preserving original luma so the
+  // tint colors a pixel without dragging it lighter/darker.
+  if (z.tintAmount > 0) {
+    const tA = (z.tintAmount / 100) * w;
+    const tR = z.tintR / 255, tG = z.tintG / 255, tB = z.tintB / 255;
+    const Lo = 0.2126 * out.r + 0.7152 * out.g + 0.0722 * out.b;
+    const Lt = 0.2126 * tR  + 0.7152 * tG  + 0.0722 * tB;
+    const k = Lt > 1e-6 ? Lo / Lt : 1; // scale tint to match luma
+    out = {
+      r: clamp01(out.r * (1 - tA) + tR * k * tA),
+      g: clamp01(out.g * (1 - tA) + tG * k * tA),
+      b: clamp01(out.b * (1 - tA) + tB * k * tA),
+    };
+  }
   return {
     r: input.r * (1 - w) + out.r * w,
     g: input.g * (1 - w) + out.g * w,
