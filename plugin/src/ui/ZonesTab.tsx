@@ -6,7 +6,7 @@ import { applyZones, type ZonesState, type ZoneState } from "../core/zoneTransfo
 import { useTargetPreview } from "./useTargetPreview";
 import { bakeZones } from "../app/bakeZones";
 import { MultiThumbSlider, type ZoneKey, ZONE_COLORS } from "./MultiThumbSlider";
-import { rgbaToBmpDataUrl } from "./encodeBmp";
+import { rgbaToPngDataUrl } from "./encodePng";
 
 const DEFAULT_ZONE: ZoneState = {
   hue: 0, sat: 0, lift: 0,
@@ -49,7 +49,7 @@ export function ZonesTab() {
       const img = imgRef.current;
       if (!img || !preview) return;
       const transformed = applyZones(preview.data, zonesRef.current);
-      img.src = rgbaToBmpDataUrl(transformed, preview.width, preview.height);
+      img.src = rgbaToPngDataUrl(transformed, preview.width, preview.height);
     });
   };
 
