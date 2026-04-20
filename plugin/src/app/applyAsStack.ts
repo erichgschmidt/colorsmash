@@ -13,6 +13,7 @@ import {
 import { computeLabStats, TransferWeights } from "../core/reinhard";
 import { downsampleToMaxEdge } from "../core/downsample";
 import { mapToStack } from "../core/reinhardToStack";
+import { fitStack } from "../core/stackFitter";
 
 const STATS_MAX_EDGE = 512;
 
@@ -39,7 +40,9 @@ export async function applyAsStack(params: ApplyAsStackParams): Promise<string> 
     };
   }).catch((e: any) => { throw new Error(e?.message ?? String(e)); });
 
-  const stack = mapToStack(stats.src, stats.tgt, params.weights);
+  const initial = mapToStack(stats.src, stats.tgt, params.weights);
+  const fit = fitStack(initial, stats.src, stats.tgt, params.weights);
+  const stack = fit.params;
 
   return executeAsModal("Color Smash build stack", async () => {
     const doc = getActiveDoc();
@@ -63,6 +66,6 @@ export async function applyAsStack(params: ApplyAsStackParams): Promise<string> 
     const cv = await makeCurvesLayer("Luminance", [{ channel: "composite", points: stack.curvesMaster }]);
     await cv.move(group, "placeInside");
 
-    return `Stack built (4 layers): L${stack.curvesMaster.map(p => `${p.input}→${p.output}`).join(",")} | sat ${stack.hueSat.saturation}`;
+    return `Stack fitted: ΔE ${fit.before.toFixed(2)} → ${fit.after.toFixed(2)} (${fit.iters} iters) | sat ${stack.hueSat.saturation}`;
   }).catch((e: any) => `Error: ${e?.message ?? e}`);
 }
