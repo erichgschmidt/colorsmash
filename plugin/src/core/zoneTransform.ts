@@ -67,27 +67,16 @@ export function liftCurvePoints(z: ZoneState) {
 }
 
 function applyCurve(input: number, points: { input: number; output: number }[]): number {
-  // Cubic Hermite interpolation (Catmull-Rom tangents) — closer to PS's Curves spline
-  // than linear interp. Falls back to linear at the endpoints.
+  // Piecewise linear interp. PS's Curves spline differs but doesn't overshoot like a free-tangent
+  // cubic does on sparse anchor points; linear is a closer fit on average.
   const sorted = [...points].sort((a, b) => a.input - b.input);
   if (input <= sorted[0].input) return sorted[0].output;
   if (input >= sorted[sorted.length - 1].input) return sorted[sorted.length - 1].output;
   for (let i = 0; i < sorted.length - 1; i++) {
-    const p1 = sorted[i], p2 = sorted[i + 1];
-    if (input >= p1.input && input <= p2.input) {
-      const p0 = i > 0 ? sorted[i - 1] : p1;
-      const p3 = i < sorted.length - 2 ? sorted[i + 2] : p2;
-      const dx = p2.input - p1.input;
-      if (dx < 1e-9) return p1.output;
-      const t = (input - p1.input) / dx;
-      // Catmull-Rom tangents (scaled to parameter space).
-      const m1 = (p2.output - p0.output) / Math.max(1e-9, p2.input - p0.input) * dx;
-      const m2 = (p3.output - p1.output) / Math.max(1e-9, p3.input - p1.input) * dx;
-      const h00 = 2 * t * t * t - 3 * t * t + 1;
-      const h10 = t * t * t - 2 * t * t + t;
-      const h01 = -2 * t * t * t + 3 * t * t;
-      const h11 = t * t * t - t * t;
-      return h00 * p1.output + h10 * m1 + h01 * p2.output + h11 * m2;
+    const a = sorted[i], b = sorted[i + 1];
+    if (input >= a.input && input <= b.input) {
+      const t = (input - a.input) / Math.max(1e-9, b.input - a.input);
+      return a.output + t * (b.output - a.output);
     }
   }
   return input;

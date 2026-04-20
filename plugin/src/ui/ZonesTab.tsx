@@ -6,6 +6,7 @@ import { applyZones, type ZonesState, type ZoneState } from "../core/zoneTransfo
 import { useTargetPreview } from "./useTargetPreview";
 import { bakeZones } from "../app/bakeZones";
 import { MultiThumbSlider, type ZoneKey, ZONE_COLORS } from "./MultiThumbSlider";
+import { TonalZonesSlider, type TonalBounds, boundsToRanges } from "./TonalZonesSlider";
 import { rgbaToPngDataUrl } from "./encodePng";
 
 const DEFAULT_ZONE: ZoneState = {
@@ -13,32 +14,33 @@ const DEFAULT_ZONE: ZoneState = {
   tintR: 128, tintG: 128, tintB: 128, tintAmount: 0,
   rangeStart: 0, rangeEnd: 100, featherLeft: 15, featherRight: 15,
 };
-const DEFAULTS: ZonesState = {
-  shadows:    { ...DEFAULT_ZONE, rangeStart: 0,  rangeEnd: 35 },
-  midtones:   { ...DEFAULT_ZONE, rangeStart: 25, rangeEnd: 75 },
-  highlights: { ...DEFAULT_ZONE, rangeStart: 65, rangeEnd: 100 },
-};
 
 interface FieldSpec {
   key: keyof ZoneState; label: string; min: number; max: number;
-  cascade?: boolean;
-  reversed?: boolean;
-  highlightKind?: "range" | "featherL" | "featherR";
 }
+// Per-zone parameters only — range/feather now live in the unified TonalZonesSlider.
 const FIELDS: FieldSpec[] = [
-  { key: "hue",          label: "Hue",       min: -180, max: 180 },
-  { key: "sat",          label: "Sat",       min: -100, max: 100 },
-  { key: "lift",         label: "Lift",      min: -100, max: 100 },
-  { key: "tintAmount",   label: "Tint mix",  min: 0,    max: 100 },
-  { key: "rangeStart",   label: "Range L",   min: 0,    max: 100, cascade: true, highlightKind: "range" },
-  { key: "rangeEnd",     label: "Range R",   min: 0,    max: 100, cascade: true, highlightKind: "range" },
-  { key: "featherLeft",  label: "Feather L", min: 0,    max: 100, highlightKind: "featherL" },
-  { key: "featherRight", label: "Feather R", min: 0,    max: 100, reversed: true, highlightKind: "featherR" },
+  { key: "hue",        label: "Hue",      min: -180, max: 180 },
+  { key: "sat",        label: "Sat",      min: -100, max: 100 },
+  { key: "lift",       label: "Lift",     min: -100, max: 100 },
+  { key: "tintAmount", label: "Tint mix", min: 0,    max: 100 },
 ];
+
+const DEFAULT_BOUNDS: TonalBounds = { t1: 25, t2: 40, t3: 60, t4: 75 };
+
+function applyBoundsToDefaults(b: TonalBounds): ZonesState {
+  const ranges = boundsToRanges(b);
+  return {
+    shadows:    { ...DEFAULT_ZONE, ...ranges.shadows },
+    midtones:   { ...DEFAULT_ZONE, ...ranges.midtones },
+    highlights: { ...DEFAULT_ZONE, ...ranges.highlights },
+  };
+}
 
 export function ZonesTab() {
   const { snap: preview, refresh: refreshPreview, error: previewError } = useTargetPreview();
-  const zonesRef = useRef<ZonesState>(JSON.parse(JSON.stringify(DEFAULTS)));
+  const boundsRef = useRef<TonalBounds>({ ...DEFAULT_BOUNDS });
+  const zonesRef = useRef<ZonesState>(applyBoundsToDefaults({ ...DEFAULT_BOUNDS }));
   const [activeZone, setActiveZone] = useState<ZoneKey>("midtones");
   const [valuesEpoch, setValuesEpoch] = useState(0); // bumped when we want sliders to re-sync from refs
   const [tintHex, setTintHex] = useState("#808080");
@@ -74,6 +76,16 @@ export function ZonesTab() {
     scheduleHighlightRefresh();
   };
 
+  const onBoundsChange = (b: TonalBounds) => {
+    boundsRef.current = { ...b };
+    const ranges = boundsToRanges(b);
+    zonesRef.current.shadows = { ...zonesRef.current.shadows, ...ranges.shadows };
+    zonesRef.current.midtones = { ...zonesRef.current.midtones, ...ranges.midtones };
+    zonesRef.current.highlights = { ...zonesRef.current.highlights, ...ranges.highlights };
+    scheduleRedraw();
+    scheduleHighlightRefresh();
+  };
+
   // Refresh highlight overlays on slider drag, but throttled to one rAF tick.
   // Note: this is a state bump (no text changes) so it doesn't trigger the font-renderer crash.
   const highlightRafPending = useRef(false);
@@ -99,7 +111,8 @@ export function ZonesTab() {
   };
 
   const reset = () => {
-    zonesRef.current = JSON.parse(JSON.stringify(DEFAULTS));
+    boundsRef.current = { ...DEFAULT_BOUNDS };
+    zonesRef.current = applyBoundsToDefaults({ ...DEFAULT_BOUNDS });
     setValuesEpoch(n => n + 1);
     setTintHex("#808080");
     scheduleRedraw();
@@ -148,32 +161,24 @@ export function ZonesTab() {
         ))}
       </div>
 
+      <TonalZonesSlider
+        key={`bounds-${valuesEpoch}`}
+        bounds={boundsRef.current}
+        onChange={onBoundsChange}
+      />
+
       {FIELDS.map(f => {
         const values: Record<ZoneKey, number> = {
           shadows: zonesRef.current.shadows[f.key] as number,
           midtones: zonesRef.current.midtones[f.key] as number,
           highlights: zonesRef.current.highlights[f.key] as number,
         };
-        let highlight: { startPct: number; endPct: number; color: string } | undefined;
-        if (f.highlightKind) {
-          const z = zonesRef.current[activeZone];
-          if (f.highlightKind === "range") {
-            highlight = { startPct: z.rangeStart, endPct: z.rangeEnd, color: ZONE_COLORS[activeZone] };
-          } else if (f.highlightKind === "featherL") {
-            highlight = { startPct: Math.max(0, z.rangeStart - z.featherLeft), endPct: z.rangeStart, color: ZONE_COLORS[activeZone] };
-          } else {
-            highlight = { startPct: z.rangeEnd, endPct: Math.min(100, z.rangeEnd + z.featherRight), color: ZONE_COLORS[activeZone] };
-          }
-        }
         return (
           <MultiThumbSlider
             key={`${f.key}-${valuesEpoch}-${activeZone}`}
             label={f.label}
             min={f.min} max={f.max}
             values={values}
-            cascade={f.cascade}
-            reversed={f.reversed}
-            highlight={highlight}
             activeZone={activeZone}
             onChange={onSliderChange(f.key)}
           />

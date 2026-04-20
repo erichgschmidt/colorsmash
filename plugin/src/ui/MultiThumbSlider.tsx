@@ -46,14 +46,16 @@ export function MultiThumbSlider(props: MultiThumbSliderProps) {
 
   const renderAll = () => ZONE_ORDER.forEach(renderThumb);
 
-  // Re-sync from props.values whenever they change (e.g. zone tab switch / reset).
+  // Re-sync from props.values whenever they change (e.g. zone tab switch / reset / parent re-render).
   useEffect(() => {
     valuesRef.current = { ...props.values };
     renderAll();
-    if (labelValueRef.current && props.activeZone) {
-      labelValueRef.current.textContent = String(Math.round(valuesRef.current[props.activeZone]));
+    if (labelValueRef.current) {
+      labelValueRef.current.textContent = props.activeZone
+        ? String(Math.round(valuesRef.current[props.activeZone]))
+        : "";
     }
-  }, [props.values, props.activeZone]); // eslint-disable-line react-hooks/exhaustive-deps
+  }); // intentionally no deps — runs on every render so label/thumbs always reflect latest props
 
   const onPointerDown = (zone: ZoneKey) => (e: React.PointerEvent) => {
     e.preventDefault();
