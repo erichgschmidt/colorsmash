@@ -7,7 +7,7 @@ import {
   executeAsModal, getActiveDoc, action,
   makeHueSatLayer, makeCurvesLayer, setLayerBlendIf,
 } from "../services/photoshop";
-import type { ZonesState, ZoneState } from "../core/zoneTransform";
+import { type ZonesState, type ZoneState, liftCurvePoints } from "../core/zoneTransform";
 
 const GROUP_NAME = "[Color Smash] zones";
 
@@ -30,18 +30,7 @@ function blendIfFor(z: ZoneState) {
   };
 }
 
-// Curves output offset for "lift": apply a vertical shift at the zone's midpoint.
-// lift in -100..100 → output shift in roughly ±0.4 RGB → ±100 8-bit.
-function liftCurve(z: ZoneState) {
-  const mid = Math.round(((z.rangeStart + z.rangeEnd) / 2) * 2.55);
-  const shift = Math.round((z.lift / 100) * 100);
-  const cap = (v: number) => Math.max(0, Math.min(255, v));
-  return [
-    { input: 0,   output: cap(0 + shift * 0.5) },
-    { input: mid, output: cap(mid + shift) },
-    { input: 255, output: cap(255 + shift * 0.5) },
-  ];
-}
+// Lift curve points are shared with the simulator via liftCurvePoints() in zoneTransform.
 
 async function findExistingGroup(): Promise<any | null> {
   const doc = getActiveDoc();
@@ -74,7 +63,7 @@ export async function bakeZones(zones: ZonesState): Promise<string> {
 
       if (z.lift !== 0) {
         const cv = await makeCurvesLayer(`${zoneName} lift`, [
-          { channel: "composite", points: liftCurve(z) },
+          { channel: "composite", points: liftCurvePoints(z) },
         ]);
         await cv.move(group, "placeInside");
         try { await setLayerBlendIf(cv, blend); } catch (e) { console.warn("blendIf failed:", e); }
