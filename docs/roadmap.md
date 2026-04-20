@@ -41,6 +41,11 @@ See [PRD.md](PRD.md) for product context and [considerations.md](considerations.
 
 **Exit criteria:** LUT round-trips through DaVinci Resolve, Nuke, or a reference LUT viewer.
 
+## Phase 2.5 — Zone Editor (proposed, ~2 weeks)
+**Goal:** Lumetri-Wheels-style tonal-zone color grading that bakes to a native PS layer stack with auto-tuned Blend If gating.
+
+See [zone-editor-spec.md](zone-editor-spec.md) for full design. May supersede or precede Phase 3.
+
 ## Phase 3 — Protection masks (2–3 weeks)
 **Goal:** Preserve Skin, Preserve Neutrals, Protect Highlights.
 
@@ -72,6 +77,9 @@ See [PRD.md](PRD.md) for product context and [considerations.md](considerations.
 - Screenshots, demo video
 - `.ccx` packaging + private-distribution beta
 - Public submission
+
+## Reinhard accuracy roadmap (parallel track)
+See [accuracy-plan.md](accuracy-plan.md). Current = Draft mode (shipping). Robust mode (PS-validated fitter, denser calibration, more layer types) is post-launch polish.
 
 ## Phase 6 — Future
 - Sensei-driven semantic local transfer
