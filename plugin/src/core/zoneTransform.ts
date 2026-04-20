@@ -1,18 +1,23 @@
-// Per-zone tonal-range color transform. Pure TS, used for both live preview and bake math.
-// The simulator mirrors the actual PS layer stack the bake produces, so preview matches output:
-//   1. Lift  → Curves (composite, applied per RGB channel)
-//   2. Hue/Sat → HSL space
-//   3. Tint → Color blend mode (take H+S of tint, keep base L)
-// All weighted by the zone's trapezoidal tonal mask, then blended back into the input.
+// Per-zone tonal-range color transform. Pure TS; mirrors the bake stack so preview matches output.
+//
+// Per-zone operations applied bottom-up (matching the bake stack inside [Color Smash] zones):
+//   1. Value (composite Curves) — brightness shift at zone midpoint
+//   2. Color shift (per-channel R/G/B Curves) — pull this zone toward a target color
+//   3. Hue/Sat (master) — hue rotation + saturation scale
+// Each zone weighted by trapezoidal tonal mask, blended into input.
 
 export interface ZoneState {
-  hue: number;
-  sat: number;
-  lift: number;
-  tintR: number; tintG: number; tintB: number;
-  tintAmount: number;
-  rangeStart: number; rangeEnd: number;
-  featherLeft: number; featherRight: number;
+  hue: number;            // -180..180
+  sat: number;            // -100..100
+  value: number;          // -100..100  (composite Curves output offset at zone midpoint)
+  colorR: number;         // 0..255 — target color for the per-channel shift
+  colorG: number;
+  colorB: number;
+  colorIntensity: number; // 0..100 — how strongly to push channels toward the target
+  rangeStart: number;     // 0..100 (full-effect start)
+  rangeEnd: number;       // 0..100 (full-effect end)
+  featherLeft: number;    // 0..100
+  featherRight: number;   // 0..100
 }
 
 export interface ZonesState {
@@ -24,7 +29,7 @@ export interface ZonesState {
 const clamp01 = (v: number) => v < 0 ? 0 : v > 1 ? 1 : v;
 const clamp255 = (v: number) => v < 0 ? 0 : v > 255 ? 255 : v;
 
-// ─── HSL helpers ─────────────────────────────────────────────────────────────
+// ─── HSL helpers ────────────────────────────────────────────────────────────
 function rgbToHsl(r: number, g: number, b: number) {
   const max = Math.max(r, g, b), min = Math.min(r, g, b);
   const l = (max + min) / 2;
@@ -53,12 +58,12 @@ function hslToRgb(h: number, s: number, l: number) {
   return { r: hue2(p, q, h + 1/3), g: hue2(p, q, h), b: hue2(p, q, h - 1/3) };
 }
 
-// ─── Lift: Curves (composite) — must match bakeZones exactly ──────
-// Anchored at (0,0) and (255,255) so the curve only bumps near the zone midpoint.
-// Combined with Blend If gating, lift stays inside the zone instead of bleeding outward.
-export function liftCurvePoints(z: ZoneState) {
-  const mid = Math.round(((z.rangeStart + z.rangeEnd) / 2) * 2.55);
-  const shift = Math.round((z.lift / 100) * 100);
+// ─── Curves ─────────────────────────────────────────────────────────────────
+// Anchor at (0,0), (mid, mid+shift), (255,255). Used for both composite (value)
+// and per-channel (color shift) curves. Linear interpolation matches PS Curves
+// closely enough for a 3-anchor curve.
+export function shiftCurvePoints(zoneMidL: number, shift: number) {
+  const mid = Math.round(zoneMidL * 2.55);
   return [
     { input: 0,   output: 0 },
     { input: mid, output: clamp255(mid + shift) },
@@ -67,8 +72,6 @@ export function liftCurvePoints(z: ZoneState) {
 }
 
 function applyCurve(input: number, points: { input: number; output: number }[]): number {
-  // Piecewise linear interp. PS's Curves spline differs but doesn't overshoot like a free-tangent
-  // cubic does on sparse anchor points; linear is a closer fit on average.
   const sorted = [...points].sort((a, b) => a.input - b.input);
   if (input <= sorted[0].input) return sorted[0].output;
   if (input >= sorted[sorted.length - 1].input) return sorted[sorted.length - 1].output;
@@ -80,6 +83,26 @@ function applyCurve(input: number, points: { input: number; output: number }[]):
     }
   }
   return input;
+}
+
+// ─── Color shift: per-channel curves derived from target color + intensity ──
+// Each channel gets shifted toward (target - 128) * (intensity/100) * scale.
+// scale of 1.0 means at intensity=100, full target shift (127 max).
+export function colorShiftCurves(z: ZoneState) {
+  const mid = (z.rangeStart + z.rangeEnd) / 2;
+  const intensity = z.colorIntensity / 100;
+  const rShift = Math.round((z.colorR - 128) * intensity);
+  const gShift = Math.round((z.colorG - 128) * intensity);
+  const bShift = Math.round((z.colorB - 128) * intensity);
+  return {
+    r: shiftCurvePoints(mid, rShift),
+    g: shiftCurvePoints(mid, gShift),
+    b: shiftCurvePoints(mid, bShift),
+  };
+}
+
+export function valueCurve(z: ZoneState) {
+  return shiftCurvePoints((z.rangeStart + z.rangeEnd) / 2, Math.round(z.value));
 }
 
 // ─── Trapezoidal zone weight ────────────────────────────────────────────────
@@ -94,20 +117,29 @@ function zoneWeight(L100: number, z: ZoneState): number {
   return 1;
 }
 
-// ─── One zone's full transform: simulates Curves → HueSat → ColorBlend, weighted ─
+// ─── One zone's full transform ──────────────────────────────────────────────
 function applyZone(input: { r: number; g: number; b: number }, z: ZoneState, w: number) {
   if (w === 0) return input;
 
-  // 1) Lift via Curves (composite, applied to each channel independently in 0..255 space).
   let r = input.r, g = input.g, b = input.b;
-  if (z.lift !== 0) {
-    const curve = liftCurvePoints(z);
-    r = applyCurve(r * 255, curve) / 255;
-    g = applyCurve(g * 255, curve) / 255;
-    b = applyCurve(b * 255, curve) / 255;
+
+  // 1) Value (composite Curves).
+  if (z.value !== 0) {
+    const c = valueCurve(z);
+    r = applyCurve(r * 255, c) / 255;
+    g = applyCurve(g * 255, c) / 255;
+    b = applyCurve(b * 255, c) / 255;
   }
 
-  // 2) Hue/Sat (master), HSL space.
+  // 2) Color shift (per-channel Curves).
+  if (z.colorIntensity > 0) {
+    const cc = colorShiftCurves(z);
+    r = applyCurve(r * 255, cc.r) / 255;
+    g = applyCurve(g * 255, cc.g) / 255;
+    b = applyCurve(b * 255, cc.b) / 255;
+  }
+
+  // 3) Hue/Sat (HSL space).
   if (z.hue !== 0 || z.sat !== 0) {
     const hsl = rgbToHsl(r, g, b);
     hsl.h = (hsl.h + z.hue / 360) % 1;
@@ -117,19 +149,7 @@ function applyZone(input: { r: number; g: number; b: number }, z: ZoneState, w: 
     r = out.r; g = out.g; b = out.b;
   }
 
-  // 3) Tint via Color blend mode formula: take H+S of tint, keep base L.
-  // Mixed by tintAmount opacity.
-  if (z.tintAmount > 0) {
-    const baseHsl = rgbToHsl(r, g, b);
-    const tintHsl = rgbToHsl(z.tintR / 255, z.tintG / 255, z.tintB / 255);
-    const colored = hslToRgb(tintHsl.h, tintHsl.s, baseHsl.l);
-    const k = z.tintAmount / 100;
-    r = r * (1 - k) + colored.r * k;
-    g = g * (1 - k) + colored.g * k;
-    b = b * (1 - k) + colored.b * k;
-  }
-
-  // Blend the zone's effect by its tonal weight.
+  // Blend by zone weight.
   return {
     r: input.r * (1 - w) + r * w,
     g: input.g * (1 - w) + g * w,
@@ -139,7 +159,6 @@ function applyZone(input: { r: number; g: number; b: number }, z: ZoneState, w: 
 
 export function applyZones(rgba: Uint8Array, zones: ZonesState): Uint8Array {
   const out = new Uint8Array(rgba.length);
-  // Apply in stack order (bottom→top): shadows first, then midtones, then highlights.
   for (let i = 0; i < rgba.length; i += 4) {
     let pixel = { r: rgba[i] / 255, g: rgba[i + 1] / 255, b: rgba[i + 2] / 255 };
     const L100 = (0.2126 * pixel.r + 0.7152 * pixel.g + 0.0722 * pixel.b) * 100;

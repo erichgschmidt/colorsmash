@@ -11,8 +11,8 @@ import { Histogram } from "./Histogram";
 import { rgbaToPngDataUrl } from "./encodePng";
 
 const DEFAULT_ZONE: ZoneState = {
-  hue: 0, sat: 0, lift: 0,
-  tintR: 128, tintG: 128, tintB: 128, tintAmount: 0,
+  hue: 0, sat: 0, value: 0,
+  colorR: 128, colorG: 128, colorB: 128, colorIntensity: 0,
   rangeStart: 0, rangeEnd: 100, featherLeft: 15, featherRight: 15,
 };
 
@@ -21,10 +21,10 @@ interface FieldSpec {
 }
 // Per-zone parameters only — range/feather now live in the unified TonalZonesSlider.
 const FIELDS: FieldSpec[] = [
-  { key: "hue",        label: "Hue",      min: -180, max: 180 },
-  { key: "sat",        label: "Sat",      min: -100, max: 100 },
-  { key: "lift",       label: "Lift",     min: -100, max: 100 },
-  { key: "tintAmount", label: "Tint mix", min: 0,    max: 100 },
+  { key: "hue",            label: "Hue",       min: -180, max: 180 },
+  { key: "sat",            label: "Sat",       min: -100, max: 100 },
+  { key: "value",          label: "Value",     min: -100, max: 100 },
+  { key: "colorIntensity", label: "Color int", min: 0,    max: 100 },
 ];
 
 const DEFAULT_BOUNDS: TonalBounds = { t1: 25, t2: 40, t3: 60, t4: 75, pad1: 0, pad2: 0 };
@@ -65,9 +65,9 @@ export function ZonesTab() {
 
   useEffect(() => {
     const z = zonesRef.current[activeZone];
-    const r = z.tintR.toString(16).padStart(2, "0");
-    const g = z.tintG.toString(16).padStart(2, "0");
-    const b = z.tintB.toString(16).padStart(2, "0");
+    const r = z.colorR.toString(16).padStart(2, "0");
+    const g = z.colorG.toString(16).padStart(2, "0");
+    const b = z.colorB.toString(16).padStart(2, "0");
     setTintHex(`#${r}${g}${b}`);
   }, [activeZone]);
 
@@ -105,9 +105,9 @@ export function ZonesTab() {
     const r = parseInt(hex.slice(1, 3), 16) || 0;
     const g = parseInt(hex.slice(3, 5), 16) || 0;
     const b = parseInt(hex.slice(5, 7), 16) || 0;
-    zonesRef.current[activeZone].tintR = r;
-    zonesRef.current[activeZone].tintG = g;
-    zonesRef.current[activeZone].tintB = b;
+    zonesRef.current[activeZone].colorR = r;
+    zonesRef.current[activeZone].colorG = g;
+    zonesRef.current[activeZone].colorB = b;
     scheduleRedraw();
   };
 
@@ -188,7 +188,7 @@ export function ZonesTab() {
       })}
 
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, fontSize: 11 }}>
-        <span style={{ width: 64, opacity: 0.7 }}>Tint color</span>
+        <span style={{ width: 64, opacity: 0.7 }}>Color</span>
         <input type="color" value={tintHex} onChange={e => onTintChange(e.target.value)}
           style={{ flex: 1, height: 22, padding: 0, border: "1px solid #555", background: "transparent", cursor: "pointer" }} />
         <span style={{ width: 36, textAlign: "right", opacity: 0.8, fontFamily: "monospace" }}>{tintHex}</span>
