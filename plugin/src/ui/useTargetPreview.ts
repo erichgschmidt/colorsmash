@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { app, action, readLayerPixels, executeAsModal } from "../services/photoshop";
 import { downsampleToMaxEdge } from "../core/downsample";
 
-const PREVIEW_MAX_EDGE = 192;
+const PREVIEW_MAX_EDGE = 384;
 
 export interface PreviewSnapshot {
   width: number;

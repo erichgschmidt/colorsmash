@@ -7,6 +7,7 @@ import { useTargetPreview } from "./useTargetPreview";
 import { bakeZones } from "../app/bakeZones";
 import { MultiThumbSlider, type ZoneKey, ZONE_COLORS } from "./MultiThumbSlider";
 import { TonalZonesSlider, type TonalBounds, boundsToRanges } from "./TonalZonesSlider";
+import { Histogram } from "./Histogram";
 import { rgbaToPngDataUrl } from "./encodePng";
 
 const DEFAULT_ZONE: ZoneState = {
@@ -26,7 +27,7 @@ const FIELDS: FieldSpec[] = [
   { key: "tintAmount", label: "Tint mix", min: 0,    max: 100 },
 ];
 
-const DEFAULT_BOUNDS: TonalBounds = { t1: 25, t2: 40, t3: 60, t4: 75 };
+const DEFAULT_BOUNDS: TonalBounds = { t1: 25, t2: 40, t3: 60, t4: 75, pad1: 0, pad2: 0 };
 
 function applyBoundsToDefaults(b: TonalBounds): ZonesState {
   const ranges = boundsToRanges(b);
@@ -161,6 +162,7 @@ export function ZonesTab() {
         ))}
       </div>
 
+      <Histogram rgba={preview?.data ?? null} height={20} />
       <TonalZonesSlider
         key={`bounds-${valuesEpoch}`}
         bounds={boundsRef.current}
