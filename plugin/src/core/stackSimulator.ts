@@ -62,27 +62,51 @@ function applyHueSat(rgb: { r: number; g: number; b: number }, satPct: number) {
   return hslToRgb(hsl.h, hsl.s, hsl.l);
 }
 
-// ── Color Balance per zone (PS uses RGB-space shifts weighted by tonal mask). ──
-// Tonal weight per zone: shadows peaks at L=0.25, mids at 0.5, highlights at 0.75 with cosine falloff.
-function zoneWeight(L: number, peak: number): number {
-  const d = Math.abs(L - peak);
-  if (d > 0.4) return 0;
-  return 0.5 * (1 + Math.cos((d / 0.4) * Math.PI));
+// ── Color Balance per zone. ──
+// Empirical model derived from PS measurements at slider=+50, sampled at L=0,64,128,192,255.
+// The observed shifts: zone-specific tonal envelope, single-axis (no cross-channel mixing),
+// approximately linear in slider value within ±100 range.
+//
+// Table entries: shift in 0..255 RGB units when slider=+50 for the matching axis.
+// Channel mapping is one-to-one: cyanRed→R, magentaGreen→G, yellowBlue→B.
+const CB_PROFILE_AT_50: Record<"shadows" | "midtones" | "highlights", number[]> = {
+  // Indexed at L = 0, 64, 128, 192, 255
+  shadows:    [0, 16, 15,  0,  0],
+  midtones:   [0, 32, 28, 17,  0],
+  highlights: [0,  0, 43, 43,  0],
+};
+const CB_PROFILE_L = [0, 64, 128, 192, 255];
+
+function interpProfile(profile: number[], L255: number): number {
+  // L255 in 0..255. Linear interp across the 5 keypoints.
+  if (L255 <= CB_PROFILE_L[0]) return profile[0];
+  if (L255 >= CB_PROFILE_L[CB_PROFILE_L.length - 1]) return profile[profile.length - 1];
+  for (let i = 0; i < CB_PROFILE_L.length - 1; i++) {
+    if (L255 >= CB_PROFILE_L[i] && L255 <= CB_PROFILE_L[i + 1]) {
+      const t = (L255 - CB_PROFILE_L[i]) / (CB_PROFILE_L[i + 1] - CB_PROFILE_L[i]);
+      return profile[i] + t * (profile[i + 1] - profile[i]);
+    }
+  }
+  return 0;
 }
+
 function applyColorBalance(rgb: { r: number; g: number; b: number }, cb: StackParams["colorBalance"]) {
-  const L = (rgb.r + rgb.g + rgb.b) / 3; // luminance proxy
-  const wS = zoneWeight(L, 0.25);
-  const wM = zoneWeight(L, 0.50);
-  const wH = zoneWeight(L, 0.75);
-  // Slider scale: ±100 → ±0.5 channel shift in 0..1 RGB space (heuristic match to PS behavior).
-  const scale = 0.005;
-  const shiftR = scale * (cb.shadows.cyanRed * wS + cb.midtones.cyanRed * wM + cb.highlights.cyanRed * wH);
-  const shiftG = -scale * (cb.shadows.magentaGreen * wS + cb.midtones.magentaGreen * wM + cb.highlights.magentaGreen * wH);
-  const shiftB = -scale * (cb.shadows.yellowBlue * wS + cb.midtones.yellowBlue * wM + cb.highlights.yellowBlue * wH);
+  // Tonal zone selection uses Rec. 709 luma. PS likely uses something similar.
+  const L255 = (0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b) * 255;
+
+  // For each zone × axis: shift = (slider / 50) * profile_at_L  (linear in slider).
+  const shiftForAxis = (axisKey: "cyanRed" | "magentaGreen" | "yellowBlue") => {
+    let total = 0;
+    total += (cb.shadows[axisKey]    / 50) * interpProfile(CB_PROFILE_AT_50.shadows,    L255);
+    total += (cb.midtones[axisKey]   / 50) * interpProfile(CB_PROFILE_AT_50.midtones,   L255);
+    total += (cb.highlights[axisKey] / 50) * interpProfile(CB_PROFILE_AT_50.highlights, L255);
+    return total / 255; // back to 0..1 RGB
+  };
+
   return {
-    r: clamp01(rgb.r + shiftR),
-    g: clamp01(rgb.g - shiftG), // PS magenta=+, green=- so negate
-    b: clamp01(rgb.b + shiftB),
+    r: clamp01(rgb.r + shiftForAxis("cyanRed")),
+    g: clamp01(rgb.g + shiftForAxis("magentaGreen")),
+    b: clamp01(rgb.b + shiftForAxis("yellowBlue")),
   };
 }
 

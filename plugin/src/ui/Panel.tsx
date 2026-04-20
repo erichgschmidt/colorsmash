@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { applyTransfer } from "../app/applyTransfer";
 import { applyAsLut } from "../app/applyAsLut";
 import { applyAsStack } from "../app/applyAsStack";
+import { validateStack } from "../app/validateStack";
+import { probeLayers } from "../app/probeLayers";
+import { calibrateCB } from "../app/calibrateCB";
 import { runRoundTrip } from "../app/runRoundTrip";
 import { exportCube } from "../app/exportCube";
 import { useLayers } from "./useLayers";
@@ -85,6 +88,30 @@ export function Panel() {
     catch (e) { setStatus(`Error: ${(e as Error).message}`); }
   };
 
+  const onValidate = async () => {
+    if (sourceId == null || targetId == null) { setStatus("Pick layers."); return; }
+    setStatus("Validating...");
+    try {
+      const msg = await validateStack({ sourceLayerId: sourceId, targetLayerId: targetId, weights: buildWeights() });
+      setStatus(msg);
+    } catch (e) { setStatus(`Error: ${(e as Error).message}`); }
+  };
+
+  const onProbe = async () => {
+    if (targetId == null) { setStatus("Pick target."); return; }
+    setStatus("Probing layers...");
+    try {
+      const msg = await probeLayers({ targetLayerId: targetId });
+      setStatus(msg);
+    } catch (e) { setStatus(`Error: ${(e as Error).message}`); }
+  };
+
+  const onCalibrate = async () => {
+    setStatus("Calibrating CB (this takes ~30s)...");
+    try { setStatus(await calibrateCB()); }
+    catch (e) { setStatus(`Error: ${(e as Error).message}`); }
+  };
+
   const onExportCube = async () => {
     if (sourceId == null || targetId == null) { setStatus("Pick layers."); return; }
     setStatus("Building LUT...");
@@ -132,6 +159,9 @@ export function Panel() {
       <button onClick={onApply} style={btnSecondary}>Apply (baked pixels — exact)</button>
       <button onClick={onExportCube} style={btnSecondary}>Export .cube (33³)</button>
       <button onClick={onApplyLut} style={btnSecondary}>Apply (LUT layer — experimental)</button>
+      <button onClick={onValidate} style={btnSecondary}>Debug validate (sim vs PS)</button>
+      <button onClick={onProbe} style={btnSecondary}>Debug probe per-layer</button>
+      <button onClick={onCalibrate} style={btnSecondary}>Debug calibrate CB (empirical)</button>
       <button onClick={onRoundTrip} style={btnSecondary}>Debug round-trip</button>
 
       <div style={{ marginTop: "auto", fontSize: 10, opacity: 0.7, whiteSpace: "pre-wrap" }}>{status}</div>

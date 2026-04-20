@@ -30,18 +30,20 @@ export async function applyAsStack(params: ApplyAsStackParams): Promise<string> 
     const target = doc.layers.find((l: any) => l.id === params.targetLayerId);
     if (!source || !target) throw new Error("Picked layer no longer exists.");
     if (source.id === target.id) throw new Error("Source and target must differ.");
-    const [s, t] = await Promise.all([
+    const [s, t, tFull] = await Promise.all([
       readLayerPixels(source, statsRectForLayer(source)),
       readLayerPixels(target, statsRectForLayer(target)),
+      readLayerPixels(target),
     ]);
     return {
       src: computeLabStats(downsampleToMaxEdge(s, STATS_MAX_EDGE).data),
       tgt: computeLabStats(downsampleToMaxEdge(t, STATS_MAX_EDGE).data),
+      targetPixels: downsampleToMaxEdge(tFull, 256).data,
     };
   }).catch((e: any) => { throw new Error(e?.message ?? String(e)); });
 
   const initial = mapToStack(stats.src, stats.tgt, params.weights);
-  const fit = fitStack(initial, stats.src, stats.tgt, params.weights);
+  const fit = fitStack(initial, stats.src, stats.tgt, params.weights, stats.targetPixels);
   const stack = fit.params;
 
   return executeAsModal("Color Smash build stack", async () => {
@@ -66,6 +68,6 @@ export async function applyAsStack(params: ApplyAsStackParams): Promise<string> 
     const cv = await makeCurvesLayer("Luminance", [{ channel: "composite", points: stack.curvesMaster }]);
     await cv.move(group, "placeInside");
 
-    return `Stack fitted: ΔE ${fit.before.toFixed(2)} → ${fit.after.toFixed(2)} (${fit.iters} iters) | sat ${stack.hueSat.saturation}`;
+    return `Fit: ΔE ${fit.before.toFixed(2)} → ${fit.after.toFixed(2)} (${fit.iters} iters)`;
   }).catch((e: any) => `Error: ${e?.message ?? e}`);
 }
