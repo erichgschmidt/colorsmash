@@ -1,32 +1,92 @@
 // Zones tab — Lumetri-wheels-style tonal-zone color grading.
-// V0 scaffolding. See docs/zone-editor-spec.md for the full design.
+// Uncontrolled sliders + RAF preview redraw, to avoid PS font-renderer crashes from per-tick React re-renders.
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { applyZones, type ZonesState, type ZoneState } from "../core/zoneTransform";
+import { useTargetPreview } from "./useTargetPreview";
 
 type Zone = "shadows" | "midtones" | "highlights";
 
-interface ZoneState {
-  hue: number;        // -180..180
-  sat: number;        // -100..100
-  lift: number;       // -100..100
-  rangeStart: number; // 0..100 (for highlights, this is the LOW edge of the range)
-  rangeEnd: number;   // 0..100
-  feather: number;    // 0..50 (Blend If split slider feather amount)
-}
-
-const DEFAULT_ZONES: Record<Zone, ZoneState> = {
-  shadows:    { hue: 0, sat: 0, lift: 0, rangeStart: 0,  rangeEnd: 35, feather: 15 },
-  midtones:   { hue: 0, sat: 0, lift: 0, rangeStart: 25, rangeEnd: 75, feather: 15 },
+const DEFAULTS: ZonesState = {
+  shadows:    { hue: 0, sat: 0, lift: 0, rangeStart: 0,  rangeEnd: 35,  feather: 15 },
+  midtones:   { hue: 0, sat: 0, lift: 0, rangeStart: 25, rangeEnd: 75,  feather: 15 },
   highlights: { hue: 0, sat: 0, lift: 0, rangeStart: 65, rangeEnd: 100, feather: 15 },
 };
 
-export function ZonesTab() {
-  const [zones, setZones] = useState(DEFAULT_ZONES);
-  const [activeZone, setActiveZone] = useState<Zone>("midtones");
-  const [status] = useState("Zone editor — coming soon. UI scaffolding only; preview + bake unimplemented.");
+interface SliderSpec { key: keyof ZoneState; label: string; min: number; max: number }
+const FIELDS: SliderSpec[] = [
+  { key: "hue",        label: "Hue",     min: -180, max: 180 },
+  { key: "sat",        label: "Sat",     min: -100, max: 100 },
+  { key: "lift",       label: "Lift",    min: -100, max: 100 },
+  { key: "rangeStart", label: "Range L", min: 0,    max: 100 },
+  { key: "rangeEnd",   label: "Range R", min: 0,    max: 100 },
+  { key: "feather",    label: "Feather", min: 0,    max: 50 },
+];
 
-  const update = (zone: Zone, patch: Partial<ZoneState>) =>
-    setZones(prev => ({ ...prev, [zone]: { ...prev[zone], ...patch } }));
+export function ZonesTab() {
+  const preview = useTargetPreview();
+  const zonesRef = useRef<ZonesState>(JSON.parse(JSON.stringify(DEFAULTS)));
+  const [activeZone, setActiveZone] = useState<Zone>("midtones");
+  const [, forceTabRerender] = useState(0); // only used when switching zone tabs (cheap)
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const labelRefs = useRef<Record<string, HTMLSpanElement | null>>({});
+  const sliderRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const rafPending = useRef(false);
+
+  const scheduleRedraw = () => {
+    if (rafPending.current) return;
+    rafPending.current = true;
+    requestAnimationFrame(() => {
+      rafPending.current = false;
+      const c = canvasRef.current;
+      if (!c || !preview) return;
+      c.width = preview.width;
+      c.height = preview.height;
+      const ctx = c.getContext("2d");
+      if (!ctx) return;
+      const transformed = applyZones(preview.data, zonesRef.current);
+      const id = ctx.createImageData(preview.width, preview.height);
+      id.data.set(transformed);
+      ctx.putImageData(id, 0, 0);
+    });
+  };
+
+  // Initial render + when target preview changes.
+  useEffect(scheduleRedraw, [preview]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sync slider DOM values to the active zone whenever the zone tab changes.
+  useEffect(() => {
+    const z = zonesRef.current[activeZone];
+    for (const f of FIELDS) {
+      const el = sliderRefs.current[f.key];
+      const lbl = labelRefs.current[f.key];
+      const v = z[f.key];
+      if (el) el.value = String(v);
+      if (lbl) lbl.textContent = String(v);
+    }
+  }, [activeZone]);
+
+  const onSliderInput = (key: keyof ZoneState) => (e: React.FormEvent<HTMLInputElement>) => {
+    const v = Number((e.target as HTMLInputElement).value);
+    zonesRef.current[activeZone][key] = v;
+    const lbl = labelRefs.current[key];
+    if (lbl) lbl.textContent = String(v);
+    scheduleRedraw();
+  };
+
+  const reset = () => {
+    zonesRef.current = JSON.parse(JSON.stringify(DEFAULTS));
+    forceTabRerender(n => n + 1);
+    // Sync slider DOM values now (effect above will fire on activeZone change too).
+    const z = zonesRef.current[activeZone];
+    for (const f of FIELDS) {
+      const el = sliderRefs.current[f.key];
+      const lbl = labelRefs.current[f.key];
+      if (el) el.value = String(z[f.key]);
+      if (lbl) lbl.textContent = String(z[f.key]);
+    }
+    scheduleRedraw();
+  };
 
   const tabBtn = (z: Zone): React.CSSProperties => ({
     flex: 1, padding: "4px 6px", fontSize: 10, cursor: "pointer",
@@ -35,48 +95,54 @@ export function ZonesTab() {
     border: "1px solid #444",
   });
 
-  const Field = (p: { label: string; min: number; max: number; value: number; onChange: (v: number) => void }) => (
-    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, fontSize: 11 }}>
-      <span style={{ width: 64, opacity: 0.7 }}>{p.label}</span>
-      <input type="range" min={p.min} max={p.max} value={p.value}
-        onChange={e => p.onChange(Number(e.target.value))}
-        style={{ flex: 1, minWidth: 0 }} />
-      <span style={{ width: 36, textAlign: "right", opacity: 0.8 }}>{p.value}</span>
-    </div>
-  );
-
-  const z = zones[activeZone];
+  const z = zonesRef.current[activeZone];
 
   return (
     <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-      {/* TODO: live histogram preview with draggable zone bands */}
       <div style={{
-        height: 60, background: "#333", border: "1px solid #555",
+        background: "#111", border: "1px solid #555",
         display: "flex", alignItems: "center", justifyContent: "center",
-        color: "#666", fontSize: 10,
+        minHeight: 80, padding: 4,
       }}>
-        Histogram preview (TODO)
+        {preview
+          ? <canvas ref={canvasRef} style={{ maxWidth: "100%", maxHeight: 200 }} />
+          : <span style={{ color: "#666", fontSize: 10 }}>Select a layer to preview</span>}
       </div>
 
-      <div style={{ display: "flex", marginTop: 4 }}>
+      <div style={{ display: "flex" }}>
         <button style={tabBtn("shadows")}    onClick={() => setActiveZone("shadows")}>Shadows</button>
         <button style={tabBtn("midtones")}   onClick={() => setActiveZone("midtones")}>Midtones</button>
         <button style={tabBtn("highlights")} onClick={() => setActiveZone("highlights")}>Highlights</button>
       </div>
 
-      <Field label="Hue"     min={-180} max={180} value={z.hue}  onChange={v => update(activeZone, { hue: v })} />
-      <Field label="Sat"     min={-100} max={100} value={z.sat}  onChange={v => update(activeZone, { sat: v })} />
-      <Field label="Lift"    min={-100} max={100} value={z.lift} onChange={v => update(activeZone, { lift: v })} />
-      <Field label="Range L" min={0}    max={100} value={z.rangeStart} onChange={v => update(activeZone, { rangeStart: v })} />
-      <Field label="Range R" min={0}    max={100} value={z.rangeEnd}   onChange={v => update(activeZone, { rangeEnd: v })} />
-      <Field label="Feather" min={0}    max={50}  value={z.feather}    onChange={v => update(activeZone, { feather: v })} />
+      {FIELDS.map(f => (
+        <div key={f.key} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, fontSize: 11 }}>
+          <span style={{ width: 56, opacity: 0.7 }}>{f.label}</span>
+          <input
+            ref={el => { sliderRefs.current[f.key] = el; }}
+            type="range" min={f.min} max={f.max} defaultValue={z[f.key]}
+            onInput={onSliderInput(f.key)}
+            style={{ flex: 1, minWidth: 0 }}
+          />
+          <span ref={el => { labelRefs.current[f.key] = el; }}
+            style={{ width: 36, textAlign: "right", opacity: 0.8 }}>{z[f.key]}</span>
+        </div>
+      ))}
 
-      <button disabled style={{
-        padding: "6px 12px", marginTop: 6, background: "#1473e6", color: "white",
-        border: "none", borderRadius: 3, opacity: 0.5, cursor: "not-allowed",
-      }}>Bake to layer stack (coming soon)</button>
+      <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+        <button onClick={reset} style={{
+          padding: "6px 12px", background: "transparent", color: "#aaa",
+          border: "1px solid #555", borderRadius: 3, cursor: "pointer", flex: 1,
+        }}>Reset</button>
+        <button disabled style={{
+          padding: "6px 12px", background: "#1473e6", color: "white",
+          border: "none", borderRadius: 3, opacity: 0.5, cursor: "not-allowed", flex: 2,
+        }}>Bake (coming soon)</button>
+      </div>
 
-      <div style={{ marginTop: 8, fontSize: 10, opacity: 0.7, whiteSpace: "pre-wrap" }}>{status}</div>
+      <div style={{ marginTop: 6, fontSize: 10, opacity: 0.6 }}>
+        Live preview shows the active layer with current zone settings.
+      </div>
     </div>
   );
 }

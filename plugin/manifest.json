@@ -19,8 +19,10 @@
       "type": "panel",
       "id": "colorSmashPanel",
       "label": { "default": "Color Smash" },
-      "minimumSize": { "width": 320, "height": 400 },
-      "preferredDockedSize": { "width": 360, "height": 600 }
+      "minimumSize": { "width": 220, "height": 300 },
+      "maximumSize": { "width": 1000, "height": 2000 },
+      "preferredDockedSize": { "width": 360, "height": 640 },
+      "preferredFloatingSize": { "width": 400, "height": 720 }
     }
   ],
   "requiredPermissions": {
