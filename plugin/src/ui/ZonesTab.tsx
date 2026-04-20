@@ -19,16 +19,21 @@ const DEFAULTS: ZonesState = {
   highlights: { ...DEFAULT_ZONE, rangeStart: 65, rangeEnd: 100 },
 };
 
-interface FieldSpec { key: keyof ZoneState; label: string; min: number; max: number; cascade?: boolean }
+interface FieldSpec {
+  key: keyof ZoneState; label: string; min: number; max: number;
+  cascade?: boolean;
+  reversed?: boolean;
+  highlightKind?: "range" | "featherL" | "featherR";
+}
 const FIELDS: FieldSpec[] = [
   { key: "hue",          label: "Hue",       min: -180, max: 180 },
   { key: "sat",          label: "Sat",       min: -100, max: 100 },
   { key: "lift",         label: "Lift",      min: -100, max: 100 },
   { key: "tintAmount",   label: "Tint mix",  min: 0,    max: 100 },
-  { key: "rangeStart",   label: "Range L",   min: 0,    max: 100, cascade: true },
-  { key: "rangeEnd",     label: "Range R",   min: 0,    max: 100, cascade: true },
-  { key: "featherLeft",  label: "Feather L", min: 0,    max: 100 },
-  { key: "featherRight", label: "Feather R", min: 0,    max: 100 },
+  { key: "rangeStart",   label: "Range L",   min: 0,    max: 100, cascade: true, highlightKind: "range" },
+  { key: "rangeEnd",     label: "Range R",   min: 0,    max: 100, cascade: true, highlightKind: "range" },
+  { key: "featherLeft",  label: "Feather L", min: 0,    max: 100, highlightKind: "featherL" },
+  { key: "featherRight", label: "Feather R", min: 0,    max: 100, reversed: true, highlightKind: "featherR" },
 ];
 
 export function ZonesTab() {
@@ -66,7 +71,21 @@ export function ZonesTab() {
   const onSliderChange = (key: keyof ZoneState) => (zone: ZoneKey, v: number) => {
     (zonesRef.current[zone] as any)[key] = v;
     scheduleRedraw();
+    scheduleHighlightRefresh();
   };
+
+  // Refresh highlight overlays on slider drag, but throttled to one rAF tick.
+  // Note: this is a state bump (no text changes) so it doesn't trigger the font-renderer crash.
+  const highlightRafPending = useRef(false);
+  const scheduleHighlightRefresh = () => {
+    if (highlightRafPending.current) return;
+    highlightRafPending.current = true;
+    requestAnimationFrame(() => {
+      highlightRafPending.current = false;
+      setHighlightTick(n => n + 1);
+    });
+  };
+  const [, setHighlightTick] = useState(0);
 
   const onTintChange = (hex: string) => {
     setTintHex(hex);
@@ -135,13 +154,26 @@ export function ZonesTab() {
           midtones: zonesRef.current.midtones[f.key] as number,
           highlights: zonesRef.current.highlights[f.key] as number,
         };
+        let highlight: { startPct: number; endPct: number; color: string } | undefined;
+        if (f.highlightKind) {
+          const z = zonesRef.current[activeZone];
+          if (f.highlightKind === "range") {
+            highlight = { startPct: z.rangeStart, endPct: z.rangeEnd, color: ZONE_COLORS[activeZone] };
+          } else if (f.highlightKind === "featherL") {
+            highlight = { startPct: Math.max(0, z.rangeStart - z.featherLeft), endPct: z.rangeStart, color: ZONE_COLORS[activeZone] };
+          } else {
+            highlight = { startPct: z.rangeEnd, endPct: Math.min(100, z.rangeEnd + z.featherRight), color: ZONE_COLORS[activeZone] };
+          }
+        }
         return (
           <MultiThumbSlider
-            key={`${f.key}-${valuesEpoch}`}
+            key={`${f.key}-${valuesEpoch}-${activeZone}`}
             label={f.label}
             min={f.min} max={f.max}
             values={values}
             cascade={f.cascade}
+            reversed={f.reversed}
+            highlight={highlight}
             activeZone={activeZone}
             onChange={onSliderChange(f.key)}
           />

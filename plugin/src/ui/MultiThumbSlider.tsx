@@ -15,11 +15,12 @@ export interface MultiThumbSliderProps {
   label: string;
   min: number;
   max: number;
-  values: Record<ZoneKey, number>;          // current per-zone value (initial; not re-read)
+  values: Record<ZoneKey, number>;
   onChange: (zone: ZoneKey, value: number) => void;
-  cascade?: boolean;                         // if true, dragging one thumb pushes neighbors
-                                             // (used for range sliders)
-  activeZone?: ZoneKey;                      // visual emphasis only
+  cascade?: boolean;
+  activeZone?: ZoneKey;
+  reversed?: boolean;                        // true: value=0 at right, value=max at left
+  highlight?: { startPct: number; endPct: number; color: string }; // colored band on the track (0..100)
 }
 
 export function MultiThumbSlider(props: MultiThumbSliderProps) {
@@ -28,8 +29,14 @@ export function MultiThumbSlider(props: MultiThumbSliderProps) {
   const thumbRefs = useRef<Record<ZoneKey, HTMLDivElement | null>>({ shadows: null, midtones: null, highlights: null });
   const labelValueRef = useRef<HTMLSpanElement>(null);
 
-  const valueToPct = (v: number) => ((v - props.min) / (props.max - props.min)) * 100;
-  const pctToValue = (p: number) => props.min + (p / 100) * (props.max - props.min);
+  const valueToPct = (v: number) => {
+    const p = ((v - props.min) / (props.max - props.min)) * 100;
+    return props.reversed ? 100 - p : p;
+  };
+  const pctToValue = (p: number) => {
+    const q = props.reversed ? 100 - p : p;
+    return props.min + (q / 100) * (props.max - props.min);
+  };
 
   const renderThumb = (zone: ZoneKey) => {
     const el = thumbRefs.current[zone];
@@ -100,9 +107,20 @@ export function MultiThumbSlider(props: MultiThumbSliderProps) {
       <div ref={trackRef}
         style={{
           flex: 1, height: 18, position: "relative", background: "#333",
-          border: "1px solid #444", borderRadius: 9,
+          border: "1px solid #444", borderRadius: 9, overflow: "hidden",
         }}
       >
+        {props.highlight && (
+          <div style={{
+            position: "absolute",
+            top: 0, bottom: 0,
+            left: `${props.highlight.startPct}%`,
+            width: `${Math.max(0, props.highlight.endPct - props.highlight.startPct)}%`,
+            background: props.highlight.color,
+            opacity: 0.3,
+            pointerEvents: "none",
+          }} />
+        )}
         {ZONE_ORDER.map(zone => {
           const isActive = props.activeZone === zone;
           const size = isActive ? 16 : 12;
@@ -129,9 +147,8 @@ export function MultiThumbSlider(props: MultiThumbSliderProps) {
         })}
       </div>
       <span ref={labelValueRef}
-        style={{ width: 36, textAlign: "right", opacity: 0.8 }}>
-        {props.activeZone ? Math.round(valuesRef.current[props.activeZone]) : ""}
-      </span>
+        style={{ width: 36, textAlign: "right", opacity: 0.8 }}
+      />{/* content set imperatively via labelValueRef to avoid React reconciler text churn */}
     </div>
   );
 }

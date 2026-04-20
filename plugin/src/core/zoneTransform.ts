@@ -53,28 +53,41 @@ function hslToRgb(h: number, s: number, l: number) {
   return { r: hue2(p, q, h + 1/3), g: hue2(p, q, h), b: hue2(p, q, h - 1/3) };
 }
 
-// ─── Lift: Curves (composite) — must match bakeZones.liftCurve exactly ──────
-// Returns the same 3 anchor points (input/output in 0..255) the bake layer uses.
+// ─── Lift: Curves (composite) — must match bakeZones exactly ──────
+// Anchored at (0,0) and (255,255) so the curve only bumps near the zone midpoint.
+// Combined with Blend If gating, lift stays inside the zone instead of bleeding outward.
 export function liftCurvePoints(z: ZoneState) {
   const mid = Math.round(((z.rangeStart + z.rangeEnd) / 2) * 2.55);
   const shift = Math.round((z.lift / 100) * 100);
   return [
-    { input: 0,   output: clamp255(0 + shift * 0.5) },
+    { input: 0,   output: 0 },
     { input: mid, output: clamp255(mid + shift) },
-    { input: 255, output: clamp255(255 + shift * 0.5) },
+    { input: 255, output: 255 },
   ];
 }
 
 function applyCurve(input: number, points: { input: number; output: number }[]): number {
-  // Piecewise linear interpolation across the three anchors.
+  // Cubic Hermite interpolation (Catmull-Rom tangents) — closer to PS's Curves spline
+  // than linear interp. Falls back to linear at the endpoints.
   const sorted = [...points].sort((a, b) => a.input - b.input);
   if (input <= sorted[0].input) return sorted[0].output;
   if (input >= sorted[sorted.length - 1].input) return sorted[sorted.length - 1].output;
   for (let i = 0; i < sorted.length - 1; i++) {
-    const a = sorted[i], b = sorted[i + 1];
-    if (input >= a.input && input <= b.input) {
-      const t = (input - a.input) / Math.max(1e-9, b.input - a.input);
-      return a.output + t * (b.output - a.output);
+    const p1 = sorted[i], p2 = sorted[i + 1];
+    if (input >= p1.input && input <= p2.input) {
+      const p0 = i > 0 ? sorted[i - 1] : p1;
+      const p3 = i < sorted.length - 2 ? sorted[i + 2] : p2;
+      const dx = p2.input - p1.input;
+      if (dx < 1e-9) return p1.output;
+      const t = (input - p1.input) / dx;
+      // Catmull-Rom tangents (scaled to parameter space).
+      const m1 = (p2.output - p0.output) / Math.max(1e-9, p2.input - p0.input) * dx;
+      const m2 = (p3.output - p1.output) / Math.max(1e-9, p3.input - p1.input) * dx;
+      const h00 = 2 * t * t * t - 3 * t * t + 1;
+      const h10 = t * t * t - 2 * t * t + t;
+      const h01 = -2 * t * t * t + 3 * t * t;
+      const h11 = t * t * t - t * t;
+      return h00 * p1.output + h10 * m1 + h01 * p2.output + h11 * m2;
     }
   }
   return input;
