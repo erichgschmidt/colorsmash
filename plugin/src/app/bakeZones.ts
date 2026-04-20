@@ -7,16 +7,14 @@
 
 import {
   executeAsModal, getActiveDoc,
-  makeHueSatLayer, makeCurvesLayer, setLayerBlendIf,
+  makeHueSatLayer, makeCurvesLayer, setLayerBlendIf, setClippingMask,
 } from "../services/photoshop";
 import { type ZonesState, type ZoneState, valueCurve, colorShiftCurves } from "../core/zoneTransform";
 
 const GROUP_NAME = "[Color Smash] zones";
 
-function zoneIsActive(z: ZoneState): boolean {
-  return z.hue !== 0 || z.sat !== 0 || z.value !== 0 || z.colorIntensity > 0;
-}
-
+// Always emit the same layer skeleton so the user can compare results across edits without
+// the structure changing. Inactive zones produce identity layers (no visual effect).
 function blendIfFor(z: ZoneState) {
   const a = Math.min(z.rangeStart, z.rangeEnd);
   const b = Math.max(z.rangeStart, z.rangeEnd);
@@ -48,45 +46,45 @@ export async function bakeZones(zones: ZonesState): Promise<string> {
       try { await prior.delete(); } catch { /* ignore */ }
     }
     const group = await doc.createLayerGroup({ name: GROUP_NAME });
-    let layersAdded = 0;
-    const order: ["highlights", "midtones", "shadows"] = ["highlights", "midtones", "shadows"];
 
-    for (const zoneName of order) {
+    // Create order: shadows → midtones → highlights. Each move with placeInside stacks on top
+    // of existing children, so final stack (top→bottom) = highlights, midtones, shadows. PS
+    // renders bottom→top, so shadows applies first, then midtones, then highlights — matching
+    // the simulator's per-zone application order.
+    // Within each zone: value → color → hue/sat (created in that order, ends with hue/sat on top
+    // of the zone subgroup → applied last per the simulator).
+    const zoneOrder: ("shadows" | "midtones" | "highlights")[] = ["shadows", "midtones", "highlights"];
+    let layersAdded = 0;
+
+    for (const zoneName of zoneOrder) {
       const z = zones[zoneName];
-      if (!zoneIsActive(z)) continue;
       const blend = blendIfFor(z);
 
-      if (z.value !== 0) {
-        const cv = await makeCurvesLayer(`${zoneName} value`, [
-          { channel: "composite", points: valueCurve(z) },
-        ]);
-        await cv.move(group, "placeInside");
-        try { await setLayerBlendIf(cv, blend); } catch (e) { console.warn("blendIf failed:", e); }
+      const addLayer = async (layer: any) => {
+        await layer.move(group, "placeInside");
+        try { await setLayerBlendIf(layer, blend); } catch (e) { console.warn("blendIf failed:", e); }
+        try { await setClippingMask(layer, true); } catch (e) { console.warn("clipping failed:", e); }
         layersAdded++;
-      }
+      };
 
-      if (z.colorIntensity > 0) {
-        const cs = colorShiftCurves(z);
-        const cc = await makeCurvesLayer(`${zoneName} color`, [
-          { channel: "red",   points: cs.r },
-          { channel: "green", points: cs.g },
-          { channel: "blue",  points: cs.b },
-        ]);
-        await cc.move(group, "placeInside");
-        try { await setLayerBlendIf(cc, blend); } catch (e) { console.warn("blendIf failed:", e); }
-        layersAdded++;
-      }
+      // Always create all 3 adjustment types per zone — identity values when zone is inactive.
+      const cv = await makeCurvesLayer(`${zoneName} value`, [
+        { channel: "composite", points: valueCurve(z) },
+      ]);
+      await addLayer(cv);
 
-      if (z.hue !== 0 || z.sat !== 0) {
-        const hs = await makeHueSatLayer(`${zoneName} hue/sat`, { hue: z.hue, saturation: z.sat });
-        await hs.move(group, "placeInside");
-        try { await setLayerBlendIf(hs, blend); } catch (e) { console.warn("blendIf failed:", e); }
-        layersAdded++;
-      }
+      const cs = colorShiftCurves(z);
+      const cc = await makeCurvesLayer(`${zoneName} color`, [
+        { channel: "red",   points: cs.r },
+        { channel: "green", points: cs.g },
+        { channel: "blue",  points: cs.b },
+      ]);
+      await addLayer(cc);
+
+      const hs = await makeHueSatLayer(`${zoneName} hue/sat`, { hue: z.hue, saturation: z.sat });
+      await addLayer(hs);
     }
 
-    return layersAdded === 0
-      ? "Nothing to bake — all zones at defaults."
-      : `Baked ${layersAdded} layer(s) into ${GROUP_NAME}.`;
+    return `Baked ${layersAdded} layers into ${GROUP_NAME} (consistent skeleton).`;
   }).catch((e: any) => `Error: ${e?.message ?? e}`);
 }

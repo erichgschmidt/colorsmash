@@ -273,6 +273,18 @@ export async function makeChannelMixerLayer(
   return doc.activeLayers?.[0] ?? doc.layers[0];
 }
 
+// Toggle clipping mask on a layer (Alt+Cmd+G equivalent). PS calls this "groupEvent".
+// When ON, the layer affects only the layer directly below it (chains with other clipped layers
+// down to the first non-clipped base layer).
+export async function setClippingMask(layer: any, clip: boolean): Promise<void> {
+  // Select the layer first so groupEvent targets it.
+  await action.batchPlay([
+    { _obj: "select", _target: [{ _ref: "layer", _id: layer.id }], makeVisible: false },
+    { _obj: clip ? "groupEvent" : "ungroup",
+      _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }] },
+  ], {});
+}
+
 // Set the Blend If "underlying" splits on a layer. The four values are the four positions of
 // the split sliders in 0..255: black-min (full-gated below), black-max (full-effect from), white-min
 // (full-effect to), white-max (full-gated above). Standard PS Blend If trapezoid.
