@@ -6,6 +6,7 @@ import { applyZones, type ZonesState, type ZoneState } from "../core/zoneTransfo
 import { useTargetPreview } from "./useTargetPreview";
 import { bakeZones } from "../app/bakeZones";
 import { MultiThumbSlider, type ZoneKey, ZONE_COLORS } from "./MultiThumbSlider";
+import { rgbaToBmpDataUrl } from "./encodeBmp";
 
 const DEFAULT_ZONE: ZoneState = {
   hue: 0, sat: 0, lift: 0,
@@ -31,12 +32,12 @@ const FIELDS: FieldSpec[] = [
 ];
 
 export function ZonesTab() {
-  const preview = useTargetPreview();
+  const { snap: preview, refresh: refreshPreview, error: previewError } = useTargetPreview();
   const zonesRef = useRef<ZonesState>(JSON.parse(JSON.stringify(DEFAULTS)));
   const [activeZone, setActiveZone] = useState<ZoneKey>("midtones");
   const [valuesEpoch, setValuesEpoch] = useState(0); // bumped when we want sliders to re-sync from refs
   const [tintHex, setTintHex] = useState("#808080");
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
   const rafPending = useRef(false);
   const [status, setStatus] = useState("Live preview · drag any thumb (zone-colored) to edit that zone. Range sliders cascade so zones can't cross.");
 
@@ -45,16 +46,10 @@ export function ZonesTab() {
     rafPending.current = true;
     requestAnimationFrame(() => {
       rafPending.current = false;
-      const c = canvasRef.current;
-      if (!c || !preview) return;
-      c.width = preview.width;
-      c.height = preview.height;
-      const ctx = c.getContext("2d");
-      if (!ctx) return;
+      const img = imgRef.current;
+      if (!img || !preview) return;
       const transformed = applyZones(preview.data, zonesRef.current);
-      const id = ctx.createImageData(preview.width, preview.height);
-      id.data.set(transformed);
-      ctx.putImageData(id, 0, 0);
+      img.src = rgbaToBmpDataUrl(transformed, preview.width, preview.height);
     });
   };
 
@@ -111,12 +106,19 @@ export function ZonesTab() {
     <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
       <div style={{
         background: "#111", border: "1px solid #555",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        minHeight: 80, padding: 4,
+        display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+        minHeight: 100, padding: 4, position: "relative",
       }}>
         {preview
-          ? <canvas ref={canvasRef} style={{ maxWidth: "100%", maxHeight: 200 }} />
-          : <span style={{ color: "#666", fontSize: 10 }}>Select a layer to preview</span>}
+          ? <img ref={imgRef} alt="preview" style={{ maxWidth: "100%", maxHeight: 200 }} />
+          : <span style={{ color: "#666", fontSize: 10 }}>{previewError ?? "Loading preview…"}</span>}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", marginTop: 4, fontSize: 9, opacity: 0.6 }}>
+          <span>{preview ? `${preview.layerName} (${preview.width}×${preview.height})` : ""}</span>
+          <button onClick={refreshPreview} style={{
+            padding: "2px 8px", background: "transparent", color: "#aaa",
+            border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 9,
+          }}>↻ Refresh</button>
+        </div>
       </div>
 
       <div style={{ display: "flex" }}>

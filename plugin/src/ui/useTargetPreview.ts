@@ -1,9 +1,7 @@
 // Loads + caches a downsampled snapshot of the active layer for fast in-panel preview.
-// Re-fetches when the active layer changes.
 
-import { useEffect, useState } from "react";
-import { app, action } from "../services/photoshop";
-import { readLayerPixels, executeAsModal, getActiveDoc } from "../services/photoshop";
+import { useCallback, useEffect, useState } from "react";
+import { app, action, readLayerPixels, executeAsModal } from "../services/photoshop";
 import { downsampleToMaxEdge } from "../core/downsample";
 
 const PREVIEW_MAX_EDGE = 192;
@@ -11,34 +9,47 @@ const PREVIEW_MAX_EDGE = 192;
 export interface PreviewSnapshot {
   width: number;
   height: number;
-  data: Uint8Array; // RGBA, downsampled
+  data: Uint8Array;
+  layerName: string;
+  layerId: number;
 }
 
-export function useTargetPreview(): PreviewSnapshot | null {
+export function useTargetPreview(): { snap: PreviewSnapshot | null; refresh: () => void; error: string | null } {
   const [snap, setSnap] = useState<PreviewSnapshot | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let alive = true;
-    const refresh = async () => {
-      try {
-        const doc = app.activeDocument;
-        if (!doc) { if (alive) setSnap(null); return; }
-        const layer = doc.activeLayers?.[0] ?? doc.layers?.[0];
-        if (!layer) { if (alive) setSnap(null); return; }
-        const buf = await executeAsModal("Color Smash preview snapshot", async () => {
-          return await readLayerPixels(getActiveDoc().layers.find((l: any) => l.id === layer.id));
-        });
+  const refresh = useCallback(async () => {
+    try {
+      const doc = app.activeDocument;
+      if (!doc) { setSnap(null); setError("No active document"); return; }
+
+      const layerInfo = await executeAsModal("Color Smash preview", async () => {
+        const d = app.activeDocument;
+        if (!d) throw new Error("No doc");
+        const layer = d.activeLayers?.[0] ?? d.layers?.[0];
+        if (!layer) throw new Error("No layers");
+        const buf = await readLayerPixels(layer);
         const small = downsampleToMaxEdge(buf, PREVIEW_MAX_EDGE);
-        if (alive) setSnap({ width: small.width, height: small.height, data: small.data });
-      } catch {
-        if (alive) setSnap(null);
-      }
-    };
-    refresh();
-    const events = ["select", "make", "delete", "set", "open", "close"];
-    action.addNotificationListener(events, refresh);
-    return () => { alive = false; action.removeNotificationListener?.(events, refresh); };
+        return {
+          width: small.width, height: small.height, data: small.data,
+          layerName: layer.name, layerId: layer.id,
+        };
+      });
+      setSnap(layerInfo);
+      setError(null);
+    } catch (e: any) {
+      setSnap(null);
+      setError(e?.message ?? String(e));
+    }
   }, []);
 
-  return snap;
+  useEffect(() => {
+    refresh();
+    const events = ["select", "make", "delete", "set", "open", "close"];
+    const handler = () => refresh();
+    action.addNotificationListener(events, handler);
+    return () => { action.removeNotificationListener?.(events, handler); };
+  }, [refresh]);
+
+  return { snap, refresh, error };
 }
