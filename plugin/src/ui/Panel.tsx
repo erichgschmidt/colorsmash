@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { applyTransfer } from "../app/applyTransfer";
 import { applyAsLut } from "../app/applyAsLut";
+import { applyAsStack } from "../app/applyAsStack";
 import { runRoundTrip } from "../app/runRoundTrip";
 import { exportCube } from "../app/exportCube";
 import { useLayers } from "./useLayers";
@@ -69,6 +70,15 @@ export function Panel() {
     } catch (e) { setStatus(`Error: ${(e as Error).message}`); }
   };
 
+  const onApplyStack = async () => {
+    if (sourceId == null || targetId == null) { setStatus("Pick layers."); return; }
+    setStatus("Building stack...");
+    try {
+      const msg = await applyAsStack({ sourceLayerId: sourceId, targetLayerId: targetId, weights: buildWeights() });
+      setStatus(msg);
+    } catch (e) { setStatus(`Error: ${(e as Error).message}`); }
+  };
+
   const onRoundTrip = async () => {
     setStatus("Running...");
     try { setStatus(await runRoundTrip()); }
@@ -118,9 +128,10 @@ export function Panel() {
       <Slider label="Color Int." defaultValue={100} valueRef={chromaRef} />
       <Slider label="Neutralize" defaultValue={0} valueRef={neutRef} />
 
-      <button onClick={onApplyLut} style={btn}>Apply (LUT layer)</button>
-      <button onClick={onApply} style={btnSecondary}>Apply (baked pixels)</button>
+      <button onClick={onApplyStack} style={btn}>Apply (editable stack)</button>
+      <button onClick={onApply} style={btnSecondary}>Apply (baked pixels — exact)</button>
       <button onClick={onExportCube} style={btnSecondary}>Export .cube (33³)</button>
+      <button onClick={onApplyLut} style={btnSecondary}>Apply (LUT layer — experimental)</button>
       <button onClick={onRoundTrip} style={btnSecondary}>Debug round-trip</button>
 
       <div style={{ marginTop: "auto", fontSize: 10, opacity: 0.7, whiteSpace: "pre-wrap" }}>{status}</div>

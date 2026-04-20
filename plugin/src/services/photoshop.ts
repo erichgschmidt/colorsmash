@@ -161,6 +161,141 @@ export async function purgeColorSmashArtifacts(): Promise<number> {
 
 export { action, app };
 
+// ─── Adjustment layer creation (well-documented batchPlay paths) ─────────────
+
+type CurveChannel = "composite" | "red" | "green" | "blue";
+
+export async function makeCurvesLayer(
+  name: string,
+  channels: { channel: CurveChannel; points: { input: number; output: number }[] }[],
+): Promise<any> {
+  const doc = getActiveDoc();
+  await action.batchPlay([{
+    _obj: "make",
+    _target: [{ _ref: "adjustmentLayer" }],
+    using: {
+      _obj: "adjustmentLayer",
+      name,
+      type: {
+        _obj: "curves",
+        adjustment: channels.map(c => ({
+          _obj: "curvesAdjustment",
+          channel: { _ref: "channel", _enum: "channel", _value: c.channel },
+          curve: c.points.map(p => ({ _obj: "paint", horizontal: p.input, vertical: p.output })),
+        })),
+      },
+    },
+  }], {});
+  return doc.activeLayers?.[0] ?? doc.layers[0];
+}
+
+export async function makeColorBalanceLayer(
+  name: string,
+  zones: {
+    shadows?:    { cyanRed: number; magentaGreen: number; yellowBlue: number };
+    midtones?:   { cyanRed: number; magentaGreen: number; yellowBlue: number };
+    highlights?: { cyanRed: number; magentaGreen: number; yellowBlue: number };
+  },
+  preserveLuminosity = false,
+): Promise<any> {
+  const doc = getActiveDoc();
+  const t: any = { _obj: "colorBalance", preserveLuminosity };
+  if (zones.shadows)    t.shadowLevels    = [zones.shadows.cyanRed,    zones.shadows.magentaGreen,    zones.shadows.yellowBlue];
+  if (zones.midtones)   t.midtoneLevels   = [zones.midtones.cyanRed,   zones.midtones.magentaGreen,   zones.midtones.yellowBlue];
+  if (zones.highlights) t.highlightLevels = [zones.highlights.cyanRed, zones.highlights.magentaGreen, zones.highlights.yellowBlue];
+  await action.batchPlay([{
+    _obj: "make",
+    _target: [{ _ref: "adjustmentLayer" }],
+    using: { _obj: "adjustmentLayer", name, type: t },
+  }], {});
+  return doc.activeLayers?.[0] ?? doc.layers[0];
+}
+
+// Selective Color per family: each family gets cyan, magenta, yellow, black adjustments (-100..100).
+export interface SelectiveColorRow { cyan: number; magenta: number; yellow: number; black: number }
+export type SelectiveColorFamily = "reds" | "yellows" | "greens" | "cyans" | "blues" | "magentas" | "whites" | "neutrals" | "blacks";
+export async function makeSelectiveColorLayer(
+  name: string,
+  families: Partial<Record<SelectiveColorFamily, SelectiveColorRow>>,
+  relative = true,
+): Promise<any> {
+  const doc = getActiveDoc();
+  const colorCorrections: any[] = [];
+  for (const [family, row] of Object.entries(families)) {
+    if (!row) continue;
+    colorCorrections.push({
+      _obj: "colorCorrection",
+      colors: { _enum: "colors", _value: family },
+      cyan:    row.cyan,
+      magenta: row.magenta,
+      yellowColor: row.yellow,
+      black:   row.black,
+    });
+  }
+  await action.batchPlay([{
+    _obj: "make",
+    _target: [{ _ref: "adjustmentLayer" }],
+    using: {
+      _obj: "adjustmentLayer",
+      name,
+      type: {
+        _obj: "selectiveColor",
+        method: { _enum: "correctionMethod", _value: relative ? "relative" : "absolute" },
+        colorCorrection: colorCorrections,
+      },
+    },
+  }], {});
+  return doc.activeLayers?.[0] ?? doc.layers[0];
+}
+
+// Channel Mixer per-output-channel: outR = aR + bG + cB + offset (each value as percent).
+export interface ChannelMixerRow { red: number; green: number; blue: number; constant: number }
+export async function makeChannelMixerLayer(
+  name: string,
+  rows: { red: ChannelMixerRow; green: ChannelMixerRow; blue: ChannelMixerRow },
+): Promise<any> {
+  const doc = getActiveDoc();
+  await action.batchPlay([{
+    _obj: "make",
+    _target: [{ _ref: "adjustmentLayer" }],
+    using: {
+      _obj: "adjustmentLayer",
+      name,
+      type: {
+        _obj: "channelMixer",
+        monochromatic: false,
+        red:   { _obj: "channelMatrix", red: rows.red.red,   grain: rows.red.green,   blue: rows.red.blue,   constant: rows.red.constant },
+        green: { _obj: "channelMatrix", red: rows.green.red, grain: rows.green.green, blue: rows.green.blue, constant: rows.green.constant },
+        blue:  { _obj: "channelMatrix", red: rows.blue.red,  grain: rows.blue.green,  blue: rows.blue.blue,  constant: rows.blue.constant },
+      },
+    },
+  }], {});
+  return doc.activeLayers?.[0] ?? doc.layers[0];
+}
+
+export async function makeHueSatLayer(name: string, master: { saturation: number; hue?: number; lightness?: number }): Promise<any> {
+  const doc = getActiveDoc();
+  await action.batchPlay([{
+    _obj: "make",
+    _target: [{ _ref: "adjustmentLayer" }],
+    using: {
+      _obj: "adjustmentLayer",
+      name,
+      type: {
+        _obj: "hueSaturation",
+        colorize: false,
+        adjustment: [{
+          _obj: "hueSatAdjustmentV2",
+          hue: master.hue ?? 0,
+          saturation: master.saturation,
+          lightness: master.lightness ?? 0,
+        }],
+      },
+    },
+  }], {});
+  return doc.activeLayers?.[0] ?? doc.layers[0];
+}
+
 // Write a .cube file into the plugin's data folder. Returns the path + raw bytes — Color Lookup
 // batchPlay needs both (file path for display + inline bytes as Uint8Array).
 export async function writeLutFile(text: string, filename = "color-smash.cube"): Promise<{ path: string; bytes: Uint8Array }> {
