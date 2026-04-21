@@ -94,11 +94,23 @@ export async function bakeZones(zones: ZonesState): Promise<string> {
       };
 
       // Create order within zone: color → hue/sat. Each placeInside puts on top of subgroup.
-      const cs = colorShiftCurves(z);
+      // Prefer the zone-specific Lab-fitted LUT when Auto Match has populated it; fall back to
+      // the delta-encoded color picker curve.
+      let ccPoints;
+      if (z.colorLUT) {
+        ccPoints = {
+          r: lutToCurvePoints(z.colorLUT.r, 17),
+          g: lutToCurvePoints(z.colorLUT.g, 17),
+          b: lutToCurvePoints(z.colorLUT.b, 17),
+        };
+      } else {
+        const cs = colorShiftCurves(z);
+        ccPoints = { r: cs.r, g: cs.g, b: cs.b };
+      }
       const cc = await makeCurvesLayer(`${zoneName} color`, [
-        { channel: "red",   points: cs.r },
-        { channel: "green", points: cs.g },
-        { channel: "blue",  points: cs.b },
+        { channel: "red",   points: ccPoints.r },
+        { channel: "green", points: ccPoints.g },
+        { channel: "blue",  points: ccPoints.b },
       ]);
       await addLayer(cc);
 

@@ -2,7 +2,7 @@
 // Each parameter slider shows all 3 zones at once; range sliders cascade so zones don't cross.
 
 import { useEffect, useRef, useState } from "react";
-import { applyZones, autoDetectTonal, labStatsInBand, lPercentiles, lMeanStddev, buildLabCorrelationLUT, fadeLUT, IDENTITY_TONAL, type ZonesState, type ZoneState, type TonalState } from "../core/zoneTransform";
+import { applyZones, autoDetectTonal, labStatsInBand, lPercentiles, lMeanStddev, buildLabCorrelationLUT, buildLabCorrelationLUTInBand, fadeLUT, IDENTITY_TONAL, type ZonesState, type ZoneState, type TonalState } from "../core/zoneTransform";
 import { useLayerPreview } from "./useLayerPreview";
 import { useLayers } from "./useLayers";
 import { bakeZones } from "../app/bakeZones";
@@ -205,13 +205,13 @@ export function ZonesTab() {
       const tgtStats = labStatsInBand(targetSnap.data, band.lo, band.hi);
       const z = zonesRef.current[zoneName];
       if (!srcStats || !tgtStats) {
-        // Fallback: leave color at gray = no shift.
         z.colorR = 128; z.colorG = 128; z.colorB = 128;
         z.colorIntensity = 0; z.sat = 0; z.hue = 0;
+        z.colorLUT = undefined;
         continue;
       }
 
-      // Per-zone delta scaled by Match Strength. At k=0, all per-zone effects collapse to identity.
+      // Per-zone delta (for the color picker display) — scaled by Match Strength.
       const dR = (srcStats.meanRGB.r - tgtStats.meanRGB.r) * k;
       const dG = (srcStats.meanRGB.g - tgtStats.meanRGB.g) * k;
       const dB = (srcStats.meanRGB.b - tgtStats.meanRGB.b) * k;
@@ -220,6 +220,19 @@ export function ZonesTab() {
       z.colorB = Math.round(Math.max(0, Math.min(255, 128 + dB)));
       const deltaMag = Math.sqrt(dR * dR + dG * dG + dB * dB);
       z.colorIntensity = deltaMag < 2 ? 0 : 100;
+
+      // Zone-specific Lab-fitted LUT: much tighter fit than the global LUT because it only
+      // considers pixels in this zone's L band.
+      const bandFull = buildLabCorrelationLUTInBand(
+        targetSnap.data, sourceSnap.data,
+        band.lo, band.hi,
+        band.lo, band.hi,
+      );
+      z.colorLUT = {
+        r: fadeLUT(bandFull.r, k),
+        g: fadeLUT(bandFull.g, k),
+        b: fadeLUT(bandFull.b, k),
+      };
 
       const srcChroma = (srcStats.sA + srcStats.sB) / 2;
       const tgtChroma = (tgtStats.sA + tgtStats.sB) / 2;
@@ -289,6 +302,8 @@ export function ZonesTab() {
     zonesRef.current[zone].colorR = r;
     zonesRef.current[zone].colorG = g;
     zonesRef.current[zone].colorB = b;
+    // Manual edit clears the Lab-fitted LUT so the color picker actually drives the zone.
+    zonesRef.current[zone].colorLUT = undefined;
     setZoneHex(prev => ({ ...prev, [zone]: hex }));
     scheduleRedraw();
   };

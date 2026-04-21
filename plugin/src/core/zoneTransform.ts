@@ -7,16 +7,18 @@
 // Each zone weighted by trapezoidal tonal mask, blended into input.
 
 export interface ZoneState {
-  hue: number;            // -180..180
-  sat: number;            // -100..100
-  colorR: number;         // 0..255 — target color for the per-channel shift
+  hue: number;
+  sat: number;
+  colorR: number;
   colorG: number;
   colorB: number;
-  colorIntensity: number; // 0..100 — how strongly to push channels toward the target
-  rangeStart: number;     // 0..100 (full-effect start)
-  rangeEnd: number;       // 0..100 (full-effect end)
-  featherLeft: number;    // 0..100
-  featherRight: number;   // 0..100
+  colorIntensity: number;
+  rangeStart: number;
+  rangeEnd: number;
+  featherLeft: number;
+  featherRight: number;
+  // Optional per-zone Lab-fitted per-channel LUTs. When present, override the color picker delta.
+  colorLUT?: { r: number[]; g: number[]; b: number[] };
 }
 
 export interface TonalState {
@@ -165,7 +167,12 @@ function applyZone(input: { r: number; g: number; b: number }, z: ZoneState, w: 
   if (w === 0) return input;
   let r = input.r, g = input.g, b = input.b;
 
-  if (z.colorIntensity > 0) {
+  // Per-zone colorLUT (Lab-fitted per-channel) overrides the delta-encoded color shift.
+  if (z.colorLUT) {
+    r = z.colorLUT.r[Math.max(0, Math.min(255, Math.round(r * 255)))] / 255;
+    g = z.colorLUT.g[Math.max(0, Math.min(255, Math.round(g * 255)))] / 255;
+    b = z.colorLUT.b[Math.max(0, Math.min(255, Math.round(b * 255)))] / 255;
+  } else if (z.colorIntensity > 0) {
     const cc = colorShiftCurves(z);
     r = applyCurve(r * 255, cc.r) / 255;
     g = applyCurve(g * 255, cc.g) / 255;
@@ -260,6 +267,99 @@ export function meanColorInBand(rgba: Uint8Array, lowL100: number, highL100: num
   }
   if (n === 0) return null;
   return { r: Math.round(sumR / n), g: Math.round(sumG / n), b: Math.round(sumB / n) };
+}
+
+// Per-zone Lab-correlation LUT: same conditional-expectation fitting but restricted to pixels
+// whose L falls within the zone's L range (with soft inclusion via the trapezoidal weight).
+// Yields tighter, zone-specific RGB curves that carry source's palette for that tonal band.
+export function buildLabCorrelationLUTInBand(
+  targetRgba: Uint8Array,
+  sourceRgba: Uint8Array,
+  tgtLowL100: number, tgtHighL100: number,
+  srcLowL100: number, srcHighL100: number,
+): { r: number[]; g: number[]; b: number[] } {
+  const L_MAX = 100, AB_OFF = 128;
+  const quantL = (L: number) => Math.max(0, Math.min(255, Math.round(L / L_MAX * 255)));
+  const quantAB = (v: number) => Math.max(0, Math.min(255, Math.round(v + AB_OFF)));
+
+  const tLHist = new Uint32Array(256), tAHist = new Uint32Array(256), tBHist = new Uint32Array(256);
+  const sLHist = new Uint32Array(256), sAHist = new Uint32Array(256), sBHist = new Uint32Array(256);
+  let tN = 0, sN = 0;
+  for (let i = 0; i < targetRgba.length; i += 4) {
+    if (targetRgba[i + 3] === 0) continue;
+    const L100 = (0.2126 * targetRgba[i] + 0.7152 * targetRgba[i + 1] + 0.0722 * targetRgba[i + 2]) / 255 * 100;
+    if (L100 < tgtLowL100 || L100 > tgtHighL100) continue;
+    const lab = rgb2lab({ r: targetRgba[i] / 255, g: targetRgba[i + 1] / 255, b: targetRgba[i + 2] / 255 });
+    tLHist[quantL(lab.L)]++; tAHist[quantAB(lab.a)]++; tBHist[quantAB(lab.b)]++; tN++;
+  }
+  for (let i = 0; i < sourceRgba.length; i += 4) {
+    if (sourceRgba[i + 3] === 0) continue;
+    const L100 = (0.2126 * sourceRgba[i] + 0.7152 * sourceRgba[i + 1] + 0.0722 * sourceRgba[i + 2]) / 255 * 100;
+    if (L100 < srcLowL100 || L100 > srcHighL100) continue;
+    const lab = rgb2lab({ r: sourceRgba[i] / 255, g: sourceRgba[i + 1] / 255, b: sourceRgba[i + 2] / 255 });
+    sLHist[quantL(lab.L)]++; sAHist[quantAB(lab.a)]++; sBHist[quantAB(lab.b)]++; sN++;
+  }
+  if (tN === 0 || sN === 0) {
+    const id = Array.from({ length: 256 }, (_, i) => i);
+    return { r: id, g: id, b: id };
+  }
+
+  const cdfMatch = (tgtHist: Uint32Array, srcHist: Uint32Array): number[] => {
+    const tCDF = new Float64Array(256), sCDF = new Float64Array(256);
+    let cT = 0, cS = 0;
+    for (let v = 0; v < 256; v++) { cT += tgtHist[v]; cS += srcHist[v]; tCDF[v] = cT / tN; sCDF[v] = cS / sN; }
+    const lut = new Array<number>(256);
+    let u = 0;
+    for (let v = 0; v < 256; v++) {
+      const t = tCDF[v];
+      while (u < 255 && sCDF[u] < t) u++;
+      lut[v] = u;
+    }
+    return lut;
+  };
+  const lutL = cdfMatch(tLHist, sLHist);
+  const lutA = cdfMatch(tAHist, sAHist);
+  const lutB = cdfMatch(tBHist, sBHist);
+
+  const rSum = new Float64Array(256), rCount = new Uint32Array(256);
+  const gSum = new Float64Array(256), gCount = new Uint32Array(256);
+  const bSum = new Float64Array(256), bCount = new Uint32Array(256);
+  for (let i = 0; i < targetRgba.length; i += 4) {
+    if (targetRgba[i + 3] === 0) continue;
+    const r = targetRgba[i], g = targetRgba[i + 1], b = targetRgba[i + 2];
+    const L100 = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 * 100;
+    if (L100 < tgtLowL100 || L100 > tgtHighL100) continue;
+    const lab = rgb2lab({ r: r / 255, g: g / 255, b: b / 255 });
+    const Lout = lutL[quantL(lab.L)] / 255 * L_MAX;
+    const aOut = lutA[quantAB(lab.a)] - AB_OFF;
+    const bOut = lutB[quantAB(lab.b)] - AB_OFF;
+    const rgbOut = lab2rgb({ L: Lout, a: aOut, b: bOut });
+    const ro = Math.max(0, Math.min(255, Math.round(rgbOut.r * 255)));
+    const go = Math.max(0, Math.min(255, Math.round(rgbOut.g * 255)));
+    const bo = Math.max(0, Math.min(255, Math.round(rgbOut.b * 255)));
+    rSum[r] += ro; rCount[r]++;
+    gSum[g] += go; gCount[g]++;
+    bSum[b] += bo; bCount[b]++;
+  }
+
+  const finalize = (sum: Float64Array, count: Uint32Array): number[] => {
+    const lut = new Array<number>(256);
+    for (let v = 0; v < 256; v++) lut[v] = count[v] > 0 ? Math.round(sum[v] / count[v]) : v;
+    let lastFilled = -1;
+    for (let v = 0; v < 256; v++) {
+      if (count[v] > 0) {
+        if (lastFilled >= 0 && v - lastFilled > 1) {
+          for (let k = lastFilled + 1; k < v; k++) {
+            const t = (k - lastFilled) / (v - lastFilled);
+            lut[k] = Math.round(lut[lastFilled] * (1 - t) + lut[v] * t);
+          }
+        }
+        lastFilled = v;
+      }
+    }
+    return lut;
+  };
+  return { r: finalize(rSum, rCount), g: finalize(gSum, gCount), b: finalize(bSum, bCount) };
 }
 
 // Lab-correlation LUT: build per-channel R/G/B LUTs that best approximate a Lab-space
