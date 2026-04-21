@@ -53,14 +53,9 @@ export async function applyLutViaAction(params: ApplyLutViaActionParams): Promis
     const file = await dataFolder.createFile(LUT_FILENAME, { overwrite: true });
     await file.write(text, { format: uxp.storage.formats.utf8 });
 
-    // 3: create an empty Color Lookup adjustment layer (now the targetEnum).
-    await psAction.batchPlay([{
-      _obj: "make",
-      _target: [{ _ref: "adjustmentLayer" }],
-      using: { _obj: "adjustmentLayer", name: ACTION_NAME, type: { _obj: "colorLookup" } },
-    }], {});
-
-    // 4: play the recorded action — loads the LUT into the new Color Lookup layer via Lod3.
+    // The recorded Action handles BOTH creating the Color Lookup layer AND loading the file —
+    // because the user records via Layer > New Adjustment Layer > Color Lookup > Load 3D LUT
+    // (a single user-facing flow that records as a make + a load step).
     try {
       await psAction.batchPlay([{
         _obj: "play",
@@ -69,9 +64,9 @@ export async function applyLutViaAction(params: ApplyLutViaActionParams): Promis
           { _ref: "actionSet", _name: ACTION_SET },
         ],
       }], {});
-      return `LUT installed via batchPlay (layer) + Action (Lod3 load).`;
+      return `LUT installed via Action play.`;
     } catch (e: any) {
-      return `Layer created, but Action play failed. Run "Setup LUT Action" first. Error: ${e?.message ?? e}`;
+      return `Action play failed. Run "Setup LUT Action" first and follow the recording steps. Error: ${e?.message ?? e}`;
     }
   });
 }
