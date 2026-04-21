@@ -46,13 +46,27 @@ export function ZonesTab() {
   const { snap: targetSnap, refresh: refreshTarget } = useLayerPreview(targetId);
   const preview = targetSnap;
 
-  const [zoneCount, setZoneCount] = useState(3);
-  const initial = buildDefaultState(zoneCount);
+  const [zoneCount, setZoneCountState] = useState(3);
+  const initial = buildDefaultState(3);
   const boundsRef = useRef<TonalBounds>(initial.bounds);
   const zonesRef = useRef<ZonesState>(initial.zones);
   const [activeZoneIdx, setActiveZoneIdx] = useState(0);
   const [valuesEpoch, setValuesEpoch] = useState(0);
-  const [zoneColors, setZoneColors] = useState<string[]>(paletteFor(zoneCount));
+  const [zoneColors, setZoneColors] = useState<string[]>(paletteFor(3));
+
+  // Atomic zone-count change: rebuild refs FIRST, then trigger React render. Avoids a render
+  // pass where zonesRef still has old length but state already has new count.
+  const setZoneCount = (n: number) => {
+    const s = buildDefaultState(n);
+    boundsRef.current = s.bounds;
+    zonesRef.current = s.zones;
+    setActiveZoneIdx(0);
+    setZoneColors(paletteFor(n));
+    setValuesEpoch(v => v + 1);
+    setTonalEpoch(v => v + 1);
+    setZoneCountState(n);
+    setTimeout(() => scheduleRedraw(), 0);
+  };
   const [tonalEpoch, setTonalEpoch] = useState(0);
   const matchStrengthRef = useRef(60);
 
@@ -86,17 +100,6 @@ export function ZonesTab() {
 
   useEffect(scheduleRedraw, [preview]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Rebuild zones when zoneCount changes.
-  useEffect(() => {
-    const s = buildDefaultState(zoneCount);
-    boundsRef.current = s.bounds;
-    zonesRef.current = s.zones;
-    setActiveZoneIdx(0);
-    setZoneColors(paletteFor(zoneCount));
-    setValuesEpoch(n => n + 1);
-    setTonalEpoch(n => n + 1);
-    scheduleRedraw();
-  }, [zoneCount]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onBoundsChange = (b: TonalBounds) => {
     boundsRef.current = b;
@@ -318,9 +321,9 @@ export function ZonesTab() {
       />
 
       <div style={{ display: "flex", marginTop: 4 }}>
-        {Array.from({ length: zoneCount }, (_, i) => (
+        {zonesRef.current.zones.map((_, i) => (
           <button key={i} style={tabBtn(i)} onClick={() => setActiveZoneIdx(i)}>
-            {zoneLabel(i, zoneCount)}
+            {zoneLabel(i, zonesRef.current.zones.length)}
           </button>
         ))}
       </div>
@@ -333,8 +336,7 @@ export function ZonesTab() {
 
       {/* Color swatches per zone */}
       <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
-        {Array.from({ length: zoneCount }, (_, i) => {
-          const z = zonesRef.current.zones[i];
+        {zonesRef.current.zones.map((z, i) => {
           const hex = `#${z.colorR.toString(16).padStart(2, "0")}${z.colorG.toString(16).padStart(2, "0")}${z.colorB.toString(16).padStart(2, "0")}`;
           return (
             <input key={`swatch-${i}-${valuesEpoch}`} type="color"
