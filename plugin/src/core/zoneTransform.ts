@@ -23,8 +23,10 @@ export interface TonalState {
   blackPoint: number;        // 0..255 — input level mapped to outputBlack
   whitePoint: number;        // 0..255 — input level mapped to outputWhite
   gamma: number;             // 0.1..3.0 — midpoint shift (1.0 = identity)
-  outputBlack: number;       // 0..255 — destination floor (source's darkest)
-  outputWhite: number;       // 0..255 — destination ceiling (source's brightest)
+  outputBlack: number;       // 0..255 — destination floor
+  outputWhite: number;       // 0..255 — destination ceiling
+  matchCurve?: number[];     // optional 256-entry LUT (input → output) from histogram matching
+                             // When present, OVERRIDES the linear black/white/gamma behavior.
 }
 
 export const IDENTITY_TONAL: TonalState = {
@@ -114,9 +116,12 @@ export function colorShiftCurves(z: ZoneState) {
   };
 }
 
-// Levels-style global tonal mapping: input black→outputBlack, input white→outputWhite,
-// with gamma midpoint. Identity = 0/255 input, 0/255 output, gamma 1.
+// Levels-style global tonal mapping with optional histogram-match LUT override.
 export function applyTonal(input: number, t: TonalState): number {
+  if (t.matchCurve) {
+    const i = Math.max(0, Math.min(255, Math.round(input)));
+    return t.matchCurve[i];
+  }
   if (t.blackPoint === 0 && t.whitePoint === 255 && t.gamma === 1.0
       && t.outputBlack === 0 && t.outputWhite === 255) return input;
   const black = Math.max(0, Math.min(254, t.blackPoint));
@@ -245,6 +250,55 @@ export function meanColorInBand(rgba: Uint8Array, lowL100: number, highL100: num
   }
   if (n === 0) return null;
   return { r: Math.round(sumR / n), g: Math.round(sumG / n), b: Math.round(sumB / n) };
+}
+
+// Histogram match: build a 256-entry LUT that, when applied to target's L, produces an output
+// distribution whose CDF matches source's CDF — i.e., output's histogram looks like source's
+// histogram. This is the canonical histogram-specification algorithm.
+export function buildHistogramMatchLUT(targetRgba: Uint8Array, sourceRgba: Uint8Array): number[] {
+  const tgtHist = new Uint32Array(256);
+  const srcHist = new Uint32Array(256);
+  let tgtN = 0, srcN = 0;
+  for (let i = 0; i < targetRgba.length; i += 4) {
+    if (targetRgba[i + 3] === 0) continue;
+    const L = Math.round(0.2126 * targetRgba[i] + 0.7152 * targetRgba[i + 1] + 0.0722 * targetRgba[i + 2]);
+    tgtHist[Math.max(0, Math.min(255, L))]++;
+    tgtN++;
+  }
+  for (let i = 0; i < sourceRgba.length; i += 4) {
+    if (sourceRgba[i + 3] === 0) continue;
+    const L = Math.round(0.2126 * sourceRgba[i] + 0.7152 * sourceRgba[i + 1] + 0.0722 * sourceRgba[i + 2]);
+    srcHist[Math.max(0, Math.min(255, L))]++;
+    srcN++;
+  }
+  if (tgtN === 0 || srcN === 0) return Array.from({ length: 256 }, (_, i) => i);
+
+  // Normalized CDFs.
+  const tgtCDF = new Float64Array(256);
+  const srcCDF = new Float64Array(256);
+  let cT = 0, cS = 0;
+  for (let v = 0; v < 256; v++) { cT += tgtHist[v]; cS += srcHist[v]; tgtCDF[v] = cT / tgtN; srcCDF[v] = cS / srcN; }
+
+  // For each target value v, find smallest u where srcCDF[u] >= tgtCDF[v]. That u is the matched output.
+  const lut = new Array<number>(256);
+  let u = 0;
+  for (let v = 0; v < 256; v++) {
+    const t = tgtCDF[v];
+    while (u < 255 && srcCDF[u] < t) u++;
+    lut[v] = u;
+  }
+  return lut;
+}
+
+// Subsample the 256-entry LUT down to N anchor points for a Curves layer. PS Curves supports
+// up to ~16 anchors comfortably; 17 evenly spaced points capture most of the LUT shape.
+export function lutToCurvePoints(lut: number[], anchors = 17): { input: number; output: number }[] {
+  const out: { input: number; output: number }[] = [];
+  for (let i = 0; i < anchors; i++) {
+    const x = Math.round((i / (anchors - 1)) * 255);
+    out.push({ input: x, output: Math.max(0, Math.min(255, lut[x])) });
+  }
+  return out;
 }
 
 // Compute global L mean + stddev (in 0..255 RGB-byte units) from a pixel buffer.

@@ -9,7 +9,7 @@ import {
   executeAsModal, getActiveDoc,
   makeHueSatLayer, makeCurvesLayer, makeLevelsLayer, setLayerBlendIf, setClippingMask,
 } from "../services/photoshop";
-import { type ZonesState, type ZoneState, colorShiftCurves, IDENTITY_TONAL } from "../core/zoneTransform";
+import { type ZonesState, type ZoneState, colorShiftCurves, IDENTITY_TONAL, lutToCurvePoints } from "../core/zoneTransform";
 
 const GROUP_NAME = "[Color Smash] zones";
 
@@ -54,9 +54,18 @@ export async function bakeZones(zones: ZonesState): Promise<string> {
     void purged;
     const group = await doc.createLayerGroup({ name: GROUP_NAME });
 
-    // Global tonal (Levels) layer — applied first by PS (bottom of group).
+    // Global tonal layer — applied first by PS (bottom of group).
+    // If we have a histogram-match LUT, emit it as a Curves layer (17 anchors) since Levels
+    // can't express a non-linear lookup. Otherwise use a Levels layer with the affine params.
     const tonal = zones.tonal ?? IDENTITY_TONAL;
-    const tonalLayer = await makeLevelsLayer("tonal", tonal);
+    let tonalLayer: any;
+    if (tonal.matchCurve) {
+      tonalLayer = await makeCurvesLayer("tonal (histogram match)", [
+        { channel: "composite", points: lutToCurvePoints(tonal.matchCurve, 17) },
+      ]);
+    } else {
+      tonalLayer = await makeLevelsLayer("tonal", tonal);
+    }
     await tonalLayer.move(group, "placeInside");
     try { await setClippingMask(tonalLayer, true); } catch (e) { console.warn("clipping failed:", e); }
     let layersAdded = 1;

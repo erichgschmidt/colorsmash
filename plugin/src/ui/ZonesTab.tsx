@@ -2,7 +2,7 @@
 // Each parameter slider shows all 3 zones at once; range sliders cascade so zones don't cross.
 
 import { useEffect, useRef, useState } from "react";
-import { applyZones, autoDetectTonal, labStatsInBand, lPercentiles, lMeanStddev, IDENTITY_TONAL, type ZonesState, type ZoneState, type TonalState } from "../core/zoneTransform";
+import { applyZones, autoDetectTonal, labStatsInBand, lPercentiles, lMeanStddev, buildHistogramMatchLUT, IDENTITY_TONAL, type ZonesState, type ZoneState, type TonalState } from "../core/zoneTransform";
 import { useLayerPreview } from "./useLayerPreview";
 import { useLayers } from "./useLayers";
 import { bakeZones } from "../app/bakeZones";
@@ -124,9 +124,10 @@ export function ZonesTab() {
     scheduleHighlightRefresh();
   };
 
-  // Drag updates: only ref + redraw; no React state change so the slider doesn't re-mount mid-drag.
+  // Drag updates: ref + redraw, no React state change. Manual edits clear the histogram-match
+  // override so the linear black/white/gamma controls take effect again.
   const onTonalChange = (patch: Partial<TonalState>) => {
-    zonesRef.current.tonal = { ...zonesRef.current.tonal, ...patch };
+    zonesRef.current.tonal = { ...zonesRef.current.tonal, ...patch, matchCurve: undefined };
     scheduleRedraw();
   };
 
@@ -147,31 +148,17 @@ export function ZonesTab() {
   const onAutoMatch = () => {
     if (!sourceSnap || !targetSnap) { setStatus("Pick both source and target."); return; }
 
-    // Reinhard L-axis affine via Levels:
-    //   output_L = (input_L - μt) * (σs/σt) + μs
-    // Set Levels black/white so the layer reproduces this exactly with gamma = 1:
-    //   input  black/white = μt ± 2σt   (captures ~95% of target's distribution)
-    //   output black/white = μs ± 2σs   (maps to ~95% of source's distribution)
-    // Clamps prevent blow-outs when source's spread is wide; the data is rescaled, not stretched
-    // beyond the bounds the source itself uses.
-    const tgt = lMeanStddev(targetSnap.data);
-    const src = lMeanStddev(sourceSnap.data);
-    const SIGMA = 2;
-    const clampByte = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
-    const tgtBlack = clampByte(tgt.mean - SIGMA * tgt.stddev);
-    const tgtWhite = clampByte(tgt.mean + SIGMA * tgt.stddev);
-    const srcBlack = clampByte(src.mean - SIGMA * src.stddev);
-    const srcWhite = clampByte(src.mean + SIGMA * src.stddev);
+    // True histogram matching: build a LUT that remaps target's L distribution to match source's.
+    // Stored as matchCurve override; bakes as a 17-point Curves layer that captures the shape.
+    const matchLUT = buildHistogramMatchLUT(targetSnap.data, sourceSnap.data);
     zonesRef.current.tonal = {
       ...zonesRef.current.tonal,
-      blackPoint:  tgtBlack,
-      whitePoint:  Math.max(tgtBlack + 1, tgtWhite),
-      outputBlack: srcBlack,
-      outputWhite: Math.max(srcBlack, srcWhite),
-      gamma:       1.0,
+      matchCurve: matchLUT,
+      // Clear the linear levels params so manual sliders show "neutral" until the user touches them.
+      blackPoint: 0, whitePoint: 255, gamma: 1.0, outputBlack: 0, outputWhite: 255,
     };
-    // Keep srcRange around for boundary clamping below.
-    const srcRange = { blackPoint: srcBlack, whitePoint: Math.max(srcBlack, srcWhite) };
+    // For boundary clamping: use source's actual min/max from the LUT (first/last non-flat values).
+    const srcRange = autoDetectTonal(sourceSnap.data);
 
     // Auto-place zone boundaries based on source's L distribution percentiles.
     // Zones operate on POST-tonal L values, so boundaries are in the same space as where the
@@ -256,7 +243,9 @@ export function ZonesTab() {
       setTintHex(`#${r}${g}${bx}`);
     }
     scheduleRedraw();
-    setStatus(`Auto-match (μ±2σ): target ${tgtBlack}-${tgtWhite} (μ${tgt.mean.toFixed(0)}/σ${tgt.stddev.toFixed(0)}) → source ${srcBlack}-${srcWhite} (μ${src.mean.toFixed(0)}/σ${src.stddev.toFixed(0)}); ${matched}/3 zones. Dial + Bake.`);
+    const tgtStat = lMeanStddev(targetSnap.data);
+    const srcStat = lMeanStddev(sourceSnap.data);
+    setStatus(`Auto-match (histogram): target μ${tgtStat.mean.toFixed(0)}/σ${tgtStat.stddev.toFixed(0)} → source μ${srcStat.mean.toFixed(0)}/σ${srcStat.stddev.toFixed(0)}; ${matched}/3 zones. Dial + Bake.`);
   };
   const [tonalEpoch, setTonalEpoch] = useState(0);
 
