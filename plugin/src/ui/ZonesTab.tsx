@@ -2,13 +2,14 @@
 // Each parameter slider shows all 3 zones at once; range sliders cascade so zones don't cross.
 
 import { useEffect, useRef, useState } from "react";
-import { applyZones, autoDetectTonal, IDENTITY_TONAL, type ZonesState, type ZoneState, type TonalState } from "../core/zoneTransform";
-import { useTargetPreview } from "./useTargetPreview";
+import { applyZones, autoDetectTonal, meanColorInBand, IDENTITY_TONAL, type ZonesState, type ZoneState, type TonalState } from "../core/zoneTransform";
+import { useLayerPreview } from "./useLayerPreview";
+import { useLayers } from "./useLayers";
 import { bakeZones } from "../app/bakeZones";
 import { MultiThumbSlider, type ZoneKey, ZONE_COLORS } from "./MultiThumbSlider";
 import { TonalZonesSlider, type TonalBounds, boundsToRanges } from "./TonalZonesSlider";
 import { Histogram } from "./Histogram";
-import { rgbaToPngDataUrl } from "./encodePng";
+import { PreviewPane } from "./PreviewPane";
 
 const DEFAULT_ZONE: ZoneState = {
   hue: 0, sat: 0,
@@ -28,6 +29,29 @@ const FIELDS: FieldSpec[] = [
 
 const DEFAULT_BOUNDS: TonalBounds = { t1: 25, t2: 40, t3: 60, t4: 75, pad1: 0, pad2: 0 };
 
+// Uncontrolled tonal slider row — value updates label via ref, no React re-render per drag tick.
+function TonalSliderRow(props: {
+  label: string; min: number; max: number; step: number;
+  defaultValue: number; format: (v: number) => string;
+  onInput: (v: number) => void;
+}) {
+  const labelRef = useRef<HTMLSpanElement>(null);
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, fontSize: 11 }}>
+      <span style={{ width: 64, opacity: 0.7 }}>{props.label}</span>
+      <input type="range" min={props.min} max={props.max} step={props.step}
+        defaultValue={props.defaultValue}
+        onInput={e => {
+          const v = Number((e.target as HTMLInputElement).value);
+          if (labelRef.current) labelRef.current.textContent = props.format(v);
+          props.onInput(v);
+        }}
+        style={{ flex: 1, minWidth: 0 }} />
+      <span ref={labelRef} style={{ width: 36, textAlign: "right", opacity: 0.8 }}>{props.format(props.defaultValue)}</span>
+    </div>
+  );
+}
+
 function applyBoundsToDefaults(b: TonalBounds): ZonesState {
   const ranges = boundsToRanges(b);
   return {
@@ -39,13 +63,27 @@ function applyBoundsToDefaults(b: TonalBounds): ZonesState {
 }
 
 export function ZonesTab() {
-  const { snap: preview, refresh: refreshPreview, error: previewError } = useTargetPreview();
+  const layers = useLayers();
+  const [sourceId, setSourceId] = useState<number | null>(null);
+  const [targetId, setTargetId] = useState<number | null>(null);
+  useEffect(() => {
+    if (layers.length >= 2) {
+      if (sourceId == null || !layers.find(l => l.id === sourceId)) setSourceId(layers[layers.length - 1].id);
+      if (targetId == null || !layers.find(l => l.id === targetId)) setTargetId(layers[0].id);
+    } else if (layers.length === 1) {
+      if (targetId == null) setTargetId(layers[0].id);
+    }
+  }, [layers]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const { snap: sourceSnap, refresh: refreshSource } = useLayerPreview(sourceId);
+  const { snap: targetSnap, refresh: refreshTarget } = useLayerPreview(targetId);
+  const preview = targetSnap; // existing code paths reference `preview` for the target
   const boundsRef = useRef<TonalBounds>({ ...DEFAULT_BOUNDS });
   const zonesRef = useRef<ZonesState>(applyBoundsToDefaults({ ...DEFAULT_BOUNDS }));
   const [activeZone, setActiveZone] = useState<ZoneKey>("midtones");
   const [valuesEpoch, setValuesEpoch] = useState(0); // bumped when we want sliders to re-sync from refs
   const [tintHex, setTintHex] = useState("#808080");
-  const imgRef = useRef<HTMLImageElement>(null);
+  const [transformedTarget, setTransformedTarget] = useState<Uint8Array | null>(null);
   const rafPending = useRef(false);
   const [status, setStatus] = useState("Live preview · drag any thumb (zone-colored) to edit that zone. Range sliders cascade so zones can't cross.");
 
@@ -54,10 +92,9 @@ export function ZonesTab() {
     rafPending.current = true;
     requestAnimationFrame(() => {
       rafPending.current = false;
-      const img = imgRef.current;
-      if (!img || !preview) return;
+      if (!preview) return;
       const transformed = applyZones(preview.data, zonesRef.current);
-      img.src = rgbaToPngDataUrl(transformed, preview.width, preview.height);
+      setTransformedTarget(transformed);
     });
   };
 
@@ -87,16 +124,58 @@ export function ZonesTab() {
     scheduleHighlightRefresh();
   };
 
+  // Drag updates: only ref + redraw; no React state change so the slider doesn't re-mount mid-drag.
   const onTonalChange = (patch: Partial<TonalState>) => {
     zonesRef.current.tonal = { ...zonesRef.current.tonal, ...patch };
     scheduleRedraw();
-    setTonalEpoch(n => n + 1);
   };
 
   const onAutoLevel = () => {
     if (!preview) return;
     const { blackPoint, whitePoint } = autoDetectTonal(preview.data);
-    onTonalChange({ blackPoint, whitePoint });
+    zonesRef.current.tonal = { ...zonesRef.current.tonal, blackPoint, whitePoint };
+    scheduleRedraw();
+    setTonalEpoch(n => n + 1);
+  };
+
+  // Auto Match: analyze source per zone, set tonal from source's range, set per-zone colors
+  // to source's mean color in each band. User then dials hue/sat/intensity.
+  const onAutoMatch = () => {
+    if (!sourceSnap) { setStatus("Pick a source layer first."); return; }
+
+    const tonal = autoDetectTonal(sourceSnap.data);
+    zonesRef.current.tonal = { ...zonesRef.current.tonal, blackPoint: tonal.blackPoint, whitePoint: tonal.whitePoint };
+
+    const b = boundsRef.current;
+    const bands = {
+      shadows:    { lo: 0,    hi: b.t1 + (b.t2 - b.t1) / 2 },
+      midtones:   { lo: b.t1 + (b.t2 - b.t1) / 2, hi: b.t3 + (b.t4 - b.t3) / 2 },
+      highlights: { lo: b.t3 + (b.t4 - b.t3) / 2, hi: 100 },
+    };
+
+    let matched = 0;
+    for (const zoneName of ["shadows", "midtones", "highlights"] as ZoneKey[]) {
+      const band = bands[zoneName];
+      const mean = meanColorInBand(sourceSnap.data, band.lo, band.hi);
+      if (!mean) continue;
+      zonesRef.current[zoneName].colorR = mean.r;
+      zonesRef.current[zoneName].colorG = mean.g;
+      zonesRef.current[zoneName].colorB = mean.b;
+      zonesRef.current[zoneName].colorIntensity = 60;
+      matched++;
+    }
+
+    setTonalEpoch(n => n + 1);
+    setValuesEpoch(n => n + 1);
+    if (zonesRef.current[activeZone]) {
+      const z = zonesRef.current[activeZone];
+      const r = z.colorR.toString(16).padStart(2, "0");
+      const g = z.colorG.toString(16).padStart(2, "0");
+      const bx = z.colorB.toString(16).padStart(2, "0");
+      setTintHex(`#${r}${g}${bx}`);
+    }
+    scheduleRedraw();
+    setStatus(`Auto-matched ${matched}/3 zones from "${sourceSnap.layerName}". Dial sliders to taste, then Bake.`);
   };
   const [tonalEpoch, setTonalEpoch] = useState(0);
 
@@ -150,21 +229,36 @@ export function ZonesTab() {
 
   return (
     <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-      <div style={{
-        background: "#111", border: "1px solid #555",
-        display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-        minHeight: 100, padding: 4, position: "relative",
-      }}>
-        {preview
-          ? <img ref={imgRef} alt="preview" style={{ maxWidth: "100%", maxHeight: 200 }} />
-          : <span style={{ color: "#666", fontSize: 10 }}>{previewError ?? "Loading preview…"}</span>}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", marginTop: 4, fontSize: 9, opacity: 0.6 }}>
-          <span>{preview ? `${preview.layerName} (${preview.width}×${preview.height})` : ""}</span>
-          <button onClick={refreshPreview} style={{
-            padding: "2px 8px", background: "transparent", color: "#aaa",
-            border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 9,
-          }}>↻ Refresh</button>
-        </div>
+      <div style={{ display: "flex", gap: 6 }}>
+        <PreviewPane
+          label="Source"
+          layers={layers}
+          selectedId={sourceId}
+          onSelect={setSourceId}
+          snapshot={sourceSnap}
+          onRefresh={refreshSource}
+          onPickColor={rgb => {
+            zonesRef.current[activeZone].colorR = rgb.r;
+            zonesRef.current[activeZone].colorG = rgb.g;
+            zonesRef.current[activeZone].colorB = rgb.b;
+            const r = rgb.r.toString(16).padStart(2, "0");
+            const g = rgb.g.toString(16).padStart(2, "0");
+            const b = rgb.b.toString(16).padStart(2, "0");
+            setTintHex(`#${r}${g}${b}`);
+            scheduleRedraw();
+          }}
+          height={120}
+        />
+        <PreviewPane
+          label="Target"
+          layers={layers}
+          selectedId={targetId}
+          onSelect={setTargetId}
+          snapshot={targetSnap}
+          transformedRgba={transformedTarget}
+          onRefresh={refreshTarget}
+          height={120}
+        />
       </div>
 
       <div style={{ display: "flex" }}>
@@ -182,7 +276,7 @@ export function ZonesTab() {
         onChange={onBoundsChange}
       />
 
-      {/* Global tonal controls: black/white/gamma applied as a Levels-style Curves below all zones. */}
+      {/* Global tonal controls: black/white/gamma applied as a Levels layer below all zones. */}
       <div style={{ borderTop: "1px solid #333", marginTop: 6, paddingTop: 6 }}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 11, opacity: 0.7 }}>
           <span>Tonal (global)</span>
@@ -191,27 +285,18 @@ export function ZonesTab() {
             border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 9,
           }}>Auto Level</button>
         </div>
-        {[
-          { key: "blackPoint" as const, label: "Black", min: 0, max: 254 },
-          { key: "whitePoint" as const, label: "White", min: 1, max: 255 },
-        ].map(f => (
-          <div key={`${f.key}-${tonalEpoch}`} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, fontSize: 11 }}>
-            <span style={{ width: 64, opacity: 0.7 }}>{f.label}</span>
-            <input type="range" min={f.min} max={f.max}
-              defaultValue={zonesRef.current.tonal[f.key]}
-              onInput={e => onTonalChange({ [f.key]: Number((e.target as HTMLInputElement).value) } as Partial<TonalState>)}
-              style={{ flex: 1, minWidth: 0 }} />
-            <span style={{ width: 36, textAlign: "right", opacity: 0.8 }}>{Math.round(zonesRef.current.tonal[f.key])}</span>
-          </div>
-        ))}
-        <div key={`gamma-${tonalEpoch}`} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, fontSize: 11 }}>
-          <span style={{ width: 64, opacity: 0.7 }}>Gamma</span>
-          <input type="range" min={0.1} max={3.0} step={0.01}
-            defaultValue={zonesRef.current.tonal.gamma}
-            onInput={e => onTonalChange({ gamma: Number((e.target as HTMLInputElement).value) })}
-            style={{ flex: 1, minWidth: 0 }} />
-          <span style={{ width: 36, textAlign: "right", opacity: 0.8 }}>{zonesRef.current.tonal.gamma.toFixed(2)}</span>
-        </div>
+        <TonalSliderRow key={`black-${tonalEpoch}`} label="Black" min={0} max={254} step={1}
+          defaultValue={zonesRef.current.tonal.blackPoint}
+          format={v => String(Math.round(v))}
+          onInput={v => onTonalChange({ blackPoint: v })} />
+        <TonalSliderRow key={`white-${tonalEpoch}`} label="White" min={1} max={255} step={1}
+          defaultValue={zonesRef.current.tonal.whitePoint}
+          format={v => String(Math.round(v))}
+          onInput={v => onTonalChange({ whitePoint: v })} />
+        <TonalSliderRow key={`gamma-${tonalEpoch}`} label="Gamma" min={0.1} max={3.0} step={0.01}
+          defaultValue={zonesRef.current.tonal.gamma}
+          format={v => v.toFixed(2)}
+          onInput={v => onTonalChange({ gamma: v })} />
       </div>
 
       {FIELDS.map(f => {
@@ -244,10 +329,14 @@ export function ZonesTab() {
           padding: "6px 12px", background: "transparent", color: "#aaa",
           border: "1px solid #555", borderRadius: 3, cursor: "pointer", flex: 1,
         }}>Reset</button>
+        <button onClick={onAutoMatch} style={{
+          padding: "6px 12px", background: "transparent", color: "#ddd",
+          border: "1px solid #1473e6", borderRadius: 3, cursor: "pointer", flex: 2,
+        }}>Auto Match from Source</button>
         <button onClick={onBake} style={{
           padding: "6px 12px", background: "#1473e6", color: "white",
           border: "none", borderRadius: 3, cursor: "pointer", flex: 2,
-        }}>Bake to layer stack</button>
+        }}>Bake</button>
       </div>
 
       <div style={{ marginTop: 6, fontSize: 10, opacity: 0.6, whiteSpace: "pre-wrap" }}>{status}</div>

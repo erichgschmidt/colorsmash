@@ -196,6 +196,19 @@ export function applyZones(rgba: Uint8Array, zones: ZonesState): Uint8Array {
   return out;
 }
 
+// Compute mean RGB of pixels within [lowL100, highL100] luminance range. Returns null if the band is empty.
+export function meanColorInBand(rgba: Uint8Array, lowL100: number, highL100: number): { r: number; g: number; b: number } | null {
+  let sumR = 0, sumG = 0, sumB = 0, n = 0;
+  for (let i = 0; i < rgba.length; i += 4) {
+    if (rgba[i + 3] === 0) continue;
+    const L = (0.2126 * rgba[i] + 0.7152 * rgba[i + 1] + 0.0722 * rgba[i + 2]) / 255 * 100;
+    if (L < lowL100 || L > highL100) continue;
+    sumR += rgba[i]; sumG += rgba[i + 1]; sumB += rgba[i + 2]; n++;
+  }
+  if (n === 0) return null;
+  return { r: Math.round(sumR / n), g: Math.round(sumG / n), b: Math.round(sumB / n) };
+}
+
 // Auto-detect black/white points from a pixel buffer using percentile clipping.
 export function autoDetectTonal(rgba: Uint8Array, lowPct = 0.5, highPct = 99.5): { blackPoint: number; whitePoint: number } {
   const histogram = new Uint32Array(256);
