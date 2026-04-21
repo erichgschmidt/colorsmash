@@ -2,7 +2,7 @@
 
 import {
   executeAsModal, getActiveDoc,
-  makeHueSatLayer, makeCurvesLayer, makeLevelsLayer, setLayerBlendIf, setClippingMask,
+  makeCurvesLayer, makeLevelsLayer, setLayerBlendIf, setClippingMask,
 } from "../services/photoshop";
 import { type ZonesState, type ZoneState, colorShiftCurves, IDENTITY_TONAL, lutToCurvePoints } from "../core/zoneTransform";
 
@@ -65,44 +65,26 @@ export async function bakeZones(zones: ZonesState): Promise<string> {
     let layersAdded = 1;
 
     const N = zones.zones.length;
-    // Build bottom-up so stack order (top→bottom) reads darkest→brightest after placeInside.
-    // Iterate darkest-to-brightest: each placeInside puts the new subgroup at the top of the parent group,
-    // so brightest ends at top, darkest at bottom — PS renders bottom-up, matching sim.
+    // Simplified: one Curves layer per zone, clipped + Blend-If gated. No subgroup, no Hue/Sat.
     for (let i = 0; i < N; i++) {
       const z = zones.zones[i];
       const blend = blendIfFor(z);
-      const subGroup = await doc.createLayerGroup({ name: zoneLabel(i, N) });
-      await subGroup.move(group, "placeInside");
 
-      const addLayer = async (layer: any) => {
-        await layer.move(subGroup, "placeInside");
-        try { await setLayerBlendIf(layer, blend); } catch (e) { console.warn("blendIf failed:", e); }
-        try { await setClippingMask(layer, true); } catch (e) { console.warn("clipping failed:", e); }
-        layersAdded++;
-      };
+      const ccPoints = z.colorLUT
+        ? { r: lutToCurvePoints(z.colorLUT.r, 17), g: lutToCurvePoints(z.colorLUT.g, 17), b: lutToCurvePoints(z.colorLUT.b, 17) }
+        : colorShiftCurves(z);
 
-      let ccPoints;
-      if (z.colorLUT) {
-        ccPoints = {
-          r: lutToCurvePoints(z.colorLUT.r, 17),
-          g: lutToCurvePoints(z.colorLUT.g, 17),
-          b: lutToCurvePoints(z.colorLUT.b, 17),
-        };
-      } else {
-        const cs = colorShiftCurves(z);
-        ccPoints = cs;
-      }
-      const cc = await makeCurvesLayer(`${zoneLabel(i, N)} color`, [
+      const cc = await makeCurvesLayer(zoneLabel(i, N), [
         { channel: "red",   points: ccPoints.r },
         { channel: "green", points: ccPoints.g },
         { channel: "blue",  points: ccPoints.b },
       ]);
-      await addLayer(cc);
-
-      const hs = await makeHueSatLayer(`${zoneLabel(i, N)} hue/sat`, { hue: z.hue, saturation: z.sat });
-      await addLayer(hs);
+      await cc.move(group, "placeInside");
+      try { await setLayerBlendIf(cc, blend); } catch (e) { console.warn("blendIf failed:", e); }
+      try { await setClippingMask(cc, true); } catch (e) { console.warn("clipping failed:", e); }
+      layersAdded++;
     }
 
-    return `Baked ${layersAdded} layers into ${GROUP_NAME} (${N} zone subgroups).`;
+    return `Baked ${layersAdded} layers into ${GROUP_NAME} (${N} zones, 1 Curves layer each).`;
   }).catch((e: any) => `Error: ${e?.message ?? e}`);
 }

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   applyZones, autoDetectTonal, labStatsInBand, lMeanStddev, buildLabCorrelationLUTInBand,
-  buildHistogramMatchLUT, fadeLUT, IDENTITY_TONAL, defaultBoundaries,
+  buildHistogramMatchLUT, buildHistogramMatchLUTPerChannel, fadeLUT, IDENTITY_TONAL, defaultBoundaries,
   type ZonesState, type ZoneState, type TonalState,
 } from "../core/zoneTransform";
 import { useLayerPreview } from "./useLayerPreview";
@@ -68,7 +68,10 @@ export function ZonesTab() {
     setTimeout(() => scheduleRedraw(), 0);
   };
   const [tonalEpoch, setTonalEpoch] = useState(0);
-  const matchStrengthRef = useRef(60);
+  const matchStrengthRef = useRef(100);
+  // "Pure RGB" mode uses per-channel RGB histogram match (more saturated, risks hue crossover).
+  // "Lab-fit" mode uses conditional-expectation Lab fit (smoother, hue-preserving, can feel tinted).
+  const [matchMode, setMatchMode] = useState<"lab" | "rgb">("lab");
 
   const transformedTargetRef = useRef<Uint8Array | null>(null);
   const targetImgHandle = useRef<PreviewImgHandle | null>(null);
@@ -179,10 +182,16 @@ export function ZonesTab() {
       const hueFull = shiftMag > 5 ? Math.round(Math.atan2(dBlab, dA) * 180 / Math.PI / 6) : 0;
       out.hue = Math.max(-30, Math.min(30, Math.round(hueFull * k)));
 
-      const bandFull = buildLabCorrelationLUTInBand(
-        targetSnap.data, sourceSnap.data,
-        bandLo, bandHi, bandLo, bandHi,
-      );
+      const bandFull = matchMode === "rgb"
+        ? buildHistogramMatchLUTPerChannel(
+            // filter to band — use a slice via a temporary mask-copy approach: simpler to just pass same arrays
+            // and rely on the zone's Blend If gating in the bake/sim to constrain the effect to the band.
+            targetSnap.data, sourceSnap.data,
+          )
+        : buildLabCorrelationLUTInBand(
+            targetSnap.data, sourceSnap.data,
+            bandLo, bandHi, bandLo, bandHi,
+          );
       out.colorLUT = { r: fadeLUT(bandFull.r, k), g: fadeLUT(bandFull.g, k), b: fadeLUT(bandFull.b, k) };
       matched++;
       return out;
@@ -343,9 +352,7 @@ export function ZonesTab() {
       </div>
 
       <div key={`zsliders-${valuesEpoch}-${activeZoneIdx}`}>
-        <ZoneSliderRow label="Hue"       min={-180} max={180} step={1}    valueKey="hue"            zoneIdx={activeZoneIdx} format={v => String(v)} />
-        <ZoneSliderRow label="Sat"       min={-100} max={100} step={1}    valueKey="sat"            zoneIdx={activeZoneIdx} format={v => String(v)} />
-        <ZoneSliderRow label="Color int" min={0}    max={100} step={1}    valueKey="colorIntensity" zoneIdx={activeZoneIdx} format={v => String(v)} />
+        <ZoneSliderRow label="Intensity" min={0}    max={100} step={1}    valueKey="colorIntensity" zoneIdx={activeZoneIdx} format={v => String(v)} />
       </div>
 
       {/* Color swatches per zone */}
@@ -398,7 +405,18 @@ export function ZonesTab() {
         <input type="range" min={0} max={100} defaultValue={matchStrengthRef.current}
           onInput={e => { matchStrengthRef.current = Number((e.target as HTMLInputElement).value); }}
           style={{ flex: 1, minWidth: 0 }} />
-        <span style={{ width: 36, textAlign: "right", opacity: 0.8, fontSize: 9 }}>Auto Match</span>
+        <span style={{ width: 36, textAlign: "right", opacity: 0.8, fontSize: 9 }}>on Auto Match</span>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
+        <span style={{ width: 100, opacity: 0.7 }}>Match Mode</span>
+        {(["lab", "rgb"] as const).map(m => (
+          <button key={m} onClick={() => setMatchMode(m)} style={{
+            padding: "2px 10px", fontSize: 10, cursor: "pointer",
+            background: matchMode === m ? "#1473e6" : "transparent",
+            color: matchMode === m ? "white" : "#aaa",
+            border: "1px solid #555", borderRadius: 3,
+          }}>{m === "lab" ? "Lab (hue-safe)" : "RGB (saturated)"}</button>
+        ))}
       </div>
 
       <div style={{ display: "flex", gap: 6, marginTop: 6 }}>

@@ -44,7 +44,8 @@ export interface ZonesState {
 const clamp01 = (v: number) => v < 0 ? 0 : v > 1 ? 1 : v;
 const clamp255 = (v: number) => v < 0 ? 0 : v > 255 ? 255 : v;
 
-// ─── HSL helpers ────────────────────────────────────────────────────────────
+// ─── HSL helpers (currently unused; kept for future per-zone Hue/Sat reinstatement) ─
+// @ts-expect-error keep for later
 function rgbToHsl(r: number, g: number, b: number) {
   const max = Math.max(r, g, b), min = Math.min(r, g, b);
   const l = (max + min) / 2;
@@ -59,6 +60,7 @@ function rgbToHsl(r: number, g: number, b: number) {
   }
   return { h, s, l };
 }
+// @ts-expect-error keep for later
 function hslToRgb(h: number, s: number, l: number) {
   if (s === 0) return { r: l, g: l, b: l };
   const hue2 = (p: number, q: number, t: number) => {
@@ -161,11 +163,12 @@ function zoneWeight(L100: number, z: ZoneState): number {
 }
 
 // ─── One zone's full transform (color + hue/sat only — value is global) ─────
+// Simplified per-zone transform: ONE per-channel Curves operation.
+// colorLUT (Lab-fitted) preferred; falls back to delta-encoded color-picker curve.
 function applyZone(input: { r: number; g: number; b: number }, z: ZoneState, w: number) {
   if (w === 0) return input;
   let r = input.r, g = input.g, b = input.b;
 
-  // Per-zone colorLUT (Lab-fitted per-channel) overrides the delta-encoded color shift.
   if (z.colorLUT) {
     r = z.colorLUT.r[Math.max(0, Math.min(255, Math.round(r * 255)))] / 255;
     g = z.colorLUT.g[Math.max(0, Math.min(255, Math.round(g * 255)))] / 255;
@@ -175,15 +178,6 @@ function applyZone(input: { r: number; g: number; b: number }, z: ZoneState, w: 
     r = applyCurve(r * 255, cc.r) / 255;
     g = applyCurve(g * 255, cc.g) / 255;
     b = applyCurve(b * 255, cc.b) / 255;
-  }
-
-  if (z.hue !== 0 || z.sat !== 0) {
-    const hsl = rgbToHsl(r, g, b);
-    hsl.h = (hsl.h + z.hue / 360) % 1;
-    if (hsl.h < 0) hsl.h += 1;
-    hsl.s = clamp01(hsl.s * (1 + z.sat / 100));
-    const out = hslToRgb(hsl.h, hsl.s, hsl.l);
-    r = out.r; g = out.g; b = out.b;
   }
 
   return {
