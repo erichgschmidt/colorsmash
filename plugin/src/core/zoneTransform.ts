@@ -247,6 +247,22 @@ export function meanColorInBand(rgba: Uint8Array, lowL100: number, highL100: num
   return { r: Math.round(sumR / n), g: Math.round(sumG / n), b: Math.round(sumB / n) };
 }
 
+// Compute global L mean + stddev (in 0..255 RGB-byte units) from a pixel buffer.
+// This is what we feed into Reinhard's L-axis affine to derive Levels black/white points
+// that exactly reproduce target's distribution remapped to source's distribution.
+export function lMeanStddev(rgba: Uint8Array): { mean: number; stddev: number; n: number } {
+  let sum = 0, sumSq = 0, n = 0;
+  for (let i = 0; i < rgba.length; i += 4) {
+    if (rgba[i + 3] === 0) continue;
+    const L = 0.2126 * rgba[i] + 0.7152 * rgba[i + 1] + 0.0722 * rgba[i + 2];
+    sum += L; sumSq += L * L; n++;
+  }
+  if (n === 0) return { mean: 128, stddev: 1, n: 0 };
+  const mean = sum / n;
+  const variance = Math.max(0, sumSq / n - mean * mean);
+  return { mean, stddev: Math.sqrt(variance), n };
+}
+
 // Compute L percentile cutoffs (each in 0..100 scale) from a pixel buffer.
 // Returns the L value (in 0..100) at each requested percentile.
 export function lPercentiles(rgba: Uint8Array, percentiles: number[]): number[] {

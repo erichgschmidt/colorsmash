@@ -2,7 +2,7 @@
 // Each parameter slider shows all 3 zones at once; range sliders cascade so zones don't cross.
 
 import { useEffect, useRef, useState } from "react";
-import { applyZones, autoDetectTonal, labStatsInBand, lPercentiles, IDENTITY_TONAL, type ZonesState, type ZoneState, type TonalState } from "../core/zoneTransform";
+import { applyZones, autoDetectTonal, labStatsInBand, lPercentiles, lMeanStddev, IDENTITY_TONAL, type ZonesState, type ZoneState, type TonalState } from "../core/zoneTransform";
 import { useLayerPreview } from "./useLayerPreview";
 import { useLayers } from "./useLayers";
 import { bakeZones } from "../app/bakeZones";
@@ -147,15 +147,31 @@ export function ZonesTab() {
   const onAutoMatch = () => {
     if (!sourceSnap || !targetSnap) { setStatus("Pick both source and target."); return; }
 
-    const tgtRange = autoDetectTonal(targetSnap.data);
-    const srcRange = autoDetectTonal(sourceSnap.data);
+    // Reinhard L-axis affine via Levels:
+    //   output_L = (input_L - μt) * (σs/σt) + μs
+    // Set Levels black/white so the layer reproduces this exactly with gamma = 1:
+    //   input  black/white = μt ± 2σt   (captures ~95% of target's distribution)
+    //   output black/white = μs ± 2σs   (maps to ~95% of source's distribution)
+    // Clamps prevent blow-outs when source's spread is wide; the data is rescaled, not stretched
+    // beyond the bounds the source itself uses.
+    const tgt = lMeanStddev(targetSnap.data);
+    const src = lMeanStddev(sourceSnap.data);
+    const SIGMA = 2;
+    const clampByte = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
+    const tgtBlack = clampByte(tgt.mean - SIGMA * tgt.stddev);
+    const tgtWhite = clampByte(tgt.mean + SIGMA * tgt.stddev);
+    const srcBlack = clampByte(src.mean - SIGMA * src.stddev);
+    const srcWhite = clampByte(src.mean + SIGMA * src.stddev);
     zonesRef.current.tonal = {
       ...zonesRef.current.tonal,
-      blackPoint:  tgtRange.blackPoint,
-      whitePoint:  tgtRange.whitePoint,
-      outputBlack: srcRange.blackPoint,
-      outputWhite: srcRange.whitePoint,
+      blackPoint:  tgtBlack,
+      whitePoint:  Math.max(tgtBlack + 1, tgtWhite),
+      outputBlack: srcBlack,
+      outputWhite: Math.max(srcBlack, srcWhite),
+      gamma:       1.0,
     };
+    // Keep srcRange around for boundary clamping below.
+    const srcRange = { blackPoint: srcBlack, whitePoint: Math.max(srcBlack, srcWhite) };
 
     // Auto-place zone boundaries based on source's L distribution percentiles.
     // Zones operate on POST-tonal L values, so boundaries are in the same space as where the
@@ -246,7 +262,7 @@ export function ZonesTab() {
       setTintHex(`#${r}${g}${bx}`);
     }
     scheduleRedraw();
-    setStatus(`Auto-match: tonal ${tgtRange.blackPoint}-${tgtRange.whitePoint} → ${srcRange.blackPoint}-${srcRange.whitePoint}; ${matched}/3 zones colored from "${sourceSnap.layerName}". Dial + Bake.`);
+    setStatus(`Auto-match (μ±2σ): target ${tgtBlack}-${tgtWhite} (μ${tgt.mean.toFixed(0)}/σ${tgt.stddev.toFixed(0)}) → source ${srcBlack}-${srcWhite} (μ${src.mean.toFixed(0)}/σ${src.stddev.toFixed(0)}); ${matched}/3 zones. Dial + Bake.`);
   };
   const [tonalEpoch, setTonalEpoch] = useState(0);
 
