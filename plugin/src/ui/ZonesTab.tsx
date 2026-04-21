@@ -201,53 +201,47 @@ export function ZonesTab() {
       highlights: { lo: b.t3 + (b.t4 - b.t3) / 2, hi: 100 },
     };
 
-    // Per-zone Lab-aware match: source and target stats in each band drive color + saturation.
+    // Per-zone match. Color picker stores the DELTA (source - target) centered at gray (128,128,128),
+    // so the per-channel shift is exactly (color - 128) * intensity → exact channel-mean transfer
+    // at intensity=100. Critically: source=target → delta=0 → color=gray → no shift = identity.
     let matched = 0;
     for (const zoneName of ["shadows", "midtones", "highlights"] as ZoneKey[]) {
       const band = bands[zoneName];
       const srcStats = labStatsInBand(sourceSnap.data, band.lo, band.hi);
       const tgtStats = labStatsInBand(targetSnap.data, band.lo, band.hi);
-      if (!srcStats) continue;
-
-      // Color picker = source's mean RGB in this band.
-      zonesRef.current[zoneName].colorR = srcStats.meanRGB.r;
-      zonesRef.current[zoneName].colorG = srcStats.meanRGB.g;
-      zonesRef.current[zoneName].colorB = srcStats.meanRGB.b;
-
-      // Color intensity scaled by Lab a/b mean shift magnitude vs target. No target → use 60%.
-      let intensity = 60;
-      if (tgtStats) {
-        const dA = srcStats.muA - tgtStats.muA;
-        const dB = srcStats.muB - tgtStats.muB;
-        const shiftMag = Math.sqrt(dA * dA + dB * dB);
-        // Lab a/b shift in [0..50] feels useful; map to [40..90% intensity].
-        intensity = Math.round(40 + Math.min(50, shiftMag) * 1.0);
-      }
-      zonesRef.current[zoneName].colorIntensity = intensity;
-
-      // Saturation = chroma stddev ratio source/target. >1 = boost, <1 = desat.
-      if (tgtStats) {
-        const srcChroma = (srcStats.sA + srcStats.sB) / 2;
-        const tgtChroma = (tgtStats.sA + tgtStats.sB) / 2;
-        const ratio = srcChroma / Math.max(1e-3, tgtChroma);
-        // Clamp ±100. Most natural matches land in -50..+50 range.
-        zonesRef.current[zoneName].sat = Math.max(-100, Math.min(100, Math.round((ratio - 1) * 100)));
+      const z = zonesRef.current[zoneName];
+      if (!srcStats || !tgtStats) {
+        // Fallback: leave color at gray = no shift.
+        z.colorR = 128; z.colorG = 128; z.colorB = 128;
+        z.colorIntensity = 0; z.sat = 0; z.hue = 0;
+        continue;
       }
 
-      // Hue = direction of the a/b shift, mapped to a small HSL hue rotation.
-      // (Approximate: a→red axis, b→yellow axis. atan2 gives direction.)
-      if (tgtStats) {
-        const dA = srcStats.muA - tgtStats.muA;
-        const dB = srcStats.muB - tgtStats.muB;
-        const shiftMag = Math.sqrt(dA * dA + dB * dB);
-        if (shiftMag > 5) {
-          const angleDeg = Math.atan2(dB, dA) * 180 / Math.PI;
-          // Subtle hue rotation toward source's color direction; cap at ±30°.
-          zonesRef.current[zoneName].hue = Math.max(-30, Math.min(30, Math.round(angleDeg / 6)));
-        } else {
-          zonesRef.current[zoneName].hue = 0;
-        }
-      }
+      const dR = srcStats.meanRGB.r - tgtStats.meanRGB.r;
+      const dG = srcStats.meanRGB.g - tgtStats.meanRGB.g;
+      const dB = srcStats.meanRGB.b - tgtStats.meanRGB.b;
+      z.colorR = Math.max(0, Math.min(255, 128 + dR));
+      z.colorG = Math.max(0, Math.min(255, 128 + dG));
+      z.colorB = Math.max(0, Math.min(255, 128 + dB));
+      // 100% intensity: full delta applies. Reduces if delta is small (already at target).
+      const deltaMag = Math.sqrt(dR * dR + dG * dG + dB * dB);
+      z.colorIntensity = deltaMag < 2 ? 0 : 100;
+
+      // Saturation = stddev ratio - 1. Self-match → ratio 1 → sat 0. Identity preserved.
+      const srcChroma = (srcStats.sA + srcStats.sB) / 2;
+      const tgtChroma = (tgtStats.sA + tgtStats.sB) / 2;
+      const ratio = srcChroma / Math.max(1e-3, tgtChroma);
+      z.sat = Math.abs(ratio - 1) < 0.02
+        ? 0
+        : Math.max(-100, Math.min(100, Math.round((ratio - 1) * 100)));
+
+      // Hue rotation toward Lab a/b shift direction. Self-match → no shift → hue 0.
+      const dA = srcStats.muA - tgtStats.muA;
+      const dBlab = srcStats.muB - tgtStats.muB;
+      const shiftMag = Math.sqrt(dA * dA + dBlab * dBlab);
+      z.hue = shiftMag > 5
+        ? Math.max(-30, Math.min(30, Math.round(Math.atan2(dBlab, dA) * 180 / Math.PI / 6)))
+        : 0;
 
       matched++;
     }
