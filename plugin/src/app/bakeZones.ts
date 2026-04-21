@@ -7,9 +7,9 @@
 
 import {
   executeAsModal, getActiveDoc,
-  makeHueSatLayer, makeCurvesLayer, setLayerBlendIf, setClippingMask,
+  makeHueSatLayer, makeCurvesLayer, makeLevelsLayer, setLayerBlendIf, setClippingMask,
 } from "../services/photoshop";
-import { type ZonesState, type ZoneState, valueCurve, colorShiftCurves } from "../core/zoneTransform";
+import { type ZonesState, type ZoneState, colorShiftCurves, IDENTITY_TONAL } from "../core/zoneTransform";
 
 const GROUP_NAME = "[Color Smash] zones";
 
@@ -29,50 +29,56 @@ function blendIfFor(z: ZoneState) {
   };
 }
 
-async function findExistingGroup(): Promise<any | null> {
-  const doc = getActiveDoc();
-  for (const l of doc.layers) {
-    if (l.name === GROUP_NAME) return l;
+async function deleteRecursive(layer: any): Promise<void> {
+  // UXP can orphan children when deleting a group, so always nuke children first.
+  const children = [...(layer.layers ?? [])];
+  for (const c of children) {
+    try { await deleteRecursive(c); } catch { /* ignore */ }
   }
-  return null;
+  try { await layer.delete(); } catch { /* ignore */ }
+}
+
+async function purgeAllZoneGroups(): Promise<number> {
+  const doc = getActiveDoc();
+  // Collect every top-level [Color Smash] zones group; could be more than one if a prior bake
+  // somehow duplicated. Delete them all.
+  const targets = doc.layers.filter((l: any) => l.name === GROUP_NAME);
+  for (const t of targets) await deleteRecursive(t);
+  return targets.length;
 }
 
 export async function bakeZones(zones: ZonesState): Promise<string> {
   return executeAsModal("Color Smash bake zones", async () => {
     const doc = getActiveDoc();
-    const prior = await findExistingGroup();
-    if (prior) {
-      for (const c of [...(prior.layers ?? [])]) { try { await c.delete(); } catch { /* ignore */ } }
-      try { await prior.delete(); } catch { /* ignore */ }
-    }
+    const purged = await purgeAllZoneGroups();
+    void purged;
     const group = await doc.createLayerGroup({ name: GROUP_NAME });
 
-    // Create order: shadows → midtones → highlights. Each move with placeInside stacks on top
-    // of existing children, so final stack (top→bottom) = highlights, midtones, shadows. PS
-    // renders bottom→top, so shadows applies first, then midtones, then highlights — matching
-    // the simulator's per-zone application order.
-    // Within each zone: value → color → hue/sat (created in that order, ends with hue/sat on top
-    // of the zone subgroup → applied last per the simulator).
+    // Global tonal (Levels) layer — applied first by PS (bottom of group).
+    const tonal = zones.tonal ?? IDENTITY_TONAL;
+    const tonalLayer = await makeLevelsLayer("tonal", tonal);
+    await tonalLayer.move(group, "placeInside");
+    try { await setClippingMask(tonalLayer, true); } catch (e) { console.warn("clipping failed:", e); }
+    let layersAdded = 1;
+
+    // Per-zone subgroups, created shadows → midtones → highlights so highlights ends at top.
     const zoneOrder: ("shadows" | "midtones" | "highlights")[] = ["shadows", "midtones", "highlights"];
-    let layersAdded = 0;
 
     for (const zoneName of zoneOrder) {
       const z = zones[zoneName];
       const blend = blendIfFor(z);
 
+      const subGroup = await doc.createLayerGroup({ name: zoneName });
+      await subGroup.move(group, "placeInside");
+
       const addLayer = async (layer: any) => {
-        await layer.move(group, "placeInside");
+        await layer.move(subGroup, "placeInside");
         try { await setLayerBlendIf(layer, blend); } catch (e) { console.warn("blendIf failed:", e); }
         try { await setClippingMask(layer, true); } catch (e) { console.warn("clipping failed:", e); }
         layersAdded++;
       };
 
-      // Always create all 3 adjustment types per zone — identity values when zone is inactive.
-      const cv = await makeCurvesLayer(`${zoneName} value`, [
-        { channel: "composite", points: valueCurve(z) },
-      ]);
-      await addLayer(cv);
-
+      // Create order within zone: color → hue/sat. Each placeInside puts on top of subgroup.
       const cs = colorShiftCurves(z);
       const cc = await makeCurvesLayer(`${zoneName} color`, [
         { channel: "red",   points: cs.r },
@@ -85,6 +91,6 @@ export async function bakeZones(zones: ZonesState): Promise<string> {
       await addLayer(hs);
     }
 
-    return `Baked ${layersAdded} layers into ${GROUP_NAME} (consistent skeleton).`;
+    return `Baked ${layersAdded} layers into ${GROUP_NAME} (3 zone subgroups).`;
   }).catch((e: any) => `Error: ${e?.message ?? e}`);
 }

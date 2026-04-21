@@ -2,7 +2,7 @@
 // Each parameter slider shows all 3 zones at once; range sliders cascade so zones don't cross.
 
 import { useEffect, useRef, useState } from "react";
-import { applyZones, type ZonesState, type ZoneState } from "../core/zoneTransform";
+import { applyZones, autoDetectTonal, IDENTITY_TONAL, type ZonesState, type ZoneState, type TonalState } from "../core/zoneTransform";
 import { useTargetPreview } from "./useTargetPreview";
 import { bakeZones } from "../app/bakeZones";
 import { MultiThumbSlider, type ZoneKey, ZONE_COLORS } from "./MultiThumbSlider";
@@ -11,7 +11,7 @@ import { Histogram } from "./Histogram";
 import { rgbaToPngDataUrl } from "./encodePng";
 
 const DEFAULT_ZONE: ZoneState = {
-  hue: 0, sat: 0, value: 0,
+  hue: 0, sat: 0,
   colorR: 128, colorG: 128, colorB: 128, colorIntensity: 0,
   rangeStart: 0, rangeEnd: 100, featherLeft: 15, featherRight: 15,
 };
@@ -19,11 +19,10 @@ const DEFAULT_ZONE: ZoneState = {
 interface FieldSpec {
   key: keyof ZoneState; label: string; min: number; max: number;
 }
-// Per-zone parameters only — range/feather now live in the unified TonalZonesSlider.
+// Per-zone parameters only — value/range/feather now global or in TonalZonesSlider.
 const FIELDS: FieldSpec[] = [
   { key: "hue",            label: "Hue",       min: -180, max: 180 },
   { key: "sat",            label: "Sat",       min: -100, max: 100 },
-  { key: "value",          label: "Value",     min: -100, max: 100 },
   { key: "colorIntensity", label: "Color int", min: 0,    max: 100 },
 ];
 
@@ -32,6 +31,7 @@ const DEFAULT_BOUNDS: TonalBounds = { t1: 25, t2: 40, t3: 60, t4: 75, pad1: 0, p
 function applyBoundsToDefaults(b: TonalBounds): ZonesState {
   const ranges = boundsToRanges(b);
   return {
+    tonal: { ...IDENTITY_TONAL },
     shadows:    { ...DEFAULT_ZONE, ...ranges.shadows },
     midtones:   { ...DEFAULT_ZONE, ...ranges.midtones },
     highlights: { ...DEFAULT_ZONE, ...ranges.highlights },
@@ -86,6 +86,19 @@ export function ZonesTab() {
     scheduleRedraw();
     scheduleHighlightRefresh();
   };
+
+  const onTonalChange = (patch: Partial<TonalState>) => {
+    zonesRef.current.tonal = { ...zonesRef.current.tonal, ...patch };
+    scheduleRedraw();
+    setTonalEpoch(n => n + 1);
+  };
+
+  const onAutoLevel = () => {
+    if (!preview) return;
+    const { blackPoint, whitePoint } = autoDetectTonal(preview.data);
+    onTonalChange({ blackPoint, whitePoint });
+  };
+  const [tonalEpoch, setTonalEpoch] = useState(0);
 
   // Refresh highlight overlays on slider drag, but throttled to one rAF tick.
   // Note: this is a state bump (no text changes) so it doesn't trigger the font-renderer crash.
@@ -168,6 +181,38 @@ export function ZonesTab() {
         bounds={boundsRef.current}
         onChange={onBoundsChange}
       />
+
+      {/* Global tonal controls: black/white/gamma applied as a Levels-style Curves below all zones. */}
+      <div style={{ borderTop: "1px solid #333", marginTop: 6, paddingTop: 6 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 11, opacity: 0.7 }}>
+          <span>Tonal (global)</span>
+          <button onClick={onAutoLevel} style={{
+            padding: "2px 8px", background: "transparent", color: "#aaa",
+            border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 9,
+          }}>Auto Level</button>
+        </div>
+        {[
+          { key: "blackPoint" as const, label: "Black", min: 0, max: 254 },
+          { key: "whitePoint" as const, label: "White", min: 1, max: 255 },
+        ].map(f => (
+          <div key={`${f.key}-${tonalEpoch}`} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, fontSize: 11 }}>
+            <span style={{ width: 64, opacity: 0.7 }}>{f.label}</span>
+            <input type="range" min={f.min} max={f.max}
+              defaultValue={zonesRef.current.tonal[f.key]}
+              onInput={e => onTonalChange({ [f.key]: Number((e.target as HTMLInputElement).value) } as Partial<TonalState>)}
+              style={{ flex: 1, minWidth: 0 }} />
+            <span style={{ width: 36, textAlign: "right", opacity: 0.8 }}>{Math.round(zonesRef.current.tonal[f.key])}</span>
+          </div>
+        ))}
+        <div key={`gamma-${tonalEpoch}`} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, fontSize: 11 }}>
+          <span style={{ width: 64, opacity: 0.7 }}>Gamma</span>
+          <input type="range" min={0.1} max={3.0} step={0.01}
+            defaultValue={zonesRef.current.tonal.gamma}
+            onInput={e => onTonalChange({ gamma: Number((e.target as HTMLInputElement).value) })}
+            style={{ flex: 1, minWidth: 0 }} />
+          <span style={{ width: 36, textAlign: "right", opacity: 0.8 }}>{zonesRef.current.tonal.gamma.toFixed(2)}</span>
+        </div>
+      </div>
 
       {FIELDS.map(f => {
         const values: Record<ZoneKey, number> = {

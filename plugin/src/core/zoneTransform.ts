@@ -9,7 +9,6 @@
 export interface ZoneState {
   hue: number;            // -180..180
   sat: number;            // -100..100
-  value: number;          // -100..100  (composite Curves output offset at zone midpoint)
   colorR: number;         // 0..255 — target color for the per-channel shift
   colorG: number;
   colorB: number;
@@ -20,7 +19,16 @@ export interface ZoneState {
   featherRight: number;   // 0..100
 }
 
+export interface TonalState {
+  blackPoint: number; // 0..255 — input level mapped to 0 output
+  whitePoint: number; // 0..255 — input level mapped to 255 output
+  gamma: number;      // 0.1..3.0 — midpoint shift (1.0 = identity)
+}
+
+export const IDENTITY_TONAL: TonalState = { blackPoint: 0, whitePoint: 255, gamma: 1.0 };
+
 export interface ZonesState {
+  tonal: TonalState;
   shadows: ZoneState;
   midtones: ZoneState;
   highlights: ZoneState;
@@ -101,8 +109,27 @@ export function colorShiftCurves(z: ZoneState) {
   };
 }
 
-export function valueCurve(z: ZoneState) {
-  return shiftCurvePoints((z.rangeStart + z.rangeEnd) / 2, Math.round(z.value));
+// Levels-style global tonal mapping: input black→0, input white→255, with gamma midpoint.
+export function applyTonal(input: number, t: TonalState): number {
+  if (t.blackPoint === 0 && t.whitePoint === 255 && t.gamma === 1.0) return input;
+  const black = Math.max(0, Math.min(254, t.blackPoint));
+  const white = Math.max(black + 1, Math.min(255, t.whitePoint));
+  let normalized = (input - black) / (white - black);
+  normalized = clamp01(normalized);
+  if (t.gamma !== 1.0) normalized = Math.pow(normalized, 1 / Math.max(0.01, t.gamma));
+  return clamp255(normalized * 255);
+}
+
+// Build a 5-point Curves spline that approximates the Levels (black/white/gamma) operation.
+// Used by bakeZones to emit a Curves layer matching the simulator's tonal pass.
+export function tonalCurvePoints(t: TonalState) {
+  return [
+    { input: 0,                                       output: 0 },
+    { input: t.blackPoint,                            output: 0 },
+    { input: Math.round((t.blackPoint + t.whitePoint) / 2), output: Math.round(applyTonal((t.blackPoint + t.whitePoint) / 2, t)) },
+    { input: t.whitePoint,                            output: 255 },
+    { input: 255,                                     output: 255 },
+  ];
 }
 
 // ─── Trapezoidal zone weight ────────────────────────────────────────────────
@@ -117,21 +144,11 @@ function zoneWeight(L100: number, z: ZoneState): number {
   return 1;
 }
 
-// ─── One zone's full transform ──────────────────────────────────────────────
+// ─── One zone's full transform (color + hue/sat only — value is global) ─────
 function applyZone(input: { r: number; g: number; b: number }, z: ZoneState, w: number) {
   if (w === 0) return input;
-
   let r = input.r, g = input.g, b = input.b;
 
-  // 1) Value (composite Curves).
-  if (z.value !== 0) {
-    const c = valueCurve(z);
-    r = applyCurve(r * 255, c) / 255;
-    g = applyCurve(g * 255, c) / 255;
-    b = applyCurve(b * 255, c) / 255;
-  }
-
-  // 2) Color shift (per-channel Curves).
   if (z.colorIntensity > 0) {
     const cc = colorShiftCurves(z);
     r = applyCurve(r * 255, cc.r) / 255;
@@ -139,7 +156,6 @@ function applyZone(input: { r: number; g: number; b: number }, z: ZoneState, w: 
     b = applyCurve(b * 255, cc.b) / 255;
   }
 
-  // 3) Hue/Sat (HSL space).
   if (z.hue !== 0 || z.sat !== 0) {
     const hsl = rgbToHsl(r, g, b);
     hsl.h = (hsl.h + z.hue / 360) % 1;
@@ -149,7 +165,6 @@ function applyZone(input: { r: number; g: number; b: number }, z: ZoneState, w: 
     r = out.r; g = out.g; b = out.b;
   }
 
-  // Blend by zone weight.
   return {
     r: input.r * (1 - w) + r * w,
     g: input.g * (1 - w) + g * w,
@@ -159,16 +174,46 @@ function applyZone(input: { r: number; g: number; b: number }, z: ZoneState, w: 
 
 export function applyZones(rgba: Uint8Array, zones: ZonesState): Uint8Array {
   const out = new Uint8Array(rgba.length);
+  const t = zones.tonal;
   for (let i = 0; i < rgba.length; i += 4) {
-    let pixel = { r: rgba[i] / 255, g: rgba[i + 1] / 255, b: rgba[i + 2] / 255 };
+    // 1) Global tonal pass (Levels-style) applied to each channel.
+    let r = applyTonal(rgba[i],     t) / 255;
+    let g = applyTonal(rgba[i + 1], t) / 255;
+    let b = applyTonal(rgba[i + 2], t) / 255;
+    let pixel = { r, g, b };
+
+    // 2) Per-zone color + hue/sat, gated by tonal weights computed from the post-tonal L.
     const L100 = (0.2126 * pixel.r + 0.7152 * pixel.g + 0.0722 * pixel.b) * 100;
     pixel = applyZone(pixel, zones.shadows,    zoneWeight(L100, zones.shadows));
     pixel = applyZone(pixel, zones.midtones,   zoneWeight(L100, zones.midtones));
     pixel = applyZone(pixel, zones.highlights, zoneWeight(L100, zones.highlights));
+
     out[i]     = Math.round(clamp01(pixel.r) * 255);
     out[i + 1] = Math.round(clamp01(pixel.g) * 255);
     out[i + 2] = Math.round(clamp01(pixel.b) * 255);
     out[i + 3] = rgba[i + 3];
   }
   return out;
+}
+
+// Auto-detect black/white points from a pixel buffer using percentile clipping.
+export function autoDetectTonal(rgba: Uint8Array, lowPct = 0.5, highPct = 99.5): { blackPoint: number; whitePoint: number } {
+  const histogram = new Uint32Array(256);
+  let total = 0;
+  for (let i = 0; i < rgba.length; i += 4) {
+    if (rgba[i + 3] === 0) continue;
+    const L = Math.round(0.2126 * rgba[i] + 0.7152 * rgba[i + 1] + 0.0722 * rgba[i + 2]);
+    histogram[L]++;
+    total++;
+  }
+  if (total === 0) return { blackPoint: 0, whitePoint: 255 };
+  const lowTarget = total * (lowPct / 100);
+  const highTarget = total * (highPct / 100);
+  let cum = 0, blackPoint = 0, whitePoint = 255;
+  for (let v = 0; v < 256; v++) {
+    cum += histogram[v];
+    if (cum >= lowTarget && blackPoint === 0) blackPoint = v;
+    if (cum >= highTarget) { whitePoint = v; break; }
+  }
+  return { blackPoint, whitePoint: Math.max(blackPoint + 1, whitePoint) };
 }
