@@ -163,24 +163,28 @@ export { action, app };
 
 // ─── Adjustment layer creation (well-documented batchPlay paths) ─────────────
 
-// Levels adjustment: input black/white + gamma on the composite channel.
-export async function makeLevelsLayer(name: string, levels: { blackPoint: number; whitePoint: number; gamma: number }): Promise<any> {
+// Levels adjustment: input black/white + gamma + output black/white on the composite channel.
+export async function makeLevelsLayer(
+  name: string,
+  levels: { blackPoint: number; whitePoint: number; gamma: number; outputBlack?: number; outputWhite?: number },
+): Promise<any> {
   const doc = getActiveDoc();
+  const adj: any = {
+    _obj: "levelsAdjustment",
+    channel: { _ref: "channel", _enum: "channel", _value: "composite" },
+    input: [Math.round(levels.blackPoint), Math.round(levels.whitePoint)],
+    gamma: levels.gamma,
+  };
+  if (levels.outputBlack != null && levels.outputWhite != null) {
+    adj.output = [Math.round(levels.outputBlack), Math.round(levels.outputWhite)];
+  }
   await action.batchPlay([{
     _obj: "make",
     _target: [{ _ref: "adjustmentLayer" }],
     using: {
       _obj: "adjustmentLayer",
       name,
-      type: {
-        _obj: "levels",
-        adjustment: [{
-          _obj: "levelsAdjustment",
-          channel: { _ref: "channel", _enum: "channel", _value: "composite" },
-          input: [Math.round(levels.blackPoint), Math.round(levels.whitePoint)],
-          gamma: levels.gamma,
-        }],
-      },
+      type: { _obj: "levels", adjustment: [adj] },
     },
   }], {});
   return doc.activeLayers?.[0] ?? doc.layers[0];

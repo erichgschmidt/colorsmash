@@ -132,19 +132,30 @@ export function ZonesTab() {
 
   const onAutoLevel = () => {
     if (!preview) return;
+    // Stretch target to its own range (output = 0..255).
     const { blackPoint, whitePoint } = autoDetectTonal(preview.data);
-    zonesRef.current.tonal = { ...zonesRef.current.tonal, blackPoint, whitePoint };
+    zonesRef.current.tonal = {
+      ...zonesRef.current.tonal, blackPoint, whitePoint, outputBlack: 0, outputWhite: 255,
+    };
     scheduleRedraw();
     setTonalEpoch(n => n + 1);
   };
 
-  // Auto Match: analyze source per zone, set tonal from source's range, set per-zone colors
-  // to source's mean color in each band. User then dials hue/sat/intensity.
+  // Auto Match: detect target's value range AND source's value range, then map target into
+  // source's range so the result occupies the same tonal extent as the source. Also samples
+  // source's per-zone mean color into each zone's color picker.
   const onAutoMatch = () => {
-    if (!sourceSnap) { setStatus("Pick a source layer first."); return; }
+    if (!sourceSnap || !targetSnap) { setStatus("Pick both source and target."); return; }
 
-    const tonal = autoDetectTonal(sourceSnap.data);
-    zonesRef.current.tonal = { ...zonesRef.current.tonal, blackPoint: tonal.blackPoint, whitePoint: tonal.whitePoint };
+    const tgtRange = autoDetectTonal(targetSnap.data);
+    const srcRange = autoDetectTonal(sourceSnap.data);
+    zonesRef.current.tonal = {
+      ...zonesRef.current.tonal,
+      blackPoint:  tgtRange.blackPoint,
+      whitePoint:  tgtRange.whitePoint,
+      outputBlack: srcRange.blackPoint,
+      outputWhite: srcRange.whitePoint,
+    };
 
     const b = boundsRef.current;
     const bands = {
@@ -175,7 +186,7 @@ export function ZonesTab() {
       setTintHex(`#${r}${g}${bx}`);
     }
     scheduleRedraw();
-    setStatus(`Auto-matched ${matched}/3 zones from "${sourceSnap.layerName}". Dial sliders to taste, then Bake.`);
+    setStatus(`Auto-match: tonal ${tgtRange.blackPoint}-${tgtRange.whitePoint} → ${srcRange.blackPoint}-${srcRange.whitePoint}; ${matched}/3 zones colored from "${sourceSnap.layerName}". Dial + Bake.`);
   };
   const [tonalEpoch, setTonalEpoch] = useState(0);
 

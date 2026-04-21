@@ -20,12 +20,17 @@ export interface ZoneState {
 }
 
 export interface TonalState {
-  blackPoint: number; // 0..255 — input level mapped to 0 output
-  whitePoint: number; // 0..255 — input level mapped to 255 output
-  gamma: number;      // 0.1..3.0 — midpoint shift (1.0 = identity)
+  blackPoint: number;        // 0..255 — input level mapped to outputBlack
+  whitePoint: number;        // 0..255 — input level mapped to outputWhite
+  gamma: number;             // 0.1..3.0 — midpoint shift (1.0 = identity)
+  outputBlack: number;       // 0..255 — destination floor (source's darkest)
+  outputWhite: number;       // 0..255 — destination ceiling (source's brightest)
 }
 
-export const IDENTITY_TONAL: TonalState = { blackPoint: 0, whitePoint: 255, gamma: 1.0 };
+export const IDENTITY_TONAL: TonalState = {
+  blackPoint: 0, whitePoint: 255, gamma: 1.0,
+  outputBlack: 0, outputWhite: 255,
+};
 
 export interface ZonesState {
   tonal: TonalState;
@@ -109,15 +114,19 @@ export function colorShiftCurves(z: ZoneState) {
   };
 }
 
-// Levels-style global tonal mapping: input black→0, input white→255, with gamma midpoint.
+// Levels-style global tonal mapping: input black→outputBlack, input white→outputWhite,
+// with gamma midpoint. Identity = 0/255 input, 0/255 output, gamma 1.
 export function applyTonal(input: number, t: TonalState): number {
-  if (t.blackPoint === 0 && t.whitePoint === 255 && t.gamma === 1.0) return input;
+  if (t.blackPoint === 0 && t.whitePoint === 255 && t.gamma === 1.0
+      && t.outputBlack === 0 && t.outputWhite === 255) return input;
   const black = Math.max(0, Math.min(254, t.blackPoint));
   const white = Math.max(black + 1, Math.min(255, t.whitePoint));
   let normalized = (input - black) / (white - black);
   normalized = clamp01(normalized);
   if (t.gamma !== 1.0) normalized = Math.pow(normalized, 1 / Math.max(0.01, t.gamma));
-  return clamp255(normalized * 255);
+  const outBlack = Math.max(0, Math.min(255, t.outputBlack));
+  const outWhite = Math.max(outBlack, Math.min(255, t.outputWhite));
+  return clamp255(outBlack + normalized * (outWhite - outBlack));
 }
 
 // Build a 5-point Curves spline that approximates the Levels (black/white/gamma) operation.
