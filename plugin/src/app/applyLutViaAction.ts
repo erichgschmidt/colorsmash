@@ -1,18 +1,18 @@
-// Transfer via Color Lookup layer using a pre-recorded PS Action.
-// The user records an Action once that loads a .cube from a fixed path; the plugin overwrites
-// that file each apply and replays the action to install the Color Lookup adjustment layer.
+// Transfer via Color Lookup layer: plugin does the heavy lifting, Action only loads the file.
 //
-// Expected Action naming (case-sensitive, user-side setup):
-//   Action set:   "Color Smash"
-//   Action name:  "Load Color Smash LUT"
-//   Action body:  Image > Adjustments > Color Lookup > Load 3D LUT > pick the path below
+// Pipeline:
+//   1. Read source + target pixels, compute Reinhard stats.
+//   2. Generate 33³ LUT, write to [plugin data folder]/color-smash-current.cube.
+//   3. Create an empty Color Lookup adjustment layer via batchPlay.
+//   4. Play the pre-recorded Action which contains just the Lod3 step — loads the LUT into
+//      the freshly-created layer (which is targetEnum after the make call).
 //
-// Path the user must pick during recording:
-//   [plugin data folder]/color-smash-current.cube
-//
-// The plugin writes there before each apply, then plays the action.
+// One-time setup: Setup LUT Action button creates set/action and injects the Lod3 step.
 
-import { readLayerPixels, executeAsModal, getActiveDoc, statsRectForLayer, action as psAction } from "../services/photoshop";
+import {
+  readLayerPixels, executeAsModal, getActiveDoc, statsRectForLayer,
+  action as psAction,
+} from "../services/photoshop";
 import { computeLabStats, TransferWeights } from "../core/reinhard";
 import { downsampleToMaxEdge } from "../core/downsample";
 import { generateReinhardLUT } from "../core/lutGenerator";
@@ -31,12 +31,13 @@ export interface ApplyLutViaActionParams {
 }
 
 export async function applyLutViaAction(params: ApplyLutViaActionParams): Promise<string> {
-  // Stage 1: compute stats + generate LUT + write to fixed path.
-  const cubePath = await executeAsModal("Color Smash write LUT", async () => {
+  return executeAsModal("Color Smash apply LUT (action)", async () => {
     const doc = getActiveDoc();
     const source = doc.layers.find((l: any) => l.id === params.sourceLayerId);
     const target = doc.layers.find((l: any) => l.id === params.targetLayerId);
     if (!source || !target) throw new Error("Picked layer no longer exists.");
+
+    // 1-2: stats + LUT + write file.
     const [s, t] = await Promise.all([
       readLayerPixels(source, statsRectForLayer(source)),
       readLayerPixels(target, statsRectForLayer(target)),
@@ -51,11 +52,15 @@ export async function applyLutViaAction(params: ApplyLutViaActionParams): Promis
     const dataFolder = await fs.getDataFolder();
     const file = await dataFolder.createFile(LUT_FILENAME, { overwrite: true });
     await file.write(text, { format: uxp.storage.formats.utf8 });
-    return file.nativePath as string;
-  });
 
-  // Stage 2: play the recorded action to load the LUT.
-  return executeAsModal("Color Smash play action", async () => {
+    // 3: create an empty Color Lookup adjustment layer (now the targetEnum).
+    await psAction.batchPlay([{
+      _obj: "make",
+      _target: [{ _ref: "adjustmentLayer" }],
+      using: { _obj: "adjustmentLayer", name: ACTION_NAME, type: { _obj: "colorLookup" } },
+    }], {});
+
+    // 4: play the recorded action — loads the LUT into the new Color Lookup layer via Lod3.
     try {
       await psAction.batchPlay([{
         _obj: "play",
@@ -64,9 +69,9 @@ export async function applyLutViaAction(params: ApplyLutViaActionParams): Promis
           { _ref: "actionSet", _name: ACTION_SET },
         ],
       }], {});
-      return `LUT installed via Action. Wrote: ${cubePath}`;
+      return `LUT installed via batchPlay (layer) + Action (Lod3 load).`;
     } catch (e: any) {
-      return `Action play failed — is an Action named "${ACTION_NAME}" inside set "${ACTION_SET}" installed? Record one that does Image → Adjustments → Color Lookup → Load 3D LUT from ${cubePath}. Error: ${e?.message ?? e}`;
+      return `Layer created, but Action play failed. Run "Setup LUT Action" first. Error: ${e?.message ?? e}`;
     }
   });
 }

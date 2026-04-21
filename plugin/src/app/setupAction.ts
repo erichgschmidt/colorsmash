@@ -52,11 +52,12 @@ async function tryCreateActionInSet(setName: string, actionName: string): Promis
   }
 }
 
-// Try several descriptors to inject a "load LUT" step into the action. Returns the form that stuck.
+// Inject ONE step: load LUT into the currently-selected Color Lookup adjustment layer.
+// Plugin handles make-layer via batchPlay (which works); action only handles the file load.
 async function tryInjectLoadStep(cubeToken: string): Promise<string> {
   const attempts: { name: string; run: () => Promise<void> }[] = [
     {
-      name: "A:make command in action",
+      name: "A:load-only step",
       run: async () => {
         await psAction.batchPlay([{
           _obj: "make",
