@@ -8,11 +8,10 @@ const ACTION_SET = "Color Smash";
 const ACTION_NAME = "Load Color Smash LUT";
 const LUT_FILENAME = "color-smash-current.cube";
 
-async function ensureLutFileExists(): Promise<string> {
+async function ensureLutFileExists(): Promise<{ path: string; token: string }> {
   const uxp = require("uxp");
   const fs = uxp.storage.localFileSystem;
   const dataFolder = await fs.getDataFolder();
-  // Tiny identity .cube so the path has real content.
   const text = [
     'TITLE "Color Smash Placeholder"',
     'LUT_3D_SIZE 2',
@@ -24,7 +23,7 @@ async function ensureLutFileExists(): Promise<string> {
     return await dataFolder.getEntry(LUT_FILENAME);
   });
   try { await file.write(text, { format: uxp.storage.formats.utf8 }); } catch { /* ignore */ }
-  return file.nativePath as string;
+  return { path: file.nativePath, token: fs.createSessionToken(file) };
 }
 
 async function tryCreateActionSet(name: string): Promise<void> {
@@ -54,7 +53,7 @@ async function tryCreateActionInSet(setName: string, actionName: string): Promis
 }
 
 // Try several descriptors to inject a "load LUT" step into the action. Returns the form that stuck.
-async function tryInjectLoadStep(cubePath: string): Promise<string> {
+async function tryInjectLoadStep(cubeToken: string): Promise<string> {
   const attempts: { name: string; run: () => Promise<void> }[] = [
     {
       name: "A:make command in action",
@@ -71,7 +70,7 @@ async function tryInjectLoadStep(cubePath: string): Promise<string> {
             commandInfo: {
               _obj: "Lod3",
               _target: [{ _ref: "adjustmentLayer", _enum: "ordinal", _value: "targetEnum" }],
-              using: { _path: cubePath },
+              using: { _path: cubeToken },
             },
           },
         }], {});
@@ -92,7 +91,7 @@ async function tryInjectLoadStep(cubePath: string): Promise<string> {
               {
                 _obj: "Lod3",
                 _target: [{ _ref: "adjustmentLayer", _enum: "ordinal", _value: "targetEnum" }],
-                using: { _path: cubePath },
+                using: { _path: cubeToken },
               },
             ],
           },
@@ -106,7 +105,7 @@ async function tryInjectLoadStep(cubePath: string): Promise<string> {
         await psAction.batchPlay([
           { _obj: "select", _target: [{ _ref: "action", _name: ACTION_NAME }, { _ref: "actionSet", _name: ACTION_SET }] },
           { _obj: "start", _target: [{ _ref: "action", _enum: "ordinal", _value: "targetEnum" }] },
-          { _obj: "Lod3", _target: [{ _ref: "adjustmentLayer", _enum: "ordinal", _value: "targetEnum" }], using: { _path: cubePath } },
+          { _obj: "Lod3", _target: [{ _ref: "adjustmentLayer", _enum: "ordinal", _value: "targetEnum" }], using: { _path: cubeToken } },
           { _obj: "stop", _target: [{ _ref: "action", _enum: "ordinal", _value: "targetEnum" }] },
         ], {});
       },
@@ -127,11 +126,11 @@ async function tryInjectLoadStep(cubePath: string): Promise<string> {
 
 export async function setupAction(): Promise<string> {
   return executeAsModal("Color Smash setup action", async () => {
-    const cubePath = await ensureLutFileExists();
+    const { path: cubePath, token: cubeToken } = await ensureLutFileExists();
     await tryCreateActionSet(ACTION_SET);
     await tryCreateActionInSet(ACTION_SET, ACTION_NAME);
     try {
-      const method = await tryInjectLoadStep(cubePath);
+      const method = await tryInjectLoadStep(cubeToken);
       return `Action created via ${method}. Path: ${cubePath}`;
     } catch (e: any) {
       return `Set/Action created, but step injection failed. Record manually: Actions panel → "${ACTION_SET}/${ACTION_NAME}" → red Record → Image > Adjustments > Color Lookup > Load 3D LUT > "${cubePath}" → Stop. Detail: ${e?.message ?? e}`;
