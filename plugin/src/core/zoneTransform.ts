@@ -205,6 +205,35 @@ export function applyZones(rgba: Uint8Array, zones: ZonesState): Uint8Array {
   return out;
 }
 
+// Compute Lab statistics (mean + chroma stddev) of pixels within an L band.
+// Returns null if the band is empty. Uses approximate sRGB→Lab via Y for L and a quick a/b proxy.
+import { rgbToLab } from "./lab";
+export function labStatsInBand(rgba: Uint8Array, lowL100: number, highL100: number): { muL: number; muA: number; muB: number; sA: number; sB: number; meanRGB: { r: number; g: number; b: number }; n: number } | null {
+  let sumL = 0, sumA = 0, sumB = 0, sum2A = 0, sum2B = 0;
+  let sumR = 0, sumG = 0, sumBl = 0;
+  let n = 0;
+  for (let i = 0; i < rgba.length; i += 4) {
+    if (rgba[i + 3] === 0) continue;
+    const r = rgba[i], g = rgba[i + 1], b = rgba[i + 2];
+    const L = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 * 100;
+    if (L < lowL100 || L > highL100) continue;
+    const lab = rgbToLab({ r: r / 255, g: g / 255, b: b / 255 });
+    sumL += lab.L; sumA += lab.a; sumB += lab.b;
+    sum2A += lab.a * lab.a; sum2B += lab.b * lab.b;
+    sumR += r; sumG += g; sumBl += b;
+    n++;
+  }
+  if (n === 0) return null;
+  const muA = sumA / n, muB = sumB / n;
+  const sA = Math.sqrt(Math.max(0, sum2A / n - muA * muA));
+  const sB = Math.sqrt(Math.max(0, sum2B / n - muB * muB));
+  return {
+    muL: sumL / n, muA, muB, sA, sB,
+    meanRGB: { r: Math.round(sumR / n), g: Math.round(sumG / n), b: Math.round(sumBl / n) },
+    n,
+  };
+}
+
 // Compute mean RGB of pixels within [lowL100, highL100] luminance range. Returns null if the band is empty.
 export function meanColorInBand(rgba: Uint8Array, lowL100: number, highL100: number): { r: number; g: number; b: number } | null {
   let sumR = 0, sumG = 0, sumB = 0, n = 0;
@@ -216,6 +245,31 @@ export function meanColorInBand(rgba: Uint8Array, lowL100: number, highL100: num
   }
   if (n === 0) return null;
   return { r: Math.round(sumR / n), g: Math.round(sumG / n), b: Math.round(sumB / n) };
+}
+
+// Compute L percentile cutoffs (each in 0..100 scale) from a pixel buffer.
+// Returns the L value (in 0..100) at each requested percentile.
+export function lPercentiles(rgba: Uint8Array, percentiles: number[]): number[] {
+  const histogram = new Uint32Array(101); // L bucket 0..100
+  let total = 0;
+  for (let i = 0; i < rgba.length; i += 4) {
+    if (rgba[i + 3] === 0) continue;
+    const L = Math.min(100, Math.max(0, Math.round((0.2126 * rgba[i] + 0.7152 * rgba[i + 1] + 0.0722 * rgba[i + 2]) / 255 * 100)));
+    histogram[L]++;
+    total++;
+  }
+  const result: number[] = [];
+  if (total === 0) return percentiles.map(() => 50);
+  for (const pct of percentiles) {
+    const target = total * (pct / 100);
+    let cum = 0, found = 100;
+    for (let v = 0; v <= 100; v++) {
+      cum += histogram[v];
+      if (cum >= target) { found = v; break; }
+    }
+    result.push(found);
+  }
+  return result;
 }
 
 // Auto-detect black/white points from a pixel buffer using percentile clipping.

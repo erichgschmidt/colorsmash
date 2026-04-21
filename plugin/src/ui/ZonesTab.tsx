@@ -2,12 +2,12 @@
 // Each parameter slider shows all 3 zones at once; range sliders cascade so zones don't cross.
 
 import { useEffect, useRef, useState } from "react";
-import { applyZones, autoDetectTonal, meanColorInBand, IDENTITY_TONAL, type ZonesState, type ZoneState, type TonalState } from "../core/zoneTransform";
+import { applyZones, autoDetectTonal, labStatsInBand, lPercentiles, IDENTITY_TONAL, type ZonesState, type ZoneState, type TonalState } from "../core/zoneTransform";
 import { useLayerPreview } from "./useLayerPreview";
 import { useLayers } from "./useLayers";
 import { bakeZones } from "../app/bakeZones";
 import { MultiThumbSlider, type ZoneKey, ZONE_COLORS } from "./MultiThumbSlider";
-import { TonalZonesSlider, type TonalBounds, boundsToRanges } from "./TonalZonesSlider";
+import { TonalZonesSlider, type TonalBounds, boundsToRanges as boundsToRangesFn } from "./TonalZonesSlider";
 import { Histogram } from "./Histogram";
 import { PreviewPane } from "./PreviewPane";
 
@@ -53,7 +53,7 @@ function TonalSliderRow(props: {
 }
 
 function applyBoundsToDefaults(b: TonalBounds): ZonesState {
-  const ranges = boundsToRanges(b);
+  const ranges = boundsToRangesFn(b);
   return {
     tonal: { ...IDENTITY_TONAL },
     shadows:    { ...DEFAULT_ZONE, ...ranges.shadows },
@@ -116,7 +116,7 @@ export function ZonesTab() {
 
   const onBoundsChange = (b: TonalBounds) => {
     boundsRef.current = { ...b };
-    const ranges = boundsToRanges(b);
+    const ranges = boundsToRangesFn(b);
     zonesRef.current.shadows = { ...zonesRef.current.shadows, ...ranges.shadows };
     zonesRef.current.midtones = { ...zonesRef.current.midtones, ...ranges.midtones };
     zonesRef.current.highlights = { ...zonesRef.current.highlights, ...ranges.highlights };
@@ -157,6 +157,27 @@ export function ZonesTab() {
       outputWhite: srcRange.whitePoint,
     };
 
+    // Auto-place zone boundaries based on source's L distribution percentiles.
+    // Zones operate on POST-tonal L values, so boundaries are in the same space as where the
+    // tonal Levels pass remaps target pixels (= source's range). Clamp to [outputBlack..outputWhite]
+    // in 0..100 scale to stay strictly inside the active tonal window.
+    const [p25, p35, p65, p75] = lPercentiles(sourceSnap.data, [25, 35, 65, 75]);
+    const outBlackL = (srcRange.blackPoint / 255) * 100;
+    const outWhiteL = (srcRange.whitePoint / 255) * 100;
+    const clamp = (v: number) => Math.max(outBlackL, Math.min(outWhiteL, v));
+    boundsRef.current = {
+      t1: clamp(p25),
+      t2: clamp(Math.max(p25, p35)),
+      t3: clamp(Math.max(p35, p65)),
+      t4: clamp(Math.max(p65, p75)),
+      pad1: 5, pad2: 5,
+    };
+    // Update zone range/feather from new bounds.
+    const ranges = boundsToRangesFn(boundsRef.current);
+    zonesRef.current.shadows = { ...zonesRef.current.shadows, ...ranges.shadows };
+    zonesRef.current.midtones = { ...zonesRef.current.midtones, ...ranges.midtones };
+    zonesRef.current.highlights = { ...zonesRef.current.highlights, ...ranges.highlights };
+
     const b = boundsRef.current;
     const bands = {
       shadows:    { lo: 0,    hi: b.t1 + (b.t2 - b.t1) / 2 },
@@ -164,15 +185,54 @@ export function ZonesTab() {
       highlights: { lo: b.t3 + (b.t4 - b.t3) / 2, hi: 100 },
     };
 
+    // Per-zone Lab-aware match: source and target stats in each band drive color + saturation.
     let matched = 0;
     for (const zoneName of ["shadows", "midtones", "highlights"] as ZoneKey[]) {
       const band = bands[zoneName];
-      const mean = meanColorInBand(sourceSnap.data, band.lo, band.hi);
-      if (!mean) continue;
-      zonesRef.current[zoneName].colorR = mean.r;
-      zonesRef.current[zoneName].colorG = mean.g;
-      zonesRef.current[zoneName].colorB = mean.b;
-      zonesRef.current[zoneName].colorIntensity = 60;
+      const srcStats = labStatsInBand(sourceSnap.data, band.lo, band.hi);
+      const tgtStats = labStatsInBand(targetSnap.data, band.lo, band.hi);
+      if (!srcStats) continue;
+
+      // Color picker = source's mean RGB in this band.
+      zonesRef.current[zoneName].colorR = srcStats.meanRGB.r;
+      zonesRef.current[zoneName].colorG = srcStats.meanRGB.g;
+      zonesRef.current[zoneName].colorB = srcStats.meanRGB.b;
+
+      // Color intensity scaled by Lab a/b mean shift magnitude vs target. No target → use 60%.
+      let intensity = 60;
+      if (tgtStats) {
+        const dA = srcStats.muA - tgtStats.muA;
+        const dB = srcStats.muB - tgtStats.muB;
+        const shiftMag = Math.sqrt(dA * dA + dB * dB);
+        // Lab a/b shift in [0..50] feels useful; map to [40..90% intensity].
+        intensity = Math.round(40 + Math.min(50, shiftMag) * 1.0);
+      }
+      zonesRef.current[zoneName].colorIntensity = intensity;
+
+      // Saturation = chroma stddev ratio source/target. >1 = boost, <1 = desat.
+      if (tgtStats) {
+        const srcChroma = (srcStats.sA + srcStats.sB) / 2;
+        const tgtChroma = (tgtStats.sA + tgtStats.sB) / 2;
+        const ratio = srcChroma / Math.max(1e-3, tgtChroma);
+        // Clamp ±100. Most natural matches land in -50..+50 range.
+        zonesRef.current[zoneName].sat = Math.max(-100, Math.min(100, Math.round((ratio - 1) * 100)));
+      }
+
+      // Hue = direction of the a/b shift, mapped to a small HSL hue rotation.
+      // (Approximate: a→red axis, b→yellow axis. atan2 gives direction.)
+      if (tgtStats) {
+        const dA = srcStats.muA - tgtStats.muA;
+        const dB = srcStats.muB - tgtStats.muB;
+        const shiftMag = Math.sqrt(dA * dA + dB * dB);
+        if (shiftMag > 5) {
+          const angleDeg = Math.atan2(dB, dA) * 180 / Math.PI;
+          // Subtle hue rotation toward source's color direction; cap at ±30°.
+          zonesRef.current[zoneName].hue = Math.max(-30, Math.min(30, Math.round(angleDeg / 6)));
+        } else {
+          zonesRef.current[zoneName].hue = 0;
+        }
+      }
+
       matched++;
     }
 
