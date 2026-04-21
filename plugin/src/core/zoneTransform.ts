@@ -20,13 +20,13 @@ export interface ZoneState {
 }
 
 export interface TonalState {
-  blackPoint: number;        // 0..255 — input level mapped to outputBlack
-  whitePoint: number;        // 0..255 — input level mapped to outputWhite
-  gamma: number;             // 0.1..3.0 — midpoint shift (1.0 = identity)
-  outputBlack: number;       // 0..255 — destination floor
-  outputWhite: number;       // 0..255 — destination ceiling
-  matchCurve?: number[];     // optional 256-entry LUT (input → output) from histogram matching
-                             // When present, OVERRIDES the linear black/white/gamma behavior.
+  blackPoint: number;
+  whitePoint: number;
+  gamma: number;
+  outputBlack: number;
+  outputWhite: number;
+  matchCurve?: number[];                                    // composite LUT (legacy single-channel match)
+  matchPerChannel?: { r: number[]; g: number[]; b: number[] };  // per-channel match (preferred for transfer)
 }
 
 export const IDENTITY_TONAL: TonalState = {
@@ -117,6 +117,8 @@ export function colorShiftCurves(z: ZoneState) {
 }
 
 // Levels-style global tonal mapping with optional histogram-match LUT override.
+// Note: per-channel match isn't applied here (each channel needs its own LUT). Sim handles it
+// in applyZones by checking matchPerChannel directly.
 export function applyTonal(input: number, t: TonalState): number {
   if (t.matchCurve) {
     const i = Math.max(0, Math.min(255, Math.round(input)));
@@ -189,11 +191,19 @@ function applyZone(input: { r: number; g: number; b: number }, z: ZoneState, w: 
 export function applyZones(rgba: Uint8Array, zones: ZonesState): Uint8Array {
   const out = new Uint8Array(rgba.length);
   const t = zones.tonal;
+  const pc = t.matchPerChannel;
   for (let i = 0; i < rgba.length; i += 4) {
-    // 1) Global tonal pass (Levels-style) applied to each channel.
-    let r = applyTonal(rgba[i],     t) / 255;
-    let g = applyTonal(rgba[i + 1], t) / 255;
-    let b = applyTonal(rgba[i + 2], t) / 255;
+    // 1) Global tonal pass. Per-channel histogram match takes precedence; otherwise composite.
+    let r: number, g: number, b: number;
+    if (pc) {
+      r = pc.r[Math.max(0, Math.min(255, rgba[i]))]     / 255;
+      g = pc.g[Math.max(0, Math.min(255, rgba[i + 1]))] / 255;
+      b = pc.b[Math.max(0, Math.min(255, rgba[i + 2]))] / 255;
+    } else {
+      r = applyTonal(rgba[i],     t) / 255;
+      g = applyTonal(rgba[i + 1], t) / 255;
+      b = applyTonal(rgba[i + 2], t) / 255;
+    }
     let pixel = { r, g, b };
 
     // 2) Per-zone color + hue/sat, gated by tonal weights computed from the post-tonal L.
@@ -250,6 +260,45 @@ export function meanColorInBand(rgba: Uint8Array, lowL100: number, highL100: num
   }
   if (n === 0) return null;
   return { r: Math.round(sumR / n), g: Math.round(sumG / n), b: Math.round(sumB / n) };
+}
+
+// Per-channel histogram match. For each of R, G, B independently, compute the CDF of target
+// and source, then map target's channel value to the source intensity at the same CDF. This is
+// the gold-standard color transfer technique (see Reinhard et al. follow-ups, OpenCV docs).
+// Returns three independent LUTs.
+export function buildHistogramMatchLUTPerChannel(targetRgba: Uint8Array, sourceRgba: Uint8Array): { r: number[]; g: number[]; b: number[] } {
+  const buildOne = (channelOffset: number): number[] => {
+    const tgtHist = new Uint32Array(256);
+    const srcHist = new Uint32Array(256);
+    let tN = 0, sN = 0;
+    for (let i = 0; i < targetRgba.length; i += 4) {
+      if (targetRgba[i + 3] === 0) continue;
+      tgtHist[targetRgba[i + channelOffset]]++; tN++;
+    }
+    for (let i = 0; i < sourceRgba.length; i += 4) {
+      if (sourceRgba[i + 3] === 0) continue;
+      srcHist[sourceRgba[i + channelOffset]]++; sN++;
+    }
+    if (tN === 0 || sN === 0) return Array.from({ length: 256 }, (_, i) => i);
+    const tCDF = new Float64Array(256);
+    const sCDF = new Float64Array(256);
+    let cT = 0, cS = 0;
+    for (let v = 0; v < 256; v++) { cT += tgtHist[v]; cS += srcHist[v]; tCDF[v] = cT / tN; sCDF[v] = cS / sN; }
+    const lut = new Array<number>(256);
+    let u = 0;
+    for (let v = 0; v < 256; v++) {
+      const t = tCDF[v];
+      while (u < 255 && sCDF[u] < t) u++;
+      lut[v] = u;
+    }
+    return lut;
+  };
+  return { r: buildOne(0), g: buildOne(1), b: buildOne(2) };
+}
+
+// Fade a LUT toward identity by k (0=identity, 1=full match).
+export function fadeLUT(lut: number[], k: number): number[] {
+  return lut.map((u, v) => Math.round(v * (1 - k) + u * k));
 }
 
 // Histogram match: build a 256-entry LUT that, when applied to target's L, produces an output

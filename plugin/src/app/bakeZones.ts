@@ -55,11 +55,17 @@ export async function bakeZones(zones: ZonesState): Promise<string> {
     const group = await doc.createLayerGroup({ name: GROUP_NAME });
 
     // Global tonal layer — applied first by PS (bottom of group).
-    // If we have a histogram-match LUT, emit it as a Curves layer (17 anchors) since Levels
-    // can't express a non-linear lookup. Otherwise use a Levels layer with the affine params.
+    // Priority: per-channel histogram match (R/G/B Curves) > composite match (composite Curves)
+    // > linear Levels.
     const tonal = zones.tonal ?? IDENTITY_TONAL;
     let tonalLayer: any;
-    if (tonal.matchCurve) {
+    if (tonal.matchPerChannel) {
+      tonalLayer = await makeCurvesLayer("tonal (per-channel match)", [
+        { channel: "red",   points: lutToCurvePoints(tonal.matchPerChannel.r, 17) },
+        { channel: "green", points: lutToCurvePoints(tonal.matchPerChannel.g, 17) },
+        { channel: "blue",  points: lutToCurvePoints(tonal.matchPerChannel.b, 17) },
+      ]);
+    } else if (tonal.matchCurve) {
       tonalLayer = await makeCurvesLayer("tonal (histogram match)", [
         { channel: "composite", points: lutToCurvePoints(tonal.matchCurve, 17) },
       ]);

@@ -2,7 +2,7 @@
 // Each parameter slider shows all 3 zones at once; range sliders cascade so zones don't cross.
 
 import { useEffect, useRef, useState } from "react";
-import { applyZones, autoDetectTonal, labStatsInBand, lPercentiles, lMeanStddev, buildHistogramMatchLUT, IDENTITY_TONAL, type ZonesState, type ZoneState, type TonalState } from "../core/zoneTransform";
+import { applyZones, autoDetectTonal, labStatsInBand, lPercentiles, lMeanStddev, buildHistogramMatchLUTPerChannel, fadeLUT, IDENTITY_TONAL, type ZonesState, type ZoneState, type TonalState } from "../core/zoneTransform";
 import { useLayerPreview } from "./useLayerPreview";
 import { useLayers } from "./useLayers";
 import { bakeZones } from "../app/bakeZones";
@@ -124,10 +124,8 @@ export function ZonesTab() {
     scheduleHighlightRefresh();
   };
 
-  // Drag updates: ref + redraw, no React state change. Manual edits clear the histogram-match
-  // override so the linear black/white/gamma controls take effect again.
   const onTonalChange = (patch: Partial<TonalState>) => {
-    zonesRef.current.tonal = { ...zonesRef.current.tonal, ...patch, matchCurve: undefined };
+    zonesRef.current.tonal = { ...zonesRef.current.tonal, ...patch, matchCurve: undefined, matchPerChannel: undefined };
     scheduleRedraw();
   };
 
@@ -148,13 +146,19 @@ export function ZonesTab() {
   const onAutoMatch = () => {
     if (!sourceSnap || !targetSnap) { setStatus("Pick both source and target."); return; }
 
-    // True histogram matching: build a LUT that remaps target's L distribution to match source's.
-    // Stored as matchCurve override; bakes as a 17-point Curves layer that captures the shape.
-    const matchLUT = buildHistogramMatchLUT(targetSnap.data, sourceSnap.data);
+    // Per-channel histogram match (R, G, B independently). Captures both luminance and color
+    // transfer in one shot. Faded by Match Strength toward identity per channel.
+    const k = matchStrengthRef.current / 100;
+    const full = buildHistogramMatchLUTPerChannel(targetSnap.data, sourceSnap.data);
+    const fadedPerChannel = {
+      r: fadeLUT(full.r, k),
+      g: fadeLUT(full.g, k),
+      b: fadeLUT(full.b, k),
+    };
     zonesRef.current.tonal = {
       ...zonesRef.current.tonal,
-      matchCurve: matchLUT,
-      // Clear the linear levels params so manual sliders show "neutral" until the user touches them.
+      matchPerChannel: fadedPerChannel,
+      matchCurve: undefined,
       blackPoint: 0, whitePoint: 255, gamma: 1.0, outputBlack: 0, outputWhite: 255,
     };
     // For boundary clamping: use source's actual min/max from the LUT (first/last non-flat values).
@@ -204,31 +208,27 @@ export function ZonesTab() {
         continue;
       }
 
-      const dR = srcStats.meanRGB.r - tgtStats.meanRGB.r;
-      const dG = srcStats.meanRGB.g - tgtStats.meanRGB.g;
-      const dB = srcStats.meanRGB.b - tgtStats.meanRGB.b;
+      // Per-zone delta scaled by Match Strength. At k=0, all per-zone effects collapse to identity.
+      const dR = (srcStats.meanRGB.r - tgtStats.meanRGB.r) * k;
+      const dG = (srcStats.meanRGB.g - tgtStats.meanRGB.g) * k;
+      const dB = (srcStats.meanRGB.b - tgtStats.meanRGB.b) * k;
       z.colorR = Math.max(0, Math.min(255, 128 + dR));
       z.colorG = Math.max(0, Math.min(255, 128 + dG));
       z.colorB = Math.max(0, Math.min(255, 128 + dB));
-      // 100% intensity: full delta applies. Reduces if delta is small (already at target).
       const deltaMag = Math.sqrt(dR * dR + dG * dG + dB * dB);
       z.colorIntensity = deltaMag < 2 ? 0 : 100;
 
-      // Saturation = stddev ratio - 1. Self-match → ratio 1 → sat 0. Identity preserved.
       const srcChroma = (srcStats.sA + srcStats.sB) / 2;
       const tgtChroma = (tgtStats.sA + tgtStats.sB) / 2;
       const ratio = srcChroma / Math.max(1e-3, tgtChroma);
-      z.sat = Math.abs(ratio - 1) < 0.02
-        ? 0
-        : Math.max(-100, Math.min(100, Math.round((ratio - 1) * 100)));
+      const satFull = Math.round((ratio - 1) * 100);
+      z.sat = Math.abs(satFull) < 2 ? 0 : Math.max(-100, Math.min(100, Math.round(satFull * k)));
 
-      // Hue rotation toward Lab a/b shift direction. Self-match → no shift → hue 0.
       const dA = srcStats.muA - tgtStats.muA;
       const dBlab = srcStats.muB - tgtStats.muB;
       const shiftMag = Math.sqrt(dA * dA + dBlab * dBlab);
-      z.hue = shiftMag > 5
-        ? Math.max(-30, Math.min(30, Math.round(Math.atan2(dBlab, dA) * 180 / Math.PI / 6)))
-        : 0;
+      const hueFull = shiftMag > 5 ? Math.round(Math.atan2(dBlab, dA) * 180 / Math.PI / 6) : 0;
+      z.hue = Math.max(-30, Math.min(30, Math.round(hueFull * k)));
 
       matched++;
     }
@@ -245,9 +245,16 @@ export function ZonesTab() {
     scheduleRedraw();
     const tgtStat = lMeanStddev(targetSnap.data);
     const srcStat = lMeanStddev(sourceSnap.data);
-    setStatus(`Auto-match (histogram): target μ${tgtStat.mean.toFixed(0)}/σ${tgtStat.stddev.toFixed(0)} → source μ${srcStat.mean.toFixed(0)}/σ${srcStat.stddev.toFixed(0)}; ${matched}/3 zones. Dial + Bake.`);
+    const z = zonesRef.current;
+    setStatus(
+      `Auto-match (histogram): target μ${tgtStat.mean.toFixed(0)}/σ${tgtStat.stddev.toFixed(0)} → source μ${srcStat.mean.toFixed(0)}/σ${srcStat.stddev.toFixed(0)}\n` +
+      `shadows: hue ${z.shadows.hue}, sat ${z.shadows.sat}, color int ${z.shadows.colorIntensity}\n` +
+      `midtones: hue ${z.midtones.hue}, sat ${z.midtones.sat}, color int ${z.midtones.colorIntensity}\n` +
+      `highlights: hue ${z.highlights.hue}, sat ${z.highlights.sat}, color int ${z.highlights.colorIntensity}`
+    );
   };
   const [tonalEpoch, setTonalEpoch] = useState(0);
+  const matchStrengthRef = useRef(60); // default 60% — a useful, non-wild starting point
 
   // Refresh highlight overlays on slider drag, but throttled to one rAF tick.
   // Note: this is a state bump (no text changes) so it doesn't trigger the font-renderer crash.
@@ -339,7 +346,14 @@ export function ZonesTab() {
         ))}
       </div>
 
-      <Histogram rgba={preview?.data ?? null} height={20} />
+      <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 4, fontSize: 9, opacity: 0.6 }}>
+        <span style={{ width: 40, textAlign: "right" }}>source</span>
+        <div style={{ flex: 1 }}><Histogram rgba={sourceSnap?.data ?? null} height={16} /></div>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, opacity: 0.6 }}>
+        <span style={{ width: 40, textAlign: "right" }}>target</span>
+        <div style={{ flex: 1 }}><Histogram rgba={transformedTarget ?? preview?.data ?? null} height={16} /></div>
+      </div>
       <TonalZonesSlider
         key={`bounds-${valuesEpoch}`}
         bounds={boundsRef.current}
@@ -392,6 +406,15 @@ export function ZonesTab() {
         <input type="color" value={tintHex} onChange={e => onTintChange(e.target.value)}
           style={{ flex: 1, height: 22, padding: 0, border: "1px solid #555", background: "transparent", cursor: "pointer" }} />
         <span style={{ width: 36, textAlign: "right", opacity: 0.8, fontFamily: "monospace" }}>{tintHex}</span>
+      </div>
+
+      {/* Match Strength controls how aggressively Auto Match transforms target. 50-60% is natural. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 11 }}>
+        <span style={{ width: 100, opacity: 0.7 }}>Match Strength</span>
+        <input type="range" min={0} max={100} defaultValue={matchStrengthRef.current}
+          onInput={e => { matchStrengthRef.current = Number((e.target as HTMLInputElement).value); }}
+          style={{ flex: 1, minWidth: 0 }} />
+        <span style={{ width: 36, textAlign: "right", opacity: 0.8, fontSize: 9 }}>(applies on Auto Match)</span>
       </div>
 
       <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
