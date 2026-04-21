@@ -124,6 +124,14 @@ export function ZonesTab() {
     setTonalEpoch(n => n + 1);
   };
 
+  // Auto-run Auto Match whenever source, target, or zone count changes.
+  useEffect(() => {
+    if (sourceSnap && targetSnap && sourceSnap.layerId !== targetSnap.layerId) {
+      onAutoMatch();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceSnap, targetSnap, zoneCount]);
+
   const onAutoMatch = () => {
     if (!sourceSnap || !targetSnap) { setStatus("Pick both source and target."); return; }
     const k = matchStrengthRef.current / 100;
