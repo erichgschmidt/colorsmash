@@ -1,64 +1,31 @@
-// Zones tab — Lumetri-wheels-style with multi-thumb sliders.
-// Each parameter slider shows all 3 zones at once; range sliders cascade so zones don't cross.
+// Zones tab with variable N zones (3/5/7).
 
 import { useEffect, useRef, useState } from "react";
-import { applyZones, autoDetectTonal, labStatsInBand, lPercentiles, lMeanStddev, buildLabCorrelationLUT, buildLabCorrelationLUTInBand, fadeLUT, IDENTITY_TONAL, type ZonesState, type ZoneState, type TonalState } from "../core/zoneTransform";
+import {
+  applyZones, autoDetectTonal, labStatsInBand, lMeanStddev, buildLabCorrelationLUTInBand,
+  fadeLUT, IDENTITY_TONAL, defaultBoundaries,
+  type ZonesState, type ZoneState, type TonalState,
+} from "../core/zoneTransform";
 import { useLayerPreview } from "./useLayerPreview";
 import { useLayers } from "./useLayers";
 import { bakeZones } from "../app/bakeZones";
-import { MultiThumbSlider, type ZoneKey, ZONE_COLORS as DEFAULT_ZONE_COLORS } from "./MultiThumbSlider";
-import { TonalZonesSlider, type TonalBounds, boundsToRanges as boundsToRangesFn } from "./TonalZonesSlider";
+import { TonalZonesSlider, type TonalBounds, boundsToRanges, paletteFor } from "./TonalZonesSlider";
 import { Histogram } from "./Histogram";
 import { PreviewPane, type PreviewImgHandle } from "./PreviewPane";
 
 const DEFAULT_ZONE: ZoneState = {
   hue: 0, sat: 0,
   colorR: 128, colorG: 128, colorB: 128, colorIntensity: 0,
-  rangeStart: 0, rangeEnd: 100, featherLeft: 15, featherRight: 15,
+  rangeStart: 0, rangeEnd: 100, featherLeft: 0, featherRight: 0,
 };
 
-interface FieldSpec {
-  key: keyof ZoneState; label: string; min: number; max: number;
-}
-// Per-zone parameters only — value/range/feather now global or in TonalZonesSlider.
-const FIELDS: FieldSpec[] = [
-  { key: "hue",            label: "Hue",       min: -180, max: 180 },
-  { key: "sat",            label: "Sat",       min: -100, max: 100 },
-  { key: "colorIntensity", label: "Color int", min: 0,    max: 100 },
-];
-
-const DEFAULT_BOUNDS: TonalBounds = { t1: 25, t2: 40, t3: 60, t4: 75, pad1: 0, pad2: 0 };
-
-// Uncontrolled tonal slider row — value updates label via ref, no React re-render per drag tick.
-function TonalSliderRow(props: {
-  label: string; min: number; max: number; step: number;
-  defaultValue: number; format: (v: number) => string;
-  onInput: (v: number) => void;
-}) {
-  const labelRef = useRef<HTMLSpanElement>(null);
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, fontSize: 11 }}>
-      <span style={{ width: 64, opacity: 0.7 }}>{props.label}</span>
-      <input type="range" min={props.min} max={props.max} step={props.step}
-        defaultValue={props.defaultValue}
-        onInput={e => {
-          const v = Number((e.target as HTMLInputElement).value);
-          if (labelRef.current) labelRef.current.textContent = props.format(v);
-          props.onInput(v);
-        }}
-        style={{ flex: 1, minWidth: 0 }} />
-      <span ref={labelRef} style={{ width: 36, textAlign: "right", opacity: 0.8 }}>{props.format(props.defaultValue)}</span>
-    </div>
-  );
-}
-
-function applyBoundsToDefaults(b: TonalBounds): ZonesState {
-  const ranges = boundsToRangesFn(b);
+function buildDefaultState(zoneCount: number): { zones: ZonesState; bounds: TonalBounds } {
+  const bounds = defaultBoundaries(zoneCount);
+  const ranges = boundsToRanges(bounds);
+  const zones: ZoneState[] = ranges.map(r => ({ ...DEFAULT_ZONE, ...r }));
   return {
-    tonal: { ...IDENTITY_TONAL },
-    shadows:    { ...DEFAULT_ZONE, ...ranges.shadows },
-    midtones:   { ...DEFAULT_ZONE, ...ranges.midtones },
-    highlights: { ...DEFAULT_ZONE, ...ranges.highlights },
+    zones: { tonal: { ...IDENTITY_TONAL }, zones },
+    bounds,
   };
 }
 
@@ -77,15 +44,22 @@ export function ZonesTab() {
 
   const { snap: sourceSnap, refresh: refreshSource } = useLayerPreview(sourceId);
   const { snap: targetSnap, refresh: refreshTarget } = useLayerPreview(targetId);
-  const preview = targetSnap; // existing code paths reference `preview` for the target
-  const boundsRef = useRef<TonalBounds>({ ...DEFAULT_BOUNDS });
-  const zonesRef = useRef<ZonesState>(applyBoundsToDefaults({ ...DEFAULT_BOUNDS }));
-  const [activeZone, setActiveZone] = useState<ZoneKey>("midtones");
-  const [valuesEpoch, setValuesEpoch] = useState(0); // bumped when we want sliders to re-sync from refs
+  const preview = targetSnap;
+
+  const [zoneCount, setZoneCount] = useState(3);
+  const initial = buildDefaultState(zoneCount);
+  const boundsRef = useRef<TonalBounds>(initial.bounds);
+  const zonesRef = useRef<ZonesState>(initial.zones);
+  const [activeZoneIdx, setActiveZoneIdx] = useState(0);
+  const [valuesEpoch, setValuesEpoch] = useState(0);
+  const [zoneColors, setZoneColors] = useState<string[]>(paletteFor(zoneCount));
+  const [tonalEpoch, setTonalEpoch] = useState(0);
+  const matchStrengthRef = useRef(60);
+
   const transformedTargetRef = useRef<Uint8Array | null>(null);
   const targetImgHandle = useRef<PreviewImgHandle | null>(null);
   const rafPending = useRef(false);
-  const [status, setStatus] = useState("Live preview · drag any thumb (zone-colored) to edit that zone. Range sliders cascade so zones can't cross.");
+  const [status, setStatus] = useState("Auto Match copies source's per-zone Lab characteristics into target. Bake emits the stack.");
 
   const scheduleRedraw = () => {
     if (rafPending.current) return;
@@ -95,33 +69,39 @@ export function ZonesTab() {
       if (!preview) return;
       const transformed = applyZones(preview.data, zonesRef.current);
       transformedTargetRef.current = transformed;
-      // Push directly to the img element, no React state change → no re-render flicker.
       targetImgHandle.current?.setPixels(transformed, preview.width, preview.height);
+    });
+  };
+
+  const highlightRafPending = useRef(false);
+  const [, setHighlightTick] = useState(0);
+  const scheduleHighlightRefresh = () => {
+    if (highlightRafPending.current) return;
+    highlightRafPending.current = true;
+    requestAnimationFrame(() => {
+      highlightRafPending.current = false;
+      setHighlightTick(n => n + 1);
     });
   };
 
   useEffect(scheduleRedraw, [preview]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Keep three independent hex strings, one per zone, so all three color pickers stay in sync.
-  const [zoneHex, setZoneHex] = useState<Record<ZoneKey, string>>({ shadows: "#808080", midtones: "#808080", highlights: "#808080" });
-  const refreshAllHexFromRef = () => {
-    const z = zonesRef.current;
-    const mk = (zz: ZoneState) => `#${zz.colorR.toString(16).padStart(2, "0")}${zz.colorG.toString(16).padStart(2, "0")}${zz.colorB.toString(16).padStart(2, "0")}`;
-    setZoneHex({ shadows: mk(z.shadows), midtones: mk(z.midtones), highlights: mk(z.highlights) });
-  };
-
-  const onSliderChange = (key: keyof ZoneState) => (zone: ZoneKey, v: number) => {
-    (zonesRef.current[zone] as any)[key] = v;
+  // Rebuild zones when zoneCount changes.
+  useEffect(() => {
+    const s = buildDefaultState(zoneCount);
+    boundsRef.current = s.bounds;
+    zonesRef.current = s.zones;
+    setActiveZoneIdx(0);
+    setZoneColors(paletteFor(zoneCount));
+    setValuesEpoch(n => n + 1);
+    setTonalEpoch(n => n + 1);
     scheduleRedraw();
-    scheduleHighlightRefresh();
-  };
+  }, [zoneCount]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onBoundsChange = (b: TonalBounds) => {
-    boundsRef.current = { ...b };
-    const ranges = boundsToRangesFn(b);
-    zonesRef.current.shadows = { ...zonesRef.current.shadows, ...ranges.shadows };
-    zonesRef.current.midtones = { ...zonesRef.current.midtones, ...ranges.midtones };
-    zonesRef.current.highlights = { ...zonesRef.current.highlights, ...ranges.highlights };
+    boundsRef.current = b;
+    const ranges = boundsToRanges(b);
+    zonesRef.current.zones = zonesRef.current.zones.map((z, i) => ({ ...z, ...(ranges[i] ?? {}) }));
     scheduleRedraw();
     scheduleHighlightRefresh();
   };
@@ -133,7 +113,6 @@ export function ZonesTab() {
 
   const onAutoLevel = () => {
     if (!preview) return;
-    // Stretch target to its own range (output = 0..255).
     const { blackPoint, whitePoint } = autoDetectTonal(preview.data);
     zonesRef.current.tonal = {
       ...zonesRef.current.tonal, blackPoint, whitePoint, outputBlack: 0, outputWhite: 255,
@@ -142,178 +121,83 @@ export function ZonesTab() {
     setTonalEpoch(n => n + 1);
   };
 
-  // Auto Match: detect target's value range AND source's value range, then map target into
-  // source's range so the result occupies the same tonal extent as the source. Also samples
-  // source's per-zone mean color into each zone's color picker.
   const onAutoMatch = () => {
     if (!sourceSnap || !targetSnap) { setStatus("Pick both source and target."); return; }
-
-    // Lab-correlation LUT: per-channel R/G/B Curves fitted to approximate a Lab-space histogram
-    // match. Preserves hue better than naive RGB per-channel matching (no more yellow→green
-    // crossover on opponent colors) and still bakes as standard RGB Curves.
     const k = matchStrengthRef.current / 100;
-    const full = buildLabCorrelationLUT(targetSnap.data, sourceSnap.data);
-    const fadedPerChannel = {
-      r: fadeLUT(full.r, k),
-      g: fadeLUT(full.g, k),
-      b: fadeLUT(full.b, k),
-    };
-    zonesRef.current.tonal = {
-      ...zonesRef.current.tonal,
-      matchPerChannel: fadedPerChannel,
-      matchCurve: undefined,
-      blackPoint: 0, whitePoint: 255, gamma: 1.0, outputBlack: 0, outputWhite: 255,
-    };
-    // For boundary clamping: use source's actual min/max from the LUT (first/last non-flat values).
-    const srcRange = autoDetectTonal(sourceSnap.data);
 
-    // Auto-place zone boundaries based on source's L distribution percentiles.
-    // Zones operate on POST-tonal L values, so boundaries are in the same space as where the
-    // tonal Levels pass remaps target pixels (= source's range). Clamp to [outputBlack..outputWhite]
-    // in 0..100 scale to stay strictly inside the active tonal window.
-    const [p25, p35, p65, p75] = lPercentiles(sourceSnap.data, [25, 35, 65, 75]);
-    const outBlackL = (srcRange.blackPoint / 255) * 100;
-    const outWhiteL = (srcRange.whitePoint / 255) * 100;
-    const clamp = (v: number) => Math.max(outBlackL, Math.min(outWhiteL, v));
-    boundsRef.current = {
-      t1: clamp(p25),
-      t2: clamp(Math.max(p25, p35)),
-      t3: clamp(Math.max(p35, p65)),
-      t4: clamp(Math.max(p65, p75)),
-      pad1: 5, pad2: 5,
-    };
-    // Update zone range/feather from new bounds.
-    const ranges = boundsToRangesFn(boundsRef.current);
-    zonesRef.current.shadows = { ...zonesRef.current.shadows, ...ranges.shadows };
-    zonesRef.current.midtones = { ...zonesRef.current.midtones, ...ranges.midtones };
-    zonesRef.current.highlights = { ...zonesRef.current.highlights, ...ranges.highlights };
+    // Clear tonal overrides and let per-zone Lab fits do the work.
+    zonesRef.current.tonal = { ...IDENTITY_TONAL };
 
-    const b = boundsRef.current;
-    const bands = {
-      shadows:    { lo: 0,    hi: b.t1 + (b.t2 - b.t1) / 2 },
-      midtones:   { lo: b.t1 + (b.t2 - b.t1) / 2, hi: b.t3 + (b.t4 - b.t3) / 2 },
-      highlights: { lo: b.t3 + (b.t4 - b.t3) / 2, hi: 100 },
-    };
-
-    // Per-zone match. Color picker stores the DELTA (source - target) centered at gray (128,128,128),
-    // so the per-channel shift is exactly (color - 128) * intensity → exact channel-mean transfer
-    // at intensity=100. Critically: source=target → delta=0 → color=gray → no shift = identity.
+    const ranges = boundsToRanges(boundsRef.current);
     let matched = 0;
-    for (const zoneName of ["shadows", "midtones", "highlights"] as ZoneKey[]) {
-      const band = bands[zoneName];
-      const srcStats = labStatsInBand(sourceSnap.data, band.lo, band.hi);
-      const tgtStats = labStatsInBand(targetSnap.data, band.lo, band.hi);
-      const z = zonesRef.current[zoneName];
+    const newZones: ZoneState[] = ranges.map((r, i) => {
+      const prev = zonesRef.current.zones[i] ?? { ...DEFAULT_ZONE, ...r };
+      const bandLo = Math.max(0, r.rangeStart - r.featherLeft);
+      const bandHi = Math.min(100, r.rangeEnd + r.featherRight);
+      const srcStats = labStatsInBand(sourceSnap.data, bandLo, bandHi);
+      const tgtStats = labStatsInBand(targetSnap.data, bandLo, bandHi);
+      const out: ZoneState = { ...prev, ...r };
       if (!srcStats || !tgtStats) {
-        z.colorR = 128; z.colorG = 128; z.colorB = 128;
-        z.colorIntensity = 0; z.sat = 0; z.hue = 0;
-        z.colorLUT = undefined;
-        continue;
+        out.colorR = 128; out.colorG = 128; out.colorB = 128;
+        out.colorIntensity = 0; out.sat = 0; out.hue = 0; out.colorLUT = undefined;
+        return out;
       }
-
-      // Per-zone delta (for the color picker display) — scaled by Match Strength.
       const dR = (srcStats.meanRGB.r - tgtStats.meanRGB.r) * k;
       const dG = (srcStats.meanRGB.g - tgtStats.meanRGB.g) * k;
       const dB = (srcStats.meanRGB.b - tgtStats.meanRGB.b) * k;
-      z.colorR = Math.round(Math.max(0, Math.min(255, 128 + dR)));
-      z.colorG = Math.round(Math.max(0, Math.min(255, 128 + dG)));
-      z.colorB = Math.round(Math.max(0, Math.min(255, 128 + dB)));
-      const deltaMag = Math.sqrt(dR * dR + dG * dG + dB * dB);
-      z.colorIntensity = deltaMag < 2 ? 0 : 100;
-
-      // Zone-specific Lab-fitted LUT: much tighter fit than the global LUT because it only
-      // considers pixels in this zone's L band.
-      const bandFull = buildLabCorrelationLUTInBand(
-        targetSnap.data, sourceSnap.data,
-        band.lo, band.hi,
-        band.lo, band.hi,
-      );
-      z.colorLUT = {
-        r: fadeLUT(bandFull.r, k),
-        g: fadeLUT(bandFull.g, k),
-        b: fadeLUT(bandFull.b, k),
-      };
+      out.colorR = Math.round(Math.max(0, Math.min(255, 128 + dR)));
+      out.colorG = Math.round(Math.max(0, Math.min(255, 128 + dG)));
+      out.colorB = Math.round(Math.max(0, Math.min(255, 128 + dB)));
+      out.colorIntensity = Math.sqrt(dR * dR + dG * dG + dB * dB) < 2 ? 0 : 100;
 
       const srcChroma = (srcStats.sA + srcStats.sB) / 2;
       const tgtChroma = (tgtStats.sA + tgtStats.sB) / 2;
       const ratio = srcChroma / Math.max(1e-3, tgtChroma);
       const satFull = Math.round((ratio - 1) * 100);
-      z.sat = Math.abs(satFull) < 2 ? 0 : Math.max(-100, Math.min(100, Math.round(satFull * k)));
+      out.sat = Math.abs(satFull) < 2 ? 0 : Math.max(-100, Math.min(100, Math.round(satFull * k)));
 
       const dA = srcStats.muA - tgtStats.muA;
       const dBlab = srcStats.muB - tgtStats.muB;
       const shiftMag = Math.sqrt(dA * dA + dBlab * dBlab);
       const hueFull = shiftMag > 5 ? Math.round(Math.atan2(dBlab, dA) * 180 / Math.PI / 6) : 0;
-      z.hue = Math.max(-30, Math.min(30, Math.round(hueFull * k)));
+      out.hue = Math.max(-30, Math.min(30, Math.round(hueFull * k)));
 
+      const bandFull = buildLabCorrelationLUTInBand(
+        targetSnap.data, sourceSnap.data,
+        bandLo, bandHi, bandLo, bandHi,
+      );
+      out.colorLUT = { r: fadeLUT(bandFull.r, k), g: fadeLUT(bandFull.g, k), b: fadeLUT(bandFull.b, k) };
       matched++;
-    }
+      return out;
+    });
+    zonesRef.current.zones = newZones;
+
+    // Retint zones with sampled source means.
+    const newColors = newZones.map((_, i) => {
+      const r = ranges[i];
+      const bandLo = Math.max(0, r.rangeStart - r.featherLeft);
+      const bandHi = Math.min(100, r.rangeEnd + r.featherRight);
+      const stats = labStatsInBand(sourceSnap.data, bandLo, bandHi);
+      return stats ? `rgb(${stats.meanRGB.r}, ${stats.meanRGB.g}, ${stats.meanRGB.b})` : paletteFor(zoneCount)[i];
+    });
+    setZoneColors(newColors);
 
     setTonalEpoch(n => n + 1);
     setValuesEpoch(n => n + 1);
-    refreshAllHexFromRef();
-
-    // Swap tonal-zone colors to the per-band source means so the visual track matches the sampled
-    // palette (shadows = dark-band color, mids = mid-band color, highlights = bright-band color).
-    const zoneBandColors: Record<ZoneKey, string> = { ...DEFAULT_ZONE_COLORS };
-    for (const zoneName of ["shadows", "midtones", "highlights"] as ZoneKey[]) {
-      const band = bands[zoneName];
-      const stats = labStatsInBand(sourceSnap.data, band.lo, band.hi);
-      if (stats) {
-        const { r, g, b } = stats.meanRGB;
-        zoneBandColors[zoneName] = `rgb(${r}, ${g}, ${b})`;
-      }
-    }
-    setZoneColors(zoneBandColors);
     scheduleRedraw();
+
     const tgtStat = lMeanStddev(targetSnap.data);
     const srcStat = lMeanStddev(sourceSnap.data);
-    const z = zonesRef.current;
-    setStatus(
-      `Auto-match (histogram): target μ${tgtStat.mean.toFixed(0)}/σ${tgtStat.stddev.toFixed(0)} → source μ${srcStat.mean.toFixed(0)}/σ${srcStat.stddev.toFixed(0)}\n` +
-      `shadows: hue ${z.shadows.hue}, sat ${z.shadows.sat}, color int ${z.shadows.colorIntensity}\n` +
-      `midtones: hue ${z.midtones.hue}, sat ${z.midtones.sat}, color int ${z.midtones.colorIntensity}\n` +
-      `highlights: hue ${z.highlights.hue}, sat ${z.highlights.sat}, color int ${z.highlights.colorIntensity}`
-    );
-  };
-  const [tonalEpoch, setTonalEpoch] = useState(0);
-  const matchStrengthRef = useRef(60);
-  // Dynamic zone colors: default to blue/gray/amber, swap to sampled colors from source after Auto Match.
-  const [zoneColors, setZoneColors] = useState<Record<ZoneKey, string>>({ ...DEFAULT_ZONE_COLORS });
-  const ZONE_COLORS = zoneColors;
-
-  // Refresh highlight overlays on slider drag, but throttled to one rAF tick.
-  // Note: this is a state bump (no text changes) so it doesn't trigger the font-renderer crash.
-  const highlightRafPending = useRef(false);
-  const scheduleHighlightRefresh = () => {
-    if (highlightRafPending.current) return;
-    highlightRafPending.current = true;
-    requestAnimationFrame(() => {
-      highlightRafPending.current = false;
-      setHighlightTick(n => n + 1);
-    });
-  };
-  const [, setHighlightTick] = useState(0);
-
-  const onZoneColorChange = (zone: ZoneKey, hex: string) => {
-    const r = parseInt(hex.slice(1, 3), 16) || 0;
-    const g = parseInt(hex.slice(3, 5), 16) || 0;
-    const b = parseInt(hex.slice(5, 7), 16) || 0;
-    zonesRef.current[zone].colorR = r;
-    zonesRef.current[zone].colorG = g;
-    zonesRef.current[zone].colorB = b;
-    // Manual edit clears the Lab-fitted LUT so the color picker actually drives the zone.
-    zonesRef.current[zone].colorLUT = undefined;
-    setZoneHex(prev => ({ ...prev, [zone]: hex }));
-    scheduleRedraw();
+    setStatus(`Auto-match (Lab per-zone, ${zoneCount} zones): target μ${tgtStat.mean.toFixed(0)}/σ${tgtStat.stddev.toFixed(0)} → source μ${srcStat.mean.toFixed(0)}/σ${srcStat.stddev.toFixed(0)}; ${matched}/${zoneCount} zones fit.`);
   };
 
   const reset = () => {
-    boundsRef.current = { ...DEFAULT_BOUNDS };
-    zonesRef.current = applyBoundsToDefaults({ ...DEFAULT_BOUNDS });
+    const s = buildDefaultState(zoneCount);
+    boundsRef.current = s.bounds;
+    zonesRef.current = s.zones;
     setValuesEpoch(n => n + 1);
-    setZoneColors({ ...DEFAULT_ZONE_COLORS });
-    refreshAllHexFromRef();
+    setZoneColors(paletteFor(zoneCount));
+    setStatus("Reset.");
     scheduleRedraw();
   };
 
@@ -323,50 +207,97 @@ export function ZonesTab() {
     catch (e) { setStatus(`Error: ${(e as Error).message}`); }
   };
 
-  const tabBtn = (z: ZoneKey): React.CSSProperties => ({
-    flex: 1, padding: "4px 6px", fontSize: 10, cursor: "pointer",
-    background: activeZone === z ? "#444" : "transparent",
-    color: activeZone === z ? "white" : "#aaa",
-    borderTop: `2px solid ${ZONE_COLORS[z]}`,
+  const tabBtn = (idx: number): React.CSSProperties => ({
+    flex: 1, padding: "4px 4px", fontSize: 9, cursor: "pointer",
+    background: activeZoneIdx === idx ? "#444" : "transparent",
+    color: activeZoneIdx === idx ? "white" : "#aaa",
+    borderTop: `2px solid ${zoneColors[idx]}`,
     borderLeft: "1px solid #444",
     borderRight: "1px solid #444",
     borderBottom: "1px solid #444",
   });
 
+  const zoneLabel = (idx: number, n: number): string => {
+    if (n === 3) return ["shadows", "midtones", "highlights"][idx];
+    if (n === 5) return ["shadows", "low-mids", "mids", "high-mids", "highlights"][idx];
+    return `zone ${idx + 1}`;
+  };
+
+  // Per-zone value slider rows (uncontrolled)
+  function ZoneSliderRow(p: { label: string; min: number; max: number; step: number; valueKey: keyof ZoneState; zoneIdx: number; format: (v: number) => string }) {
+    const lblRef = useRef<HTMLSpanElement>(null);
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3, fontSize: 11 }}>
+        <span style={{ width: 64, opacity: 0.7 }}>{p.label}</span>
+        <input type="range" min={p.min} max={p.max} step={p.step}
+          defaultValue={zonesRef.current.zones[p.zoneIdx][p.valueKey] as number}
+          onInput={e => {
+            const v = Number((e.target as HTMLInputElement).value);
+            (zonesRef.current.zones[p.zoneIdx] as any)[p.valueKey] = v;
+            // Clear Lab LUT for this zone so manual edits drive the picker math.
+            zonesRef.current.zones[p.zoneIdx].colorLUT = undefined;
+            if (lblRef.current) lblRef.current.textContent = p.format(v);
+            scheduleRedraw();
+          }}
+          style={{ flex: 1, minWidth: 0 }} />
+        <span ref={lblRef} style={{ width: 36, textAlign: "right", opacity: 0.8 }}>{p.format(zonesRef.current.zones[p.zoneIdx][p.valueKey] as number)}</span>
+      </div>
+    );
+  }
+
+  function TonalSliderRow(props: { label: string; min: number; max: number; step: number; defaultValue: number; format: (v: number) => string; onInput: (v: number) => void }) {
+    const labelRef = useRef<HTMLSpanElement>(null);
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, fontSize: 11 }}>
+        <span style={{ width: 64, opacity: 0.7 }}>{props.label}</span>
+        <input type="range" min={props.min} max={props.max} step={props.step}
+          defaultValue={props.defaultValue}
+          onInput={e => {
+            const v = Number((e.target as HTMLInputElement).value);
+            if (labelRef.current) labelRef.current.textContent = props.format(v);
+            props.onInput(v);
+          }}
+          style={{ flex: 1, minWidth: 0 }} />
+        <span ref={labelRef} style={{ width: 36, textAlign: "right", opacity: 0.8 }}>{props.format(props.defaultValue)}</span>
+      </div>
+    );
+  }
+
+  const btn: React.CSSProperties = { padding: "6px 12px", marginTop: 4, background: "#1473e6", color: "white", border: "none", cursor: "pointer", borderRadius: 3 };
+  const btnSecondary: React.CSSProperties = { ...btn, background: "transparent", color: "#aaa", border: "1px solid #555" };
+
   return (
-    <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+    <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 4 }}>
       <div style={{ display: "flex", gap: 6 }}>
         <PreviewPane
-          label="Source"
-          layers={layers}
-          selectedId={sourceId}
-          onSelect={setSourceId}
-          snapshot={sourceSnap}
-          onRefresh={refreshSource}
+          label="Source" layers={layers} selectedId={sourceId} onSelect={setSourceId}
+          snapshot={sourceSnap} onRefresh={refreshSource}
           onPickColor={rgb => {
-            const hex = `#${rgb.r.toString(16).padStart(2, "0")}${rgb.g.toString(16).padStart(2, "0")}${rgb.b.toString(16).padStart(2, "0")}`;
-            onZoneColorChange(activeZone, hex);
+            zonesRef.current.zones[activeZoneIdx].colorR = rgb.r;
+            zonesRef.current.zones[activeZoneIdx].colorG = rgb.g;
+            zonesRef.current.zones[activeZoneIdx].colorB = rgb.b;
+            zonesRef.current.zones[activeZoneIdx].colorLUT = undefined;
+            setValuesEpoch(n => n + 1);
+            scheduleRedraw();
           }}
           height={120}
         />
         <PreviewPane
-          label="Target"
-          layers={layers}
-          selectedId={targetId}
-          onSelect={setTargetId}
-          snapshot={targetSnap}
-          transformedRgba={transformedTargetRef.current}
-          onRefresh={refreshTarget}
-          imgHandleRef={targetImgHandle}
-          height={120}
+          label="Target" layers={layers} selectedId={targetId} onSelect={setTargetId}
+          snapshot={targetSnap} transformedRgba={transformedTargetRef.current}
+          onRefresh={refreshTarget} imgHandleRef={targetImgHandle} height={120}
         />
       </div>
 
-      <div style={{ display: "flex" }}>
-        {(["shadows", "midtones", "highlights"] as ZoneKey[]).map(z => (
-          <button key={z} style={tabBtn(z)} onClick={() => setActiveZone(z)}>
-            {z}
-          </button>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 11 }}>
+        <span style={{ opacity: 0.7 }}>Zones:</span>
+        {[3, 5, 7].map(n => (
+          <button key={n} onClick={() => setZoneCount(n)} style={{
+            padding: "2px 10px", fontSize: 10, cursor: "pointer",
+            background: zoneCount === n ? "#1473e6" : "transparent",
+            color: zoneCount === n ? "white" : "#aaa",
+            border: "1px solid #555", borderRadius: 3,
+          }}>{n}</button>
         ))}
       </div>
 
@@ -378,14 +309,52 @@ export function ZonesTab() {
         <span style={{ width: 40, textAlign: "right" }}>target</span>
         <div style={{ flex: 1 }}><Histogram rgba={transformedTargetRef.current ?? preview?.data ?? null} height={16} /></div>
       </div>
+
       <TonalZonesSlider
-        key={`bounds-${valuesEpoch}`}
+        key={`bounds-${valuesEpoch}-${zoneCount}`}
         bounds={boundsRef.current}
         onChange={onBoundsChange}
         zoneColors={zoneColors}
       />
 
-      {/* Global tonal controls: black/white/gamma applied as a Levels layer below all zones. */}
+      <div style={{ display: "flex", marginTop: 4 }}>
+        {Array.from({ length: zoneCount }, (_, i) => (
+          <button key={i} style={tabBtn(i)} onClick={() => setActiveZoneIdx(i)}>
+            {zoneLabel(i, zoneCount)}
+          </button>
+        ))}
+      </div>
+
+      <div key={`zsliders-${valuesEpoch}-${activeZoneIdx}`}>
+        <ZoneSliderRow label="Hue"       min={-180} max={180} step={1}    valueKey="hue"            zoneIdx={activeZoneIdx} format={v => String(v)} />
+        <ZoneSliderRow label="Sat"       min={-100} max={100} step={1}    valueKey="sat"            zoneIdx={activeZoneIdx} format={v => String(v)} />
+        <ZoneSliderRow label="Color int" min={0}    max={100} step={1}    valueKey="colorIntensity" zoneIdx={activeZoneIdx} format={v => String(v)} />
+      </div>
+
+      {/* Color swatches per zone */}
+      <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
+        {Array.from({ length: zoneCount }, (_, i) => {
+          const z = zonesRef.current.zones[i];
+          const hex = `#${z.colorR.toString(16).padStart(2, "0")}${z.colorG.toString(16).padStart(2, "0")}${z.colorB.toString(16).padStart(2, "0")}`;
+          return (
+            <input key={`swatch-${i}-${valuesEpoch}`} type="color"
+              defaultValue={hex}
+              onChange={e => {
+                const h = e.target.value;
+                const r = parseInt(h.slice(1, 3), 16) || 0;
+                const g = parseInt(h.slice(3, 5), 16) || 0;
+                const b = parseInt(h.slice(5, 7), 16) || 0;
+                zonesRef.current.zones[i].colorR = r;
+                zonesRef.current.zones[i].colorG = g;
+                zonesRef.current.zones[i].colorB = b;
+                zonesRef.current.zones[i].colorLUT = undefined;
+                scheduleRedraw();
+              }}
+              style={{ flex: 1, height: 18, padding: 0, border: `2px solid ${zoneColors[i]}`, background: "transparent", cursor: "pointer" }} />
+          );
+        })}
+      </div>
+
       <div style={{ borderTop: "1px solid #333", marginTop: 6, paddingTop: 6 }}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 11, opacity: 0.7 }}>
           <span>Tonal (global)</span>
@@ -408,64 +377,21 @@ export function ZonesTab() {
           onInput={v => onTonalChange({ gamma: v })} />
       </div>
 
-      {FIELDS.map(f => {
-        const values: Record<ZoneKey, number> = {
-          shadows: zonesRef.current.shadows[f.key] as number,
-          midtones: zonesRef.current.midtones[f.key] as number,
-          highlights: zonesRef.current.highlights[f.key] as number,
-        };
-        return (
-          <MultiThumbSlider
-            key={`${f.key}-${valuesEpoch}-${activeZone}`}
-            label={f.label}
-            min={f.min} max={f.max}
-            values={values}
-            activeZone={activeZone}
-            onChange={onSliderChange(f.key)}
-          />
-        );
-      })}
-
-      <div style={{ display: "flex", gap: 6, marginBottom: 4, alignItems: "stretch" }}>
-        {(["shadows", "midtones", "highlights"] as ZoneKey[]).map(zone => (
-          <div key={zone} style={{ flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
-            <span style={{
-              fontSize: 9, textAlign: "center", opacity: 0.7,
-              borderTop: `2px solid ${ZONE_COLORS[zone]}`, paddingTop: 2,
-            }}>{zone}</span>
-            <input type="color" value={zoneHex[zone]}
-              onChange={e => onZoneColorChange(zone, e.target.value)}
-              style={{ width: "100%", height: 24, padding: 0, border: "1px solid #555", background: "transparent", cursor: "pointer" }} />
-            <span style={{ fontSize: 9, textAlign: "center", opacity: 0.7, fontFamily: "monospace" }}>{zoneHex[zone]}</span>
-          </div>
-        ))}
-      </div>
-
-      {/* Match Strength controls how aggressively Auto Match transforms target. 50-60% is natural. */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 11 }}>
         <span style={{ width: 100, opacity: 0.7 }}>Match Strength</span>
         <input type="range" min={0} max={100} defaultValue={matchStrengthRef.current}
           onInput={e => { matchStrengthRef.current = Number((e.target as HTMLInputElement).value); }}
           style={{ flex: 1, minWidth: 0 }} />
-        <span style={{ width: 36, textAlign: "right", opacity: 0.8, fontSize: 9 }}>(applies on Auto Match)</span>
+        <span style={{ width: 36, textAlign: "right", opacity: 0.8, fontSize: 9 }}>Auto Match</span>
       </div>
 
       <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-        <button onClick={reset} style={{
-          padding: "6px 12px", background: "transparent", color: "#aaa",
-          border: "1px solid #555", borderRadius: 3, cursor: "pointer", flex: 1,
-        }}>Reset</button>
-        <button onClick={onAutoMatch} style={{
-          padding: "6px 12px", background: "transparent", color: "#ddd",
-          border: "1px solid #1473e6", borderRadius: 3, cursor: "pointer", flex: 2,
-        }}>Auto Match from Source</button>
-        <button onClick={onBake} style={{
-          padding: "6px 12px", background: "#1473e6", color: "white",
-          border: "none", borderRadius: 3, cursor: "pointer", flex: 2,
-        }}>Bake</button>
+        <button onClick={reset} style={{ ...btnSecondary, flex: 1 }}>Reset</button>
+        <button onClick={onAutoMatch} style={{ ...btnSecondary, color: "#ddd", border: "1px solid #1473e6", flex: 2 }}>Auto Match</button>
+        <button onClick={onBake} style={{ ...btn, flex: 2 }}>Bake</button>
       </div>
 
-      <div style={{ marginTop: 6, fontSize: 10, opacity: 0.6, whiteSpace: "pre-wrap" }}>{status}</div>
+      <div style={{ marginTop: 6, fontSize: 10, opacity: 0.7, whiteSpace: "pre-wrap" }}>{status}</div>
     </div>
   );
 }

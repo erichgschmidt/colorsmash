@@ -38,9 +38,7 @@ export const IDENTITY_TONAL: TonalState = {
 
 export interface ZonesState {
   tonal: TonalState;
-  shadows: ZoneState;
-  midtones: ZoneState;
-  highlights: ZoneState;
+  zones: ZoneState[];   // N zones, ordered from shadow to highlight along L
 }
 
 const clamp01 = (v: number) => v < 0 ? 0 : v > 1 ? 1 : v;
@@ -200,7 +198,6 @@ export function applyZones(rgba: Uint8Array, zones: ZonesState): Uint8Array {
   const t = zones.tonal;
   const pc = t.matchPerChannel;
   for (let i = 0; i < rgba.length; i += 4) {
-    // 1) Global tonal pass. Per-channel histogram match takes precedence; otherwise composite.
     let r: number, g: number, b: number;
     if (pc) {
       r = pc.r[Math.max(0, Math.min(255, rgba[i]))]     / 255;
@@ -213,11 +210,10 @@ export function applyZones(rgba: Uint8Array, zones: ZonesState): Uint8Array {
     }
     let pixel = { r, g, b };
 
-    // 2) Per-zone color + hue/sat, gated by tonal weights computed from the post-tonal L.
     const L100 = (0.2126 * pixel.r + 0.7152 * pixel.g + 0.0722 * pixel.b) * 100;
-    pixel = applyZone(pixel, zones.shadows,    zoneWeight(L100, zones.shadows));
-    pixel = applyZone(pixel, zones.midtones,   zoneWeight(L100, zones.midtones));
-    pixel = applyZone(pixel, zones.highlights, zoneWeight(L100, zones.highlights));
+    for (const zone of zones.zones) {
+      pixel = applyZone(pixel, zone, zoneWeight(L100, zone));
+    }
 
     out[i]     = Math.round(clamp01(pixel.r) * 255);
     out[i + 1] = Math.round(clamp01(pixel.g) * 255);
@@ -225,6 +221,39 @@ export function applyZones(rgba: Uint8Array, zones: ZonesState): Uint8Array {
     out[i + 3] = rgba[i + 3];
   }
   return out;
+}
+
+// Derive N-zone ranges and feathers from a boundaries array.
+// boundaries.length = 2 * (N-1); ordered [core_end_0, core_start_1, core_end_1, core_start_2, ...]
+// pads.length = N - 1; pad[i] extends the feather between zone i and i+1 outward.
+export function boundariesToZoneRanges(boundaries: number[], pads: number[]): { rangeStart: number; rangeEnd: number; featherLeft: number; featherRight: number }[] {
+  const N = boundaries.length / 2 + 1;
+  const out: { rangeStart: number; rangeEnd: number; featherLeft: number; featherRight: number }[] = [];
+  for (let i = 0; i < N; i++) {
+    const coreStart = i === 0 ? 0 : boundaries[2 * i - 1];
+    const coreEnd   = i === N - 1 ? 100 : boundaries[2 * i];
+    const featherL = i === 0 ? 0 :
+      (boundaries[2 * i - 1] - boundaries[2 * i - 2]) + 2 * (pads[i - 1] ?? 0);
+    const featherR = i === N - 1 ? 0 :
+      (boundaries[2 * i + 1] - boundaries[2 * i]) + 2 * (pads[i] ?? 0);
+    out.push({ rangeStart: coreStart, rangeEnd: coreEnd, featherLeft: featherL, featherRight: featherR });
+  }
+  return out;
+}
+
+// Default boundaries for N evenly-distributed zones. For N=3: [25, 40, 60, 75].
+// For N=5: [12, 24, 36, 48, 60, 72] (wait we need 2*(N-1) = 8 values). Let me recompute.
+// 2*(N-1) boundaries define N zones. For N=5: 8 values. Core ends/starts split at 1/N intervals.
+export function defaultBoundaries(n: number): { boundaries: number[]; pads: number[] } {
+  const boundaries: number[] = [];
+  const transitionWidth = 15 / Math.max(1, n - 1); // narrower transitions with more zones
+  for (let i = 0; i < n - 1; i++) {
+    const center = ((i + 1) / n) * 100;
+    boundaries.push(Math.round(center - transitionWidth / 2));
+    boundaries.push(Math.round(center + transitionWidth / 2));
+  }
+  const pads = Array(n - 1).fill(0);
+  return { boundaries, pads };
 }
 
 // Compute Lab statistics (mean + chroma stddev) of pixels within an L band.
