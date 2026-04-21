@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { applyTransfer } from "../app/applyTransfer";
 import { applyAsLut } from "../app/applyAsLut";
+import { applyLutViaAction } from "../app/applyLutViaAction";
 import { applyAsStack } from "../app/applyAsStack";
 import { validateStack } from "../app/validateStack";
 import { probeLayers } from "../app/probeLayers";
@@ -83,6 +84,11 @@ export function TransferTab() {
     return await applyAsLut({ sourceLayerId: sourceId, targetLayerId: targetId, weights: buildWeights() });
   });
 
+  const onApplyLutViaAction = wrap("Playing LUT action", async () => {
+    if (sourceId == null || targetId == null) throw new Error("Pick layers.");
+    return await applyLutViaAction({ sourceLayerId: sourceId, targetLayerId: targetId, weights: buildWeights() });
+  });
+
   const row: React.CSSProperties = { display: "flex", alignItems: "center", gap: 6, marginBottom: 6, fontSize: 11 };
   const lbl: React.CSSProperties = { width: 64, opacity: 0.7, flexShrink: 0 };
   const sel: React.CSSProperties = { flex: 1, padding: "2px 4px", fontSize: 11, minWidth: 0, background: "#333", color: "#ddd", border: "1px solid #555" };
@@ -122,6 +128,7 @@ export function TransferTab() {
       <button onClick={onApplyStack} style={btn}>Apply (editable stack)</button>
       <button onClick={onApplyExact} style={btnSecondary}>Apply (baked pixels — exact)</button>
       <button onClick={onExport} style={btnSecondary}>Export .cube (33³)</button>
+      <button onClick={onApplyLutViaAction} style={btnSecondary}>Apply LUT via Action (experimental)</button>
 
       <div style={{ marginTop: 10, fontSize: 10 }}>
         <label style={{ cursor: "pointer", opacity: 0.6 }}>
