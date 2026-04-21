@@ -2,7 +2,7 @@
 // Each parameter slider shows all 3 zones at once; range sliders cascade so zones don't cross.
 
 import { useEffect, useRef, useState } from "react";
-import { applyZones, autoDetectTonal, labStatsInBand, lPercentiles, lMeanStddev, buildHistogramMatchLUTPerChannel, fadeLUT, IDENTITY_TONAL, type ZonesState, type ZoneState, type TonalState } from "../core/zoneTransform";
+import { applyZones, autoDetectTonal, labStatsInBand, lPercentiles, lMeanStddev, buildLabCorrelationLUT, fadeLUT, IDENTITY_TONAL, type ZonesState, type ZoneState, type TonalState } from "../core/zoneTransform";
 import { useLayerPreview } from "./useLayerPreview";
 import { useLayers } from "./useLayers";
 import { bakeZones } from "../app/bakeZones";
@@ -148,10 +148,11 @@ export function ZonesTab() {
   const onAutoMatch = () => {
     if (!sourceSnap || !targetSnap) { setStatus("Pick both source and target."); return; }
 
-    // Per-channel histogram match (R, G, B independently). Captures both luminance and color
-    // transfer in one shot. Faded by Match Strength toward identity per channel.
+    // Lab-correlation LUT: per-channel R/G/B Curves fitted to approximate a Lab-space histogram
+    // match. Preserves hue better than naive RGB per-channel matching (no more yellow→green
+    // crossover on opponent colors) and still bakes as standard RGB Curves.
     const k = matchStrengthRef.current / 100;
-    const full = buildHistogramMatchLUTPerChannel(targetSnap.data, sourceSnap.data);
+    const full = buildLabCorrelationLUT(targetSnap.data, sourceSnap.data);
     const fadedPerChannel = {
       r: fadeLUT(full.r, k),
       g: fadeLUT(full.g, k),

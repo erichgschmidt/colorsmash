@@ -262,6 +262,108 @@ export function meanColorInBand(rgba: Uint8Array, lowL100: number, highL100: num
   return { r: Math.round(sumR / n), g: Math.round(sumG / n), b: Math.round(sumB / n) };
 }
 
+// Lab-correlation LUT: build per-channel R/G/B LUTs that best approximate a Lab-space
+// histogram match via conditional expectation fitting. The process:
+//   1. Build CDF-match LUTs for each Lab axis (L, a, b) between target and source.
+//   2. For every target pixel, compute its "true" Lab-matched output RGB.
+//   3. Per channel: bin by input value 0..255, average the observed outputs → that bin's LUT value.
+// Resulting LUTs preserve hue much better than naive per-channel RGB match (avoids opponent-color
+// crossover like yellow→green) and still bake as standard RGB Curves — no per-pixel rendering.
+import { rgbToLab as rgb2lab, labToRgb as lab2rgb } from "./lab";
+export function buildLabCorrelationLUT(targetRgba: Uint8Array, sourceRgba: Uint8Array): { r: number[]; g: number[]; b: number[] } {
+  // Axis histograms: quantize L to 0..255 (scaled from 0..100), a and b to 0..255 (clamped from −128..127).
+  const L_MAX = 100;
+  const AB_OFF = 128; // a, b shifted into 0..255 range for histogram buckets
+  const AB_MAX = 255;
+
+  const tLHist = new Uint32Array(256);
+  const tAHist = new Uint32Array(256);
+  const tBHist = new Uint32Array(256);
+  const sLHist = new Uint32Array(256);
+  const sAHist = new Uint32Array(256);
+  const sBHist = new Uint32Array(256);
+
+  const quantL = (L: number) => Math.max(0, Math.min(255, Math.round(L / L_MAX * 255)));
+  const quantAB = (v: number) => Math.max(0, Math.min(255, Math.round(v + AB_OFF)));
+
+  let tN = 0, sN = 0;
+  for (let i = 0; i < targetRgba.length; i += 4) {
+    if (targetRgba[i + 3] === 0) continue;
+    const lab = rgb2lab({ r: targetRgba[i] / 255, g: targetRgba[i + 1] / 255, b: targetRgba[i + 2] / 255 });
+    tLHist[quantL(lab.L)]++; tAHist[quantAB(lab.a)]++; tBHist[quantAB(lab.b)]++; tN++;
+  }
+  for (let i = 0; i < sourceRgba.length; i += 4) {
+    if (sourceRgba[i + 3] === 0) continue;
+    const lab = rgb2lab({ r: sourceRgba[i] / 255, g: sourceRgba[i + 1] / 255, b: sourceRgba[i + 2] / 255 });
+    sLHist[quantL(lab.L)]++; sAHist[quantAB(lab.a)]++; sBHist[quantAB(lab.b)]++; sN++;
+  }
+  if (tN === 0 || sN === 0) {
+    const id = Array.from({ length: 256 }, (_, i) => i);
+    return { r: id, g: id, b: id };
+  }
+
+  // CDF-based LUT for each axis.
+  const cdfMatch = (tgtHist: Uint32Array, srcHist: Uint32Array): number[] => {
+    const tCDF = new Float64Array(256);
+    const sCDF = new Float64Array(256);
+    let cT = 0, cS = 0;
+    for (let v = 0; v < 256; v++) { cT += tgtHist[v]; cS += srcHist[v]; tCDF[v] = cT / tN; sCDF[v] = cS / sN; }
+    const lut = new Array<number>(256);
+    let u = 0;
+    for (let v = 0; v < 256; v++) {
+      const t = tCDF[v];
+      while (u < 255 && sCDF[u] < t) u++;
+      lut[v] = u;
+    }
+    return lut;
+  };
+  const lutL = cdfMatch(tLHist, sLHist);
+  const lutA = cdfMatch(tAHist, sAHist);
+  const lutB = cdfMatch(tBHist, sBHist);
+
+  // Now pass each target pixel through the Lab transform and accumulate per-channel (input → output) pairs.
+  const rSum = new Float64Array(256), rCount = new Uint32Array(256);
+  const gSum = new Float64Array(256), gCount = new Uint32Array(256);
+  const bSum = new Float64Array(256), bCount = new Uint32Array(256);
+  for (let i = 0; i < targetRgba.length; i += 4) {
+    if (targetRgba[i + 3] === 0) continue;
+    const r = targetRgba[i], g = targetRgba[i + 1], b = targetRgba[i + 2];
+    const lab = rgb2lab({ r: r / 255, g: g / 255, b: b / 255 });
+    const Lout = lutL[quantL(lab.L)] / 255 * L_MAX;
+    const aOut = lutA[quantAB(lab.a)] - AB_OFF;
+    const bOut = lutB[quantAB(lab.b)] - AB_OFF;
+    const rgbOut = lab2rgb({ L: Lout, a: aOut, b: bOut });
+    const ro = Math.max(0, Math.min(255, Math.round(rgbOut.r * 255)));
+    const go = Math.max(0, Math.min(255, Math.round(rgbOut.g * 255)));
+    const bo = Math.max(0, Math.min(255, Math.round(rgbOut.b * 255)));
+    rSum[r] += ro; rCount[r]++;
+    gSum[g] += go; gCount[g]++;
+    bSum[b] += bo; bCount[b]++;
+    void AB_MAX;
+  }
+
+  const finalize = (sum: Float64Array, count: Uint32Array): number[] => {
+    const lut = new Array<number>(256);
+    // Fill bins with data. Identity for empty bins.
+    for (let v = 0; v < 256; v++) lut[v] = count[v] > 0 ? Math.round(sum[v] / count[v]) : v;
+    // Smooth empty bins between neighbors via linear interp across runs.
+    let lastFilled = -1;
+    for (let v = 0; v < 256; v++) {
+      if (count[v] > 0) {
+        if (lastFilled >= 0 && v - lastFilled > 1) {
+          for (let k = lastFilled + 1; k < v; k++) {
+            const t = (k - lastFilled) / (v - lastFilled);
+            lut[k] = Math.round(lut[lastFilled] * (1 - t) + lut[v] * t);
+          }
+        }
+        lastFilled = v;
+      }
+    }
+    return lut;
+  };
+  return { r: finalize(rSum, rCount), g: finalize(gSum, gCount), b: finalize(bSum, bCount) };
+}
+
 // Per-channel histogram match. For each of R, G, B independently, compute the CDF of target
 // and source, then map target's channel value to the source intensity at the same CDF. This is
 // the gold-standard color transfer technique (see Reinhard et al. follow-ups, OpenCV docs).
