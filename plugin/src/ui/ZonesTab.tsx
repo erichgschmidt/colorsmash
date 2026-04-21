@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   applyZones, autoDetectTonal, labStatsInBand, lMeanStddev, buildLabCorrelationLUTInBand,
-  fadeLUT, IDENTITY_TONAL, defaultBoundaries,
+  buildHistogramMatchLUT, fadeLUT, IDENTITY_TONAL, defaultBoundaries,
   type ZonesState, type ZoneState, type TonalState,
 } from "../core/zoneTransform";
 import { useLayerPreview } from "./useLayerPreview";
@@ -128,8 +128,14 @@ export function ZonesTab() {
     if (!sourceSnap || !targetSnap) { setStatus("Pick both source and target."); return; }
     const k = matchStrengthRef.current / 100;
 
-    // Clear tonal overrides and let per-zone Lab fits do the work.
-    zonesRef.current.tonal = { ...IDENTITY_TONAL };
+    // Global pass: L histogram match (composite Curves) remaps target's L distribution to source's.
+    // Per-zone Lab LUTs below handle chroma refinement without double-counting luminance since
+    // Lab's L axis changes won't affect a/b axes. Faded by Match Strength.
+    const lLUT = buildHistogramMatchLUT(targetSnap.data, sourceSnap.data);
+    zonesRef.current.tonal = {
+      ...IDENTITY_TONAL,
+      matchCurve: fadeLUT(lLUT, k),
+    };
 
     const ranges = boundsToRanges(boundsRef.current);
     let matched = 0;
