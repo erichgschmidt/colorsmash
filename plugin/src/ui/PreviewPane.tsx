@@ -17,10 +17,26 @@ export interface PreviewPaneProps {
   height?: number;
 }
 
-export function PreviewPane(props: PreviewPaneProps) {
+export interface PreviewImgHandle {
+  setPixels: (rgba: Uint8Array, width: number, height: number) => void;
+}
+
+export function PreviewPane(props: PreviewPaneProps & { imgHandleRef?: React.MutableRefObject<PreviewImgHandle | null> }) {
   const imgRef = useRef<HTMLImageElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const height = props.height ?? 140;
+
+  useEffect(() => {
+    if (!props.imgHandleRef) return;
+    props.imgHandleRef.current = {
+      setPixels: (rgba, w, h) => {
+        const img = imgRef.current;
+        if (!img) return;
+        img.src = rgbaToPngDataUrl(rgba, w, h);
+      },
+    };
+    return () => { if (props.imgHandleRef) props.imgHandleRef.current = null; };
+  }, [props.imgHandleRef]);
 
   useEffect(() => {
     const img = imgRef.current;

@@ -6,10 +6,10 @@ import { applyZones, autoDetectTonal, labStatsInBand, lPercentiles, lMeanStddev,
 import { useLayerPreview } from "./useLayerPreview";
 import { useLayers } from "./useLayers";
 import { bakeZones } from "../app/bakeZones";
-import { MultiThumbSlider, type ZoneKey, ZONE_COLORS } from "./MultiThumbSlider";
+import { MultiThumbSlider, type ZoneKey, ZONE_COLORS as DEFAULT_ZONE_COLORS } from "./MultiThumbSlider";
 import { TonalZonesSlider, type TonalBounds, boundsToRanges as boundsToRangesFn } from "./TonalZonesSlider";
 import { Histogram } from "./Histogram";
-import { PreviewPane } from "./PreviewPane";
+import { PreviewPane, type PreviewImgHandle } from "./PreviewPane";
 
 const DEFAULT_ZONE: ZoneState = {
   hue: 0, sat: 0,
@@ -82,8 +82,8 @@ export function ZonesTab() {
   const zonesRef = useRef<ZonesState>(applyBoundsToDefaults({ ...DEFAULT_BOUNDS }));
   const [activeZone, setActiveZone] = useState<ZoneKey>("midtones");
   const [valuesEpoch, setValuesEpoch] = useState(0); // bumped when we want sliders to re-sync from refs
-  const [tintHex, setTintHex] = useState("#808080");
-  const [transformedTarget, setTransformedTarget] = useState<Uint8Array | null>(null);
+  const transformedTargetRef = useRef<Uint8Array | null>(null);
+  const targetImgHandle = useRef<PreviewImgHandle | null>(null);
   const rafPending = useRef(false);
   const [status, setStatus] = useState("Live preview · drag any thumb (zone-colored) to edit that zone. Range sliders cascade so zones can't cross.");
 
@@ -94,19 +94,21 @@ export function ZonesTab() {
       rafPending.current = false;
       if (!preview) return;
       const transformed = applyZones(preview.data, zonesRef.current);
-      setTransformedTarget(transformed);
+      transformedTargetRef.current = transformed;
+      // Push directly to the img element, no React state change → no re-render flicker.
+      targetImgHandle.current?.setPixels(transformed, preview.width, preview.height);
     });
   };
 
   useEffect(scheduleRedraw, [preview]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    const z = zonesRef.current[activeZone];
-    const r = z.colorR.toString(16).padStart(2, "0");
-    const g = z.colorG.toString(16).padStart(2, "0");
-    const b = z.colorB.toString(16).padStart(2, "0");
-    setTintHex(`#${r}${g}${b}`);
-  }, [activeZone]);
+  // Keep three independent hex strings, one per zone, so all three color pickers stay in sync.
+  const [zoneHex, setZoneHex] = useState<Record<ZoneKey, string>>({ shadows: "#808080", midtones: "#808080", highlights: "#808080" });
+  const refreshAllHexFromRef = () => {
+    const z = zonesRef.current;
+    const mk = (zz: ZoneState) => `#${zz.colorR.toString(16).padStart(2, "0")}${zz.colorG.toString(16).padStart(2, "0")}${zz.colorB.toString(16).padStart(2, "0")}`;
+    setZoneHex({ shadows: mk(z.shadows), midtones: mk(z.midtones), highlights: mk(z.highlights) });
+  };
 
   const onSliderChange = (key: keyof ZoneState) => (zone: ZoneKey, v: number) => {
     (zonesRef.current[zone] as any)[key] = v;
@@ -212,9 +214,9 @@ export function ZonesTab() {
       const dR = (srcStats.meanRGB.r - tgtStats.meanRGB.r) * k;
       const dG = (srcStats.meanRGB.g - tgtStats.meanRGB.g) * k;
       const dB = (srcStats.meanRGB.b - tgtStats.meanRGB.b) * k;
-      z.colorR = Math.max(0, Math.min(255, 128 + dR));
-      z.colorG = Math.max(0, Math.min(255, 128 + dG));
-      z.colorB = Math.max(0, Math.min(255, 128 + dB));
+      z.colorR = Math.round(Math.max(0, Math.min(255, 128 + dR)));
+      z.colorG = Math.round(Math.max(0, Math.min(255, 128 + dG)));
+      z.colorB = Math.round(Math.max(0, Math.min(255, 128 + dB)));
       const deltaMag = Math.sqrt(dR * dR + dG * dG + dB * dB);
       z.colorIntensity = deltaMag < 2 ? 0 : 100;
 
@@ -235,13 +237,20 @@ export function ZonesTab() {
 
     setTonalEpoch(n => n + 1);
     setValuesEpoch(n => n + 1);
-    if (zonesRef.current[activeZone]) {
-      const z = zonesRef.current[activeZone];
-      const r = z.colorR.toString(16).padStart(2, "0");
-      const g = z.colorG.toString(16).padStart(2, "0");
-      const bx = z.colorB.toString(16).padStart(2, "0");
-      setTintHex(`#${r}${g}${bx}`);
+    refreshAllHexFromRef();
+
+    // Swap tonal-zone colors to the per-band source means so the visual track matches the sampled
+    // palette (shadows = dark-band color, mids = mid-band color, highlights = bright-band color).
+    const zoneBandColors: Record<ZoneKey, string> = { ...DEFAULT_ZONE_COLORS };
+    for (const zoneName of ["shadows", "midtones", "highlights"] as ZoneKey[]) {
+      const band = bands[zoneName];
+      const stats = labStatsInBand(sourceSnap.data, band.lo, band.hi);
+      if (stats) {
+        const { r, g, b } = stats.meanRGB;
+        zoneBandColors[zoneName] = `rgb(${r}, ${g}, ${b})`;
+      }
     }
+    setZoneColors(zoneBandColors);
     scheduleRedraw();
     const tgtStat = lMeanStddev(targetSnap.data);
     const srcStat = lMeanStddev(sourceSnap.data);
@@ -254,7 +263,10 @@ export function ZonesTab() {
     );
   };
   const [tonalEpoch, setTonalEpoch] = useState(0);
-  const matchStrengthRef = useRef(60); // default 60% — a useful, non-wild starting point
+  const matchStrengthRef = useRef(60);
+  // Dynamic zone colors: default to blue/gray/amber, swap to sampled colors from source after Auto Match.
+  const [zoneColors, setZoneColors] = useState<Record<ZoneKey, string>>({ ...DEFAULT_ZONE_COLORS });
+  const ZONE_COLORS = zoneColors;
 
   // Refresh highlight overlays on slider drag, but throttled to one rAF tick.
   // Note: this is a state bump (no text changes) so it doesn't trigger the font-renderer crash.
@@ -269,14 +281,14 @@ export function ZonesTab() {
   };
   const [, setHighlightTick] = useState(0);
 
-  const onTintChange = (hex: string) => {
-    setTintHex(hex);
+  const onZoneColorChange = (zone: ZoneKey, hex: string) => {
     const r = parseInt(hex.slice(1, 3), 16) || 0;
     const g = parseInt(hex.slice(3, 5), 16) || 0;
     const b = parseInt(hex.slice(5, 7), 16) || 0;
-    zonesRef.current[activeZone].colorR = r;
-    zonesRef.current[activeZone].colorG = g;
-    zonesRef.current[activeZone].colorB = b;
+    zonesRef.current[zone].colorR = r;
+    zonesRef.current[zone].colorG = g;
+    zonesRef.current[zone].colorB = b;
+    setZoneHex(prev => ({ ...prev, [zone]: hex }));
     scheduleRedraw();
   };
 
@@ -284,7 +296,8 @@ export function ZonesTab() {
     boundsRef.current = { ...DEFAULT_BOUNDS };
     zonesRef.current = applyBoundsToDefaults({ ...DEFAULT_BOUNDS });
     setValuesEpoch(n => n + 1);
-    setTintHex("#808080");
+    setZoneColors({ ...DEFAULT_ZONE_COLORS });
+    refreshAllHexFromRef();
     scheduleRedraw();
   };
 
@@ -315,14 +328,8 @@ export function ZonesTab() {
           snapshot={sourceSnap}
           onRefresh={refreshSource}
           onPickColor={rgb => {
-            zonesRef.current[activeZone].colorR = rgb.r;
-            zonesRef.current[activeZone].colorG = rgb.g;
-            zonesRef.current[activeZone].colorB = rgb.b;
-            const r = rgb.r.toString(16).padStart(2, "0");
-            const g = rgb.g.toString(16).padStart(2, "0");
-            const b = rgb.b.toString(16).padStart(2, "0");
-            setTintHex(`#${r}${g}${b}`);
-            scheduleRedraw();
+            const hex = `#${rgb.r.toString(16).padStart(2, "0")}${rgb.g.toString(16).padStart(2, "0")}${rgb.b.toString(16).padStart(2, "0")}`;
+            onZoneColorChange(activeZone, hex);
           }}
           height={120}
         />
@@ -332,8 +339,9 @@ export function ZonesTab() {
           selectedId={targetId}
           onSelect={setTargetId}
           snapshot={targetSnap}
-          transformedRgba={transformedTarget}
+          transformedRgba={transformedTargetRef.current}
           onRefresh={refreshTarget}
+          imgHandleRef={targetImgHandle}
           height={120}
         />
       </div>
@@ -352,12 +360,13 @@ export function ZonesTab() {
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, opacity: 0.6 }}>
         <span style={{ width: 40, textAlign: "right" }}>target</span>
-        <div style={{ flex: 1 }}><Histogram rgba={transformedTarget ?? preview?.data ?? null} height={16} /></div>
+        <div style={{ flex: 1 }}><Histogram rgba={transformedTargetRef.current ?? preview?.data ?? null} height={16} /></div>
       </div>
       <TonalZonesSlider
         key={`bounds-${valuesEpoch}`}
         bounds={boundsRef.current}
         onChange={onBoundsChange}
+        zoneColors={zoneColors}
       />
 
       {/* Global tonal controls: black/white/gamma applied as a Levels layer below all zones. */}
@@ -401,11 +410,19 @@ export function ZonesTab() {
         );
       })}
 
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, fontSize: 11 }}>
-        <span style={{ width: 64, opacity: 0.7 }}>Color</span>
-        <input type="color" value={tintHex} onChange={e => onTintChange(e.target.value)}
-          style={{ flex: 1, height: 22, padding: 0, border: "1px solid #555", background: "transparent", cursor: "pointer" }} />
-        <span style={{ width: 36, textAlign: "right", opacity: 0.8, fontFamily: "monospace" }}>{tintHex}</span>
+      <div style={{ display: "flex", gap: 6, marginBottom: 4, alignItems: "stretch" }}>
+        {(["shadows", "midtones", "highlights"] as ZoneKey[]).map(zone => (
+          <div key={zone} style={{ flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
+            <span style={{
+              fontSize: 9, textAlign: "center", opacity: 0.7,
+              borderTop: `2px solid ${ZONE_COLORS[zone]}`, paddingTop: 2,
+            }}>{zone}</span>
+            <input type="color" value={zoneHex[zone]}
+              onChange={e => onZoneColorChange(zone, e.target.value)}
+              style={{ width: "100%", height: 24, padding: 0, border: "1px solid #555", background: "transparent", cursor: "pointer" }} />
+            <span style={{ fontSize: 9, textAlign: "center", opacity: 0.7, fontFamily: "monospace" }}>{zoneHex[zone]}</span>
+          </div>
+        ))}
       </div>
 
       {/* Match Strength controls how aggressively Auto Match transforms target. 50-60% is natural. */}

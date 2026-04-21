@@ -24,6 +24,7 @@ const HANDLE_LABEL: Record<Handle, string> = {
 export interface TonalZonesSliderProps {
   bounds: TonalBounds;
   onChange: (b: TonalBounds) => void;
+  zoneColors?: { shadows: string; midtones: string; highlights: string };
 }
 
 export function TonalZonesSlider(props: TonalZonesSliderProps) {
@@ -173,11 +174,11 @@ export function TonalZonesSlider(props: TonalZonesSliderProps) {
           position: "relative", height: 28, background: "#222",
           border: "1px solid #444", borderRadius: 4, overflow: "hidden",
         }}>
-        <div ref={el => { bandRefs.current.shadows = el; }} style={bandStyle(ZONE_COLORS.shadows)} />
-        <div ref={el => { bandRefs.current.sToM = el; }} style={featherStyle(ZONE_COLORS.shadows, ZONE_COLORS.midtones)} />
-        <div ref={el => { bandRefs.current.midtones = el; }} style={bandStyle(ZONE_COLORS.midtones)} />
-        <div ref={el => { bandRefs.current.mToH = el; }} style={featherStyle(ZONE_COLORS.midtones, ZONE_COLORS.highlights)} />
-        <div ref={el => { bandRefs.current.highlights = el; }} style={bandStyle(ZONE_COLORS.highlights)} />
+        <div ref={el => { bandRefs.current.shadows = el; }} style={bandStyle((props.zoneColors ?? ZONE_COLORS).shadows)} />
+        <div ref={el => { bandRefs.current.sToM = el; }} style={featherStyle((props.zoneColors ?? ZONE_COLORS).shadows, (props.zoneColors ?? ZONE_COLORS).midtones)} />
+        <div ref={el => { bandRefs.current.midtones = el; }} style={bandStyle((props.zoneColors ?? ZONE_COLORS).midtones)} />
+        <div ref={el => { bandRefs.current.mToH = el; }} style={featherStyle((props.zoneColors ?? ZONE_COLORS).midtones, (props.zoneColors ?? ZONE_COLORS).highlights)} />
+        <div ref={el => { bandRefs.current.highlights = el; }} style={bandStyle((props.zoneColors ?? ZONE_COLORS).highlights)} />
         {HANDLES.map(h => (
           <div key={h}
             ref={el => { handleRefs.current[h] = el; }}

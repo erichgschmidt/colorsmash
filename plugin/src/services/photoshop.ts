@@ -205,6 +205,7 @@ export async function makeCurvesLayer(
       name,
       type: {
         _obj: "curves",
+        presetKind: { _enum: "presetKindType", _value: "presetKindCustom" },
         adjustment: channels.map(c => ({
           _obj: "curvesAdjustment",
           channel: { _ref: "channel", _enum: "channel", _value: c.channel },
