@@ -1,64 +1,42 @@
-// Installs the Color Smash Color-Lookup-load action by writing a generated
-// .atn file directly into Photoshop's Presets/Actions folder. Pairs with
-// `core/atnWriter.ts` (binary writer, currently a scaffold).
+// Installs the Color Smash Color-Lookup-load action by writing a generated .atn file into the
+// plugin's own data folder, then asking PS to load it into the Actions panel via batchPlay.
+// Avoids the Presets/Actions auto-load path because it stacks duplicates on every PS restart
+// without giving us a clean way to overwrite.
 
 import { writeColorLookupLoadAtn } from "../core/atnWriter";
+import { action as psAction } from "./photoshop";
 
 const ACTION_SET = "Color Smash";
 const ACTION_NAME = "Load Color Smash LUT";
-const ATN_FILENAME = "Color Smash.atn";
+const ATN_FILENAME = "color-smash.atn";
 
-/**
- * Best-effort lookup of the active PS install's `Presets/Actions` folder.
- * Tries UXP's pluginDataFolder-relative resolution first; falls back to the
- * platform-conventional location built off `APPDATA` (Windows) or `HOME`
- * (macOS).
- *
- * NOTE: this picks one PS version. Multi-install machines may need a
- * version-picker UI later.
- */
-async function resolveActionsFolderPath(): Promise<string> {
-  // PS version is hard-coded for now; once we have a way to query the host
-  // PS version via UXP we'll swap this out.
-  const PS_VERSION_DIR = "Adobe Photoshop 2026";
-
-  if (process.platform === "darwin" || (typeof navigator !== "undefined" && /Mac/i.test(navigator.platform ?? ""))) {
-    const home = process.env.HOME ?? "";
-    return `${home}/Library/Application Support/Adobe/${PS_VERSION_DIR}/Presets/Actions`;
-  }
-
-  const appData = process.env.APPDATA ?? "";
-  return `${appData}\\Adobe\\${PS_VERSION_DIR}\\Presets\\Actions`;
+async function deleteExistingSet(): Promise<void> {
+  try {
+    await psAction.batchPlay([{
+      _obj: "delete",
+      _target: [{ _ref: "actionSet", _name: ACTION_SET }],
+    }], {});
+  } catch { /* set didn't exist; fine */ }
 }
 
-/**
- * Generates a `.atn` for the Color Lookup load action and drops it into
- * Photoshop's Presets/Actions folder.
- *
- * @param cubePath absolute path to the `.cube` file the recorded action will load.
- * @returns `{ written, needsReload }` — `written` is the absolute .atn path,
- *          `needsReload` indicates whether PS must be restarted (or the user
- *          must manually click Actions panel → Load Actions) before the new
- *          set appears. We assume `true` until we confirm PS auto-rescans
- *          the Presets/Actions folder.
- *
- * @throws if the writer scaffold hasn't been implemented yet — the error
- *         message points at `core/atnWriter.ts` so the caller knows where
- *         the gap is.
- */
 export async function installColorLookupAction(
   cubePath: string,
 ): Promise<{ written: string; needsReload: boolean }> {
-  // The .atn writer is pure and needs the .cube bytes in memory so it can
-  // embed them as `LUT3DFileData`. Read here, then hand off.
   const uxp = require("uxp");
   const fs = uxp.storage.localFileSystem;
 
-  const cubeEntry = await fs.getEntryWithUrl(`file:${cubePath.replace(/\\/g, "/")}`);
-  const cubeBytes = new Uint8Array(
-    await cubeEntry.read({ format: uxp.storage.formats.binary }),
-  );
+  // Read the cube bytes from the plugin's own data folder.
+  let cubeBytes: Uint8Array;
+  try {
+    const dataFolder = await fs.getDataFolder();
+    const cubeFilename = cubePath.split(/[\\/]/).pop() ?? "color-smash-current.cube";
+    const cubeEntry = await dataFolder.getEntry(cubeFilename);
+    cubeBytes = new Uint8Array(await cubeEntry.read({ format: uxp.storage.formats.binary }));
+  } catch (e: any) {
+    throw new Error(`Couldn't read cube bytes from ${cubePath}. ${e?.message ?? e?.code ?? String(e)}`);
+  }
 
+  // Generate the .atn bytes.
   let bytes: Uint8Array;
   try {
     bytes = writeColorLookupLoadAtn({
@@ -67,23 +45,43 @@ export async function installColorLookupAction(
       cubePath,
       cubeBytes,
     });
-  } catch (e) {
-    throw new Error(
-      `installColorLookupAction: atn writer failed (see plugin/src/core/atnWriter.ts). Underlying: ${(e as Error).message}`,
-    );
+  } catch (e: any) {
+    throw new Error(`atn writer failed. ${e?.message ?? e?.code ?? String(e)}`);
   }
 
-  const folderPath = await resolveActionsFolderPath();
-  const fullPath = `${folderPath}${folderPath.includes("\\") ? "\\" : "/"}${ATN_FILENAME}`;
-
-  const folder = await fs.getEntryWithUrl(`file:${folderPath.replace(/\\/g, "/")}`);
-  let file: any;
+  // Write into plugin data folder (no permissions needed).
+  let atnNativePath: string;
+  let atnTokenForBatchPlay: string;
   try {
-    file = await folder.createFile(ATN_FILENAME, { overwrite: true });
-  } catch {
-    file = await folder.getEntry(ATN_FILENAME);
+    const dataFolder = await fs.getDataFolder();
+    const file = await dataFolder.createFile(ATN_FILENAME, { overwrite: true });
+    await file.write(bytes, { format: uxp.storage.formats.binary });
+    atnNativePath = file.nativePath;
+    atnTokenForBatchPlay = fs.createSessionToken(file);
+  } catch (e: any) {
+    throw new Error(`Couldn't write ${ATN_FILENAME} to plugin data folder. ${e?.message ?? e?.code ?? String(e)}`);
   }
-  await file.write(bytes, { format: uxp.storage.formats.binary });
 
-  return { written: fullPath, needsReload: true };
+  // Drop any existing copy of the set, then load the freshly-written .atn into the Actions panel.
+  await deleteExistingSet();
+  const loadAttempts: { name: string; descriptor: any }[] = [
+    { name: "open null:_path", descriptor: { _obj: "open", null: { _path: atnTokenForBatchPlay } } },
+    { name: "make actionSet using:_path", descriptor: { _obj: "make", _target: [{ _ref: "actionSet" }], using: { _path: atnTokenForBatchPlay } } },
+    { name: "open _target:[_path]", descriptor: { _obj: "open", _target: [{ _path: atnTokenForBatchPlay }] } },
+  ];
+  let lastErr: any = null;
+  let usedMethod: string | null = null;
+  for (const attempt of loadAttempts) {
+    try {
+      await psAction.batchPlay([attempt.descriptor], {});
+      usedMethod = attempt.name;
+      lastErr = null;
+      break;
+    } catch (e) { lastErr = e; }
+  }
+  if (lastErr && !usedMethod) {
+    throw new Error(`Wrote ${atnNativePath} but all PS load forms failed. Last: ${(lastErr as any)?.message ?? lastErr}`);
+  }
+
+  return { written: `${atnNativePath} (loaded via ${usedMethod})`, needsReload: false };
 }

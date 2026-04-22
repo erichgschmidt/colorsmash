@@ -60,7 +60,10 @@ export function TransferTab() {
   const wrap = (label: string, fn: () => Promise<string>) => async () => {
     setStatus(`${label}...`);
     try { setStatus(await fn()); }
-    catch (e) { setStatus(`Error: ${(e as Error).message}`); }
+    catch (e: any) {
+      const msg = e?.message ?? e?.code ?? (typeof e === "string" ? e : JSON.stringify(e ?? {}));
+      setStatus(`Error: ${msg || "(no message — check UXP devtools console)"}`);
+    }
   };
 
   const onApplyStack = async () => {
