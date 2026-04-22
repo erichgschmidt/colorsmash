@@ -41,10 +41,11 @@ export interface WriteColorLookupLoadAtnOptions {
 export function writeColorLookupLoadAtn(opts: WriteColorLookupLoadAtnOptions): Uint8Array {
   const { setName, actionName, cubePath, cubeBytes } = opts;
 
-  // Mirrors the PS Listener capture of a real "Load 3D LUT": a `set` event targeting the
-  // active adjustmentLayer (ordinal targetEnum) with a `to` Objc(colorLookup) payload that
-  // has only LUT3DFileData, LUT3DFileName, and name. profile is omitted — PS regenerates it
-  // from LUT3DFileData at playback (per docs/atn-format-research.md §4.2).
+  // Matches what PS records when the user manually does Layer > New Adjustment Layer >
+  // Color Lookup > Load 3D LUT: a `set` step targeting the active adjustmentLayer with a `to`
+  // colorLookup descriptor. PS rejects the set form via batchPlay alone because there's no
+  // active Color Lookup layer; the plugin's apply flow creates the empty layer first via
+  // batchPlay so that targetEnum resolves correctly when the action plays.
   const colorLookupDesc = writeDescriptorBody(
     "colorLookup",
     tokString("colorLookup"),
@@ -52,12 +53,12 @@ export function writeColorLookupLoadAtn(opts: WriteColorLookupLoadAtnOptions): U
       itemTdta("LUT3DFileData", cubeBytes),
       itemText("LUT3DFileName", cubePath),
       itemText("name", cubePath),
+      itemEnum("lookupType", "colorLookupType", "3DLUT"),
+      itemEnum("LUTFormat", "LUTFormatType", "LUTFormatCUBE"),
     ],
   );
 
-  // _target = obj ref with one Enmr (enum reference) item:
-  //   classID1 (UnicodeString "adjustmentLayer"), classID2 (OSType "AdjL"),
-  //   typeID (OSType "Ordn" = ordinal), enumValue (OSType "Trgt" = targetEnum).
+  // _target = obj ref with one Enmr (enum reference): adjustmentLayer / ordinal / targetEnum.
   const targetRef = concat(
     u32(1),
     osType("Enmr"),
@@ -73,7 +74,7 @@ export function writeColorLookupLoadAtn(opts: WriteColorLookupLoadAtnOptions): U
     concat(tokOSType("T   "), osType("Objc"), colorLookupDesc),
   ]);
 
-  void itemEnum; void itemBool; // kept for future use, not needed for set form
+  void itemBool;
   const event = concat(
     u8(0),
     u8(1),
