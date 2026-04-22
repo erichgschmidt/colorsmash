@@ -46,14 +46,21 @@ export function writeColorLookupLoadAtn(opts: WriteColorLookupLoadAtnOptions): U
   // colorLookup descriptor. PS rejects the set form via batchPlay alone because there's no
   // active Color Lookup layer; the plugin's apply flow creates the empty layer first via
   // batchPlay so that targetEnum resolves correctly when the action plays.
+  // 5 items matching user's working .atn structure (no profile yet — PS regenerates from data).
+  // `Nm  ` (4-byte OSType, Adobe abbrev for layer name) is the canonical name-field key.
+  const nameItem = concat(
+    osType("Nm  "),
+    osType("TEXT"),
+    uniString(cubePath),
+  );
   const colorLookupDesc = writeDescriptorBody(
     "colorLookup",
     tokString("colorLookup"),
     [
-      itemTdta("LUT3DFileData", cubeBytes),
-      itemText("LUT3DFileName", cubePath),
-      itemText("name", cubePath),
       itemEnum("lookupType", "colorLookupType", "3DLUT"),
+      nameItem,
+      itemText("LUT3DFileName", cubePath),
+      itemTdta("LUT3DFileData", cubeBytes),
       itemEnum("LUTFormat", "LUTFormatType", "LUTFormatCUBE"),
     ],
   );
@@ -75,11 +82,10 @@ export function writeColorLookupLoadAtn(opts: WriteColorLookupLoadAtnOptions): U
   ]);
 
   void itemBool;
-  const event = concat(
-    u8(0),
-    u8(1),
-    u8(0),
-    u8(0),
+  // Single-step action: set the LUT data on whatever Color Lookup adjustment layer is active.
+  // Plugin's apply flow creates + selects the layer via batchPlay before playing this action.
+  const setEvent = concat(
+    u8(0), u8(1), u8(0), u8(0),
     ascii("TEXT"),
     pascalAscii("set"),
     pascalAscii("Set"),
@@ -87,16 +93,16 @@ export function writeColorLookupLoadAtn(opts: WriteColorLookupLoadAtnOptions): U
     setDescBody,
   );
 
-  // Action 0 wrapper
+  // Action: just the set step. Plugin handles layer create + select beforehand.
   const action = concat(
-    i16(0), // index (function key)
-    u8(0), // shiftKey
-    u8(0), // commandKey
-    i16(0), // colorIndex
+    i16(0),
+    u8(0),
+    u8(0),
+    i16(0),
     uniString(actionName),
-    u8(0), // expanded
-    u32(1), // eventCount
-    event,
+    u8(0),
+    u32(1),
+    setEvent,
   );
 
   // File header
