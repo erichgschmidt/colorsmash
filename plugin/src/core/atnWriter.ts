@@ -41,57 +41,49 @@ export interface WriteColorLookupLoadAtnOptions {
 export function writeColorLookupLoadAtn(opts: WriteColorLookupLoadAtnOptions): Uint8Array {
   const { setName, actionName, cubePath, cubeBytes } = opts;
 
-  // Inner descriptor: type=Objc(colorLookup) with the 7 keys per research §4.
+  // Mirrors the PS Listener capture of a real "Load 3D LUT": a `set` event targeting the
+  // active adjustmentLayer (ordinal targetEnum) with a `to` Objc(colorLookup) payload that
+  // has only LUT3DFileData, LUT3DFileName, and name. profile is omitted — PS regenerates it
+  // from LUT3DFileData at playback (per docs/atn-format-research.md §4.2).
   const colorLookupDesc = writeDescriptorBody(
-    "colorLookup", // classID1 — UnicodeString
-    tokString("colorLookup"), // classID2 — length-prefixed (no charID)
+    "colorLookup",
+    tokString("colorLookup"),
     [
-      itemEnum("lookupType", "colorLookupType", "3DLUT"),
-      itemEnum("LUTFormat", "LUTFormatType", "LUTFormatCUBE"),
-      itemEnum("dataOrder", "dataOrder", "rgbOrder"),
-      itemEnum("tableOrder", "tableOrder", "bgrOrder"),
-      itemText("LUT3DFileName", cubePath),
       itemTdta("LUT3DFileData", cubeBytes),
-      itemBool("dither", true),
+      itemText("LUT3DFileName", cubePath),
+      itemText("name", cubePath),
     ],
   );
 
-  // using = Objc(adjustmentLayer { type = Objc(colorLookup{...}) })
-  const usingDesc = writeDescriptorBody(
-    "adjustmentLayer",
+  // _target = obj ref with one Enmr (enum reference) item:
+  //   classID1 (UnicodeString "adjustmentLayer"), classID2 (OSType "AdjL"),
+  //   typeID (OSType "Ordn" = ordinal), enumValue (OSType "Trgt" = targetEnum).
+  const targetRef = concat(
+    u32(1),
+    osType("Enmr"),
+    tokUniString("adjustmentLayer"),
     tokOSType("AdjL"),
-    [
-      // key "type" -> Objc payload (colorLookup descriptor)
-      concat(tokOSType("Type"), osType("Objc"), colorLookupDesc),
-    ],
+    tokOSType("Ordn"),
+    tokOSType("Trgt"),
   );
 
-  // null = obj reference -> Class { adjustmentLayer }
-  // payload of an `obj ` item is: uint32 count + count × (FourByteOSType + payload)
-  const nullRef = concat(
-    u32(1), // one reference item
-    osType("Clss"),
-    tokUniString("adjustmentLayer"), // classID1 (TokenOrUnicodeString)
-    tokOSType("AdjL"), // classID2 (TokenOrString)
-  );
-
-  // Outer event descriptor: classID="make" / 'Mk  ', items = [null, using]
-  const makeDescBody = writeDescriptorBody("make", tokOSType("Mk  "), [
-    concat(tokOSType("null"), osType("obj "), nullRef),
-    concat(tokOSType("Usng"), osType("Objc"), usingDesc),
+  // Outer event: set / classID2 'setd', items = [null (target), T (to)].
+  const setDescBody = writeDescriptorBody("set", tokOSType("setd"), [
+    concat(tokOSType("null"), osType("obj "), targetRef),
+    concat(tokOSType("T   "), osType("Objc"), colorLookupDesc),
   ]);
 
-  // Event 0 wrapper (per §1, fields between `expanded` and the descriptor body)
+  void itemEnum; void itemBool; // kept for future use, not needed for set form
   const event = concat(
-    u8(0), // expanded
-    u8(1), // enabled
-    u8(0), // withDialog
-    u8(0), // dialogOptions
-    ascii("TEXT"), // EventName tag (TEXT form for "make")
-    pascalAscii("make"),
-    pascalAscii("Make"), // displayName
-    i32(-1), // hasDescriptor = 0xFFFFFFFF
-    makeDescBody,
+    u8(0),
+    u8(1),
+    u8(0),
+    u8(0),
+    ascii("TEXT"),
+    pascalAscii("set"),
+    pascalAscii("Set"),
+    i32(-1),
+    setDescBody,
   );
 
   // Action 0 wrapper
