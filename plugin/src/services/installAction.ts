@@ -49,27 +49,33 @@ async function resolveActionsFolderPath(): Promise<string> {
 export async function installColorLookupAction(
   cubePath: string,
 ): Promise<{ written: string; needsReload: boolean }> {
+  // The .atn writer is pure and needs the .cube bytes in memory so it can
+  // embed them as `LUT3DFileData`. Read here, then hand off.
+  const uxp = require("uxp");
+  const fs = uxp.storage.localFileSystem;
+
+  const cubeEntry = await fs.getEntryWithUrl(`file:${cubePath.replace(/\\/g, "/")}`);
+  const cubeBytes = new Uint8Array(
+    await cubeEntry.read({ format: uxp.storage.formats.binary }),
+  );
+
   let bytes: Uint8Array;
   try {
     bytes = writeColorLookupLoadAtn({
       setName: ACTION_SET,
       actionName: ACTION_NAME,
       cubePath,
+      cubeBytes,
     });
   } catch (e) {
     throw new Error(
-      `installColorLookupAction: atn writer not ready (see plugin/src/core/atnWriter.ts). Underlying: ${(e as Error).message}`,
+      `installColorLookupAction: atn writer failed (see plugin/src/core/atnWriter.ts). Underlying: ${(e as Error).message}`,
     );
   }
 
   const folderPath = await resolveActionsFolderPath();
   const fullPath = `${folderPath}${folderPath.includes("\\") ? "\\" : "/"}${ATN_FILENAME}`;
 
-  // UXP fs write. Kept best-effort: if the host doesn't expose
-  // localFileSystem.getEntryWithUrl for an arbitrary path, the writer will
-  // throw and the caller will surface the error.
-  const uxp = require("uxp");
-  const fs = uxp.storage.localFileSystem;
   const folder = await fs.getEntryWithUrl(`file:${folderPath.replace(/\\/g, "/")}`);
   let file: any;
   try {
