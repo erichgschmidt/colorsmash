@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { applyTransfer } from "../app/applyTransfer";
 import { applyAsLut } from "../app/applyAsLut";
 import { applyLutViaAction } from "../app/applyLutViaAction";
-import { setupAction } from "../app/setupAction";
+import { setupAction, setupActionAuto } from "../app/setupAction";
 import { applyAsStack } from "../app/applyAsStack";
 import { validateStack } from "../app/validateStack";
 import { probeLayers } from "../app/probeLayers";
@@ -131,6 +131,7 @@ export function TransferTab() {
       <button onClick={onExport} style={btnSecondary}>Export .cube (33³)</button>
       <button onClick={onApplyLutViaAction} style={btnSecondary}>Apply LUT via Action (experimental)</button>
       <button onClick={wrap("Setting up action", setupAction)} style={btnSecondary}>Setup LUT Action (one-time)</button>
+      <button onClick={wrap("Auto-installing action", setupActionAuto)} style={btnSecondary}>Setup LUT Action (auto, experimental)</button>
 
       <div style={{ marginTop: 10, fontSize: 10 }}>
         <label style={{ cursor: "pointer", opacity: 0.6 }}>

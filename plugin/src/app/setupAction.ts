@@ -4,6 +4,7 @@
 // translate to a usable Lod3 step at play time).
 
 import { executeAsModal, action as psAction } from "../services/photoshop";
+import { installColorLookupAction } from "../services/installAction";
 
 const ACTION_SET = "Color Smash";
 const ACTION_NAME = "Load Color Smash LUT";
@@ -74,5 +75,29 @@ export async function setupAction(): Promise<string> {
       ``,
       `After recording, click "Apply LUT via Action" to use it. The plugin overwrites the same file each apply, so the recorded action keeps loading fresh content.`,
     ].join("\n");
+  });
+}
+
+/**
+ * Experimental: skip the manual recording step entirely by writing a
+ * pre-built `.atn` file straight into PS's Presets/Actions folder. Depends on
+ * `core/atnWriter.ts` being implemented (currently a scaffold).
+ */
+export async function setupActionAuto(): Promise<string> {
+  return executeAsModal("Color Smash setup action (auto)", async () => {
+    const cubePath = await ensureLutFileExists();
+    try {
+      const { written, needsReload } = await installColorLookupAction(cubePath);
+      const reloadHint = needsReload
+        ? "Restart Photoshop or use Actions panel > Load Actions to pick it up."
+        : "PS should pick it up automatically.";
+      return `Action auto-installed at ${written}. ${reloadHint}`;
+    } catch (e) {
+      const msg = (e as Error).message ?? "";
+      if (/not ready|not implemented/i.test(msg)) {
+        return "Auto-install pending atn writer — use manual setup for now.";
+      }
+      throw e;
+    }
   });
 }
