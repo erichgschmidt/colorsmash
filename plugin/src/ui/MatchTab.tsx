@@ -241,14 +241,18 @@ export function MatchTab() {
       scheduleRedraw();
     };
     return (
-      <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11 }}>
-        <span style={{ width: 56, opacity: 0.7, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
+      <div style={{ display: "flex", flexDirection: "column", gap: 1, fontSize: 11, marginBottom: 4 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ opacity: 0.75 }}>{label}</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <span style={{ opacity: 0.85, fontSize: 10 }}>{value}{suffix}</span>
+            {defaultVal != null && <button onClick={reset} title={`Reset to ${defaultVal}${suffix}`} style={resetIconBtn}><Icon name="revert" size={11} /></button>}
+          </div>
+        </div>
         <input type="range" min={min} max={max} defaultValue={value}
           ref={el => { sliderRefs.current[label] = el; }}
           onInput={e => { const v = Math.round(Number((e.target as HTMLInputElement).value)); ref.current = v; setValue(v); scheduleRedraw(); }}
-          style={{ flex: 1, minWidth: 30 }} />
-        <span style={{ width: 30, textAlign: "right", opacity: 0.8, fontSize: 10 }}>{value}{suffix}</span>
-        {defaultVal != null && <button onClick={reset} title={`Reset to ${defaultVal}${suffix}`} style={resetIconBtn}><Icon name="revert" size={11} /></button>}
+          style={{ width: "100%" }} />
       </div>
     );
   };
@@ -262,13 +266,17 @@ export function MatchTab() {
       scheduleRedraw();
     };
     return (
-      <div key={key} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11 }}>
-        <span style={{ width: 56, opacity: 0.7, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
+      <div key={key} style={{ display: "flex", flexDirection: "column", gap: 1, fontSize: 11, marginBottom: 4 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ opacity: 0.75 }}>{label}</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <span style={{ opacity: 0.85, fontSize: 10 }}>{value}{suffix}</span>
+            <button onClick={reset} title={`Reset to ${def}${suffix}`} style={resetIconBtn}><Icon name="revert" size={11} /></button>
+          </div>
+        </div>
         <input type="range" min={min} max={max} value={value}
           onInput={e => { const v = Math.round(Number((e.target as HTMLInputElement).value)); dimsRef.current = { ...dimsRef.current, [key]: v }; setDimsLabel(d => ({ ...d, [key]: v })); scheduleRedraw(); }}
-          style={{ flex: 1, minWidth: 30 }} />
-        <span style={{ width: 32, textAlign: "right", opacity: 0.8, fontSize: 10 }}>{value}{suffix}</span>
-        <button onClick={reset} title={`Reset to ${def}${suffix}`} style={resetIconBtn}><Icon name="revert" size={11} /></button>
+          style={{ width: "100%" }} />
       </div>
     );
   };
@@ -292,26 +300,12 @@ export function MatchTab() {
 
   return (
     <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-      {/* Top row: source mode tabs + doc picker */}
-      <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
-        <span style={{ opacity: 0.7 }}>Src:</span>
-        <button style={tabBtn(srcMode === "layer")}     onClick={() => switchSrcMode("layer")}     title="Layer source">
-          <Icon name="layers" size={11} />
-        </button>
-        <button style={tabBtn(srcMode === "selection")} onClick={() => switchSrcMode("selection")} title="Selection source">
-          <Icon name="selection" size={11} />
-        </button>
-        <span style={{ opacity: 0.7, marginLeft: 8 }}>Doc:</span>
-        <select style={{ flex: 1, padding: "2px 4px", fontSize: 10, minWidth: 0, background: "#333", color: "#ddd", border: "1px solid #555" }}
-          value={activeDocId ?? ""} onChange={e => onSwitchDoc(Number(e.target.value))}>
-          {docs.length === 0 && <option value="">— no docs —</option>}
-          {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-        </select>
+      {/* Top row: just LAB toggle + refresh on the right */}
+      <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, justifyContent: "flex-end" }}>
         <button onClick={() => setColorSpace(c => c === "rgb" ? "lab" : "rgb")}
-          title={`Color space: ${colorSpace.toUpperCase()} — click to toggle`}
-          style={{ padding: "2px 6px", fontSize: 10, fontWeight: 600, minWidth: 32,
-                   background: colorSpace === "lab" ? "#1473e6" : "transparent",
-                   color: colorSpace === "lab" ? "white" : "#aaa",
+          title="Toggle color space — RGB matches per-channel histograms; Lab matches in perceptual space."
+          style={{ padding: "2px 8px", fontSize: 10, fontWeight: 600, minWidth: 36,
+                   background: "transparent", color: "#cccccc",
                    border: "1px solid #555", borderRadius: 3, cursor: "pointer" }}>
           {colorSpace.toUpperCase()}
         </button>
@@ -323,14 +317,32 @@ export function MatchTab() {
         <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
           {useMemo(() => (
             <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+              {/* Source column: doc dropdown + layer/selection picker */}
               <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+                <div style={{ height: 26, display: "flex", alignItems: "center" }}>
+                  <select style={sel}
+                    value={srcMode === "selection" ? "__selection__" : (activeDocId ?? "")}
+                    onChange={e => {
+                      if (e.target.value === "__selection__") switchSrcMode("selection");
+                      else { switchSrcMode("layer"); onSwitchDoc(Number(e.target.value)); }
+                    }}>
+                    {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                    <option value="__selection__">⊞ Use Selection</option>
+                  </select>
+                </div>
                 <div style={{ height: 26, display: "flex", alignItems: "center" }}>{sourceModeContent()}</div>
                 <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}}
                   snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}
                   hideSelector fitAspect maxHeight={160} />
               </div>
               <div style={{ width: 1, background: "#444", alignSelf: "stretch" }} />
+              {/* Target column: doc dropdown + layer picker */}
               <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+                <div style={{ height: 26, display: "flex", alignItems: "center" }}>
+                  <select style={sel} value={activeDocId ?? ""} onChange={e => onSwitchDoc(Number(e.target.value))}>
+                    {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                  </select>
+                </div>
                 <div style={{ height: 26, display: "flex", alignItems: "center" }}>
                   <select style={sel} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}>
                     {layers.length === 0 && <option value="">— none —</option>}
@@ -341,7 +353,7 @@ export function MatchTab() {
                   hideSelector fitAspect maxHeight={160} />
               </div>
             </div>
-          ), [src.snap, tgt.snap, sourceId, targetId, layers, srcMode, srcOverride, autoUpdate])}
+          ), [src.snap, tgt.snap, sourceId, targetId, layers, srcMode, srcOverride, autoUpdate, docs, activeDocId])}
 
           <div style={{ marginTop: 4 }}>
             <span style={{ fontSize: 10, opacity: 0.7 }}>Matched preview</span>
@@ -417,7 +429,7 @@ export function MatchTab() {
           })}
 
           {/* @ts-ignore Spectrum web component */}
-          <sp-button variant="secondary" onClick={onApply} style={{ marginTop: 6, width: "100%" }}>Apply Match (1 Curves layer)</sp-button>
+          <sp-button variant="secondary" onClick={onApply} style={{ marginTop: 6, width: "100%" }}>Apply Curves</sp-button>
           <div style={{ marginTop: 6, fontSize: 10, opacity: 0.7, whiteSpace: "pre-wrap" }}>{status}</div>
         </div>
       </div>
