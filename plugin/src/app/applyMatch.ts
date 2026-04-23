@@ -7,7 +7,7 @@ import {
 } from "../services/photoshop";
 import { downsampleToMaxEdge } from "../core/downsample";
 import {
-  fitHistogramCurves, sampleControlPoints, processChannelCurves, applyDimensions,
+  fitHistogramCurves, fitHistogramCurvesLab, sampleControlPoints, processChannelCurves, applyDimensions,
   applyZoneWeightsToChannels,
   ChannelCurves, DimensionOpts, DEFAULT_DIMENSIONS, ZoneOpts, DEFAULT_ZONES,
 } from "../core/histogramMatch";
@@ -27,6 +27,7 @@ export interface ApplyMatchParams {
   zones?: ZoneOpts;
   sourcePixelsOverride?: Uint8Array; // if set, use these RGBA pixels instead of reading source layer
   sourceLabel?: string; // optional name shown in result message
+  colorSpace?: "rgb" | "lab";
 }
 
 export async function fitMatchCurves(params: ApplyMatchParams): Promise<ChannelCurves> {
@@ -39,7 +40,8 @@ export async function fitMatchCurves(params: ApplyMatchParams): Promise<ChannelC
       readLayerPixels(source, statsRectForLayer(source)),
       readLayerPixels(target, statsRectForLayer(target)),
     ]);
-    const raw = fitHistogramCurves(
+    const fit = params.colorSpace === "lab" ? fitHistogramCurvesLab : fitHistogramCurves;
+    const raw = fit(
       downsampleToMaxEdge(s, STATS_MAX_EDGE).data,
       downsampleToMaxEdge(t, STATS_MAX_EDGE).data,
     );
@@ -69,7 +71,8 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       srcPixels = downsampleToMaxEdge(s, STATS_MAX_EDGE).data;
     }
     const t = await readLayerPixels(target, statsRectForLayer(target));
-    const raw = fitHistogramCurves(
+    const fit2 = params.colorSpace === "lab" ? fitHistogramCurvesLab : fitHistogramCurves;
+    const raw = fit2(
       srcPixels,
       downsampleToMaxEdge(t, STATS_MAX_EDGE).data,
     );

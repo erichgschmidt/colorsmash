@@ -10,7 +10,7 @@ import { ZoneCompoundSlider } from "./ZoneCompoundSlider";
 import { Icon } from "./Icon";
 import { ChannelCurves } from "../core/histogramMatch";
 import {
-  fitHistogramCurves, processChannelCurves, applyChannelCurvesToRgba, applyChromaOnly,
+  fitHistogramCurves, fitHistogramCurvesLab, processChannelCurves, applyChannelCurvesToRgba, applyChromaOnly,
   applyDimensions, applyZoneWeightsToChannels,
   DimensionOpts, DEFAULT_DIMENSIONS, ZoneOpts, DEFAULT_ZONES,
 } from "../core/histogramMatch";
@@ -47,6 +47,7 @@ export function MatchTab() {
   const [srcMode, setSrcMode] = useState<SrcMode>("layer");
   const [srcOverride, setSrcOverride] = useState<SourceSnap | null>(null);
   const [autoUpdate, setAutoUpdate] = useState(false);
+  const [colorSpace, setColorSpace] = useState<"rgb" | "lab">("rgb");
 
   const [openSection, setOpenSection] = useState<"basic" | "dims" | "zones" | null>("basic");
   const toggleSection = (s: "basic" | "dims" | "zones") => setOpenSection(o => o === s ? null : s);
@@ -151,8 +152,9 @@ export function MatchTab() {
 
   const fittedRaw = useMemo(() => {
     if (!srcSnap || !tgt.snap) return null;
-    return fitHistogramCurves(srcSnap.data, tgt.snap.data);
-  }, [srcSnap, tgt.snap]);
+    const fit = colorSpace === "lab" ? fitHistogramCurvesLab : fitHistogramCurves;
+    return fit(srcSnap.data, tgt.snap.data);
+  }, [srcSnap, tgt.snap, colorSpace]);
 
   const matchedHandleRef = useRef<PreviewImgHandle | null>(null);
   const rafPendingRef = useRef(false);
@@ -207,6 +209,7 @@ export function MatchTab() {
         zones: zonesRef.current,
         sourcePixelsOverride: srcOverride?.data,
         sourceLabel: srcOverride?.name,
+        colorSpace,
       }));
     } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
   };
@@ -304,6 +307,14 @@ export function MatchTab() {
           {docs.length === 0 && <option value="">— no docs —</option>}
           {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
         </select>
+        <button onClick={() => setColorSpace(c => c === "rgb" ? "lab" : "rgb")}
+          title={`Color space: ${colorSpace.toUpperCase()} — click to toggle`}
+          style={{ padding: "2px 6px", fontSize: 10, fontWeight: 600, minWidth: 32,
+                   background: colorSpace === "lab" ? "#1473e6" : "transparent",
+                   color: colorSpace === "lab" ? "white" : "#aaa",
+                   border: "1px solid #555", borderRadius: 3, cursor: "pointer" }}>
+          {colorSpace.toUpperCase()}
+        </button>
         <button onClick={onRefreshAll} title="Refresh source + target previews" style={resetIconBtn}><Icon name="refresh" size={11} /></button>
       </div>
 
