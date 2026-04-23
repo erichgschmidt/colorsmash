@@ -18,8 +18,18 @@ module.exports = {
   module: {
     rules: [
       { test: /\.tsx?$/, loader: "ts-loader", exclude: /node_modules/ },
-      // Inline SVGs as raw strings so we can dangerouslySetInnerHTML and currentColor works.
-      { test: /\.svg$/, type: "asset/source" },
+      // Convert SVG imports into proper React components (handles UXP rendering correctly).
+      {
+        test: /\.svg$/,
+        use: [{
+          loader: "@svgr/webpack",
+          options: {
+            svgo: true,
+            svgoConfig: { plugins: [{ name: "preset-default", params: { overrides: { removeViewBox: false } } }] },
+            replaceAttrValues: { "#464646": "currentColor" },
+          },
+        }],
+      },
     ],
   },
 };
