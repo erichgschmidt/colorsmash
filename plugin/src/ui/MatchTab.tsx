@@ -236,7 +236,7 @@ export function MatchTab() {
       scheduleRedraw();
     };
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 1, fontSize: 11, marginBottom: 4 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 0, fontSize: 11, marginBottom: 1 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <span style={{ opacity: 0.75 }}>{label}</span>
           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -261,7 +261,7 @@ export function MatchTab() {
       scheduleRedraw();
     };
     return (
-      <div key={key} style={{ display: "flex", flexDirection: "column", gap: 1, fontSize: 11, marginBottom: 4 }}>
+      <div key={key} style={{ display: "flex", flexDirection: "column", gap: 0, fontSize: 11, marginBottom: 1 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <span style={{ opacity: 0.75 }}>{label}</span>
           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -295,20 +295,8 @@ export function MatchTab() {
 
   return (
     <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-      {/* Top row: just LAB toggle + refresh on the right */}
-      <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, justifyContent: "flex-end" }}>
-        <button onClick={() => setColorSpace(c => c === "rgb" ? "lab" : "rgb")}
-          title="Toggle color space — RGB matches per-channel histograms; Lab matches in perceptual space."
-          style={{ padding: "2px 8px", fontSize: 10, fontWeight: 600, minWidth: 36,
-                   background: "transparent", color: "#cccccc",
-                   border: "1px solid #555", borderRadius: 3, cursor: "pointer" }}>
-          {colorSpace.toUpperCase()}
-        </button>
-        <button onClick={onRefreshAll} title="Refresh source + target previews" style={resetIconBtn}><Icon name="refresh" size={11} /></button>
-      </div>
-
-      {/* Body: previews left, controls right */}
-      <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+      {/* Body: previews on left, curves+controls on right (no top header row anymore — toggles live in right col header) */}
+      <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
         <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
           {useMemo(() => (
             <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
@@ -362,7 +350,22 @@ export function MatchTab() {
 
         <div style={{ width: 1, background: "#444", alignSelf: "stretch" }} />
         <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-          <div style={{ fontSize: 10, opacity: 0.7 }}>Fitted curves (R G B)</div>
+          {/* Header row: spans the same vertical space as left col's two dropdown rows so the curves graph top aligns with the preview tops. */}
+          <div style={{ height: 56, display: "flex", flexDirection: "column", justifyContent: "flex-end", paddingBottom: 4 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 10, opacity: 0.85 }}>
+              <span>Fitted curves (R G B)</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <button onClick={() => setColorSpace(c => c === "rgb" ? "lab" : "rgb")}
+                  title="Toggle color space — RGB matches per-channel histograms; Lab matches in perceptual space."
+                  style={{ padding: "1px 8px", fontSize: 10, fontWeight: 600, minWidth: 36,
+                           background: "transparent", color: "#cccccc",
+                           border: "1px solid #555", borderRadius: 3, cursor: "pointer" }}>
+                  {colorSpace.toUpperCase()}
+                </button>
+                <button onClick={onRefreshAll} title="Refresh source + target previews" style={resetIconBtn}><Icon name="refresh" size={11} /></button>
+              </div>
+            </div>
+          </div>
           <CurvesGraph curves={renderedCurves} />
 
           <div style={{ borderTop: "1px solid #444", margin: "8px 0 0" }} />
