@@ -102,36 +102,43 @@ export function fitHistogramCurvesLab(srcRgba: Uint8Array, tgtRgba: Uint8Array):
   for (const ch of [0, 1, 2] as const) {
     labMaps.push(specifyChannel(cumulative(buildLabHist(srcRgba, ch)), cumulative(buildLabHist(tgtRgba, ch))));
   }
-  // Sample 17^3 RGB grid through the Lab transform, average per output channel for each input v.
-  const N = 17;
+  // Sample curves from ACTUAL target pixels. For each tgt pixel, run through Lab→spec→Lab'→RGB',
+  // bucket the (input, output) pair by input channel value, then average per bucket. This tailors
+  // the per-channel curves to the colors that actually appear in the target — avoids the wild
+  // distortions a synthetic 17³ grid produces because curves can't express cross-channel changes.
   const sumR = new Float64Array(256), sumG = new Float64Array(256), sumB = new Float64Array(256);
   const cntR = new Float64Array(256), cntG = new Float64Array(256), cntB = new Float64Array(256);
-  for (let i = 0; i < N; i++) {
-    const r = Math.round((i / (N - 1)) * 255);
-    for (let j = 0; j < N; j++) {
-      const g = Math.round((j / (N - 1)) * 255);
-      for (let k = 0; k < N; k++) {
-        const b = Math.round((k / (N - 1)) * 255);
-        const [L, A, B] = rgbToLab(r, g, b);
-        const Lbin = Math.max(0, Math.min(255, Math.round(L * 2.55)));
-        const Abin = Math.max(0, Math.min(255, Math.round(A + 128)));
-        const Bbin = Math.max(0, Math.min(255, Math.round(B + 128)));
-        const Lmapped = labMaps[0][Lbin] / 2.55;
-        const Amapped = labMaps[1][Abin] - 128;
-        const Bmapped = labMaps[2][Bbin] - 128;
-        const [or, og, ob] = labToRgb(Lmapped, Amapped, Bmapped);
-        sumR[r] += or; cntR[r]++;
-        sumG[g] += og; cntG[g]++;
-        sumB[b] += ob; cntB[b]++;
-      }
-    }
+  for (let i = 0; i < tgtRgba.length; i += 4) {
+    if (tgtRgba[i + 3] < 128) continue;
+    const r = tgtRgba[i], g = tgtRgba[i + 1], b = tgtRgba[i + 2];
+    const [L, A, B] = rgbToLab(r, g, b);
+    const Lbin = Math.max(0, Math.min(255, Math.round(L * 2.55)));
+    const Abin = Math.max(0, Math.min(255, Math.round(A + 128)));
+    const Bbin = Math.max(0, Math.min(255, Math.round(B + 128)));
+    const Lmapped = labMaps[0][Lbin] / 2.55;
+    const Amapped = labMaps[1][Abin] - 128;
+    const Bmapped = labMaps[2][Bbin] - 128;
+    const [or, og, ob] = labToRgb(Lmapped, Amapped, Bmapped);
+    sumR[r] += or; cntR[r]++;
+    sumG[g] += og; cntG[g]++;
+    sumB[b] += ob; cntB[b]++;
   }
   const finish = (sum: Float64Array, cnt: Float64Array): Uint8Array => {
     const out = new Uint8Array(256);
-    let lastVal = 0;
+    // Pass 1: fill where we have data; for empty bins, hold last known value.
+    let lastVal = 0; let haveAny = false;
     for (let v = 0; v < 256; v++) {
-      if (cnt[v] > 0) lastVal = sum[v] / cnt[v];
-      out[v] = Math.max(0, Math.min(255, Math.round(lastVal)));
+      if (cnt[v] > 0) { lastVal = sum[v] / cnt[v]; haveAny = true; }
+      out[v] = haveAny ? Math.max(0, Math.min(255, Math.round(lastVal))) : v; // identity if no data at all
+    }
+    // Pass 2: linearly interpolate forward over runs of unfilled bins from the front.
+    // (back-fill) Find first known and use it as the floor for earlier bins.
+    let firstFilled = -1;
+    for (let v = 0; v < 256; v++) if (cnt[v] > 0) { firstFilled = v; break; }
+    if (firstFilled > 0) {
+      const start = out[firstFilled];
+      // Fill 0..firstFilled-1 by interpolating from 0 to start.
+      for (let v = 0; v < firstFilled; v++) out[v] = Math.round((v / firstFilled) * start);
     }
     // Force monotonic.
     let m = out[0];
