@@ -295,6 +295,12 @@ export function MatchTab() {
     boxSizing: "border-box",
   });
 
+  const resetIconBtn: React.CSSProperties = {
+    width: 16, height: 16, padding: 0, lineHeight: "14px", fontSize: 10, textAlign: "center",
+    background: "transparent", color: "#888", border: "1px solid #444", borderRadius: 2, cursor: "pointer",
+    flexShrink: 0, boxSizing: "border-box",
+  };
+
   const sliderRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const slider = (
     label: string, ref: React.MutableRefObject<number>, value: number, setValue: (n: number) => void,
@@ -309,14 +315,14 @@ export function MatchTab() {
       scheduleRedraw();
     };
     return (
-      <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
-        <span style={{ width: 64, opacity: 0.7 }}>{label}</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11 }}>
+        <span style={{ width: 56, opacity: 0.7, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
         <input type="range" min={min} max={max} defaultValue={value}
           ref={el => { sliderRefs.current[label] = el; }}
           onInput={e => { const v = Number((e.target as HTMLInputElement).value); ref.current = v; setValue(v); scheduleRedraw(); }}
-          style={{ flex: 1, minWidth: 0 }} />
-        <span style={{ width: 36, textAlign: "right", opacity: 0.8 }}>{value}{suffix}</span>
-        {defaultVal != null && <button onClick={reset} title={`Reset to ${defaultVal}${suffix}`} style={{ ...tinyBtn, padding: "0 4px", fontSize: 10 }}>↺</button>}
+          style={{ flex: 1, minWidth: 30 }} />
+        <span style={{ width: 30, textAlign: "right", opacity: 0.8, fontSize: 10 }}>{value}{suffix}</span>
+        {defaultVal != null && <button onClick={reset} title={`Reset to ${defaultVal}${suffix}`} style={resetIconBtn}>↺</button>}
       </div>
     );
   };
@@ -330,13 +336,13 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
       scheduleRedraw();
     };
     return (
-      <div key={key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
-        <span style={{ width: 64, opacity: 0.7 }}>{label}</span>
+      <div key={key} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11 }}>
+        <span style={{ width: 56, opacity: 0.7, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
         <input type="range" min={min} max={max} value={value}
           onInput={e => { const v = Number((e.target as HTMLInputElement).value); dimsRef.current = { ...dimsRef.current, [key]: v }; setDimsLabel(d => ({ ...d, [key]: v })); scheduleRedraw(); }}
-          style={{ flex: 1, minWidth: 0 }} />
-        <span style={{ width: 40, textAlign: "right", opacity: 0.8 }}>{value}{suffix}</span>
-        <button onClick={reset} title={`Reset to ${def}${suffix}`} style={{ ...tinyBtn, padding: "0 4px", fontSize: 10 }}>↺</button>
+          style={{ flex: 1, minWidth: 30 }} />
+        <span style={{ width: 32, textAlign: "right", opacity: 0.8, fontSize: 10 }}>{value}{suffix}</span>
+        <button onClick={reset} title={`Reset to ${def}${suffix}`} style={resetIconBtn}>↺</button>
       </div>
     );
   };

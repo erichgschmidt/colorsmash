@@ -135,7 +135,8 @@ export function ZoneCompoundSlider(props: ZoneCompoundSliderProps) {
       {props.defaults && (
         <button onClick={() => { valueRef.current = { ...props.defaults! }; props.onChange({ ...props.defaults! }); }}
           title="Reset zone"
-          style={{ padding: "0 4px", fontSize: 10, background: "transparent", color: "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer" }}>↺</button>
+          style={{ width: 16, height: 16, padding: 0, lineHeight: "14px", fontSize: 10, textAlign: "center",
+                   background: "transparent", color: "#888", border: "1px solid #444", borderRadius: 2, cursor: "pointer", flexShrink: 0, boxSizing: "border-box" }}>↺</button>
       )}
     </div>
   );
