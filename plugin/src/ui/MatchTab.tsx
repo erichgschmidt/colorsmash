@@ -261,11 +261,13 @@ export function MatchTab() {
   const tinyBtn: React.CSSProperties = { padding: "1px 6px", background: "transparent", color: "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 9 };
   const sel: React.CSSProperties = { flex: 1, padding: "2px 4px", fontSize: 10, minWidth: 0, background: "#333", color: "#ddd", border: "1px solid #555" };
   const tabBtn = (active: boolean): React.CSSProperties => ({
-    width: 22, padding: "2px 0", fontSize: 11, cursor: "pointer", textAlign: "center",
+    width: 20, height: 16, padding: 0, fontSize: 10, cursor: "pointer", textAlign: "center",
+    lineHeight: "14px",
     background: active ? "#1473e6" : "transparent",
     color: active ? "white" : "#aaa",
-    border: "1px solid #555", borderBottom: active ? "1px solid #1473e6" : "1px solid #555",
+    border: "1px solid #555",
     fontWeight: 600,
+    boxSizing: "border-box",
   });
 
   const slider = (
@@ -380,7 +382,7 @@ export function MatchTab() {
         <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 0 }}>
             <span style={{ fontSize: 10, opacity: 0.7, width: 22 }}>Tgt</span>
-            <div style={{ ...tabBtn(true), cursor: "default" }} title="Layer">L</div>
+            <button style={{ ...tabBtn(true), cursor: "default" }} title="Layer" disabled>L</button>
           </div>
           <div style={{ minHeight: 22, display: "flex" }}>
             <select style={sel} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}>
