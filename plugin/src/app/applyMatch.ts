@@ -28,6 +28,8 @@ export interface ApplyMatchParams {
   sourcePixelsOverride?: Uint8Array; // if set, use these RGBA pixels instead of reading source layer
   sourceLabel?: string; // optional name shown in result message
   colorSpace?: "rgb" | "lab";
+  deselectFirst?: boolean;     // drop active marquee before creating layer (default true)
+  overwritePrior?: boolean;    // delete prior Match Curves (true) or hide them (false) (default true)
 }
 
 export async function fitMatchCurves(params: ApplyMatchParams): Promise<ChannelCurves> {
@@ -84,26 +86,36 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     const dim = applyDimensions(processed, params.dimensions ?? DEFAULT_DIMENSIONS);
     const curves: ChannelCurves = applyZoneWeightsToChannels(dim, params.zones ?? DEFAULT_ZONES);
 
-    // Reuse existing [Color Smash] group; remove any prior Match layer to avoid stacking.
+    // Reuse existing [Color Smash] group. Prior Match Curves layers are either deleted
+    // (overwritePrior=true, default) or just hidden (overwritePrior=false, so user can keep
+    // alternatives stacked).
     const findGroup = () => doc.layers.find((l: any) => l.name === GROUP_NAME && l.layers);
     let group = findGroup();
     if (!group) group = await doc.createLayerGroup({ name: GROUP_NAME });
+    const overwrite = params.overwritePrior !== false;
     for (const child of [...(group.layers ?? [])]) {
-      if (child.name === RESULT_LAYER_NAME) {
-        try { await child.delete(); } catch { /* ignore */ }
+      if (child.name === RESULT_LAYER_NAME || child.name.startsWith(RESULT_LAYER_NAME)) {
+        if (overwrite) {
+          try { await child.delete(); } catch { /* ignore */ }
+        } else {
+          try { child.visible = false; } catch { /* ignore */ }
+        }
       }
     }
 
     // Select target so the new adjustment layer is created above it (then we clip + move into group).
     await action.batchPlay([{ _obj: "select", _target: [{ _ref: "layer", _id: target.id }], makeVisible: false }], {});
 
-    // If a marquee selection is active, PS would auto-mask the new adjustment layer to it.
-    // The user wants curves to apply to the FULL target, so drop the selection first.
-    // (Not restored afterwards — user can re-marquee or manually add a mask if desired.)
-    try { await action.batchPlay([{ _obj: "set", _target: [{ _ref: "channel", _property: "selection" }], to: { _enum: "ordinal", _value: "none" } }], {}); }
-    catch { /* ignore */ }
+    // Optionally deselect (so curves apply to the full target, not masked to the marquee).
+    if (params.deselectFirst !== false) {
+      try { await action.batchPlay([{ _obj: "set", _target: [{ _ref: "channel", _property: "selection" }], to: { _enum: "ordinal", _value: "none" } }], {}); }
+      catch { /* ignore */ }
+    }
 
-    const curveLayer = await makeCurvesLayer(RESULT_LAYER_NAME, [
+    // If keeping prior layers, give the new one a unique numbered suffix so they coexist.
+    const layerName = overwrite ? RESULT_LAYER_NAME
+      : `${RESULT_LAYER_NAME} ${new Date().toTimeString().slice(0, 8)}`;
+    const curveLayer = await makeCurvesLayer(layerName, [
       { channel: "red",   points: sampleControlPoints(curves.r, CONTROL_POINTS) },
       { channel: "green", points: sampleControlPoints(curves.g, CONTROL_POINTS) },
       { channel: "blue",  points: sampleControlPoints(curves.b, CONTROL_POINTS) },

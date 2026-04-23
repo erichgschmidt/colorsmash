@@ -52,6 +52,8 @@ export function MatchTab() {
   const sampleLockRef = useRef(false);
   useEffect(() => { sampleLockRef.current = sampleLock; }, [sampleLock]);
   const [colorSpace, setColorSpace] = useState<"rgb" | "lab">("rgb");
+  const [deselectOnApply, setDeselectOnApply] = useState(true);
+  const [overwriteOnApply, setOverwriteOnApply] = useState(true);
 
   const [openSection, setOpenSection] = useState<"basic" | "dims" | "zones" | null>("basic");
   const toggleSection = (s: "basic" | "dims" | "zones") => setOpenSection(o => o === s ? null : s);
@@ -175,13 +177,16 @@ export function MatchTab() {
       else if (!key) { lastBoundsRef.current = ""; }
     }, 200);
     // Re-snap on any PS event that could change pixels under the marquee.
-    const events = ["set", "make", "delete", "paste", "fill", "stroke", "move"];
+    const events = ["set", "make", "delete", "paste", "fill", "stroke", "move", "applyImage", "rasterizeLayer", "modifyLayerEffect"];
     const onPsEvent = () => trySnap();
     psAction.addNotificationListener(events, onPsEvent);
+    // Periodic backup (some events like brush strokes don't notify reliably).
+    const pollTimer = setInterval(() => trySnap(), 1000);
     trySnap(); // initial
     return () => {
       cancelled = true;
       clearInterval(boundsTimer);
+      clearInterval(pollTimer);
       psAction.removeNotificationListener?.(events, onPsEvent);
     };
   }, [srcMode, autoUpdate]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -251,6 +256,8 @@ export function MatchTab() {
         sourcePixelsOverride: srcOverride?.data,
         sourceLabel: srcOverride?.name,
         colorSpace,
+        deselectFirst: deselectOnApply,
+        overwritePrior: overwriteOnApply,
       }));
     } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
   };
@@ -481,8 +488,18 @@ export function MatchTab() {
             );
           })}
 
+          <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 10, marginTop: 6, opacity: 0.85 }}>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: "pointer" }} title="Drop active marquee selection before creating the layer (so curves apply to the full target).">
+              <input type="checkbox" checked={deselectOnApply} onChange={e => setDeselectOnApply(e.target.checked)} />
+              Deselect
+            </label>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: "pointer" }} title="On: replace the prior Match Curves layer. Off: keep prior layers (hidden) so you can stack alternatives.">
+              <input type="checkbox" checked={overwriteOnApply} onChange={e => setOverwriteOnApply(e.target.checked)} />
+              Overwrite
+            </label>
+          </div>
           {/* @ts-ignore Spectrum web component */}
-          <sp-button variant="secondary" onClick={onApply} style={{ marginTop: 6, width: "100%" }}>Apply Curves</sp-button>
+          <sp-button variant="secondary" onClick={onApply} style={{ marginTop: 4, width: "100%" }}>Apply Curves</sp-button>
           <div style={{ marginTop: 6, fontSize: 10, opacity: 0.7, whiteSpace: "pre-wrap" }}>{status}</div>
         </div>
       </div>
