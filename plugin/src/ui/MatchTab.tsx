@@ -271,8 +271,8 @@ export function MatchTab() {
   const sel: React.CSSProperties = { flex: 1, padding: "2px 4px", fontSize: 10, minWidth: 0, background: "#333", color: "#ddd", border: "1px solid #555" };
   const numInputStyle: React.CSSProperties = {
     width: 38, padding: "1px 3px", fontSize: 10, textAlign: "right",
-    background: "transparent", color: "#ddd",
-    border: "1px solid #555", borderRadius: 2,
+    background: "#404040", color: "#dddddd",
+    border: "1px solid #6e6e6e", borderRadius: 2,
     boxSizing: "border-box", height: 18, lineHeight: "14px", margin: 0,
     // Strip browser-default input chrome (inset shadows, spinners, focus ring).
     appearance: "none" as any,
