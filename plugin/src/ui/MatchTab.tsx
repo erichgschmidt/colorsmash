@@ -147,27 +147,40 @@ export function MatchTab() {
     } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
   };
 
-  // Auto-update: poll selection bounds; re-snap when stable.
+  // Auto-update: re-snap on EITHER selection-bounds change OR PS pixel-changing events.
   const lastBoundsRef = useRef<string>("");
-  const stableTicksRef = useRef(0);
+  const snapInFlightRef = useRef(false);
   useEffect(() => {
     if (srcMode !== "selection" || !autoUpdate) return;
-    const interval = setInterval(async () => {
+    let cancelled = false;
+    const trySnap = async () => {
+      if (snapInFlightRef.current) return;
       let bounds: any = null;
       try { bounds = getSelectionBounds(); } catch { /* */ }
-      if (!bounds) { lastBoundsRef.current = ""; stableTicksRef.current = 0; return; }
-      const key = `${bounds.left},${bounds.top},${bounds.right},${bounds.bottom}`;
-      if (key === lastBoundsRef.current) {
-        stableTicksRef.current++;
-        if (stableTicksRef.current === 1) {
-          try { setSrcOverride(await snapshotSelectionInner()); } catch { /* ignore */ }
-        }
-      } else {
-        lastBoundsRef.current = key;
-        stableTicksRef.current = 0;
-      }
+      if (!bounds) return;
+      snapInFlightRef.current = true;
+      try { const snap = await snapshotSelectionInner(); if (!cancelled) setSrcOverride(snap); }
+      catch { /* ignore transient */ }
+      finally { snapInFlightRef.current = false; }
+    };
+    // Immediate re-snap on bounds change (cheap poll: just reads doc.selection.bounds).
+    const boundsTimer = setInterval(() => {
+      let bounds: any = null;
+      try { bounds = getSelectionBounds(); } catch { /* */ }
+      const key = bounds ? `${bounds.left},${bounds.top},${bounds.right},${bounds.bottom}` : "";
+      if (key && key !== lastBoundsRef.current) { lastBoundsRef.current = key; trySnap(); }
+      else if (!key) { lastBoundsRef.current = ""; }
     }, 200);
-    return () => clearInterval(interval);
+    // Re-snap on any PS event that could change pixels under the marquee.
+    const events = ["set", "make", "delete", "paste", "fill", "stroke", "move"];
+    const onPsEvent = () => trySnap();
+    psAction.addNotificationListener(events, onPsEvent);
+    trySnap(); // initial
+    return () => {
+      cancelled = true;
+      clearInterval(boundsTimer);
+      psAction.removeNotificationListener?.(events, onPsEvent);
+    };
   }, [srcMode, autoUpdate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const switchSrcMode = (m: SrcMode) => {
