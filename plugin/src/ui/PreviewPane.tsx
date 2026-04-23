@@ -26,6 +26,10 @@ export interface PreviewImgHandle {
 
 export function PreviewPane(props: PreviewPaneProps & { imgHandleRef?: React.MutableRefObject<PreviewImgHandle | null> }) {
   const imgRef = useRef<HTMLImageElement>(null);
+  // Second buffer img for double-buffering when imgHandleRef is used. Eliminates the
+  // load-cycle blank-frame flash inherent to img.src reassignment with dataURLs.
+  const imgBackRef = useRef<HTMLImageElement>(null);
+  const visibleRef = useRef<"front" | "back">("front");
   const wrapRef = useRef<HTMLDivElement>(null);
   const height = props.height ?? 140;
 
@@ -33,9 +37,18 @@ export function PreviewPane(props: PreviewPaneProps & { imgHandleRef?: React.Mut
     if (!props.imgHandleRef) return;
     props.imgHandleRef.current = {
       setPixels: (rgba, w, h) => {
-        const img = imgRef.current;
-        if (!img) return;
-        img.src = rgbaToPngDataUrl(rgba, w, h);
+        const front = imgRef.current;
+        const back = imgBackRef.current;
+        if (!front || !back) return;
+        const showFront = visibleRef.current === "front";
+        const target = showFront ? back : front;
+        const other  = showFront ? front : back;
+        target.onload = () => {
+          target.style.opacity = "1";
+          other.style.opacity = "0";
+          visibleRef.current = showFront ? "back" : "front";
+        };
+        target.src = rgbaToPngDataUrl(rgba, w, h);
       },
     };
     return () => { if (props.imgHandleRef) props.imgHandleRef.current = null; };
@@ -85,8 +98,18 @@ export function PreviewPane(props: PreviewPaneProps & { imgHandleRef?: React.Mut
         ...aspectStyle, overflow: "hidden", position: "relative",
       }}>
         {(props.snapshot || props.imgHandleRef)
-          ? <img ref={imgRef} alt={props.label} onClick={onImgClick}
-              style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", cursor: props.onPickColor ? "crosshair" : "default" }} />
+          ? <>
+              <img ref={imgRef} alt={props.label} onClick={onImgClick}
+                style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", cursor: props.onPickColor ? "crosshair" : "default",
+                         position: props.imgHandleRef ? "absolute" : "static", top: 0, left: 0, right: 0, bottom: 0, margin: "auto",
+                         transition: "opacity 0ms" }} />
+              {props.imgHandleRef && (
+                <img ref={imgBackRef} alt="" aria-hidden
+                  style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain",
+                           position: "absolute", top: 0, left: 0, right: 0, bottom: 0, margin: "auto",
+                           opacity: 0, pointerEvents: "none" }} />
+              )}
+            </>
           : <span style={{ color: "#666", fontSize: 10 }}>{props.layers.length === 0 ? "no layers" : "select a layer"}</span>}
       </div>
       {props.onRefresh && (
