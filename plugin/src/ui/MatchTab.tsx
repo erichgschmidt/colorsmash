@@ -387,9 +387,13 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
 
   return (
     <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-      {/* Top row: doc picker + refresh + source mode tabs */}
+      {/* Top row: source mode tabs (above source preview) | doc picker (above target preview) */}
       <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
-        <span style={{ opacity: 0.7 }}>Doc:</span>
+        <span style={{ opacity: 0.7 }}>Src:</span>
+        <button style={tabBtn(srcMode === "layer")}     onClick={() => switchMode("layer")}     title="Layer">L</button>
+        <button style={tabBtn(srcMode === "preset")}    onClick={() => switchMode("preset")}    title="Preset">P</button>
+        <button style={tabBtn(srcMode === "selection")} onClick={() => switchMode("selection")} title="Selection">S</button>
+        <span style={{ opacity: 0.7, marginLeft: 8 }}>Doc:</span>
         <select style={{ flex: 1, padding: "2px 4px", fontSize: 10, minWidth: 0, background: "#333", color: "#ddd", border: "1px solid #555" }}
           value={activeDocId ?? ""} onChange={e => onSwitchDoc(Number(e.target.value))}>
           {docs.length === 0 && <option value="">— no docs —</option>}
@@ -397,10 +401,6 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
         </select>
         <button onClick={onRefreshAll} title="Refresh source + target previews from active doc"
           style={{ padding: "2px 8px", background: "transparent", color: "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 10 }}>↻</button>
-        <span style={{ opacity: 0.7, marginLeft: 6 }}>Src:</span>
-        <button style={tabBtn(srcMode === "layer")}     onClick={() => switchMode("layer")}     title="Layer">L</button>
-        <button style={tabBtn(srcMode === "preset")}    onClick={() => switchMode("preset")}    title="Preset">P</button>
-        <button style={tabBtn(srcMode === "selection")} onClick={() => switchMode("selection")} title="Selection">S</button>
       </div>
 
       {/* 2-column body: previews on left, controls on right */}
