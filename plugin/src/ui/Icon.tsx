@@ -1,15 +1,30 @@
-// Spectrum SMOCK icons via plain <img> tags pointing at bundled SVG files.
-// UXP renders img+SVG natively (inline SVG JSX renders blank in current UXP).
-// SVG fill is baked to a mid-gray (#b8b8b8) since img can't inherit currentColor.
+// Spectrum SMOCK icons. SVGs imported as data URLs (webpack asset/inline rule),
+// rendered via <img>. UXP's React renderer doesn't render inline <svg> JSX reliably,
+// so we go through img which it handles consistently.
+
+// @ts-ignore svg url import
+import refreshUrl from "../../assets/icons/Smock_Refresh_18_N.svg";
+// @ts-ignore
+import revertUrl from "../../assets/icons/Smock_Revert_18_N.svg";
+// @ts-ignore
+import chevronDownUrl from "../../assets/icons/Smock_ChevronDown_18_N.svg";
+// @ts-ignore
+import chevronRightUrl from "../../assets/icons/Smock_ChevronRight_18_N.svg";
+// @ts-ignore
+import layersUrl from "../../assets/icons/Smock_Layers_18_N.svg";
+// @ts-ignore
+import selectionUrl from "../../assets/icons/Smock_Selection_18_N.svg";
+// @ts-ignore
+import samplerUrl from "../../assets/icons/Smock_Sampler_18_N.svg";
 
 const SRC: Record<string, string> = {
-  refresh:      "./assets/icons/Smock_Refresh_18_N.svg",
-  revert:       "./assets/icons/Smock_Revert_18_N.svg",
-  chevronDown:  "./assets/icons/Smock_ChevronDown_18_N.svg",
-  chevronRight: "./assets/icons/Smock_ChevronRight_18_N.svg",
-  layers:       "./assets/icons/Smock_Layers_18_N.svg",
-  selection:    "./assets/icons/Smock_Selection_18_N.svg",
-  sampler:      "./assets/icons/Smock_Sampler_18_N.svg",
+  refresh: refreshUrl,
+  revert: revertUrl,
+  chevronDown: chevronDownUrl,
+  chevronRight: chevronRightUrl,
+  layers: layersUrl,
+  selection: selectionUrl,
+  sampler: samplerUrl,
 };
 
 export type IconName = keyof typeof SRC;

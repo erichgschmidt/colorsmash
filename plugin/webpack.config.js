@@ -18,6 +18,8 @@ module.exports = {
   module: {
     rules: [
       { test: /\.tsx?$/, loader: "ts-loader", exclude: /node_modules/ },
+      // Inline small SVGs as base64 data URLs (UXP loads img src=data: reliably).
+      { test: /\.svg$/, type: "asset/inline" },
     ],
   },
 };
