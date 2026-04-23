@@ -242,7 +242,7 @@ export function MatchTab() {
         <span style={{ width: 56, opacity: 0.7, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
         <input type="range" min={min} max={max} defaultValue={value}
           ref={el => { sliderRefs.current[label] = el; }}
-          onInput={e => { const v = Number((e.target as HTMLInputElement).value); ref.current = v; setValue(v); scheduleRedraw(); }}
+          onInput={e => { const v = Math.round(Number((e.target as HTMLInputElement).value)); ref.current = v; setValue(v); scheduleRedraw(); }}
           style={{ flex: 1, minWidth: 30 }} />
         <span style={{ width: 30, textAlign: "right", opacity: 0.8, fontSize: 10 }}>{value}{suffix}</span>
         {defaultVal != null && <button onClick={reset} title={`Reset to ${defaultVal}${suffix}`} style={resetIconBtn}><Icon name="revert" size={11} /></button>}
@@ -262,7 +262,7 @@ export function MatchTab() {
       <div key={key} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11 }}>
         <span style={{ width: 56, opacity: 0.7, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
         <input type="range" min={min} max={max} value={value}
-          onInput={e => { const v = Number((e.target as HTMLInputElement).value); dimsRef.current = { ...dimsRef.current, [key]: v }; setDimsLabel(d => ({ ...d, [key]: v })); scheduleRedraw(); }}
+          onInput={e => { const v = Math.round(Number((e.target as HTMLInputElement).value)); dimsRef.current = { ...dimsRef.current, [key]: v }; setDimsLabel(d => ({ ...d, [key]: v })); scheduleRedraw(); }}
           style={{ flex: 1, minWidth: 30 }} />
         <span style={{ width: 32, textAlign: "right", opacity: 0.8, fontSize: 10 }}>{value}{suffix}</span>
         <button onClick={reset} title={`Reset to ${def}${suffix}`} style={resetIconBtn}><Icon name="revert" size={11} /></button>

@@ -1,67 +1,29 @@
-// Spectrum SMOCK icons rendered as direct inline React SVGs.
-// No imports, no loaders — UXP renders standard <svg>/<path>/<rect>
-// JSX elements correctly. Each icon takes a fill prop (default #bbb).
+// Spectrum SMOCK icons via plain <img> tags pointing at bundled SVG files.
+// UXP renders img+SVG natively (inline SVG JSX renders blank in current UXP).
+// SVG fill is baked to a mid-gray (#b8b8b8) since img can't inherit currentColor.
 
-interface IconProps {
-  size?: number;
-  color?: string;
-  style?: React.CSSProperties;
-}
-
-const wrap = (size: number, color: string, children: React.ReactNode, style?: React.CSSProperties) => (
-  <svg viewBox="0 0 18 18" width={size} height={size} fill={color} xmlns="http://www.w3.org/2000/svg" style={{ display: "inline-block", verticalAlign: "middle", flexShrink: 0, ...style }}>
-    {children}
-  </svg>
-);
-
-const PATHS: Record<string, React.ReactNode> = {
-  refresh: (
-    <>
-      <path d="M16.337,10H15.39a.6075.6075,0,0,0-.581.469A5.7235,5.7235,0,0,1,5.25,13.006l-.346-.3465L6.8815,10.682A.392.392,0,0,0,7,10.4a.4.4,0,0,0-.377-.4H1.25a.25.25,0,0,0-.25.25v5.375A.4.4,0,0,0,1.4,16a.3905.3905,0,0,0,.28-.118l1.8085-1.8085.178.1785a8.09048,8.09048,0,0,0,3.642,2.1655,7.715,7.715,0,0,0,9.4379-5.47434q.04733-.178.0861-.35816A.5.5,0,0,0,16.337,10Z" />
-      <path d="M16.6,2a.3905.3905,0,0,0-.28.118L14.5095,3.9265l-.178-.1765a8.09048,8.09048,0,0,0-3.642-2.1655A7.715,7.715,0,0,0,1.25269,7.06072q-.04677.17612-.08519.35428A.5.5,0,0,0,1.663,8H2.61a.6075.6075,0,0,0,.581-.469A5.7235,5.7235,0,0,1,12.75,4.994l.346.3465L11.1185,7.318A.392.392,0,0,0,11,7.6a.4.4,0,0,0,.377.4H16.75A.25.25,0,0,0,17,7.75V2.377A.4.4,0,0,0,16.6,2Z" />
-    </>
-  ),
-  revert: (
-    <>
-      <rect height={2} rx={0.5} width={16} x={1} y={13} />
-      <path d="M1.25,10H6.625A.4.4,0,0,0,7,9.6a.392.392,0,0,0-.1175-.28L4.905,7.3405l.346-.3465a5.7235,5.7235,0,0,1,9.558,2.537A.6075.6075,0,0,0,15.39,10h.947a.5.5,0,0,0,.4955-.585A7.715,7.715,0,0,0,7.66626,3.497q-.17886.03852-.35576.08549A8.09051,8.09051,0,0,0,3.6685,5.75l-.178.1785L1.682,4.118A.39051.39051,0,0,0,1.4,4a.4.4,0,0,0-.4.377V9.75A.25.25,0,0,0,1.25,10Z" />
-    </>
-  ),
-  chevronDown: (
-    <path d="M4,7.01a1,1,0,0,1,1.7055-.7055l3.289,3.286,3.289-3.286a1,1,0,0,1,1.437,1.3865l-.0245.0245L9.7,11.7075a1,1,0,0,1-1.4125,0L4.293,7.716A.9945.9945,0,0,1,4,7.01Z" />
-  ),
-  chevronRight: (
-    <path d="M12,9a.994.994,0,0,1-.2925.7045l-3.9915,3.99a1,1,0,1,1-1.4355-1.386l.0245-.0245L9.5905,9,6.3045,5.715A1,1,0,0,1,7.691,4.28l.0245.0245,3.9915,3.99A.994.994,0,0,1,12,9Z" />
-  ),
-  layers: (
-    <>
-      <path d="M14.144,9.969,9.2245,13.3825a.3945.3945,0,0,1-.45,0L3.856,9.969.929,12a.1255.1255,0,0,0,0,.2055l7.925,5.5a.2575.2575,0,0,0,.292,0l7.925-5.5a.1255.1255,0,0,0,0-.2055Z" />
-      <path d="M8.85,11.494.929,6a.1245.1245,0,0,1,0-.205L8.85.297a.265.265,0,0,1,.3,0l7.921,5.496a.1245.1245,0,0,1,0,.205L9.15,11.494A.265.265,0,0,1,8.85,11.494Z" />
-    </>
-  ),
-  selection: (
-    <>
-      <rect height={2.5} width={1} x={2} y={10} />
-      <rect height={2.5} width={1} x={2} y={6} />
-      <path d="M3,15V14H2v1.5555A.4445.4445,0,0,0,2.4445,16H4.5V15Z" />
-      <rect height={1} width={2.5} x={6} y={15} />
-      <rect height={1} width={2.5} x={10} y={15} />
-      <rect height={2.5} width={1} x={15} y={5.5} />
-      <rect height={2.5} width={1} x={15} y={9.5} />
-      <path d="M15,13.5V15H14v1h1.5a.5.5,0,0,0,.5-.5v-2Z" />
-      <path d="M15.556,2H13.5V3H15V4h1V2.4445A.4445.4445,0,0,0,15.556,2Z" />
-      <rect height={1} width={2.5005} x={9.5} y={2} />
-      <rect height={1} width={2.5005} x={5.5} y={2} />
-      <path d="M4,2H2.5a.5.5,0,0,0-.5.5v2H3V3H4Z" />
-    </>
-  ),
-  sampler: (
-    <path d="M11.2285,8.5185,4.116,15.631a1.2355,1.2355,0,0,1-1.7772-1.7168l.0302-.0302L9.4815,6.7715ZM14.864,1.053a1.79554,1.79554,0,0,0-1.273.5275L11.3285,3.843l-.707-.707a.5.5,0,0,0-.707,0L8.2335,4.8165a.5.5,0,0,0,0,.707l.5405.541L1.662,13.177a2.23516,2.23516,0,0,0,3.161,3.161l7.1125-7.112.541.5405a.5.5,0,0,0,.707,0L14.864,8.086a.5.5,0,0,0,.00039-.70711L14.864,7.3785l-.707-.707L16.4195,4.409a1.8,1.8,0,0,0,.00042-2.54558L16.4195,1.863l-.2825-.2825A1.796,1.796,0,0,0,14.864,1.053Z" />
-  ),
+const SRC: Record<string, string> = {
+  refresh:      "./assets/icons/Smock_Refresh_18_N.svg",
+  revert:       "./assets/icons/Smock_Revert_18_N.svg",
+  chevronDown:  "./assets/icons/Smock_ChevronDown_18_N.svg",
+  chevronRight: "./assets/icons/Smock_ChevronRight_18_N.svg",
+  layers:       "./assets/icons/Smock_Layers_18_N.svg",
+  selection:    "./assets/icons/Smock_Selection_18_N.svg",
+  sampler:      "./assets/icons/Smock_Sampler_18_N.svg",
 };
 
-export type IconName = keyof typeof PATHS;
+export type IconName = keyof typeof SRC;
 
-export function Icon(props: IconProps & { name: IconName }) {
-  return wrap(props.size ?? 14, props.color ?? "#bbb", PATHS[props.name], props.style);
+export function Icon(props: { name: IconName; size?: number; style?: React.CSSProperties }) {
+  const size = props.size ?? 14;
+  return (
+    <img
+      src={SRC[props.name]}
+      width={size}
+      height={size}
+      alt=""
+      aria-hidden
+      style={{ display: "inline-block", verticalAlign: "middle", flexShrink: 0, ...props.style }}
+    />
+  );
 }
