@@ -445,9 +445,9 @@ export function MatchTab() {
 
       {/* Accordion controls */}
       <div style={{ borderTop: "1px solid #444", margin: "6px 0 0" }} />
-      <button onClick={() => toggleSection("basic")} style={{ alignSelf: "stretch", width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", background: "transparent", color: "#ccc", border: "none", cursor: "pointer", fontSize: 11, textAlign: "left" }}>
+      <div onClick={() => toggleSection("basic")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#ccc", cursor: "pointer", fontSize: 11 }}>
         <span><Icon name={openSection === "basic" ? "chevronDown" : "chevronRight"} size={11} /> Match controls</span>
-      </button>
+      </div>
       {openSection === "basic" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: 0 }}>
           {slider("Amount",     amountRef,  amountLabel,  setAmountLabel,  0, 100, "%", 100)}
@@ -462,10 +462,10 @@ export function MatchTab() {
       )}
 
       <div style={{ borderTop: "1px solid #444" }} />
-      <button onClick={() => toggleSection("dims")} style={{ alignSelf: "stretch", width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", background: "transparent", color: "#ccc", border: "none", cursor: "pointer", fontSize: 11, textAlign: "left" }}>
+      <div onClick={() => toggleSection("dims")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#ccc", cursor: "pointer", fontSize: 11 }}>
         <span><Icon name={openSection === "dims" ? "chevronDown" : "chevronRight"} size={11} /> Dimension warps</span>
         {openSection === "dims" && <span onClick={(e: any) => { e.stopPropagation(); dimsRef.current = { ...DEFAULT_DIMENSIONS }; setDimsLabel({ ...DEFAULT_DIMENSIONS }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>}
-      </button>
+      </div>
       {openSection === "dims" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: 0 }}>
           {dimSlider("Value",       "value",      0, 200, "%")}
@@ -478,10 +478,10 @@ export function MatchTab() {
       )}
 
       <div style={{ borderTop: "1px solid #444" }} />
-      <button onClick={() => toggleSection("zones")} style={{ alignSelf: "stretch", width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", background: "transparent", color: "#ccc", border: "none", cursor: "pointer", fontSize: 11, textAlign: "left" }}>
+      <div onClick={() => toggleSection("zones")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#ccc", cursor: "pointer", fontSize: 11 }}>
         <span><Icon name={openSection === "zones" ? "chevronDown" : "chevronRight"} size={11} /> Zone targeting</span>
         {openSection === "zones" && <span onClick={(e: any) => { e.stopPropagation(); zonesRef.current = { ...DEFAULT_ZONES }; setZonesLabel({ ...DEFAULT_ZONES }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>}
-      </button>
+      </div>
       {openSection === "zones" && (["shadows", "mids", "highlights"] as const).map(zone => {
         const colorMap: Record<string, string> = { shadows: "#4a7fc1", mids: "#bbb", highlights: "#e0b85a" };
         const ankKey = `${zone}Anchor` as keyof ZoneOpts;
