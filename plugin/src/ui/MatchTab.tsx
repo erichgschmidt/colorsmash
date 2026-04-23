@@ -370,8 +370,8 @@ export function MatchTab() {
         <PreviewPane label="Source" layers={[]} selectedId={null} onSelect={() => {}}
           snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}
           onRefresh={srcMode === "layer" ? src.refresh : undefined}
-          hideSelector height={120} />
-        <PreviewPane label="Target" layers={layers} selectedId={targetId} onSelect={setTargetId} snapshot={tgt.snap} onRefresh={tgt.refresh} height={120} />
+          hideSelector fitAspect />
+        <PreviewPane label="Target" layers={layers} selectedId={targetId} onSelect={setTargetId} snapshot={tgt.snap} onRefresh={tgt.refresh} fitAspect />
       </div>
 
       <div style={{ display: "flex", justifyContent: "center" }}>
