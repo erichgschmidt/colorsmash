@@ -261,11 +261,10 @@ export function MatchTab() {
   const tinyBtn: React.CSSProperties = { padding: "1px 6px", background: "transparent", color: "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 9 };
   const sel: React.CSSProperties = { flex: 1, padding: "2px 4px", fontSize: 10, minWidth: 0, background: "#333", color: "#ddd", border: "1px solid #555" };
   const tabBtn = (active: boolean): React.CSSProperties => ({
-    flex: 1, padding: "2px 0", fontSize: 10, cursor: "pointer", textAlign: "center",
+    padding: "2px 8px", fontSize: 10, cursor: "pointer", textAlign: "center",
     background: active ? "#1473e6" : "transparent",
     color: active ? "white" : "#aaa",
     border: "1px solid #555", borderBottom: active ? "1px solid #1473e6" : "1px solid #555",
-    minWidth: 0,
   });
 
   const slider = (
@@ -378,10 +377,8 @@ export function MatchTab() {
           <div style={{ display: "flex", alignItems: "center", gap: 0 }}>
             <span style={{ fontSize: 10, opacity: 0.7, width: 22 }}>Tgt</span>
             <div style={{ ...tabBtn(true), cursor: "default" }}>Layer</div>
-            <div style={{ ...tabBtn(false), visibility: "hidden" }}>·</div>
-            <div style={{ ...tabBtn(false), visibility: "hidden" }}>·</div>
           </div>
-          <div style={{ minHeight: 22 }}>
+          <div style={{ minHeight: 22, display: "flex" }}>
             <select style={sel} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}>
               {layers.length === 0 && <option value="">— none —</option>}
               {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
