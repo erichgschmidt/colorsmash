@@ -273,21 +273,40 @@ export function MatchTab() {
     boxSizing: "border-box",
   });
 
+  const sliderRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const slider = (
     label: string, ref: React.MutableRefObject<number>, value: number, setValue: (n: number) => void,
-    min: number, max: number, suffix = "",
-  ) => (
-    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
-      <span style={{ width: 64, opacity: 0.7 }}>{label}</span>
-      <input type="range" min={min} max={max} defaultValue={value}
-        onInput={e => { const v = Number((e.target as HTMLInputElement).value); ref.current = v; setValue(v); scheduleRedraw(); }}
-        style={{ flex: 1, minWidth: 0 }} />
-      <span style={{ width: 36, textAlign: "right", opacity: 0.8 }}>{value}{suffix}</span>
-    </div>
-  );
+    min: number, max: number, suffix = "", defaultVal?: number,
+  ) => {
+    const reset = () => {
+      if (defaultVal == null) return;
+      ref.current = defaultVal;
+      setValue(defaultVal);
+      const el = sliderRefs.current[label];
+      if (el) el.value = String(defaultVal);
+      scheduleRedraw();
+    };
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
+        <span style={{ width: 64, opacity: 0.7 }}>{label}</span>
+        <input type="range" min={min} max={max} defaultValue={value}
+          ref={el => { sliderRefs.current[label] = el; }}
+          onInput={e => { const v = Number((e.target as HTMLInputElement).value); ref.current = v; setValue(v); scheduleRedraw(); }}
+          style={{ flex: 1, minWidth: 0 }} />
+        <span style={{ width: 36, textAlign: "right", opacity: 0.8 }}>{value}{suffix}</span>
+        {defaultVal != null && <button onClick={reset} title={`Reset to ${defaultVal}${suffix}`} style={{ ...tinyBtn, padding: "0 4px", fontSize: 10 }}>↺</button>}
+      </div>
+    );
+  };
 
 const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: number, suffix = "") => {
     const value = dimsLabel[key];
+    const def = DEFAULT_DIMENSIONS[key];
+    const reset = () => {
+      dimsRef.current = { ...dimsRef.current, [key]: def };
+      setDimsLabel(d => ({ ...d, [key]: def }));
+      scheduleRedraw();
+    };
     return (
       <div key={key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
         <span style={{ width: 64, opacity: 0.7 }}>{label}</span>
@@ -295,6 +314,7 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
           onInput={e => { const v = Number((e.target as HTMLInputElement).value); dimsRef.current = { ...dimsRef.current, [key]: v }; setDimsLabel(d => ({ ...d, [key]: v })); scheduleRedraw(); }}
           style={{ flex: 1, minWidth: 0 }} />
         <span style={{ width: 40, textAlign: "right", opacity: 0.8 }}>{value}{suffix}</span>
+        <button onClick={reset} title={`Reset to ${def}${suffix}`} style={{ ...tinyBtn, padding: "0 4px", fontSize: 10 }}>↺</button>
       </div>
     );
   };
@@ -412,9 +432,9 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
       </button>
       {openSection === "basic" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          {slider("Amount",     amountRef,  amountLabel,  setAmountLabel,  0, 100, "%")}
-          {slider("Smoothing",  smoothRef,  smoothLabel,  setSmoothLabel,  0,  32)}
-          {slider("Max stretch",stretchRef, stretchLabel, setStretchLabel, 1,  32)}
+          {slider("Amount",     amountRef,  amountLabel,  setAmountLabel,  0, 100, "%", 100)}
+          {slider("Smoothing",  smoothRef,  smoothLabel,  setSmoothLabel,  0,  32, "",  0)}
+          {slider("Max stretch",stretchRef, stretchLabel, setStretchLabel, 1,  32, "",  8)}
           <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, marginTop: 2, cursor: "pointer", opacity: 0.85 }}>
             <input type="checkbox" checked={chromaOnly} onChange={e => setChromaOnly(e.target.checked)} />
             Chroma only (preserve target luminance)
@@ -455,6 +475,7 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
             label={zone}
             color={colorMap[zone]}
             value={{ amount: zonesLabel[zone], anchor: zonesLabel[ankKey], falloff: zonesLabel[falKey] }}
+            defaults={{ amount: DEFAULT_ZONES[zone], anchor: DEFAULT_ZONES[ankKey], falloff: DEFAULT_ZONES[falKey] }}
             onChange={next => {
               zonesRef.current = {
                 ...zonesRef.current,

@@ -14,6 +14,7 @@ export interface ZoneCompoundSliderProps {
   label: string;
   color: string;        // band color
   value: ZoneCompoundValue;
+  defaults?: ZoneCompoundValue;
   onChange: (next: ZoneCompoundValue) => void;
 }
 
@@ -131,6 +132,11 @@ export function ZoneCompoundSlider(props: ZoneCompoundSliderProps) {
         title="Amount %"
         style={{ width: 60, flexShrink: 0 }} />
       <span style={{ width: 36, textAlign: "right", opacity: 0.8 }}>{props.value.amount}%</span>
+      {props.defaults && (
+        <button onClick={() => { valueRef.current = { ...props.defaults! }; props.onChange({ ...props.defaults! }); }}
+          title="Reset zone"
+          style={{ padding: "0 4px", fontSize: 10, background: "transparent", color: "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer" }}>↺</button>
+      )}
     </div>
   );
 }
