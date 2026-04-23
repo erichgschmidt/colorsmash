@@ -7,7 +7,7 @@ import {
 } from "../services/photoshop";
 import { downsampleToMaxEdge } from "../core/downsample";
 import {
-  fitHistogramCurves, blendWithIdentity, sampleControlPoints, ChannelCurves,
+  fitHistogramCurves, sampleControlPoints, processChannelCurves, ChannelCurves,
 } from "../core/histogramMatch";
 
 const STATS_MAX_EDGE = 512;
@@ -17,7 +17,10 @@ const RESULT_LAYER_NAME = "Match Curves";
 export interface ApplyMatchParams {
   sourceLayerId: number;
   targetLayerId: number;
-  amount: number; // 0..1
+  amount: number;        // 0..1
+  smoothRadius?: number; // 0..64
+  maxStretch?: number;   // local slope cap; large = no cap
+  chromaOnly?: boolean;  // set the Curves layer to "Color" blend mode
 }
 
 export async function fitMatchCurves(params: ApplyMatchParams): Promise<ChannelCurves> {
@@ -30,14 +33,15 @@ export async function fitMatchCurves(params: ApplyMatchParams): Promise<ChannelC
       readLayerPixels(source, statsRectForLayer(source)),
       readLayerPixels(target, statsRectForLayer(target)),
     ]);
-    const sSmall = downsampleToMaxEdge(s, STATS_MAX_EDGE).data;
-    const tSmall = downsampleToMaxEdge(t, STATS_MAX_EDGE).data;
-    const raw = fitHistogramCurves(sSmall, tSmall);
-    return {
-      r: blendWithIdentity(raw.r, params.amount),
-      g: blendWithIdentity(raw.g, params.amount),
-      b: blendWithIdentity(raw.b, params.amount),
-    };
+    const raw = fitHistogramCurves(
+      downsampleToMaxEdge(s, STATS_MAX_EDGE).data,
+      downsampleToMaxEdge(t, STATS_MAX_EDGE).data,
+    );
+    return processChannelCurves(raw, {
+      amount: params.amount,
+      smoothRadius: params.smoothRadius ?? 0,
+      maxStretch: params.maxStretch ?? 999,
+    });
   });
 }
 
@@ -58,11 +62,11 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       downsampleToMaxEdge(s, STATS_MAX_EDGE).data,
       downsampleToMaxEdge(t, STATS_MAX_EDGE).data,
     );
-    const curves: ChannelCurves = {
-      r: blendWithIdentity(raw.r, params.amount),
-      g: blendWithIdentity(raw.g, params.amount),
-      b: blendWithIdentity(raw.b, params.amount),
-    };
+    const curves: ChannelCurves = processChannelCurves(raw, {
+      amount: params.amount,
+      smoothRadius: params.smoothRadius ?? 0,
+      maxStretch: params.maxStretch ?? 999,
+    });
 
     // Reuse existing [Color Smash] group; remove any prior Match layer to avoid stacking.
     const findGroup = () => doc.layers.find((l: any) => l.name === GROUP_NAME && l.layers);
@@ -83,8 +87,15 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       { channel: "blue",  points: sampleControlPoints(curves.b, CONTROL_POINTS) },
     ]);
     await setClippingMask(curveLayer, true);
+    if (params.chromaOnly) {
+      try { curveLayer.blendMode = "color"; } catch { /* ignore */ }
+    }
     try { await curveLayer.move(group, "placeInside"); } catch { /* ignore */ }
 
-    return `Matched (curves only) · amount ${Math.round(params.amount * 100)}%`;
+    const tags = [`amt ${Math.round(params.amount * 100)}%`];
+    if (params.smoothRadius) tags.push(`smooth ${params.smoothRadius}`);
+    if (params.maxStretch && params.maxStretch < 100) tags.push(`cap ${params.maxStretch}`);
+    if (params.chromaOnly) tags.push("chroma-only");
+    return `Matched · ${tags.join(" · ")}`;
   });
 }
