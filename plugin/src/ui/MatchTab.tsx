@@ -268,7 +268,7 @@ export function MatchTab() {
 
   // ─── Styles ─────────────────────────────────────────────────────────────
   const tinyBtn: React.CSSProperties = { padding: "1px 6px", background: "transparent", color: "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 9 };
-  const sel: React.CSSProperties = { flex: 1, padding: "2px 4px", fontSize: 10, minWidth: 0, background: "#333", color: "#ddd", border: "1px solid #555" };
+  const sel: React.CSSProperties = { width: "100%", maxWidth: "100%", padding: "2px 4px", fontSize: 10, minWidth: 0, background: "#333", color: "#ddd", border: "1px solid #555", textAlign: "left" };
   const numInputStyle: React.CSSProperties = {
     width: 38, padding: "1px 3px", fontSize: 10, textAlign: "right",
     background: "#404040", color: "#dddddd",
