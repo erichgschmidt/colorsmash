@@ -468,13 +468,13 @@ export function MatchTab() {
       })}
 
       {/* Bottom action bar: Deselect | Overwrite | RGB toggle | refresh */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 10, marginTop: 8, opacity: 0.9 }}>
-        <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: "pointer" }} title="Drop active marquee selection before creating the layer (so curves apply to the full target).">
-          <input type="checkbox" checked={deselectOnApply} onChange={e => setDeselectOnApply(e.target.checked)} />
+      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 10, marginTop: 8, opacity: 0.9, height: 18 }}>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: "pointer", height: "100%" }} title="Drop active marquee selection before creating the layer (so curves apply to the full target).">
+          <input type="checkbox" checked={deselectOnApply} onChange={e => setDeselectOnApply(e.target.checked)} style={{ margin: 0, verticalAlign: "middle" }} />
           Deselect
         </label>
-        <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: "pointer" }} title="On: replace the prior Match Curves layer. Off: keep prior layers (hidden) so you can stack alternatives.">
-          <input type="checkbox" checked={overwriteOnApply} onChange={e => setOverwriteOnApply(e.target.checked)} />
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: "pointer", height: "100%" }} title="On: replace the prior Match Curves layer. Off: keep prior layers (hidden) so you can stack alternatives.">
+          <input type="checkbox" checked={overwriteOnApply} onChange={e => setOverwriteOnApply(e.target.checked)} style={{ margin: 0, verticalAlign: "middle" }} />
           Overwrite
         </label>
         <div style={{ flex: 1 }} />
