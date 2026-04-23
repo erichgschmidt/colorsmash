@@ -498,7 +498,7 @@ export function MatchTab() {
       </div>
 
       {/* @ts-ignore Spectrum web component */}
-      <sp-button variant="secondary" onClick={onApply} style={{ marginTop: 4, width: "100%" }}>Apply Curves</sp-button>
+      <sp-button variant="secondary" onClick={onApply} style={{ marginTop: 10, width: "100%" }}>Apply Curves</sp-button>
 
       {/* Curves graph below Apply */}
       <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7 }}>Fitted curves (R G B)</div>
