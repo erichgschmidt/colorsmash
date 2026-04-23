@@ -10,6 +10,9 @@ import {
   fitHistogramCurves, processChannelCurves, applyChannelCurvesToRgba, applyChromaOnly,
   applyDimensions, DimensionOpts, DEFAULT_DIMENSIONS,
 } from "../core/histogramMatch";
+import {
+  applyPaletteReduce, isPaletteReduceActive, PaletteReduceOpts, DEFAULT_PALETTE_REDUCE,
+} from "../core/paletteReduce";
 import { applyMatch } from "../app/applyMatch";
 
 export function MatchTab() {
@@ -28,6 +31,11 @@ export function MatchTab() {
   // Post-fit dimension warps. All defaults = identity (no change to base match).
   const dimsRef = useRef<DimensionOpts>({ ...DEFAULT_DIMENSIONS });
   const [dimsLabel, setDimsLabel] = useState<DimensionOpts>({ ...DEFAULT_DIMENSIONS });
+
+  // Palette reduction. When any value > 0, output mode auto-switches to baked pixels.
+  const reduceRef = useRef<PaletteReduceOpts>({ ...DEFAULT_PALETTE_REDUCE });
+  const [reduceLabel, setReduceLabel] = useState<PaletteReduceOpts>({ ...DEFAULT_PALETTE_REDUCE });
+  const reduceActive = isPaletteReduceActive(reduceLabel);
 
   useEffect(() => {
     if (layers.length >= 2) {
@@ -57,6 +65,7 @@ export function MatchTab() {
     const c = applyDimensions(processed, dimsRef.current);
     let out = applyChannelCurvesToRgba(tgt.snap.data, c);
     if (chromaOnly) out = applyChromaOnly(tgt.snap.data, out);
+    out = applyPaletteReduce(out, reduceRef.current);
     matchedHandleRef.current.setPixels(out, tgt.snap.width, tgt.snap.height);
   };
 
@@ -80,6 +89,7 @@ export function MatchTab() {
         maxStretch: stretchRef.current,
         chromaOnly,
         dimensions: dimsRef.current,
+        paletteReduce: reduceRef.current,
       }));
     } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
   };
@@ -118,6 +128,26 @@ export function MatchTab() {
           }}
           style={{ flex: 1, minWidth: 0 }} />
         <span style={{ width: 40, textAlign: "right", opacity: 0.8 }}>{value}{suffix}</span>
+      </div>
+    );
+  };
+
+  const reduceSlider = (
+    label: string, key: keyof PaletteReduceOpts, min: number, max: number, suffix = "",
+  ) => {
+    const value = reduceLabel[key];
+    return (
+      <div key={key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
+        <span style={{ width: 80, opacity: 0.7 }}>{label}</span>
+        <input type="range" min={min} max={max} value={value}
+          onInput={e => {
+            const v = Number((e.target as HTMLInputElement).value);
+            reduceRef.current = { ...reduceRef.current, [key]: v };
+            setReduceLabel(r => ({ ...r, [key]: v }));
+            scheduleRedraw();
+          }}
+          style={{ flex: 1, minWidth: 0 }} />
+        <span style={{ width: 40, textAlign: "right", opacity: 0.8 }}>{value === 0 ? "off" : `${value}${suffix}`}</span>
       </div>
     );
   };
@@ -161,7 +191,25 @@ export function MatchTab() {
         {dimSlider("Separation",  "separation", 0, 200, "%")}
       </div>
 
-      <button onClick={onApply} style={btn}>Apply Match (1 Curves layer)</button>
+      <div style={{ borderTop: "1px solid #444", margin: "8px 0 4px" }} />
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 10, opacity: 0.7 }}>
+        <span>Palette reduction (HSL, per-axis)</span>
+        <button onClick={() => {
+          reduceRef.current = { ...DEFAULT_PALETTE_REDUCE };
+          setReduceLabel({ ...DEFAULT_PALETTE_REDUCE });
+          scheduleRedraw();
+        }} style={{ padding: "1px 6px", background: "transparent", color: "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 9 }}>Reset</button>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        {reduceSlider("Value steps",  "valueSteps",     0, 32, "")}
+        {reduceSlider("Hue families", "hueBins",        0, 32, "")}
+        {reduceSlider("Chroma steps", "chromaSteps",    0, 32, "")}
+        {reduceSlider("Outlier cull", "outlierCullPct", 0, 50, "%")}
+      </div>
+
+      <button onClick={onApply} style={btn}>
+        Apply Match ({reduceActive ? "baked pixels" : "1 Curves layer"})
+      </button>
       <div style={{ marginTop: 6, fontSize: 10, opacity: 0.7, whiteSpace: "pre-wrap" }}>{status}</div>
     </div>
   );
