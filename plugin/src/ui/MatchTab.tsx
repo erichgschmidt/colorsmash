@@ -399,9 +399,12 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
           style={{ padding: "1px 8px", background: showOriginal ? "#e80" : "transparent", color: showOriginal ? "white" : "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 9 }}
         >Hold for A/B</button>
       </div>
-      {useMemo(() => (
-        <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap} imgHandleRef={matchedHandleRef} hideSelector fitAspect />
-      ), [tgt.snap])}
+      {/* Wrapper with explicit minHeight prevents panel reflow if inner container momentarily collapses during reconcile */}
+      <div style={{ minHeight: 180 }}>
+        {useMemo(() => (
+          <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap} imgHandleRef={matchedHandleRef} hideSelector fitAspect maxHeight={220} />
+        ), [tgt.snap])}
+      </div>
 
       <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7 }}>Fitted curves (R G B)</div>
       <CurvesGraph curves={renderedCurves} />
