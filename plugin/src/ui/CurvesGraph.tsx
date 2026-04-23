@@ -1,19 +1,25 @@
 // Inline SVG showing the three fitted R/G/B curves. Diagonal = identity.
-// Lightweight (no canvas), updates whenever the curves change.
+// Subsamples to STEP points per curve to keep SVG render cheap during drag.
 
+import { memo } from "react";
 import { ChannelCurves } from "../core/histogramMatch";
 
-export function CurvesGraph(props: { curves: ChannelCurves | null; height?: number }) {
+const STEP = 4; // 256 / 4 = 64 segments per channel
+
+export const CurvesGraph = memo(function CurvesGraph(props: { curves: ChannelCurves | null; height?: number }) {
   const h = props.height ?? 90;
   const w = 256;
 
   const path = (curve: Uint8Array) => {
     let d = "";
-    for (let v = 0; v < 256; v++) {
+    for (let v = 0; v < 256; v += STEP) {
       const x = (v / 255) * w;
       const y = h - (curve[v] / 255) * h;
       d += (v === 0 ? "M" : "L") + x.toFixed(1) + " " + y.toFixed(1);
     }
+    // ensure last point
+    const x = w, y = h - (curve[255] / 255) * h;
+    d += "L" + x.toFixed(1) + " " + y.toFixed(1);
     return d;
   };
 
@@ -39,4 +45,4 @@ export function CurvesGraph(props: { curves: ChannelCurves | null; height?: numb
       </svg>
     </div>
   );
-}
+});

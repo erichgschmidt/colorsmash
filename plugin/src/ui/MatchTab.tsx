@@ -82,6 +82,8 @@ export function MatchTab() {
   const rafPendingRef = useRef(false);
   const [renderedCurves, setRenderedCurves] = useState<ChannelCurves | null>(null);
   const [showOriginal, setShowOriginal] = useState(false);
+  const curvesPendingRef = useRef<ChannelCurves | null>(null);
+  const curvesTimeoutRef = useRef<any>(null);
 
   const redrawMatched = () => {
     if (!tgt.snap || !matchedHandleRef.current) return;
@@ -97,7 +99,14 @@ export function MatchTab() {
     });
     const dim = applyDimensions(processed, dimsRef.current);
     const c = applyZoneWeightsToChannels(dim, zonesRef.current);
-    setRenderedCurves(c);
+    // Throttle the React state update for the curves graph (SVG re-render is the bottleneck).
+    curvesPendingRef.current = c;
+    if (!curvesTimeoutRef.current) {
+      curvesTimeoutRef.current = setTimeout(() => {
+        curvesTimeoutRef.current = null;
+        if (curvesPendingRef.current) setRenderedCurves(curvesPendingRef.current);
+      }, 100);
+    }
     let out = applyChannelCurvesToRgba(tgt.snap.data, c);
     if (chromaOnly) out = applyChromaOnly(tgt.snap.data, out);
     matchedHandleRef.current.setPixels(out, tgt.snap.width, tgt.snap.height);
