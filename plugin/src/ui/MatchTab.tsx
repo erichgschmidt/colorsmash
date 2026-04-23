@@ -349,9 +349,9 @@ export function MatchTab() {
         </div>
 
         <div style={{ width: 1, background: "#444", alignSelf: "stretch" }} />
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0, paddingLeft: 4 }}>
           {/* Header row: spans the same vertical space as left col's two dropdown rows so the curves graph top aligns with the preview tops. */}
-          <div style={{ height: 56, display: "flex", flexDirection: "column", justifyContent: "flex-end", paddingBottom: 4 }}>
+          <div style={{ height: 52, display: "flex", flexDirection: "column", justifyContent: "flex-end", paddingBottom: 0 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 10, opacity: 0.85 }}>
               <span>Fitted curves (R G B)</span>
               <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
