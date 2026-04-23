@@ -229,12 +229,6 @@ export function MatchTab() {
 
   const onResetFolder = async () => { setStatus(await resetScreenshotFolder()); };
 
-  const onSwap = () => {
-    if (srcMode !== "layer") { setStatus("Swap only works in Layer mode."); return; }
-    const a = sourceId, b = targetId;
-    setSourceId(b); setTargetId(a);
-  };
-
   const onApply = async () => {
     if (targetId == null) { setStatus("Pick target layer."); return; }
     if (srcMode === "layer" && sourceId == null) { setStatus("Pick source layer."); return; }
@@ -397,11 +391,7 @@ export function MatchTab() {
         </div>
       </div>
 
-      <div style={{ display: "flex", justifyContent: "center" }}>
-        <button onClick={onSwap} style={{ padding: "2px 10px", background: "transparent", color: "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 10 }}>⇄ Swap source / target</button>
-      </div>
-
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
+<div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
         <span style={{ fontSize: 10, opacity: 0.7 }}>Matched preview {showOriginal && <span style={{ color: "#e80" }}>· showing original</span>}</span>
         <button
           onMouseDown={() => setShowOriginal(true)} onMouseUp={() => setShowOriginal(false)} onMouseLeave={() => setShowOriginal(false)}
