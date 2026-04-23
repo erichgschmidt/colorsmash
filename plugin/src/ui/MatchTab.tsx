@@ -266,10 +266,10 @@ export function MatchTab() {
     </select>
   ) : (
     <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
-      <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: "pointer", opacity: 0.85, whiteSpace: "nowrap", flexShrink: 0 }} title="Auto-sample as you change the marquee selection">
-        <input type="checkbox" checked={autoUpdate} onChange={e => setAutoUpdate(e.target.checked)} />
-        <span>Auto{autoUpdate && <span style={{ color: "#7d7" }}> ●</span>}</span>
-      </label>
+      <input type="checkbox" checked={autoUpdate} onChange={e => setAutoUpdate(e.target.checked)}
+        title={autoUpdate ? "Auto-sample on (selection changes re-sample)" : "Auto-sample on selection change"}
+        style={{ cursor: "pointer", flexShrink: 0 }} />
+      {autoUpdate && <span style={{ color: "#7d7", flexShrink: 0 }}>●</span>}
       <button onClick={onSnapSelection} style={{ ...tinyBtn, flexShrink: 0 }} title="Sample the current marquee selection now">Sample</button>
     </div>
   );
