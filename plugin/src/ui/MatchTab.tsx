@@ -372,15 +372,18 @@ export function MatchTab() {
             onRefresh={srcMode === "layer" ? src.refresh : undefined}
             hideSelector fitAspect maxHeight={160} />
         </div>
-        {/* Target column */}
+        {/* Target column — header row mirrors source tab strip for vertical alignment */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, opacity: 0.7, height: 22 }}>
-            <span>Target</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 0 }}>
+            <span style={{ fontSize: 10, opacity: 0.7, marginRight: 4 }}>Tgt</span>
+            <div style={{ ...tabBtn(true), cursor: "default" }}>Layer</div>
           </div>
-          <select style={sel} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}>
-            {layers.length === 0 && <option value="">— none —</option>}
-            {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-          </select>
+          <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
+            <select style={sel} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}>
+              {layers.length === 0 && <option value="">— none —</option>}
+              {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+            </select>
+          </div>
           <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap} onRefresh={tgt.refresh}
             hideSelector fitAspect maxHeight={160} />
         </div>
