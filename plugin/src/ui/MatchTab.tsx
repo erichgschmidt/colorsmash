@@ -261,7 +261,7 @@ export function MatchTab() {
       scheduleRedraw();
     };
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 0, fontSize: 11, marginBottom: 1 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 0, fontSize: 11, marginBottom: 0 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: 0 }}>
           <span style={{ opacity: 0.75 }}>{label}</span>
           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -272,7 +272,7 @@ export function MatchTab() {
         <input type="range" min={min} max={max} defaultValue={value}
           ref={el => { sliderRefs.current[label] = el; }}
           onInput={e => { const v = Math.round(Number((e.target as HTMLInputElement).value)); ref.current = v; setValue(v); scheduleRedraw(); }}
-          style={{ width: "calc(100% + 16px)", marginLeft: -8 }} />
+          style={{ width: "calc(100% + 16px)", marginLeft: -8, marginTop: -2, marginBottom: -2 }} />
       </div>
     );
   };
@@ -286,7 +286,7 @@ export function MatchTab() {
       scheduleRedraw();
     };
     return (
-      <div key={key} style={{ display: "flex", flexDirection: "column", gap: 0, fontSize: 11, marginBottom: 1 }}>
+      <div key={key} style={{ display: "flex", flexDirection: "column", gap: 0, fontSize: 11, marginBottom: 0 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: 0 }}>
           <span style={{ opacity: 0.75 }}>{label}</span>
           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -296,12 +296,18 @@ export function MatchTab() {
         </div>
         <input type="range" min={min} max={max} value={value}
           onInput={e => { const v = Math.round(Number((e.target as HTMLInputElement).value)); dimsRef.current = { ...dimsRef.current, [key]: v }; setDimsLabel(d => ({ ...d, [key]: v })); scheduleRedraw(); }}
-          style={{ width: "calc(100% + 16px)", marginLeft: -8 }} />
+          style={{ width: "calc(100% + 16px)", marginLeft: -8, marginTop: -2, marginBottom: -2 }} />
       </div>
     );
   };
 
-  const onRefreshAll = () => { src.refresh(); tgt.refresh(); };
+  const onRefreshAll = async () => {
+    src.refresh();
+    tgt.refresh();
+    if (srcMode === "selection" && srcOverride) {
+      try { setSrcOverride(await snapshotSelectionInner()); } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
+    }
+  };
 
   const sourceModeContent = () => srcMode === "layer" ? (
     <select style={sel} value={sourceId ?? ""} onChange={e => setSourceId(Number(e.target.value))}>
