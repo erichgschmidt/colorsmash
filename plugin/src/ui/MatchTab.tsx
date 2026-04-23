@@ -270,9 +270,9 @@ export function MatchTab() {
   const tinyBtn: React.CSSProperties = { padding: "1px 6px", background: "transparent", color: "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 9 };
   const sel: React.CSSProperties = { flex: 1, padding: "2px 4px", fontSize: 10, minWidth: 0, background: "#333", color: "#ddd", border: "1px solid #555" };
   const numInputStyle: React.CSSProperties = {
-    width: 36, padding: "0 3px", fontSize: 10, textAlign: "right",
-    background: "#3c3c3c", color: "#ddd", border: "1px solid #666", borderRadius: 2,
-    boxSizing: "border-box", height: 16, lineHeight: "14px",
+    width: 38, padding: "0 2px", fontSize: 10, textAlign: "right",
+    background: "transparent", color: "#ddd", border: "1px solid #555", borderRadius: 2,
+    boxSizing: "border-box", height: 18, lineHeight: "16px", margin: 0,
   };
   const resetIconBtn: React.CSSProperties = {
     width: 16, height: 16, padding: 0, lineHeight: "14px", fontSize: 10, textAlign: "center",
