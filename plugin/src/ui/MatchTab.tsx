@@ -486,10 +486,10 @@ export function MatchTab() {
           {colorSpace.toUpperCase()}
         </button>
         <button onClick={onRefreshAll} title="Refresh source + target previews"
-          style={{ width: 22, height: 20, padding: 0, lineHeight: "18px", fontSize: 14, textAlign: "center",
-                   background: "transparent", color: "#dddddd",
-                   border: "1px solid #888", borderRadius: 3, cursor: "pointer", flexShrink: 0, boxSizing: "border-box" }}>
-          ↻
+          style={{ width: 22, height: 20, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
+                   background: "transparent", border: "1px solid #888", borderRadius: 3, cursor: "pointer",
+                   flexShrink: 0, boxSizing: "border-box" }}>
+          <span style={{ width: 10, height: 10, background: "#bbbbbb", borderRadius: 1 }} />
         </button>
       </div>
 
