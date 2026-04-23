@@ -217,11 +217,6 @@ export function MatchTab() {
   // ─── Styles ─────────────────────────────────────────────────────────────
   const tinyBtn: React.CSSProperties = { padding: "1px 6px", background: "transparent", color: "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 9 };
   const sel: React.CSSProperties = { flex: 1, padding: "2px 4px", fontSize: 10, minWidth: 0, background: "#333", color: "#ddd", border: "1px solid #555" };
-  const tabBtn = (active: boolean): React.CSSProperties => ({
-    width: 20, height: 16, padding: 0, fontSize: 10, cursor: "pointer", textAlign: "center",
-    lineHeight: "14px", background: active ? "#1473e6" : "transparent", color: active ? "white" : "#aaa",
-    border: "1px solid #555", fontWeight: 600, boxSizing: "border-box",
-  });
   const resetIconBtn: React.CSSProperties = {
     width: 16, height: 16, padding: 0, lineHeight: "14px", fontSize: 10, textAlign: "center",
     background: "transparent", color: "#888", border: "1px solid #444", borderRadius: 2, cursor: "pointer",
