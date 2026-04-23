@@ -7,6 +7,7 @@ import { useLayerPreview } from "./useLayerPreview";
 import { PreviewPane, PreviewImgHandle } from "./PreviewPane";
 import { CurvesGraph } from "./CurvesGraph";
 import { ZoneCompoundSlider } from "./ZoneCompoundSlider";
+import { Icon } from "./Icon";
 import { ChannelCurves } from "../core/histogramMatch";
 import {
   fitHistogramCurves, processChannelCurves, applyChannelCurvesToRgba, applyChromaOnly,
@@ -244,7 +245,7 @@ export function MatchTab() {
           onInput={e => { const v = Number((e.target as HTMLInputElement).value); ref.current = v; setValue(v); scheduleRedraw(); }}
           style={{ flex: 1, minWidth: 30 }} />
         <span style={{ width: 30, textAlign: "right", opacity: 0.8, fontSize: 10 }}>{value}{suffix}</span>
-        {defaultVal != null && <button onClick={reset} title={`Reset to ${defaultVal}${suffix}`} style={resetIconBtn}>↺</button>}
+        {defaultVal != null && <button onClick={reset} title={`Reset to ${defaultVal}${suffix}`} style={resetIconBtn}><Icon name="revert" size={11} /></button>}
       </div>
     );
   };
@@ -264,7 +265,7 @@ export function MatchTab() {
           onInput={e => { const v = Number((e.target as HTMLInputElement).value); dimsRef.current = { ...dimsRef.current, [key]: v }; setDimsLabel(d => ({ ...d, [key]: v })); scheduleRedraw(); }}
           style={{ flex: 1, minWidth: 30 }} />
         <span style={{ width: 32, textAlign: "right", opacity: 0.8, fontSize: 10 }}>{value}{suffix}</span>
-        <button onClick={reset} title={`Reset to ${def}${suffix}`} style={resetIconBtn}>↺</button>
+        <button onClick={reset} title={`Reset to ${def}${suffix}`} style={resetIconBtn}><Icon name="revert" size={11} /></button>
       </div>
     );
   };
@@ -291,15 +292,19 @@ export function MatchTab() {
       {/* Top row: source mode tabs + doc picker */}
       <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
         <span style={{ opacity: 0.7 }}>Src:</span>
-        <button style={tabBtn(srcMode === "layer")}     onClick={() => switchSrcMode("layer")}     title="Layer">L</button>
-        <button style={tabBtn(srcMode === "selection")} onClick={() => switchSrcMode("selection")} title="Selection">S</button>
+        <button style={tabBtn(srcMode === "layer")}     onClick={() => switchSrcMode("layer")}     title="Layer source">
+          <Icon name="layers" size={11} />
+        </button>
+        <button style={tabBtn(srcMode === "selection")} onClick={() => switchSrcMode("selection")} title="Selection source">
+          <Icon name="selection" size={11} />
+        </button>
         <span style={{ opacity: 0.7, marginLeft: 8 }}>Doc:</span>
         <select style={{ flex: 1, padding: "2px 4px", fontSize: 10, minWidth: 0, background: "#333", color: "#ddd", border: "1px solid #555" }}
           value={activeDocId ?? ""} onChange={e => onSwitchDoc(Number(e.target.value))}>
           {docs.length === 0 && <option value="">— no docs —</option>}
           {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
         </select>
-        <button onClick={onRefreshAll} title="Refresh source + target previews" style={resetIconBtn}>↻</button>
+        <button onClick={onRefreshAll} title="Refresh source + target previews" style={resetIconBtn}><Icon name="refresh" size={11} /></button>
       </div>
 
       {/* Body: previews left, controls right */}
@@ -344,7 +349,7 @@ export function MatchTab() {
 
           <div style={{ borderTop: "1px solid #444", margin: "8px 0 0" }} />
           <button onClick={() => toggleSection("basic")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", background: "transparent", color: "#ccc", border: "none", cursor: "pointer", fontSize: 11 }}>
-            <span>{openSection === "basic" ? "▾" : "▸"} Match controls</span>
+            <span><Icon name={openSection === "basic" ? "chevronDown" : "chevronRight"} size={11} /> Match controls</span>
           </button>
           {openSection === "basic" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -361,7 +366,7 @@ export function MatchTab() {
 
           <div style={{ borderTop: "1px solid #444" }} />
           <button onClick={() => toggleSection("dims")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", background: "transparent", color: "#ccc", border: "none", cursor: "pointer", fontSize: 11 }}>
-            <span>{openSection === "dims" ? "▾" : "▸"} Dimension warps</span>
+            <span><Icon name={openSection === "dims" ? "chevronDown" : "chevronRight"} size={11} /> Dimension warps</span>
             {openSection === "dims" && <span onClick={(e: any) => { e.stopPropagation(); dimsRef.current = { ...DEFAULT_DIMENSIONS }; setDimsLabel({ ...DEFAULT_DIMENSIONS }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>}
           </button>
           {openSection === "dims" && (
@@ -377,7 +382,7 @@ export function MatchTab() {
 
           <div style={{ borderTop: "1px solid #444" }} />
           <button onClick={() => toggleSection("zones")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", background: "transparent", color: "#ccc", border: "none", cursor: "pointer", fontSize: 11 }}>
-            <span>{openSection === "zones" ? "▾" : "▸"} Zone targeting</span>
+            <span><Icon name={openSection === "zones" ? "chevronDown" : "chevronRight"} size={11} /> Zone targeting</span>
             {openSection === "zones" && <span onClick={(e: any) => { e.stopPropagation(); zonesRef.current = { ...DEFAULT_ZONES }; setZonesLabel({ ...DEFAULT_ZONES }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>}
           </button>
           {openSection === "zones" && (["shadows", "mids", "highlights"] as const).map(zone => {
