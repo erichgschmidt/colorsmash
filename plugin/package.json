@@ -1,14 +1,11 @@
 {
   "name": "color-smash",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
-  "description": "Photoshop UXP plugin: non-destructive color transfer with editable adjustment stack + LUT.",
+  "description": "Photoshop UXP plugin: per-channel histogram color match into a single editable Curves adjustment layer.",
   "scripts": {
     "build": "webpack --mode=production",
     "watch": "webpack --mode=development --watch",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "lint": "eslint \"src/**/*.{ts,tsx}\"",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
@@ -16,7 +13,6 @@
     "@types/react-dom": "^18.2.0",
     "ts-loader": "^9.5.1",
     "typescript": "^5.4.0",
-    "vitest": "^1.4.0",
     "webpack": "^5.91.0",
     "webpack-cli": "^5.1.4"
   },

@@ -287,8 +287,7 @@ export function MatchTab() {
           {docs.length === 0 && <option value="">— no docs —</option>}
           {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
         </select>
-        <button onClick={onRefreshAll} title="Refresh source + target previews"
-          style={{ padding: "2px 8px", background: "transparent", color: "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 10 }}>↻</button>
+        <button onClick={onRefreshAll} title="Refresh source + target previews" style={resetIconBtn}>↻</button>
       </div>
 
       {/* Body: previews left, controls right */}
