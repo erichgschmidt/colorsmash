@@ -47,6 +47,7 @@ export function MatchTab() {
   const [srcMode, setSrcMode] = useState<SrcMode>("layer");
   const [srcOverride, setSrcOverride] = useState<SourceSnap | null>(null);
   const [autoUpdate, setAutoUpdate] = useState(false);
+  const [sampleMerged, setSampleMerged] = useState(false);
   const [colorSpace, setColorSpace] = useState<"rgb" | "lab">("rgb");
 
   const [openSection, setOpenSection] = useState<"basic" | "dims" | "zones" | null>("basic");
@@ -92,9 +93,29 @@ export function MatchTab() {
       const doc = getActiveDoc();
       const sel = getSelectionBounds();
       if (!sel) throw new Error("No active marquee selection.");
-      const layer = doc.activeLayers?.[0];
-      if (!layer) throw new Error("No active layer.");
-      const buf = await readLayerPixels(layer, sel);
+      let buf;
+      let sourceName: string;
+      if (sampleMerged) {
+        // Read the merged composite within sel: imaging.getPixels with no layerID returns the doc composite.
+        const { imaging } = require("photoshop");
+        const result = await imaging.getPixels({ documentID: doc.id, sourceBounds: sel, componentSize: 8, applyAlpha: false, colorSpace: "RGB" });
+        const id = result.imageData;
+        const raw = await id.getData();
+        const src = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
+        const w = id.width, h = id.height;
+        const components = id.components ?? (src.length / (w * h));
+        const data = new Uint8Array(w * h * 4);
+        if (components === 4) data.set(src);
+        else for (let i = 0, j = 0; i < w * h; i++, j += 3) { const o = i * 4; data[o] = src[j]; data[o + 1] = src[j + 1]; data[o + 2] = src[j + 2]; data[o + 3] = 255; }
+        if (id.dispose) id.dispose();
+        buf = { width: w, height: h, data, bounds: sel };
+        sourceName = "Composite (selection)";
+      } else {
+        const layer = doc.activeLayers?.[0];
+        if (!layer) throw new Error("No active layer.");
+        buf = await readLayerPixels(layer, sel);
+        sourceName = `${layer.name} (selection)`;
+      }
       // Read the selection mask within the same bbox; bake it into the alpha channel
       // so non-selected pixels are excluded from the histogram fit.
       try {
@@ -109,7 +130,7 @@ export function MatchTab() {
         if (maskResult.imageData.dispose) maskResult.imageData.dispose();
       } catch { /* fallback: use full bbox if mask read fails */ }
       const small = downsampleToMaxEdge(buf, SOURCE_MAX_EDGE);
-      return { width: small.width, height: small.height, data: small.data, name: `${layer.name} (selection)` };
+      return { width: small.width, height: small.height, data: small.data, name: sourceName };
     });
   };
 
@@ -237,7 +258,7 @@ export function MatchTab() {
     };
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 0, fontSize: 11, marginBottom: 1 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 7px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: 0 }}>
           <span style={{ opacity: 0.75 }}>{label}</span>
           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
             <span style={{ opacity: 0.85, fontSize: 10 }}>{value}{suffix}</span>
@@ -247,7 +268,7 @@ export function MatchTab() {
         <input type="range" min={min} max={max} defaultValue={value}
           ref={el => { sliderRefs.current[label] = el; }}
           onInput={e => { const v = Math.round(Number((e.target as HTMLInputElement).value)); ref.current = v; setValue(v); scheduleRedraw(); }}
-          style={{ width: "100%" }} />
+          style={{ width: "calc(100% + 16px)", marginLeft: -8 }} />
       </div>
     );
   };
@@ -262,7 +283,7 @@ export function MatchTab() {
     };
     return (
       <div key={key} style={{ display: "flex", flexDirection: "column", gap: 0, fontSize: 11, marginBottom: 1 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 7px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: 0 }}>
           <span style={{ opacity: 0.75 }}>{label}</span>
           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
             <span style={{ opacity: 0.85, fontSize: 10 }}>{value}{suffix}</span>
@@ -271,7 +292,7 @@ export function MatchTab() {
         </div>
         <input type="range" min={min} max={max} value={value}
           onInput={e => { const v = Math.round(Number((e.target as HTMLInputElement).value)); dimsRef.current = { ...dimsRef.current, [key]: v }; setDimsLabel(d => ({ ...d, [key]: v })); scheduleRedraw(); }}
-          style={{ width: "100%" }} />
+          style={{ width: "calc(100% + 16px)", marginLeft: -8 }} />
       </div>
     );
   };
@@ -289,6 +310,10 @@ export function MatchTab() {
         title={autoUpdate ? "Auto-sample on (selection changes re-sample)" : "Auto-sample on selection change"}
         style={{ cursor: "pointer", flexShrink: 0 }} />
       {autoUpdate && <span style={{ color: "#7d7", flexShrink: 0 }}>●</span>}
+      <input type="checkbox" checked={sampleMerged} onChange={e => setSampleMerged(e.target.checked)}
+        title="Sample merged composite (everything visible at the selection) instead of just the active layer"
+        style={{ cursor: "pointer", flexShrink: 0, marginLeft: 4 }} />
+      <span style={{ opacity: 0.8 }}>Merged</span>
       <button onClick={onSnapSelection} style={{ ...tinyBtn, flexShrink: 0 }} title="Sample the current marquee selection now">Sample</button>
     </div>
   );

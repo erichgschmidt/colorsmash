@@ -97,12 +97,28 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     // Select target so the new adjustment layer is created above it (then we clip + move into group).
     await action.batchPlay([{ _obj: "select", _target: [{ _ref: "layer", _id: target.id }], makeVisible: false }], {});
 
+    // If a marquee selection is active, PS would auto-mask the new adjustment layer to it —
+    // but the user wants the curves to apply to the FULL target. Drop the selection just for
+    // layer creation, then restore it from history afterwards.
+    let hadSelection = false;
+    try { hadSelection = !!doc.selection?.bounds; } catch { /* */ }
+    if (hadSelection) {
+      try { await action.batchPlay([{ _obj: "set", _target: [{ _ref: "channel", _property: "selection" }], to: { _enum: "ordinal", _value: "none" } }], {}); }
+      catch { /* ignore */ }
+    }
+
     const curveLayer = await makeCurvesLayer(RESULT_LAYER_NAME, [
       { channel: "red",   points: sampleControlPoints(curves.r, CONTROL_POINTS) },
       { channel: "green", points: sampleControlPoints(curves.g, CONTROL_POINTS) },
       { channel: "blue",  points: sampleControlPoints(curves.b, CONTROL_POINTS) },
     ]);
     await setClippingMask(curveLayer, true);
+
+    // Restore the prior selection (PS reselect = previous selection from history).
+    if (hadSelection) {
+      try { await action.batchPlay([{ _obj: "set", _target: [{ _ref: "channel", _property: "selection" }], to: { _enum: "ordinal", _value: "previous" } }], {}); }
+      catch { /* ignore */ }
+    }
     if (params.chromaOnly) {
       try { curveLayer.blendMode = "color"; } catch { /* ignore */ }
     }
