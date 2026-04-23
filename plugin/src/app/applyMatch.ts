@@ -93,13 +93,22 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     let group = findGroup();
     if (!group) group = await doc.createLayerGroup({ name: GROUP_NAME });
     const overwrite = params.overwritePrior !== false;
-    for (const child of [...(group.layers ?? [])]) {
-      if (child.name === RESULT_LAYER_NAME || child.name.startsWith(RESULT_LAYER_NAME)) {
-        if (overwrite) {
-          try { await child.delete(); } catch { /* ignore */ }
-        } else {
-          try { child.visible = false; } catch { /* ignore */ }
-        }
+    const matchChildren = [...(group.layers ?? [])].filter((c: any) =>
+      c.name === RESULT_LAYER_NAME || (typeof c.name === "string" && c.name.startsWith(RESULT_LAYER_NAME))
+    );
+    if (overwrite) {
+      // Overwrite ONLY the most recent (topmost) Match Curves layer; keep older ones intact.
+      // Prefer the user-selected one if it's a Match Curves layer; else top of group.
+      const selectedId = doc.activeLayers?.[0]?.id;
+      const selectedMatch = selectedId != null ? matchChildren.find((c: any) => c.id === selectedId) : undefined;
+      const target = selectedMatch ?? matchChildren[0];
+      if (target) {
+        try { await target.delete(); } catch { /* ignore */ }
+      }
+    } else {
+      // Hide all prior matches so the new one doesn't compete.
+      for (const child of matchChildren) {
+        try { child.visible = false; } catch { /* ignore */ }
       }
     }
 
