@@ -237,7 +237,7 @@ export function MatchTab() {
     };
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 0, fontSize: 11, marginBottom: 1 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 7px" }}>
           <span style={{ opacity: 0.75 }}>{label}</span>
           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
             <span style={{ opacity: 0.85, fontSize: 10 }}>{value}{suffix}</span>
@@ -262,7 +262,7 @@ export function MatchTab() {
     };
     return (
       <div key={key} style={{ display: "flex", flexDirection: "column", gap: 0, fontSize: 11, marginBottom: 1 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 7px" }}>
           <span style={{ opacity: 0.75 }}>{label}</span>
           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
             <span style={{ opacity: 0.85, fontSize: 10 }}>{value}{suffix}</span>
