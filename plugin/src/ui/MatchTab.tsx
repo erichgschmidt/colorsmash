@@ -23,6 +23,9 @@ import {
   listPresets, savePreset, deletePreset, loadPresetSnap,
   SourcePreset, SourcePresetSnapshot,
 } from "../services/sourcePresets";
+import {
+  snapshotFromClipboard, importRecentScreenshots, resetScreenshotFolder,
+} from "../services/sourceCapture";
 
 const SOURCE_MAX_EDGE = 256;
 
@@ -157,6 +160,43 @@ export function MatchTab() {
 
   const onClearOverride = () => { setSrcOverride(null); setStatus("Source = layer."); };
 
+  const onSnapshotClipboard = async (alsoSave: boolean) => {
+    setStatus("Pasting from clipboard...");
+    try {
+      const snap = await snapshotFromClipboard();
+      setSrcOverride(snap);
+      let msg = `Source = ${snap.name} (${snap.width}×${snap.height})`;
+      if (alsoSave) {
+        const name = prompt("Preset name:", snap.name);
+        if (name) {
+          await savePreset({ ...snap, name });
+          setPresets(await listPresets());
+          msg += ` · saved as "${name}"`;
+        }
+      }
+      setStatus(msg);
+    } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
+  };
+
+  const [importN, setImportN] = useState(10);
+  const onImportFolder = async () => {
+    setStatus(`Importing last ${importN} from folder...`);
+    try {
+      const existing = new Set(presets.map(p => p.name));
+      const snaps = await importRecentScreenshots(importN, existing);
+      if (snaps.length === 0) { setStatus("No new images found (already imported or folder empty)."); return; }
+      for (const s of snaps) await savePreset(s);
+      const fresh = await listPresets();
+      setPresets(fresh);
+      // Auto-select the newest one as override.
+      const newest = fresh.find(p => p.name === snaps[0].name);
+      if (newest) setSrcOverride(loadPresetSnap(newest));
+      setStatus(`Imported ${snaps.length} preset${snaps.length === 1 ? "" : "s"}.`);
+    } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
+  };
+
+  const onResetFolder = async () => { setStatus(await resetScreenshotFolder()); };
+
   const onApply = async () => {
     if (targetId == null) { setStatus("Pick target layer."); return; }
     if (!srcOverride && sourceId == null) { setStatus("Pick source layer."); return; }
@@ -230,16 +270,28 @@ export function MatchTab() {
       </div>
 
       {/* Source toolbar: snapshot / save / preset dropdown / clear */}
-      <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
-        <button onClick={onSnapshotSelection} style={tinyBtn} title="Use the active marquee selection on the active layer as source">Snapshot selection</button>
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4, fontSize: 10 }}>
+        <button onClick={onSnapshotSelection} style={tinyBtn} title="Use the active marquee selection on the active layer as source">Snip selection</button>
+        <button onClick={() => onSnapshotClipboard(false)} style={tinyBtn} title="Paste current clipboard as source (one-shot)">Clipboard</button>
+        <button onClick={() => onSnapshotClipboard(true)} style={tinyBtn} title="Paste clipboard + save as preset">Clip → preset</button>
         <button onClick={onSavePreset} style={tinyBtn} title="Save current source for later reuse">Save preset</button>
+        {srcOverride && <button onClick={onClearOverride} style={tinyBtn}>Use layer</button>}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
         <select id="match-preset-select" style={sel} value={srcOverride && presets.find(p => p.name === srcOverride.name) ? presets.find(p => p.name === srcOverride.name)!.id : ""}
           onChange={e => onLoadPreset(e.target.value)}>
           <option value="">— layer mode —</option>
           {presets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
         <button onClick={onDeletePreset} style={tinyBtn} title="Delete the preset selected in the dropdown">Del</button>
-        {srcOverride && <button onClick={onClearOverride} style={tinyBtn}>Use layer</button>}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
+        <span style={{ opacity: 0.6 }}>Folder import last</span>
+        <input type="number" min={1} max={30} value={importN}
+          onChange={e => setImportN(Math.max(1, Math.min(30, Number(e.target.value) || 1)))}
+          style={{ width: 36, padding: "1px 4px", background: "#333", color: "#ddd", border: "1px solid #555", fontSize: 10 }} />
+        <button onClick={onImportFolder} style={tinyBtn} title="Import N most-recent images from picked folder, dedup against existing presets">Import</button>
+        <button onClick={onResetFolder} style={tinyBtn} title="Forget saved screenshot folder">Reset folder</button>
       </div>
 
       <div style={{ display: "flex", justifyContent: "center" }}>
