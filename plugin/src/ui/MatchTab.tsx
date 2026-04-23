@@ -265,12 +265,12 @@ export function MatchTab() {
       {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
     </select>
   ) : (
-    <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, whiteSpace: "nowrap", overflow: "hidden" }}>
-      <label style={{ display: "flex", alignItems: "center", gap: 3, cursor: "pointer", opacity: 0.85 }} title="Auto-sample as you change the marquee selection">
+    <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
+      <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: "pointer", opacity: 0.85, whiteSpace: "nowrap", flexShrink: 0 }} title="Auto-sample as you change the marquee selection">
         <input type="checkbox" checked={autoUpdate} onChange={e => setAutoUpdate(e.target.checked)} />
-        Auto{autoUpdate && <span style={{ color: "#7d7" }}> ●</span>}
+        <span>Auto{autoUpdate && <span style={{ color: "#7d7" }}> ●</span>}</span>
       </label>
-      <button onClick={onSnapSelection} style={tinyBtn} title="Sample the current marquee selection now">Sample</button>
+      <button onClick={onSnapSelection} style={{ ...tinyBtn, flexShrink: 0 }} title="Sample the current marquee selection now">Sample</button>
     </div>
   );
 
