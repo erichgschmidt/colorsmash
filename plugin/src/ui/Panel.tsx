@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { TransferTab } from "./TransferTab";
 import { ZonesTab } from "./ZonesTab";
+import { MatchTab } from "./MatchTab";
 
-type Tab = "transfer" | "zones";
+type Tab = "transfer" | "zones" | "match";
 
 export function Panel() {
   const [tab, setTab] = useState<Tab>("transfer");
@@ -23,9 +24,10 @@ export function Panel() {
       <div style={{ display: "flex" }}>
         <button style={tabBtn("transfer")} onClick={() => setTab("transfer")}>Transfer</button>
         <button style={tabBtn("zones")}    onClick={() => setTab("zones")}>Zones</button>
+        <button style={tabBtn("match")}    onClick={() => setTab("match")}>Match</button>
       </div>
       <div style={{ flex: 1, overflow: "auto" }}>
-        {tab === "transfer" ? <TransferTab /> : <ZonesTab />}
+        {tab === "transfer" ? <TransferTab /> : tab === "zones" ? <ZonesTab /> : <MatchTab />}
       </div>
     </div>
   );

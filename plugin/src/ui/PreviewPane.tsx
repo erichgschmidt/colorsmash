@@ -15,6 +15,8 @@ export interface PreviewPaneProps {
   onRefresh?: () => void;
   onPickColor?: (rgb: { r: number; g: number; b: number }) => void;
   height?: number;
+  hideSelector?: boolean;
+  fitAspect?: boolean;  // if true, container height tracks snapshot aspect ratio
 }
 
 export interface PreviewImgHandle {
@@ -58,19 +60,25 @@ export function PreviewPane(props: PreviewPaneProps & { imgHandleRef?: React.Mut
 
   const sel: React.CSSProperties = { flex: 1, padding: "2px 4px", fontSize: 10, minWidth: 0, background: "#333", color: "#ddd", border: "1px solid #555" };
 
+  const aspectStyle: React.CSSProperties = props.fitAspect && props.snapshot
+    ? { aspectRatio: `${props.snapshot.width} / ${props.snapshot.height}`, width: "100%" }
+    : { height };
+
   return (
     <div ref={wrapRef} style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 2, fontSize: 10, opacity: 0.8 }}>
-        <span style={{ width: 40, opacity: 0.7 }}>{props.label}</span>
-        <select style={sel} value={props.selectedId ?? ""} onChange={e => props.onSelect(Number(e.target.value))}>
-          {props.layers.length === 0 && <option value="">— none —</option>}
-          {props.layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-        </select>
-      </div>
+      {!props.hideSelector && (
+        <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 2, fontSize: 10, opacity: 0.8 }}>
+          <span style={{ width: 40, opacity: 0.7 }}>{props.label}</span>
+          <select style={sel} value={props.selectedId ?? ""} onChange={e => props.onSelect(Number(e.target.value))}>
+            {props.layers.length === 0 && <option value="">— none —</option>}
+            {props.layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+          </select>
+        </div>
+      )}
       <div style={{
         background: "#111", border: "1px solid #555", borderRadius: 2,
         display: "flex", alignItems: "center", justifyContent: "center",
-        height, overflow: "hidden", position: "relative",
+        ...aspectStyle, overflow: "hidden", position: "relative",
       }}>
         {props.snapshot
           ? <img ref={imgRef} alt={props.label} onClick={onImgClick}

@@ -3,6 +3,8 @@ import { applyTransfer } from "../app/applyTransfer";
 import { applyAsLut } from "../app/applyAsLut";
 import { applyLutViaAction } from "../app/applyLutViaAction";
 import { setupAction, setupActionAuto } from "../app/setupAction";
+import { installLutToPresets, resetLutFolder } from "../app/installLutToPresets";
+import { exportLutNative, resetLutOutputFolder } from "../app/exportLutNative";
 import { applyAsStack } from "../app/applyAsStack";
 import { validateStack } from "../app/validateStack";
 import { probeLayers } from "../app/probeLayers";
@@ -135,6 +137,16 @@ export function TransferTab() {
       <button onClick={onApplyLutViaAction} style={btnSecondary}>Apply LUT via Action (experimental)</button>
       <button onClick={wrap("Setting up action", setupAction)} style={btnSecondary}>Setup LUT Action (one-time)</button>
       <button onClick={wrap("Auto-installing action", setupActionAuto)} style={btnSecondary}>Setup LUT Action (auto, experimental)</button>
+      <button onClick={wrap("Installing LUT to PS Presets", async () => {
+        if (sourceId == null || targetId == null) throw new Error("Pick layers.");
+        return await installLutToPresets({ sourceLayerId: sourceId, targetLayerId: targetId, weights: buildWeights() });
+      })} style={btnSecondary}>Install LUT to PS Presets (test)</button>
+      <button onClick={wrap("Resetting LUT folder", resetLutFolder)} style={btnSecondary}>Reset LUT folder pick</button>
+      <button onClick={wrap("Exporting LUT (native Expr)", async () => {
+        if (sourceId == null || targetId == null) throw new Error("Pick layers.");
+        return await exportLutNative({ sourceLayerId: sourceId, targetLayerId: targetId, weights: buildWeights() });
+      })} style={btnSecondary}>Export LUT (native Expr)</button>
+      <button onClick={wrap("Resetting export folder", resetLutOutputFolder)} style={btnSecondary}>Reset native export folder</button>
 
       <div style={{ marginTop: 10, fontSize: 10 }}>
         <label style={{ cursor: "pointer", opacity: 0.6 }}>

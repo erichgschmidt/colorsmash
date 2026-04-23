@@ -12,6 +12,7 @@ import { downsampleToMaxEdge } from "../core/downsample";
 import { generateReinhardLUT } from "../core/lutGenerator";
 import { writeCubeLUT } from "../core/cubeWriter";
 import { writeColorLookupLoadAtn } from "../core/atnWriter";
+import { patchLutData, readTemplateAtn } from "../services/patchTemplateAtn";
 
 const STATS_MAX_EDGE = 512;
 const LUT_SIZE = 33;
@@ -51,13 +52,23 @@ export async function applyLutViaAction(params: ApplyLutViaActionParams): Promis
     const cubeFile = await dataFolder.createFile(LUT_FILENAME, { overwrite: true });
     await cubeFile.write(cubeText, { format: uxp.storage.formats.utf8 });
 
-    // 3. Generate FRESH .atn with the new cube bytes embedded as LUT3DFileData.
-    const atnBytes = writeColorLookupLoadAtn({
-      setName: ACTION_SET,
-      actionName: ACTION_NAME,
-      cubePath: cubeFile.nativePath,
-      cubeBytes,
-    });
+    // 3. Patch user's working template .atn with fresh cube bytes (writer can't produce a
+    //    valid ICC profile blob, so we use the template's profile + replace only LUT3DFileData).
+    let atnBytes: Uint8Array;
+    try {
+      const template = await readTemplateAtn();
+      atnBytes = patchLutData(template, cubeBytes);
+    } catch (e: any) {
+      // Fallback to from-scratch writer (currently produces a .atn PS won't fully apply).
+      console.warn("Template patch failed, falling back to scratch writer:", e?.message);
+      atnBytes = writeColorLookupLoadAtn({
+        setName: ACTION_SET,
+        actionName: ACTION_NAME,
+        cubePath: cubeFile.nativePath,
+        cubeBytes,
+        targetLayerName: "ColorSmashLUT_active",
+      });
+    }
     const atnFile = await dataFolder.createFile(ATN_FILENAME, { overwrite: true });
     await atnFile.write(atnBytes, { format: uxp.storage.formats.binary });
 
@@ -67,7 +78,13 @@ export async function applyLutViaAction(params: ApplyLutViaActionParams): Promis
     const atnToken = fs.createSessionToken(atnFile);
     await psAction.batchPlay([{ _obj: "open", null: { _path: atnToken } }], {});
 
-    // 5. Create the Color Lookup adjustment layer. After make, PS leaves it as the active layer.
+    // 5. Remove any prior ColorSmashLUT_active layer so we don't accumulate duplicates.
+    const TARGET_LAYER_NAME = "ColorSmashLUT_active";
+    for (const l of [...doc.layers]) {
+      if (l.name === TARGET_LAYER_NAME) {
+        try { await l.delete(); } catch { /* ignore */ }
+      }
+    }
     try {
       await psAction.batchPlay([{
         _obj: "make",
@@ -78,10 +95,12 @@ export async function applyLutViaAction(params: ApplyLutViaActionParams): Promis
       return `Failed to create Color Lookup layer. ${e?.message ?? e}`;
     }
 
-    // Read the front (most recent) layer to confirm it's a Color Lookup adjustment.
     const activeLayer = doc.activeLayers?.[0];
     const newLayerId = activeLayer?.id ?? null;
     const newLayerKind = activeLayer?.kind ?? "?";
+    if (activeLayer) {
+      try { activeLayer.name = TARGET_LAYER_NAME; } catch { /* ignore */ }
+    }
 
     // 6. Play the action.
     try {

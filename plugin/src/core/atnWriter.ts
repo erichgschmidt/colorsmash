@@ -38,23 +38,25 @@ export interface WriteColorLookupLoadAtnOptions {
  * adjustment layer pre-loaded with the given .cube LUT (Shape A in
  * research §4.2 — embedded `LUT3DFileData`, no `profile`).
  */
-export function writeColorLookupLoadAtn(opts: WriteColorLookupLoadAtnOptions): Uint8Array {
-  const { setName, actionName, cubePath, cubeBytes } = opts;
+export function writeColorLookupLoadAtn(opts: WriteColorLookupLoadAtnOptions & { targetLayerName?: string }): Uint8Array {
+  const { setName, actionName, cubePath, cubeBytes, targetLayerName = "ColorSmashLUT_active" } = opts;
 
   // Matches what PS records when the user manually does Layer > New Adjustment Layer >
   // Color Lookup > Load 3D LUT: a `set` step targeting the active adjustmentLayer with a `to`
   // colorLookup descriptor. PS rejects the set form via batchPlay alone because there's no
   // active Color Lookup layer; the plugin's apply flow creates the empty layer first via
   // batchPlay so that targetEnum resolves correctly when the action plays.
-  // 5 items matching user's working .atn structure (no profile yet — PS regenerates from data).
-  // `Nm  ` (4-byte OSType, Adobe abbrev for layer name) is the canonical name-field key.
+  // Key needs TokenOrString form (length-zero sentinel + OSType), not bare OSType.
+  // `Nm  ` is the canonical layer-name key Adobe uses.
   const nameItem = concat(
-    osType("Nm  "),
+    tokOSType("Nm  "),
     osType("TEXT"),
     uniString(cubePath),
   );
+  // classID1 = display name ("Color Lookup"), classID2 = internal ID ("colorLookup")
+  // Adobe convention; verified via byte-diff against working .atn.
   const colorLookupDesc = writeDescriptorBody(
-    "colorLookup",
+    "Color Lookup",
     tokString("colorLookup"),
     [
       itemEnum("lookupType", "colorLookupType", "3DLUT"),
@@ -65,11 +67,15 @@ export function writeColorLookupLoadAtn(opts: WriteColorLookupLoadAtnOptions): U
     ],
   );
 
-  // _target = obj ref with one Enmr (enum reference): adjustmentLayer / ordinal / targetEnum.
+  // _target = obj ref with one Enmr (enum reference). PS emits classID1 as EMPTY
+  // (length-1 just-NUL UnicodeString) when classID2 has a known 4-byte OSType — verified
+  // via byte-diff against user's working .atn. Redundant full classID1 makes PS parse fail.
+  const emptyClassID1 = u32(1); // length=1 UTF-16 unit (the NUL); content is implied 2 bytes 00 00
+  const emptyTok = concat(emptyClassID1, u8(0), u8(0));
   const targetRef = concat(
     u32(1),
     osType("Enmr"),
-    tokUniString("adjustmentLayer"),
+    emptyTok, // classID1 empty
     tokOSType("AdjL"),
     tokOSType("Ordn"),
     tokOSType("Trgt"),
@@ -82,8 +88,52 @@ export function writeColorLookupLoadAtn(opts: WriteColorLookupLoadAtnOptions): U
   ]);
 
   void itemBool;
-  // Single-step action: set the LUT data on whatever Color Lookup adjustment layer is active.
-  // Plugin's apply flow creates + selects the layer via batchPlay before playing this action.
+
+  // Event 1: Deselect Layers (matches user's working .atn structure).
+  // Empty classID1 — see targetRef above.
+  const deselectRef = concat(
+    u32(1),
+    osType("Enmr"),
+    emptyTok,
+    tokOSType("Lyr "),
+    tokOSType("Ordn"),
+    tokOSType("Trgt"),
+  );
+  const deselectDescBody = writeDescriptorBody("Deselect Layers", tokString("selectNoLayers"), [
+    concat(tokOSType("null"), osType("obj "), deselectRef),
+  ]);
+  const deselectEvent = concat(
+    u8(0), u8(1), u8(0), u8(0),
+    ascii("TEXT"),
+    pascalAscii("selectNoLayers"),
+    pascalAscii("Deselect Layers"),
+    i32(-1),
+    deselectDescBody,
+  );
+
+  // Event 2: Select layer by exact name (a known temp name plugin renames the layer to).
+  // Empty classID1 + OSType classID2.
+  const selectRef = concat(
+    u32(1),
+    osType("name"), // name reference type
+    emptyTok,
+    tokOSType("Lyr "),
+    uniString(targetLayerName),
+  );
+  const selectDescBody = writeDescriptorBody("select", tokOSType("slct"), [
+    concat(tokOSType("null"), osType("obj "), selectRef),
+    concat(tokOSType("MkVs"), osType("bool"), u8(0)),
+  ]);
+  const selectEvent = concat(
+    u8(0), u8(1), u8(0), u8(0),
+    ascii("TEXT"),
+    pascalAscii("select"),
+    pascalAscii("Select"),
+    i32(-1),
+    selectDescBody,
+  );
+
+  // Event 3: Set the LUT.
   const setEvent = concat(
     u8(0), u8(1), u8(0), u8(0),
     ascii("TEXT"),
@@ -93,7 +143,7 @@ export function writeColorLookupLoadAtn(opts: WriteColorLookupLoadAtnOptions): U
     setDescBody,
   );
 
-  // Action: just the set step. Plugin handles layer create + select beforehand.
+  // Action: 3 events matching user's working .atn (Deselect → Select-by-name → Set).
   const action = concat(
     i16(0),
     u8(0),
@@ -101,7 +151,9 @@ export function writeColorLookupLoadAtn(opts: WriteColorLookupLoadAtnOptions): U
     i16(0),
     uniString(actionName),
     u8(0),
-    u32(1),
+    u32(3),
+    deselectEvent,
+    selectEvent,
     setEvent,
   );
 
@@ -338,6 +390,7 @@ function tokString(s: string): Uint8Array {
 function tokUniString(s: string): Uint8Array {
   return uniString(s);
 }
+void tokUniString;
 
 /** PS UnicodeString: uint32 length (UTF-16 units incl. NUL) + UTF-16BE. */
 function uniString(s: string): Uint8Array {
