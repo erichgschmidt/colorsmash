@@ -334,38 +334,34 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
     <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
       {/* Two flex columns + center divider. Stretch makes columns equal height,
           marginTop:auto on previews pushes them to bottom so they align. */}
-      <div style={{ display: "flex", gap: 8, alignItems: "stretch" }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
         <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 0, height: 18 }}>
             <span style={{ fontSize: 10, opacity: 0.7, width: 22 }}>Src</span>
             <button style={tabBtn(srcMode === "layer")}     onClick={() => switchMode("layer")}     title="Layer">L</button>
             <button style={tabBtn(srcMode === "preset")}    onClick={() => switchMode("preset")}    title="Preset">P</button>
             <button style={tabBtn(srcMode === "selection")} onClick={() => switchMode("selection")} title="Selection">S</button>
           </div>
-          <div style={{ minHeight: 22, display: "flex", flexDirection: "column", gap: 4 }}>{sourceModeContent()}</div>
-          <div style={{ marginTop: "auto" }}>
-            <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}}
-              snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}
-              onRefresh={srcMode === "layer" ? src.refresh : undefined}
-              hideSelector fitAspect maxHeight={160} />
-          </div>
+          <div style={{ height: 22, display: "flex", flexDirection: "column", gap: 4, overflow: "hidden" }}>{sourceModeContent()}</div>
+          <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}}
+            snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}
+            onRefresh={srcMode === "layer" ? src.refresh : undefined}
+            hideSelector fitAspect maxHeight={160} />
         </div>
-        <div style={{ width: 1, background: "#444" }} />
+        <div style={{ width: 1, background: "#444", alignSelf: "stretch" }} />
         <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 0, height: 18 }}>
             <span style={{ fontSize: 10, opacity: 0.7, width: 22 }}>Tgt</span>
             <button style={{ ...tabBtn(true), cursor: "default" }} title="Layer" disabled>L</button>
           </div>
-          <div style={{ minHeight: 22, display: "flex" }}>
+          <div style={{ height: 22, display: "flex" }}>
             <select style={sel} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}>
               {layers.length === 0 && <option value="">— none —</option>}
               {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
             </select>
           </div>
-          <div style={{ marginTop: "auto" }}>
-            <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap} onRefresh={tgt.refresh}
-              hideSelector fitAspect maxHeight={160} />
-          </div>
+          <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap} onRefresh={tgt.refresh}
+            hideSelector fitAspect maxHeight={160} />
         </div>
       </div>
 

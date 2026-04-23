@@ -42,11 +42,14 @@ export function PreviewPane(props: PreviewPaneProps & { imgHandleRef?: React.Mut
   }, [props.imgHandleRef]);
 
   useEffect(() => {
+    // When imgHandleRef is provided, the parent owns img.src updates imperatively
+    // (e.g. live preview redraws). Don't double-write here or we cause flicker.
+    if (props.imgHandleRef) return;
     const img = imgRef.current;
     if (!img || !props.snapshot) return;
     const data = props.transformedRgba ?? props.snapshot.data;
     img.src = rgbaToPngDataUrl(data, props.snapshot.width, props.snapshot.height);
-  }, [props.snapshot, props.transformedRgba]);
+  }, [props.snapshot, props.transformedRgba, props.imgHandleRef]);
 
   const onImgClick = (e: React.MouseEvent<HTMLImageElement>) => {
     if (!props.onPickColor || !props.snapshot) return;
