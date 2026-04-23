@@ -381,6 +381,7 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
 
   return (
     <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+      {/* Top row: doc picker (full width) */}
       <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
         <span style={{ opacity: 0.7 }}>Doc:</span>
         <select style={{ flex: 1, padding: "2px 4px", fontSize: 10, minWidth: 0, background: "#333", color: "#ddd", border: "1px solid #555" }}
@@ -393,6 +394,10 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
           ↻
         </button>
       </div>
+
+      {/* 2-column body: previews on left, controls on right */}
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
       {useMemo(() => (
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
           <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
@@ -444,13 +449,17 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
         <span style={{ fontSize: 10, opacity: 0.7 }}>Matched preview</span>
       </div>
       {/* Fixed height; img letterboxes inside via object-fit: contain. No aspect-ratio reflow possible. */}
-      <div style={{ height: 200 }}>
+      <div style={{ height: 240 }}>
         {useMemo(() => (
-          <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap} imgHandleRef={matchedHandleRef} hideSelector height={200} />
+          <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap} imgHandleRef={matchedHandleRef} hideSelector height={240} />
         ), [tgt.snap])}
       </div>
+        </div>
 
-      <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7 }}>Fitted curves (R G B)</div>
+        {/* Right column: curves graph + accordion controls */}
+        <div style={{ width: 1, background: "#444", alignSelf: "stretch" }} />
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+      <div style={{ fontSize: 10, opacity: 0.7 }}>Fitted curves (R G B)</div>
       <CurvesGraph curves={renderedCurves} />
 
       {/* ── Accordion: Basic ────────────────────────────── */}
@@ -520,6 +529,8 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
 
       <button onClick={onApply} style={btn}>Apply Match (1 Curves layer)</button>
       <div style={{ marginTop: 6, fontSize: 10, opacity: 0.7, whiteSpace: "pre-wrap" }}>{status}</div>
+        </div>
+      </div>
     </div>
   );
 }
