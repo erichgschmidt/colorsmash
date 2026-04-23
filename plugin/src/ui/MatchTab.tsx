@@ -445,7 +445,7 @@ export function MatchTab() {
 
       {/* Accordion controls */}
       <div style={{ borderTop: "1px solid #444", margin: "6px 0 0" }} />
-      <button onClick={() => toggleSection("basic")} style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", background: "transparent", color: "#ccc", border: "none", cursor: "pointer", fontSize: 11, textAlign: "left", margin: 0 }}>
+      <button onClick={() => toggleSection("basic")} style={{ alignSelf: "stretch", width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", background: "transparent", color: "#ccc", border: "none", cursor: "pointer", fontSize: 11, textAlign: "left" }}>
         <span><Icon name={openSection === "basic" ? "chevronDown" : "chevronRight"} size={11} /> Match controls</span>
       </button>
       {openSection === "basic" && (
@@ -462,7 +462,7 @@ export function MatchTab() {
       )}
 
       <div style={{ borderTop: "1px solid #444" }} />
-      <button onClick={() => toggleSection("dims")} style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", background: "transparent", color: "#ccc", border: "none", cursor: "pointer", fontSize: 11, textAlign: "left", margin: 0 }}>
+      <button onClick={() => toggleSection("dims")} style={{ alignSelf: "stretch", width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", background: "transparent", color: "#ccc", border: "none", cursor: "pointer", fontSize: 11, textAlign: "left" }}>
         <span><Icon name={openSection === "dims" ? "chevronDown" : "chevronRight"} size={11} /> Dimension warps</span>
         {openSection === "dims" && <span onClick={(e: any) => { e.stopPropagation(); dimsRef.current = { ...DEFAULT_DIMENSIONS }; setDimsLabel({ ...DEFAULT_DIMENSIONS }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>}
       </button>
@@ -478,7 +478,7 @@ export function MatchTab() {
       )}
 
       <div style={{ borderTop: "1px solid #444" }} />
-      <button onClick={() => toggleSection("zones")} style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", background: "transparent", color: "#ccc", border: "none", cursor: "pointer", fontSize: 11, textAlign: "left", margin: 0 }}>
+      <button onClick={() => toggleSection("zones")} style={{ alignSelf: "stretch", width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", background: "transparent", color: "#ccc", border: "none", cursor: "pointer", fontSize: 11, textAlign: "left" }}>
         <span><Icon name={openSection === "zones" ? "chevronDown" : "chevronRight"} size={11} /> Zone targeting</span>
         {openSection === "zones" && <span onClick={(e: any) => { e.stopPropagation(); zonesRef.current = { ...DEFAULT_ZONES }; setZonesLabel({ ...DEFAULT_ZONES }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>}
       </button>
