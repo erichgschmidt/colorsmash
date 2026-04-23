@@ -7,6 +7,7 @@ import { useLayers } from "./useLayers";
 import { useLayerPreview } from "./useLayerPreview";
 import { PreviewPane, PreviewImgHandle } from "./PreviewPane";
 import { CurvesGraph } from "./CurvesGraph";
+import { ZoneCompoundSlider } from "./ZoneCompoundSlider";
 import { ChannelCurves } from "../core/histogramMatch";
 import {
   fitHistogramCurves, processChannelCurves, applyChannelCurvesToRgba, applyChromaOnly,
@@ -277,20 +278,7 @@ export function MatchTab() {
     </div>
   );
 
-  const zoneSlider = (label: string, key: keyof ZoneOpts, min: number, max: number, suffix = "") => {
-    const value = zonesLabel[key];
-    return (
-      <div key={key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
-        <span style={{ width: 80, opacity: 0.7 }}>{label}</span>
-        <input type="range" min={min} max={max} value={value}
-          onInput={e => { const v = Number((e.target as HTMLInputElement).value); zonesRef.current = { ...zonesRef.current, [key]: v }; setZonesLabel(z => ({ ...z, [key]: v })); scheduleRedraw(); }}
-          style={{ flex: 1, minWidth: 0 }} />
-        <span style={{ width: 40, textAlign: "right", opacity: 0.8 }}>{value}{suffix}</span>
-      </div>
-    );
-  };
-
-  const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: number, suffix = "") => {
+const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: number, suffix = "") => {
     const value = dimsLabel[key];
     return (
       <div key={key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
@@ -434,14 +422,29 @@ export function MatchTab() {
         <span>Zone targeting (per-zone amount / anchor / falloff)</span>
         <button onClick={() => { zonesRef.current = { ...DEFAULT_ZONES }; setZonesLabel({ ...DEFAULT_ZONES }); scheduleRedraw(); }} style={tinyBtn}>Reset</button>
       </div>
-      {(["shadows", "mids", "highlights"] as const).map(zone => (
-        <div key={zone} style={{ display: "flex", flexDirection: "column", gap: 2, marginBottom: 4 }}>
-          <span style={{ fontSize: 10, opacity: 0.6, textTransform: "capitalize" }}>{zone}</span>
-          {zoneSlider("Amount", zone, 0, 200, "%")}
-          {zoneSlider("Anchor", `${zone}Anchor` as keyof ZoneOpts, 0, 255, "")}
-          {zoneSlider("Falloff", `${zone}Falloff` as keyof ZoneOpts, 0, 100, "%")}
-        </div>
-      ))}
+      {(["shadows", "mids", "highlights"] as const).map(zone => {
+        const colorMap: Record<string, string> = { shadows: "#4a7fc1", mids: "#bbb", highlights: "#e0b85a" };
+        const ankKey = `${zone}Anchor` as keyof ZoneOpts;
+        const falKey = `${zone}Falloff` as keyof ZoneOpts;
+        return (
+          <ZoneCompoundSlider
+            key={zone}
+            label={zone}
+            color={colorMap[zone]}
+            value={{ amount: zonesLabel[zone], anchor: zonesLabel[ankKey], falloff: zonesLabel[falKey] }}
+            onChange={next => {
+              zonesRef.current = {
+                ...zonesRef.current,
+                [zone]: next.amount,
+                [ankKey]: next.anchor,
+                [falKey]: next.falloff,
+              } as ZoneOpts;
+              setZonesLabel(z => ({ ...z, [zone]: next.amount, [ankKey]: next.anchor, [falKey]: next.falloff }));
+              scheduleRedraw();
+            }}
+          />
+        );
+      })}
 
       <button onClick={onApply} style={btn}>Apply Match (1 Curves layer)</button>
       <div style={{ marginTop: 6, fontSize: 10, opacity: 0.7, whiteSpace: "pre-wrap" }}>{status}</div>
