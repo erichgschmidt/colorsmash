@@ -81,16 +81,11 @@ export function MatchTab() {
   const matchedHandleRef = useRef<PreviewImgHandle | null>(null);
   const rafPendingRef = useRef(false);
   const [renderedCurves, setRenderedCurves] = useState<ChannelCurves | null>(null);
-  const [showOriginal, setShowOriginal] = useState(false);
   const curvesPendingRef = useRef<ChannelCurves | null>(null);
   const curvesTimeoutRef = useRef<any>(null);
 
   const redrawMatched = () => {
     if (!tgt.snap || !matchedHandleRef.current) return;
-    if (showOriginal) {
-      matchedHandleRef.current.setPixels(tgt.snap.data, tgt.snap.width, tgt.snap.height);
-      return;
-    }
     if (!fittedRaw) return;
     const processed = processChannelCurves(fittedRaw, {
       amount: amountRef.current / 100,
@@ -119,7 +114,7 @@ export function MatchTab() {
     setTimeout(() => { rafPendingRef.current = false; redrawMatched(); }, 33);
   };
 
-  useEffect(() => { scheduleRedraw(); }, [fittedRaw, tgt.snap, chromaOnly, showOriginal]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { scheduleRedraw(); }, [fittedRaw, tgt.snap, chromaOnly]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Source-mode actions ────────────────────────────────────────────────
   const snapshotSelectionInner = async (): Promise<SourcePresetSnapshot> => {
@@ -340,10 +335,16 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
     );
   };
 
+  const onRefreshAll = () => { src.refresh(); tgt.refresh(); };
+
   return (
     <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-      {/* Two flex columns + center divider. Stretch makes columns equal height,
-          marginTop:auto on previews pushes them to bottom so they align. */}
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <button onClick={onRefreshAll} title="Refresh source + target from active doc"
+          style={{ padding: "2px 8px", background: "transparent", color: "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 10 }}>
+          ↻ Refresh
+        </button>
+      </div>
       {useMemo(() => (
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
           <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
@@ -356,7 +357,6 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
             <div style={{ height: 22, display: "flex", flexDirection: "column", gap: 4, overflow: "hidden" }}>{sourceModeContent()}</div>
             <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}}
               snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}
-              onRefresh={srcMode === "layer" ? src.refresh : undefined}
               hideSelector fitAspect maxHeight={160} />
           </div>
           <div style={{ width: 1, background: "#444", alignSelf: "stretch" }} />
@@ -371,11 +371,11 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
                 {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
               </select>
             </div>
-            <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap} onRefresh={tgt.refresh}
+            <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap}
               hideSelector fitAspect maxHeight={160} />
           </div>
         </div>
-      ), [src.snap, src.refresh, tgt.snap, tgt.refresh, sourceId, targetId, srcMode, srcOverride, layers, selectedPresetId, presets, autoUpdate, importN, presetMore])}
+      ), [src.snap, tgt.snap, sourceId, targetId, srcMode, srcOverride, layers, selectedPresetId, presets, autoUpdate, importN, presetMore])}
 
 {srcMode === "preset" && presetMore && (
         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4, fontSize: 10, padding: "4px 6px", background: "#1a1a1a", borderRadius: 3, border: "1px solid #333" }}>
@@ -392,13 +392,8 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
         </div>
       )}
 
-<div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
-        <span style={{ fontSize: 10, opacity: 0.7 }}>Matched preview {showOriginal && <span style={{ color: "#e80" }}>· showing original</span>}</span>
-        <button
-          onMouseDown={() => setShowOriginal(true)} onMouseUp={() => setShowOriginal(false)} onMouseLeave={() => setShowOriginal(false)}
-          onTouchStart={() => setShowOriginal(true)} onTouchEnd={() => setShowOriginal(false)}
-          style={{ padding: "1px 8px", background: showOriginal ? "#e80" : "transparent", color: showOriginal ? "white" : "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 9 }}
-        >Hold for A/B</button>
+<div style={{ marginTop: 4 }}>
+        <span style={{ fontSize: 10, opacity: 0.7 }}>Matched preview</span>
       </div>
       {/* Fixed height; img letterboxes inside via object-fit: contain. No aspect-ratio reflow possible. */}
       <div style={{ height: 200 }}>
