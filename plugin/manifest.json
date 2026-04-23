@@ -2,7 +2,7 @@
   "manifestVersion": 5,
   "id": "com.colorsmash.plugin",
   "name": "Color Smash",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "main": "index.html",
   "host": [
     {
@@ -25,9 +25,6 @@
       "preferredFloatingSize": { "width": 400, "height": 720 }
     }
   ],
-  "requiredPermissions": {
-    "localFileSystem": "request"
-  },
   "icons": [
     { "width": 23, "height": 23, "path": "icons/icon-light.png", "scale": [1, 2], "theme": ["lightest", "light", "medium"] },
     { "width": 23, "height": 23, "path": "icons/icon-dark.png", "scale": [1, 2], "theme": ["dark", "darkest"] }
