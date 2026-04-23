@@ -10,7 +10,10 @@ export interface ChannelCurves {
 
 function buildHistogram(rgba: Uint8Array, channelOffset: 0 | 1 | 2): Float64Array {
   const h = new Float64Array(256);
-  for (let i = channelOffset; i < rgba.length; i += 4) h[rgba[i]]++;
+  for (let i = 0; i < rgba.length; i += 4) {
+    if (rgba[i + 3] < 128) continue; // skip masked-out / transparent pixels
+    h[rgba[i + channelOffset]]++;
+  }
   return h;
 }
 

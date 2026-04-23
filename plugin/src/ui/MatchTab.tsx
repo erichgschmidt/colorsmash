@@ -93,6 +93,19 @@ export function MatchTab() {
       const layer = doc.activeLayers?.[0];
       if (!layer) throw new Error("No active layer.");
       const buf = await readLayerPixels(layer, sel);
+      // Read the selection mask within the same bbox; bake it into the alpha channel
+      // so non-selected pixels are excluded from the histogram fit.
+      try {
+        const { imaging } = require("photoshop");
+        const maskResult = await imaging.getSelection({ documentID: doc.id, sourceBounds: sel });
+        const maskRaw = await maskResult.imageData.getData();
+        const mask = maskRaw instanceof Uint8Array ? maskRaw : new Uint8Array(maskRaw);
+        const px = buf.data;
+        for (let i = 0, m = 0; i < px.length; i += 4, m++) {
+          px[i + 3] = mask[m] ?? 0;
+        }
+        if (maskResult.imageData.dispose) maskResult.imageData.dispose();
+      } catch { /* fallback: use full bbox if mask read fails */ }
       const small = downsampleToMaxEdge(buf, SOURCE_MAX_EDGE);
       return { width: small.width, height: small.height, data: small.data, name: `${layer.name} (selection)` };
     });
