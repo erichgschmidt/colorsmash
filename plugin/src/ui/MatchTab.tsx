@@ -468,29 +468,33 @@ export function MatchTab() {
       })}
 
       {/* Bottom action bar: Deselect | Overwrite | RGB toggle | refresh */}
-      <div style={{ display: "flex", flexWrap: "nowrap", alignItems: "center", gap: 8, fontSize: 10, marginTop: 8, opacity: 0.9, height: 18, overflow: "hidden" }}>
-        <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: "pointer", whiteSpace: "nowrap", minWidth: 0, overflow: "hidden" }} title="Drop active marquee selection before creating the layer (so curves apply to the full target).">
-          <input type="checkbox" checked={deselectOnApply} onChange={e => setDeselectOnApply(e.target.checked)} style={{ margin: 0, verticalAlign: "middle", flexShrink: 0 }} />
-          <span style={{ overflow: "hidden", textOverflow: "clip" }}>Deselect</span>
-        </label>
-        <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: "pointer", whiteSpace: "nowrap", minWidth: 0, overflow: "hidden" }} title="On: replace the prior Match Curves layer. Off: keep prior layers (hidden) so you can stack alternatives.">
-          <input type="checkbox" checked={overwriteOnApply} onChange={e => setOverwriteOnApply(e.target.checked)} style={{ margin: 0, verticalAlign: "middle", flexShrink: 0 }} />
-          <span style={{ overflow: "hidden", textOverflow: "clip" }}>Overwrite</span>
-        </label>
-        <div style={{ flex: 1 }} />
-        <button onClick={() => setColorSpace(c => c === "rgb" ? "lab" : "rgb")}
-          title="Toggle color space — RGB matches per-channel histograms; Lab matches in perceptual space."
-          style={{ height: 16, padding: "0 6px", fontSize: 10, fontWeight: 600, lineHeight: "14px",
-                   background: "transparent", color: "#dddddd",
-                   border: "1px solid #888", borderRadius: 3, cursor: "pointer", boxSizing: "border-box" }}>
-          {colorSpace.toUpperCase()}
-        </button>
-        <button onClick={onRefreshAll} title="Refresh source + target previews"
-          style={{ width: 16, height: 16, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
-                   background: "transparent", border: "1px solid #888", borderRadius: 3, cursor: "pointer",
-                   flexShrink: 0, boxSizing: "border-box" }}>
-          <span style={{ width: 8, height: 8, background: "#bbbbbb", borderRadius: 1 }} />
-        </button>
+      {/* Bottom action bar: labels left-anchored, buttons right-anchored over panel BG so when
+          space gets tight, the buttons visually occlude the labels (no wrap, no shift). */}
+      <div style={{ position: "relative", height: 18, marginTop: 8, fontSize: 10, color: "#cccccc" }}>
+        <div style={{ position: "absolute", left: 0, top: 0, height: 18, display: "flex", alignItems: "center", gap: 10, whiteSpace: "nowrap" }}>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: "pointer" }} title="Drop active marquee selection before creating the layer (so curves apply to the full target).">
+            <input type="checkbox" checked={deselectOnApply} onChange={e => setDeselectOnApply(e.target.checked)} style={{ margin: 0, verticalAlign: "middle" }} />
+            Deselect
+          </label>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: "pointer" }} title="On: replace the prior Match Curves layer. Off: keep prior layers (hidden) so you can stack alternatives.">
+            <input type="checkbox" checked={overwriteOnApply} onChange={e => setOverwriteOnApply(e.target.checked)} style={{ margin: 0, verticalAlign: "middle" }} />
+            Overwrite
+          </label>
+        </div>
+        <div style={{ position: "absolute", right: 0, top: 0, height: 18, display: "flex", alignItems: "center", gap: 4, background: "#535353", paddingLeft: 6 }}>
+          <button onClick={() => setColorSpace(c => c === "rgb" ? "lab" : "rgb")}
+            title="Toggle color space — RGB matches per-channel histograms; Lab matches in perceptual space."
+            style={{ height: 16, padding: "0 6px", fontSize: 10, fontWeight: 600, lineHeight: "14px",
+                     background: "transparent", color: "#dddddd",
+                     border: "1px solid #888", borderRadius: 3, cursor: "pointer", boxSizing: "border-box" }}>
+            {colorSpace.toUpperCase()}
+          </button>
+          <button onClick={onRefreshAll} title="Refresh source + target previews"
+            style={{ width: 16, height: 16, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
+                     background: "transparent", border: "1px solid #888", borderRadius: 3, cursor: "pointer", boxSizing: "border-box" }}>
+            <span style={{ width: 8, height: 8, background: "#bbbbbb", borderRadius: 1 }} />
+          </button>
+        </div>
       </div>
 
       {/* @ts-ignore Spectrum web component */}
