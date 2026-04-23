@@ -121,12 +121,13 @@ export function ZoneCompoundSlider(props: ZoneCompoundSliderProps) {
           }} title={`anchor (${props.value.anchor})`} />
       </div>
       {/* Amount slider */}
-      <input type="range" min={0} max={200} value={props.value.amount}
+      <input type="range" min={0} max={200} value={props.value.amount} tabIndex={-1}
         onInput={e => {
           const v = Number((e.target as HTMLInputElement).value);
           valueRef.current = { ...valueRef.current, amount: v };
           props.onChange(valueRef.current);
         }}
+        onFocus={e => e.currentTarget.blur()}
         title="Amount %"
         style={{ width: 60, flexShrink: 0 }} />
       <span style={{ width: 36, textAlign: "right", opacity: 0.8 }}>{props.value.amount}%</span>

@@ -54,6 +54,9 @@ export function MatchTab() {
   const [selectedPresetId, setSelectedPresetId] = useState("");
   const [autoUpdate, setAutoUpdate] = useState(false);
   const [importN, setImportN] = useState(10);
+  const [presetMore, setPresetMore] = useState(false);
+  const [openSection, setOpenSection] = useState<"basic" | "dims" | "zones" | null>("basic");
+  const toggleSection = (s: "basic" | "dims" | "zones") => setOpenSection(o => o === s ? null : s);
 
   useEffect(() => { listPresets().then(setPresets).catch(() => {}); }, []);
 
@@ -305,37 +308,24 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
     }
     if (srcMode === "preset") {
       return (
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
-            <select style={sel} value={selectedPresetId} onChange={e => onLoadPreset(e.target.value)}>
-              <option value="">— pick a preset —</option>
-              {presets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-            <button onClick={onDeletePreset} style={tinyBtn}>Del</button>
-            <button onClick={onSavePreset} style={tinyBtn} title="Save current source as preset">Save current</button>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
-            <button onClick={() => onSnapshotClipboard(false)} style={tinyBtn}>Clipboard</button>
-            <button onClick={() => onSnapshotClipboard(true)} style={tinyBtn}>Clip → preset</button>
-            <span style={{ opacity: 0.6, marginLeft: 4 }}>folder last</span>
-            <input type="number" min={1} max={30} value={importN}
-              onChange={e => setImportN(Math.max(1, Math.min(30, Number(e.target.value) || 1)))}
-              style={{ width: 36, padding: "1px 4px", background: "#333", color: "#ddd", border: "1px solid #555", fontSize: 10 }} />
-            <button onClick={onImportFolder} style={tinyBtn}>Import</button>
-            <button onClick={onResetFolder} style={tinyBtn} title="Forget saved screenshot folder">⟲</button>
-          </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
+          <select style={sel} value={selectedPresetId} onChange={e => onLoadPreset(e.target.value)}>
+            <option value="">— pick a preset —</option>
+            {presets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <button onClick={onDeletePreset} style={tinyBtn} title="Delete selected preset">Del</button>
+          <button onClick={() => setPresetMore(m => !m)} style={tinyBtn} title="Show preset creation options">{presetMore ? "▾" : "+"}</button>
         </div>
       );
     }
     // selection
     return (
-      <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, whiteSpace: "nowrap", overflow: "hidden" }}>
         <button onClick={onSnapSelection} style={tinyBtn}>Snap now</button>
-        <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", opacity: 0.85 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 3, cursor: "pointer", opacity: 0.85 }} title="Auto-update from selection">
           <input type="checkbox" checked={autoUpdate} onChange={e => setAutoUpdate(e.target.checked)} />
-          Auto-update from selection
+          Auto{autoUpdate && <span style={{ color: "#7d7" }}> ●</span>}
         </label>
-        {autoUpdate && <span style={{ color: "#7d7", marginLeft: 4 }}>● watching</span>}
       </div>
     );
   };
@@ -379,6 +369,21 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
         </div>
       </div>
 
+{srcMode === "preset" && presetMore && (
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4, fontSize: 10, padding: "4px 6px", background: "#1a1a1a", borderRadius: 3, border: "1px solid #333" }}>
+          <span style={{ opacity: 0.6 }}>New preset:</span>
+          <button onClick={onSavePreset} style={tinyBtn}>Save current</button>
+          <button onClick={() => onSnapshotClipboard(false)} style={tinyBtn}>Clipboard</button>
+          <button onClick={() => onSnapshotClipboard(true)} style={tinyBtn}>Clip → preset</button>
+          <span style={{ opacity: 0.6, marginLeft: 4 }}>folder last</span>
+          <input type="number" min={1} max={30} value={importN} tabIndex={-1}
+            onChange={e => setImportN(Math.max(1, Math.min(30, Number(e.target.value) || 1)))}
+            style={{ width: 36, padding: "1px 4px", background: "#333", color: "#ddd", border: "1px solid #555", fontSize: 10 }} />
+          <button onClick={onImportFolder} style={tinyBtn}>Import</button>
+          <button onClick={onResetFolder} style={tinyBtn} title="Forget saved screenshot folder">⟲</button>
+        </div>
+      )}
+
 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
         <span style={{ fontSize: 10, opacity: 0.7 }}>Matched preview {showOriginal && <span style={{ color: "#e80" }}>· showing original</span>}</span>
         <button
@@ -392,37 +397,47 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
       <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7 }}>Fitted curves (R G B)</div>
       <CurvesGraph curves={renderedCurves} />
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 4 }}>
-        {slider("Amount",     amountRef,  amountLabel,  setAmountLabel,  0, 100, "%")}
-        {slider("Smoothing",  smoothRef,  smoothLabel,  setSmoothLabel,  0,  32)}
-        {slider("Max stretch",stretchRef, stretchLabel, setStretchLabel, 1,  32)}
-      </div>
+      {/* ── Accordion: Basic ────────────────────────────── */}
+      <div style={{ borderTop: "1px solid #444", margin: "8px 0 0" }} />
+      <button onClick={() => toggleSection("basic")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", background: "transparent", color: "#ccc", border: "none", cursor: "pointer", fontSize: 11 }}>
+        <span>{openSection === "basic" ? "▾" : "▸"} Match controls</span>
+      </button>
+      {openSection === "basic" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {slider("Amount",     amountRef,  amountLabel,  setAmountLabel,  0, 100, "%")}
+          {slider("Smoothing",  smoothRef,  smoothLabel,  setSmoothLabel,  0,  32)}
+          {slider("Max stretch",stretchRef, stretchLabel, setStretchLabel, 1,  32)}
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, marginTop: 2, cursor: "pointer", opacity: 0.85 }}>
+            <input type="checkbox" checked={chromaOnly} onChange={e => setChromaOnly(e.target.checked)} />
+            Chroma only (preserve target luminance)
+          </label>
+        </div>
+      )}
 
-      <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, marginTop: 2, cursor: "pointer", opacity: 0.85 }}>
-        <input type="checkbox" checked={chromaOnly} onChange={e => setChromaOnly(e.target.checked)} />
-        Chroma only (preserve target luminance)
-      </label>
+      {/* ── Accordion: Dimensions ──────────────────────── */}
+      <div style={{ borderTop: "1px solid #444" }} />
+      <button onClick={() => toggleSection("dims")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", background: "transparent", color: "#ccc", border: "none", cursor: "pointer", fontSize: 11 }}>
+        <span>{openSection === "dims" ? "▾" : "▸"} Dimension warps</span>
+        {openSection === "dims" && <span onClick={(e: any) => { e.stopPropagation(); dimsRef.current = { ...DEFAULT_DIMENSIONS }; setDimsLabel({ ...DEFAULT_DIMENSIONS }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>}
+      </button>
+      {openSection === "dims" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {dimSlider("Value",       "value",      0, 200, "%")}
+          {dimSlider("Chroma",      "chroma",     0, 200, "%")}
+          {dimSlider("Hue shift",   "hueShift", -180, 180, "°")}
+          {dimSlider("Contrast",    "contrast",   1, 200, "%")}
+          {dimSlider("Neutralize",  "neutralize", 0, 100, "%")}
+          {dimSlider("Separation",  "separation", 0, 200, "%")}
+        </div>
+      )}
 
-      <div style={{ borderTop: "1px solid #444", margin: "8px 0 4px" }} />
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 10, opacity: 0.7 }}>
-        <span>Post-fit dimension warps (defaults = no change)</span>
-        <button onClick={() => { dimsRef.current = { ...DEFAULT_DIMENSIONS }; setDimsLabel({ ...DEFAULT_DIMENSIONS }); scheduleRedraw(); }} style={tinyBtn}>Reset</button>
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        {dimSlider("Value",       "value",      0, 200, "%")}
-        {dimSlider("Chroma",      "chroma",     0, 200, "%")}
-        {dimSlider("Hue shift",   "hueShift", -180, 180, "°")}
-        {dimSlider("Contrast",    "contrast",   1, 200, "%")}
-        {dimSlider("Neutralize",  "neutralize", 0, 100, "%")}
-        {dimSlider("Separation",  "separation", 0, 200, "%")}
-      </div>
-
-      <div style={{ borderTop: "1px solid #444", margin: "8px 0 4px" }} />
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 10, opacity: 0.7 }}>
-        <span>Zone targeting (per-zone amount / anchor / falloff)</span>
-        <button onClick={() => { zonesRef.current = { ...DEFAULT_ZONES }; setZonesLabel({ ...DEFAULT_ZONES }); scheduleRedraw(); }} style={tinyBtn}>Reset</button>
-      </div>
-      {(["shadows", "mids", "highlights"] as const).map(zone => {
+      {/* ── Accordion: Zones ───────────────────────────── */}
+      <div style={{ borderTop: "1px solid #444" }} />
+      <button onClick={() => toggleSection("zones")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", background: "transparent", color: "#ccc", border: "none", cursor: "pointer", fontSize: 11 }}>
+        <span>{openSection === "zones" ? "▾" : "▸"} Zone targeting</span>
+        {openSection === "zones" && <span onClick={(e: any) => { e.stopPropagation(); zonesRef.current = { ...DEFAULT_ZONES }; setZonesLabel({ ...DEFAULT_ZONES }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>}
+      </button>
+      {openSection === "zones" && (["shadows", "mids", "highlights"] as const).map(zone => {
         const colorMap: Record<string, string> = { shadows: "#4a7fc1", mids: "#bbb", highlights: "#e0b85a" };
         const ankKey = `${zone}Anchor` as keyof ZoneOpts;
         const falKey = `${zone}Falloff` as keyof ZoneOpts;
