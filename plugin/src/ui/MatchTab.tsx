@@ -480,16 +480,16 @@ export function MatchTab() {
         <div style={{ flex: 1 }} />
         <button onClick={() => setColorSpace(c => c === "rgb" ? "lab" : "rgb")}
           title="Toggle color space — RGB matches per-channel histograms; Lab matches in perceptual space."
-          style={{ padding: "2px 10px", fontSize: 10, fontWeight: 600, minWidth: 40,
+          style={{ height: 16, padding: "0 6px", fontSize: 10, fontWeight: 600, lineHeight: "14px",
                    background: "transparent", color: "#dddddd",
-                   border: "1px solid #888", borderRadius: 3, cursor: "pointer" }}>
+                   border: "1px solid #888", borderRadius: 3, cursor: "pointer", boxSizing: "border-box" }}>
           {colorSpace.toUpperCase()}
         </button>
         <button onClick={onRefreshAll} title="Refresh source + target previews"
-          style={{ width: 22, height: 20, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
+          style={{ width: 16, height: 16, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
                    background: "transparent", border: "1px solid #888", borderRadius: 3, cursor: "pointer",
                    flexShrink: 0, boxSizing: "border-box" }}>
-          <span style={{ width: 10, height: 10, background: "#bbbbbb", borderRadius: 1 }} />
+          <span style={{ width: 8, height: 8, background: "#bbbbbb", borderRadius: 1 }} />
         </button>
       </div>
 
