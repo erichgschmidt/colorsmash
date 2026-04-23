@@ -1,7 +1,6 @@
 // Color-match tab. One Curves layer fitted via per-channel histogram specification.
-// Captures range, contrast, value, and color cast in a single editable node.
-// Controls: amount, smoothing, stretch cap, dimension warps, zone targeting, chroma-only.
-// Source can be a layer, a marquee selection snapshot, or a saved preset (history).
+// Source is one of three modes (tabbed): Layer / Preset / Selection.
+// Selection mode supports auto-update — re-snapshots when the marquee changes.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLayers } from "./useLayers";
@@ -15,9 +14,7 @@ import {
   DimensionOpts, DEFAULT_DIMENSIONS, ZoneOpts, DEFAULT_ZONES,
 } from "../core/histogramMatch";
 import { applyMatch } from "../app/applyMatch";
-import {
-  readLayerPixels, executeAsModal, getActiveDoc, getSelectionBounds,
-} from "../services/photoshop";
+import { readLayerPixels, executeAsModal, getActiveDoc, getSelectionBounds } from "../services/photoshop";
 import { downsampleToMaxEdge } from "../core/downsample";
 import {
   listPresets, savePreset, deletePreset, loadPresetSnap,
@@ -28,6 +25,8 @@ import {
 } from "../services/sourceCapture";
 
 const SOURCE_MAX_EDGE = 256;
+
+type SrcMode = "layer" | "preset" | "selection";
 
 export function MatchTab() {
   const layers = useLayers();
@@ -48,9 +47,12 @@ export function MatchTab() {
   const zonesRef = useRef<ZoneOpts>({ ...DEFAULT_ZONES });
   const [zonesLabel, setZonesLabel] = useState<ZoneOpts>({ ...DEFAULT_ZONES });
 
-  // Source override: when set, fit uses these pixels instead of the source layer.
+  const [srcMode, setSrcMode] = useState<SrcMode>("layer");
   const [srcOverride, setSrcOverride] = useState<SourcePresetSnapshot | null>(null);
   const [presets, setPresets] = useState<SourcePreset[]>([]);
+  const [selectedPresetId, setSelectedPresetId] = useState("");
+  const [autoUpdate, setAutoUpdate] = useState(false);
+  const [importN, setImportN] = useState(10);
 
   useEffect(() => { listPresets().then(setPresets).catch(() => {}); }, []);
 
@@ -61,10 +63,10 @@ export function MatchTab() {
     }
   }, [layers]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const src = useLayerPreview(sourceId);
+  const src = useLayerPreview(srcMode === "layer" ? sourceId : null);
   const tgt = useLayerPreview(targetId);
 
-  // Effective source snapshot for fit + preview.
+  // Effective source = override (preset/selection) or live layer snap.
   const srcSnap = srcOverride ?? src.snap;
 
   const fittedRaw = useMemo(() => {
@@ -105,67 +107,99 @@ export function MatchTab() {
 
   useEffect(() => { scheduleRedraw(); }, [fittedRaw, tgt.snap, chromaOnly, showOriginal]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const onSwap = () => {
-    if (srcOverride) { setStatus("Cannot swap while source is an override. Clear override first."); return; }
-    const a = sourceId, b = targetId;
-    setSourceId(b); setTargetId(a);
+  // ─── Source-mode actions ────────────────────────────────────────────────
+  const snapshotSelectionInner = async (): Promise<SourcePresetSnapshot> => {
+    return executeAsModal("Color Smash snap selection", async () => {
+      const doc = getActiveDoc();
+      const sel = getSelectionBounds();
+      if (!sel) throw new Error("No active marquee selection.");
+      const layer = doc.activeLayers?.[0];
+      if (!layer) throw new Error("No active layer.");
+      const buf = await readLayerPixels(layer, sel);
+      const small = downsampleToMaxEdge(buf, SOURCE_MAX_EDGE);
+      return { width: small.width, height: small.height, data: small.data, name: `${layer.name} (selection)` };
+    });
   };
 
-  const onSnapshotSelection = async () => {
-    setStatus("Snapshotting selection...");
+  const onSnapSelection = async () => {
+    setStatus("Snapping selection...");
     try {
-      const snap = await executeAsModal("Color Smash snapshot selection", async () => {
-        const doc = getActiveDoc();
-        const sel = getSelectionBounds();
-        if (!sel) throw new Error("No active marquee selection.");
-        const layer = doc.activeLayers?.[0];
-        if (!layer) throw new Error("No active layer.");
-        const buf = await readLayerPixels(layer, sel);
-        const small = downsampleToMaxEdge(buf, SOURCE_MAX_EDGE);
-        return { width: small.width, height: small.height, data: small.data, name: `${layer.name} (selection)` };
-      });
+      const snap = await snapshotSelectionInner();
       setSrcOverride(snap);
-      setStatus(`Source = ${snap.name} (${snap.width}×${snap.height})`);
+      setStatus(`Source = ${snap.name}`);
     } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
+  };
+
+  // Auto-update polling when in Selection mode + autoUpdate on. Debounced via stability count.
+  const lastBoundsRef = useRef<string>("");
+  const stableTicksRef = useRef(0);
+  useEffect(() => {
+    if (srcMode !== "selection" || !autoUpdate) return;
+    const interval = setInterval(async () => {
+      let bounds: any = null;
+      try { bounds = getSelectionBounds(); } catch { /* */ }
+      if (!bounds) { lastBoundsRef.current = ""; stableTicksRef.current = 0; return; }
+      const key = `${bounds.left},${bounds.top},${bounds.right},${bounds.bottom}`;
+      if (key === lastBoundsRef.current) {
+        stableTicksRef.current++;
+        if (stableTicksRef.current === 1) {
+          try { setSrcOverride(await snapshotSelectionInner()); } catch { /* ignore transient */ }
+        }
+      } else {
+        lastBoundsRef.current = key;
+        stableTicksRef.current = 0;
+      }
+    }, 200);
+    return () => clearInterval(interval);
+  }, [srcMode, autoUpdate]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Switching mode: clear conflicting state.
+  const switchMode = (m: SrcMode) => {
+    setSrcMode(m);
+    if (m === "layer") { setSrcOverride(null); setAutoUpdate(false); }
+    if (m === "preset") setAutoUpdate(false);
+    // Selection mode: leave srcOverride; user can Snap now or enable auto-update.
+  };
+
+  const onLoadPreset = (id: string) => {
+    setSelectedPresetId(id);
+    if (!id) { setSrcOverride(null); return; }
+    const p = presets.find(x => x.id === id);
+    if (!p) return;
+    setSrcOverride(loadPresetSnap(p));
+    setStatus(`Source = preset "${p.name}"`);
   };
 
   const onSavePreset = async () => {
     if (!srcSnap) { setStatus("No source snapshot to save."); return; }
-    const name = prompt("Preset name:", srcOverride?.name ?? src.snap?.layerName ?? "Untitled");
+    const defaultName = srcOverride?.name ?? src.snap?.layerName ?? "Untitled";
+    const name = prompt("Preset name:", defaultName);
     if (!name) return;
     try {
-      const p = await savePreset({ width: srcSnap.width, height: srcSnap.height, data: srcSnap.data, name });
+      await savePreset({ width: srcSnap.width, height: srcSnap.height, data: srcSnap.data, name });
       setPresets(await listPresets());
-      setStatus(`Saved preset "${p.name}".`);
-    } catch (e: any) { setStatus(`Error saving preset: ${e?.message ?? e}`); }
-  };
-
-  const onLoadPreset = (id: string) => {
-    if (!id) { setSrcOverride(null); setStatus("Source = layer."); return; }
-    const p = presets.find(x => x.id === id);
-    if (!p) return;
-    setSrcOverride(loadPresetSnap(p));
-    setStatus(`Source = preset "${p.name}".`);
+      setStatus(`Saved preset "${name}".`);
+    } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
   };
 
   const onDeletePreset = async () => {
-    const sel = (document.querySelector("#match-preset-select") as HTMLSelectElement | null)?.value;
-    if (!sel) { setStatus("Pick a preset to delete."); return; }
-    if (!confirm(`Delete preset "${presets.find(p => p.id === sel)?.name}"?`)) return;
-    await deletePreset(sel);
+    if (!selectedPresetId) { setStatus("Pick a preset to delete."); return; }
+    const p = presets.find(x => x.id === selectedPresetId);
+    if (!p) return;
+    if (!confirm(`Delete preset "${p.name}"?`)) return;
+    await deletePreset(selectedPresetId);
     setPresets(await listPresets());
-    if (srcOverride && presets.find(p => p.id === sel)) setSrcOverride(null);
+    setSelectedPresetId("");
+    if (srcOverride?.name === p.name) setSrcOverride(null);
     setStatus("Preset deleted.");
   };
-
-  const onClearOverride = () => { setSrcOverride(null); setStatus("Source = layer."); };
 
   const onSnapshotClipboard = async (alsoSave: boolean) => {
     setStatus("Pasting from clipboard...");
     try {
       const snap = await snapshotFromClipboard();
       setSrcOverride(snap);
-      let msg = `Source = ${snap.name} (${snap.width}×${snap.height})`;
+      let msg = `Source = ${snap.name}`;
       if (alsoSave) {
         const name = prompt("Preset name:", snap.name);
         if (name) {
@@ -178,28 +212,33 @@ export function MatchTab() {
     } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
   };
 
-  const [importN, setImportN] = useState(10);
   const onImportFolder = async () => {
-    setStatus(`Importing last ${importN} from folder...`);
+    setStatus(`Importing last ${importN}...`);
     try {
       const existing = new Set(presets.map(p => p.name));
       const snaps = await importRecentScreenshots(importN, existing);
-      if (snaps.length === 0) { setStatus("No new images found (already imported or folder empty)."); return; }
+      if (snaps.length === 0) { setStatus("No new images (already imported or folder empty)."); return; }
       for (const s of snaps) await savePreset(s);
       const fresh = await listPresets();
       setPresets(fresh);
-      // Auto-select the newest one as override.
       const newest = fresh.find(p => p.name === snaps[0].name);
-      if (newest) setSrcOverride(loadPresetSnap(newest));
+      if (newest) { setSrcOverride(loadPresetSnap(newest)); setSelectedPresetId(newest.id); }
       setStatus(`Imported ${snaps.length} preset${snaps.length === 1 ? "" : "s"}.`);
     } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
   };
 
   const onResetFolder = async () => { setStatus(await resetScreenshotFolder()); };
 
+  const onSwap = () => {
+    if (srcMode !== "layer") { setStatus("Swap only works in Layer mode."); return; }
+    const a = sourceId, b = targetId;
+    setSourceId(b); setTargetId(a);
+  };
+
   const onApply = async () => {
     if (targetId == null) { setStatus("Pick target layer."); return; }
-    if (!srcOverride && sourceId == null) { setStatus("Pick source layer."); return; }
+    if (srcMode === "layer" && sourceId == null) { setStatus("Pick source layer."); return; }
+    if (srcMode !== "layer" && !srcOverride) { setStatus("No source snapshot — capture one first."); return; }
     setStatus("Applying match...");
     try {
       setStatus(await applyMatch({
@@ -217,9 +256,16 @@ export function MatchTab() {
     } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
   };
 
+  // ─── UI helpers ─────────────────────────────────────────────────────────
   const btn: React.CSSProperties = { padding: "6px 12px", marginTop: 6, background: "#1473e6", color: "white", border: "none", cursor: "pointer", borderRadius: 3 };
   const tinyBtn: React.CSSProperties = { padding: "1px 6px", background: "transparent", color: "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 9 };
   const sel: React.CSSProperties = { flex: 1, padding: "2px 4px", fontSize: 10, minWidth: 0, background: "#333", color: "#ddd", border: "1px solid #555" };
+  const tabBtn = (active: boolean): React.CSSProperties => ({
+    padding: "3px 10px", fontSize: 10, cursor: "pointer",
+    background: active ? "#1473e6" : "transparent",
+    color: active ? "white" : "#aaa",
+    border: "1px solid #555", borderBottom: active ? "1px solid #1473e6" : "1px solid #555",
+  });
 
   const slider = (
     label: string, ref: React.MutableRefObject<number>, value: number, setValue: (n: number) => void,
@@ -260,38 +306,72 @@ export function MatchTab() {
     );
   };
 
+  // ─── Source mode tab content ────────────────────────────────────────────
+  const sourceModeContent = () => {
+    if (srcMode === "layer") {
+      return (
+        <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
+          <select style={sel} value={sourceId ?? ""} onChange={e => setSourceId(Number(e.target.value))}>
+            {layers.length === 0 && <option value="">— none —</option>}
+            {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+          </select>
+        </div>
+      );
+    }
+    if (srcMode === "preset") {
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
+            <select style={sel} value={selectedPresetId} onChange={e => onLoadPreset(e.target.value)}>
+              <option value="">— pick a preset —</option>
+              {presets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            <button onClick={onDeletePreset} style={tinyBtn}>Del</button>
+            <button onClick={onSavePreset} style={tinyBtn} title="Save current source as preset">Save current</button>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
+            <button onClick={() => onSnapshotClipboard(false)} style={tinyBtn}>Clipboard</button>
+            <button onClick={() => onSnapshotClipboard(true)} style={tinyBtn}>Clip → preset</button>
+            <span style={{ opacity: 0.6, marginLeft: 4 }}>folder last</span>
+            <input type="number" min={1} max={30} value={importN}
+              onChange={e => setImportN(Math.max(1, Math.min(30, Number(e.target.value) || 1)))}
+              style={{ width: 36, padding: "1px 4px", background: "#333", color: "#ddd", border: "1px solid #555", fontSize: 10 }} />
+            <button onClick={onImportFolder} style={tinyBtn}>Import</button>
+            <button onClick={onResetFolder} style={tinyBtn} title="Forget saved screenshot folder">⟲</button>
+          </div>
+        </div>
+      );
+    }
+    // selection
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
+        <button onClick={onSnapSelection} style={tinyBtn}>Snap now</button>
+        <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", opacity: 0.85 }}>
+          <input type="checkbox" checked={autoUpdate} onChange={e => setAutoUpdate(e.target.checked)} />
+          Auto-update from selection
+        </label>
+        {autoUpdate && <span style={{ color: "#7d7", marginLeft: 4 }}>● watching</span>}
+      </div>
+    );
+  };
+
   return (
     <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-      <div style={{ display: "flex", gap: 8 }}>
-        <PreviewPane label="Source" layers={srcOverride ? [] : layers} selectedId={srcOverride ? null : sourceId} onSelect={setSourceId}
-          snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}
-          onRefresh={srcOverride ? undefined : src.refresh} height={120} />
-        <PreviewPane label="Target" layers={layers} selectedId={targetId} onSelect={setTargetId} snapshot={tgt.snap} onRefresh={tgt.refresh} height={120} />
+      {/* Source mode tabs (full width) */}
+      <div style={{ display: "flex", gap: 0 }}>
+        <span style={{ fontSize: 10, opacity: 0.7, alignSelf: "center", marginRight: 6 }}>Source:</span>
+        <button style={tabBtn(srcMode === "layer")}     onClick={() => switchMode("layer")}>Layer</button>
+        <button style={tabBtn(srcMode === "preset")}    onClick={() => switchMode("preset")}>Preset</button>
+        <button style={tabBtn(srcMode === "selection")} onClick={() => switchMode("selection")}>Selection</button>
       </div>
+      {sourceModeContent()}
 
-      {/* Source toolbar: snapshot / save / preset dropdown / clear */}
-      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4, fontSize: 10 }}>
-        <button onClick={onSnapshotSelection} style={tinyBtn} title="Use the active marquee selection on the active layer as source">Snip selection</button>
-        <button onClick={() => onSnapshotClipboard(false)} style={tinyBtn} title="Paste current clipboard as source (one-shot)">Clipboard</button>
-        <button onClick={() => onSnapshotClipboard(true)} style={tinyBtn} title="Paste clipboard + save as preset">Clip → preset</button>
-        <button onClick={onSavePreset} style={tinyBtn} title="Save current source for later reuse">Save preset</button>
-        {srcOverride && <button onClick={onClearOverride} style={tinyBtn}>Use layer</button>}
-      </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
-        <select id="match-preset-select" style={sel} value={srcOverride && presets.find(p => p.name === srcOverride.name) ? presets.find(p => p.name === srcOverride.name)!.id : ""}
-          onChange={e => onLoadPreset(e.target.value)}>
-          <option value="">— layer mode —</option>
-          {presets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
-        <button onClick={onDeletePreset} style={tinyBtn} title="Delete the preset selected in the dropdown">Del</button>
-      </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
-        <span style={{ opacity: 0.6 }}>Folder import last</span>
-        <input type="number" min={1} max={30} value={importN}
-          onChange={e => setImportN(Math.max(1, Math.min(30, Number(e.target.value) || 1)))}
-          style={{ width: 36, padding: "1px 4px", background: "#333", color: "#ddd", border: "1px solid #555", fontSize: 10 }} />
-        <button onClick={onImportFolder} style={tinyBtn} title="Import N most-recent images from picked folder, dedup against existing presets">Import</button>
-        <button onClick={onResetFolder} style={tinyBtn} title="Forget saved screenshot folder">Reset folder</button>
+      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+        <PreviewPane label="Source" layers={[]} selectedId={null} onSelect={() => {}}
+          snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}
+          onRefresh={srcMode === "layer" ? src.refresh : undefined}
+          hideSelector height={120} />
+        <PreviewPane label="Target" layers={layers} selectedId={targetId} onSelect={setTargetId} snapshot={tgt.snap} onRefresh={tgt.refresh} height={120} />
       </div>
 
       <div style={{ display: "flex", justifyContent: "center" }}>
