@@ -357,21 +357,33 @@ export function MatchTab() {
 
   return (
     <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-      {/* Source mode tabs (full width) */}
-      <div style={{ display: "flex", gap: 0 }}>
-        <span style={{ fontSize: 10, opacity: 0.7, alignSelf: "center", marginRight: 6 }}>Source:</span>
-        <button style={tabBtn(srcMode === "layer")}     onClick={() => switchMode("layer")}>Layer</button>
-        <button style={tabBtn(srcMode === "preset")}    onClick={() => switchMode("preset")}>Preset</button>
-        <button style={tabBtn(srcMode === "selection")} onClick={() => switchMode("selection")}>Selection</button>
-      </div>
-      {sourceModeContent()}
-
-      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-        <PreviewPane label="Source" layers={[]} selectedId={null} onSelect={() => {}}
-          snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}
-          onRefresh={srcMode === "layer" ? src.refresh : undefined}
-          hideSelector fitAspect />
-        <PreviewPane label="Target" layers={layers} selectedId={targetId} onSelect={setTargetId} snapshot={tgt.snap} onRefresh={tgt.refresh} fitAspect />
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+        {/* Source column */}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 0 }}>
+            <span style={{ fontSize: 10, opacity: 0.7, marginRight: 4 }}>Src</span>
+            <button style={tabBtn(srcMode === "layer")}     onClick={() => switchMode("layer")}>Layer</button>
+            <button style={tabBtn(srcMode === "preset")}    onClick={() => switchMode("preset")}>Preset</button>
+            <button style={tabBtn(srcMode === "selection")} onClick={() => switchMode("selection")}>Sel</button>
+          </div>
+          {sourceModeContent()}
+          <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}}
+            snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}
+            onRefresh={srcMode === "layer" ? src.refresh : undefined}
+            hideSelector fitAspect maxHeight={160} />
+        </div>
+        {/* Target column */}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, opacity: 0.7, height: 22 }}>
+            <span>Target</span>
+          </div>
+          <select style={sel} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}>
+            {layers.length === 0 && <option value="">— none —</option>}
+            {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+          </select>
+          <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap} onRefresh={tgt.refresh}
+            hideSelector fitAspect maxHeight={160} />
+        </div>
       </div>
 
       <div style={{ display: "flex", justifyContent: "center" }}>

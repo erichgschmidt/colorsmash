@@ -17,6 +17,7 @@ export interface PreviewPaneProps {
   height?: number;
   hideSelector?: boolean;
   fitAspect?: boolean;  // if true, container height tracks snapshot aspect ratio
+  maxHeight?: number;   // cap for fitAspect (default 180)
 }
 
 export interface PreviewImgHandle {
@@ -61,7 +62,7 @@ export function PreviewPane(props: PreviewPaneProps & { imgHandleRef?: React.Mut
   const sel: React.CSSProperties = { flex: 1, padding: "2px 4px", fontSize: 10, minWidth: 0, background: "#333", color: "#ddd", border: "1px solid #555" };
 
   const aspectStyle: React.CSSProperties = props.fitAspect && props.snapshot
-    ? { aspectRatio: `${props.snapshot.width} / ${props.snapshot.height}`, width: "100%" }
+    ? { aspectRatio: `${props.snapshot.width} / ${props.snapshot.height}`, width: "100%", maxHeight: props.maxHeight ?? 180 }
     : { height };
 
   return (
