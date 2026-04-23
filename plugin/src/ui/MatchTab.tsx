@@ -211,7 +211,6 @@ export function MatchTab() {
   };
 
   // ─── Styles ─────────────────────────────────────────────────────────────
-  const btn: React.CSSProperties = { padding: "6px 12px", marginTop: 6, background: "#1473e6", color: "white", border: "none", cursor: "pointer", borderRadius: 3 };
   const tinyBtn: React.CSSProperties = { padding: "1px 6px", background: "transparent", color: "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 9 };
   const sel: React.CSSProperties = { flex: 1, padding: "2px 4px", fontSize: 10, minWidth: 0, background: "#333", color: "#ddd", border: "1px solid #555" };
   const tabBtn = (active: boolean): React.CSSProperties => ({
@@ -352,10 +351,11 @@ export function MatchTab() {
               {slider("Amount",     amountRef,  amountLabel,  setAmountLabel,  0, 100, "%", 100)}
               {slider("Smoothing",  smoothRef,  smoothLabel,  setSmoothLabel,  0,  32, "",  0)}
               {slider("Max stretch",stretchRef, stretchLabel, setStretchLabel, 1,  32, "",  8)}
-              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, marginTop: 2, cursor: "pointer", opacity: 0.85 }}>
-                <input type="checkbox" checked={chromaOnly} onChange={e => setChromaOnly(e.target.checked)} />
+              {/* @ts-ignore Spectrum web component */}
+              <sp-checkbox checked={chromaOnly || undefined} onInput={(e: any) => setChromaOnly(e.target.checked)} style={{ marginTop: 4, fontSize: 11 }}>
                 Chroma only (preserve target luminance)
-              </label>
+              {/* @ts-ignore */}
+              </sp-checkbox>
             </div>
           )}
 
@@ -400,7 +400,8 @@ export function MatchTab() {
             );
           })}
 
-          <button onClick={onApply} style={btn}>Apply Match (1 Curves layer)</button>
+          {/* @ts-ignore Spectrum web component */}
+          <sp-button variant="cta" onClick={onApply} style={{ marginTop: 6, width: "100%" }}>Apply Match (1 Curves layer)</sp-button>
           <div style={{ marginTop: 6, fontSize: 10, opacity: 0.7, whiteSpace: "pre-wrap" }}>{status}</div>
         </div>
       </div>
