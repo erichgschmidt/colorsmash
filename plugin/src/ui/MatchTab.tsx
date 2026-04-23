@@ -15,7 +15,7 @@ import {
   DimensionOpts, DEFAULT_DIMENSIONS, ZoneOpts, DEFAULT_ZONES,
 } from "../core/histogramMatch";
 import { applyMatch } from "../app/applyMatch";
-import { readLayerPixels, executeAsModal, getActiveDoc, getSelectionBounds } from "../services/photoshop";
+import { readLayerPixels, executeAsModal, getActiveDoc, getSelectionBounds, app, action as psAction } from "../services/photoshop";
 import { downsampleToMaxEdge } from "../core/downsample";
 import {
   listPresets, savePreset, deletePreset, loadPresetSnap,
@@ -56,6 +56,28 @@ export function MatchTab() {
   const [importN, setImportN] = useState(10);
   const [presetMore, setPresetMore] = useState(false);
   const [openSection, setOpenSection] = useState<"basic" | "dims" | "zones" | null>("basic");
+  const [docs, setDocs] = useState<{ id: number; name: string }[]>([]);
+  const [activeDocId, setActiveDocId] = useState<number | null>(null);
+
+  useEffect(() => {
+    const refresh = () => {
+      try {
+        const list = (app.documents ?? []).map((d: any) => ({ id: d.id, name: d.name }));
+        setDocs(list);
+        setActiveDocId(app.activeDocument?.id ?? null);
+      } catch { /* */ }
+    };
+    refresh();
+    const events = ["open", "close", "select", "make"];
+    psAction.addNotificationListener(events, refresh);
+    return () => { psAction.removeNotificationListener?.(events, refresh); };
+  }, []);
+
+  const onSwitchDoc = (id: number) => {
+    const d = (app.documents ?? []).find((x: any) => x.id === id);
+    if (!d) return;
+    try { app.activeDocument = d; setActiveDocId(id); } catch (e: any) { setStatus(`Error switching doc: ${e?.message ?? e}`); }
+  };
   const toggleSection = (s: "basic" | "dims" | "zones") => setOpenSection(o => o === s ? null : s);
 
   useEffect(() => { listPresets().then(setPresets).catch(() => {}); }, []);
@@ -359,10 +381,16 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
 
   return (
     <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
-        <button onClick={onRefreshAll} title="Refresh source + target from active doc"
+      <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
+        <span style={{ opacity: 0.7 }}>Doc:</span>
+        <select style={{ flex: 1, padding: "2px 4px", fontSize: 10, minWidth: 0, background: "#333", color: "#ddd", border: "1px solid #555" }}
+          value={activeDocId ?? ""} onChange={e => onSwitchDoc(Number(e.target.value))}>
+          {docs.length === 0 && <option value="">— no docs —</option>}
+          {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+        </select>
+        <button onClick={onRefreshAll} title="Refresh source + target previews from active doc"
           style={{ padding: "2px 8px", background: "transparent", color: "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 10 }}>
-          ↻ Refresh
+          ↻
         </button>
       </div>
       {useMemo(() => (
@@ -374,7 +402,7 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
               <button style={tabBtn(srcMode === "preset")}    onClick={() => switchMode("preset")}    title="Preset">P</button>
               <button style={tabBtn(srcMode === "selection")} onClick={() => switchMode("selection")} title="Selection">S</button>
             </div>
-            <div style={{ height: 22, display: "flex", flexDirection: "column", gap: 4, overflow: "hidden" }}>{sourceModeContent()}</div>
+            <div style={{ minHeight: 24, display: "flex", flexDirection: "column", gap: 4 }}>{sourceModeContent()}</div>
             <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}}
               snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}
               hideSelector fitAspect maxHeight={160} />
@@ -385,7 +413,7 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
               <span style={{ fontSize: 10, opacity: 0.7, width: 22 }}>Tgt</span>
               <button style={{ ...tabBtn(true), cursor: "default" }} title="Layer" disabled>L</button>
             </div>
-            <div style={{ height: 22, display: "flex" }}>
+            <div style={{ minHeight: 24, display: "flex" }}>
               <select style={sel} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}>
                 {layers.length === 0 && <option value="">— none —</option>}
                 {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
