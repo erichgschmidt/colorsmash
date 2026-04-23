@@ -361,152 +361,141 @@ export function MatchTab() {
 
   return (
     <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-      {/* Body: previews on left, curves+controls on right (no top header row anymore — toggles live in right col header) */}
-      <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
-          {useMemo(() => (
-            <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-              {/* Source column: doc dropdown + layer/selection picker */}
-              <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-                <div style={{ height: 26, display: "flex", alignItems: "center" }}>
-                  <select style={sel}
-                    value={srcMode === "selection" ? "__selection__" : (activeDocId ?? "")}
-                    onChange={e => {
-                      if (e.target.value === "__selection__") switchSrcMode("selection");
-                      else { switchSrcMode("layer"); onSwitchDoc(Number(e.target.value)); }
-                    }}>
-                    {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                    <option value="__selection__">⊞ Use Selection</option>
-                  </select>
-                </div>
-                <div style={{ height: 26, display: "flex", alignItems: "center" }}>{sourceModeContent()}</div>
-                <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}}
-                  snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}
-                  hideSelector fitAspect maxHeight={160} />
-              </div>
-              <div style={{ width: 1, background: "#444", alignSelf: "stretch" }} />
-              {/* Target column: doc dropdown + layer picker */}
-              <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-                <div style={{ height: 26, display: "flex", alignItems: "center" }}>
-                  <select style={sel} value={activeDocId ?? ""} onChange={e => onSwitchDoc(Number(e.target.value))}>
-                    {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                  </select>
-                </div>
-                <div style={{ height: 26, display: "flex", alignItems: "center" }}>
-                  <select style={sel} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}>
-                    {layers.length === 0 && <option value="">— none —</option>}
-                    {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                  </select>
-                </div>
-                <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap}
-                  hideSelector fitAspect maxHeight={160} />
-              </div>
+      {/* Top: source + target side-by-side mini panes (each: doc dropdown + layer picker + small preview) */}
+      {useMemo(() => (
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+            <div style={{ height: 26, display: "flex", alignItems: "center" }}>
+              <select style={sel}
+                value={srcMode === "selection" ? "__selection__" : (activeDocId ?? "")}
+                onChange={e => {
+                  if (e.target.value === "__selection__") switchSrcMode("selection");
+                  else { switchSrcMode("layer"); onSwitchDoc(Number(e.target.value)); }
+                }}>
+                {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                <option value="__selection__">⊞ Use Selection</option>
+              </select>
             </div>
-          ), [src.snap, tgt.snap, sourceId, targetId, layers, srcMode, srcOverride, autoUpdate, docs, activeDocId])}
-
-          <div style={{ marginTop: 4 }}>
-            <span style={{ fontSize: 10, opacity: 0.7 }}>Matched preview</span>
+            <div style={{ height: 26, display: "flex", alignItems: "center" }}>{sourceModeContent()}</div>
+            <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}}
+              snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}
+              hideSelector fitAspect maxHeight={120} />
           </div>
-          <div style={{ height: 240 }}>
-            {useMemo(() => (
-              <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap} imgHandleRef={matchedHandleRef} hideSelector height={240} />
-            ), [tgt.snap])}
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+            <div style={{ height: 26, display: "flex", alignItems: "center" }}>
+              <select style={sel} value={activeDocId ?? ""} onChange={e => onSwitchDoc(Number(e.target.value))}>
+                {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+            </div>
+            <div style={{ height: 26, display: "flex", alignItems: "center" }}>
+              <select style={sel} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}>
+                {layers.length === 0 && <option value="">— none —</option>}
+                {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+              </select>
+            </div>
+            <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap}
+              hideSelector fitAspect maxHeight={120} />
           </div>
         </div>
+      ), [src.snap, tgt.snap, sourceId, targetId, layers, srcMode, srcOverride, autoUpdate, docs, activeDocId])}
 
-        <div style={{ width: 1, background: "#444", alignSelf: "stretch" }} />
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0, paddingLeft: 4 }}>
-          {/* Header row: spans the same vertical space as left col's two dropdown rows so the curves graph top aligns with the preview tops. */}
-          <div style={{ height: 52, display: "flex", flexDirection: "column", justifyContent: "flex-end", paddingBottom: 0 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 10, opacity: 0.85 }}>
-              <span>Fitted curves (R G B)</span>
-              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <button onClick={() => setColorSpace(c => c === "rgb" ? "lab" : "rgb")}
-                  title="Toggle color space — RGB matches per-channel histograms; Lab matches in perceptual space."
-                  style={{ padding: "1px 8px", fontSize: 10, fontWeight: 600, minWidth: 36,
-                           background: "transparent", color: "#cccccc",
-                           border: "1px solid #555", borderRadius: 3, cursor: "pointer" }}>
-                  {colorSpace.toUpperCase()}
-                </button>
-                <button onClick={onRefreshAll} title="Refresh source + target previews" style={resetIconBtn}><Icon name="refresh" size={11} /></button>
-              </div>
-            </div>
-          </div>
-          <CurvesGraph curves={renderedCurves} />
-
-          <div style={{ borderTop: "1px solid #444", margin: "8px 0 0" }} />
-          <button onClick={() => toggleSection("basic")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", background: "transparent", color: "#ccc", border: "none", cursor: "pointer", fontSize: 11 }}>
-            <span><Icon name={openSection === "basic" ? "chevronDown" : "chevronRight"} size={11} /> Match controls</span>
-          </button>
-          {openSection === "basic" && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              {slider("Amount",     amountRef,  amountLabel,  setAmountLabel,  0, 100, "%", 100)}
-              {slider("Smooth",     smoothRef,  smoothLabel,  setSmoothLabel,  0,  32, "",  0)}
-              {slider("Stretch",    stretchRef, stretchLabel, setStretchLabel, 1,  32, "",  8)}
-              {/* @ts-ignore Spectrum web component */}
-              <sp-checkbox checked={chromaOnly || undefined} onInput={(e: any) => setChromaOnly(e.target.checked)} style={{ marginTop: 4, fontSize: 11 }}>
-                Chroma only (preserve target luminance)
-              {/* @ts-ignore */}
-              </sp-checkbox>
-            </div>
-          )}
-
-          <div style={{ borderTop: "1px solid #444" }} />
-          <button onClick={() => toggleSection("dims")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", background: "transparent", color: "#ccc", border: "none", cursor: "pointer", fontSize: 11 }}>
-            <span><Icon name={openSection === "dims" ? "chevronDown" : "chevronRight"} size={11} /> Dimension warps</span>
-            {openSection === "dims" && <span onClick={(e: any) => { e.stopPropagation(); dimsRef.current = { ...DEFAULT_DIMENSIONS }; setDimsLabel({ ...DEFAULT_DIMENSIONS }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>}
-          </button>
-          {openSection === "dims" && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              {dimSlider("Value",       "value",      0, 200, "%")}
-              {dimSlider("Chroma",      "chroma",     0, 200, "%")}
-              {dimSlider("Hue shift",   "hueShift", -180, 180, "°")}
-              {dimSlider("Contrast",    "contrast",   1, 200, "%")}
-              {dimSlider("Neutralize",  "neutralize", 0, 100, "%")}
-              {dimSlider("Separation",  "separation", 0, 200, "%")}
-            </div>
-          )}
-
-          <div style={{ borderTop: "1px solid #444" }} />
-          <button onClick={() => toggleSection("zones")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", background: "transparent", color: "#ccc", border: "none", cursor: "pointer", fontSize: 11 }}>
-            <span><Icon name={openSection === "zones" ? "chevronDown" : "chevronRight"} size={11} /> Zone targeting</span>
-            {openSection === "zones" && <span onClick={(e: any) => { e.stopPropagation(); zonesRef.current = { ...DEFAULT_ZONES }; setZonesLabel({ ...DEFAULT_ZONES }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>}
-          </button>
-          {openSection === "zones" && (["shadows", "mids", "highlights"] as const).map(zone => {
-            const colorMap: Record<string, string> = { shadows: "#4a7fc1", mids: "#bbb", highlights: "#e0b85a" };
-            const ankKey = `${zone}Anchor` as keyof ZoneOpts;
-            const falKey = `${zone}Falloff` as keyof ZoneOpts;
-            return (
-              <ZoneCompoundSlider
-                key={zone}
-                label={zone}
-                color={colorMap[zone]}
-                value={{ amount: zonesLabel[zone], anchor: zonesLabel[ankKey], falloff: zonesLabel[falKey] }}
-                defaults={{ amount: DEFAULT_ZONES[zone], anchor: DEFAULT_ZONES[ankKey], falloff: DEFAULT_ZONES[falKey] }}
-                onChange={next => {
-                  zonesRef.current = { ...zonesRef.current, [zone]: next.amount, [ankKey]: next.anchor, [falKey]: next.falloff } as ZoneOpts;
-                  setZonesLabel(z => ({ ...z, [zone]: next.amount, [ankKey]: next.anchor, [falKey]: next.falloff }));
-                  scheduleRedraw();
-                }}
-              />
-            );
-          })}
-
-          <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 10, marginTop: 6, opacity: 0.85 }}>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: "pointer" }} title="Drop active marquee selection before creating the layer (so curves apply to the full target).">
-              <input type="checkbox" checked={deselectOnApply} onChange={e => setDeselectOnApply(e.target.checked)} />
-              Deselect
-            </label>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: "pointer" }} title="On: replace the prior Match Curves layer. Off: keep prior layers (hidden) so you can stack alternatives.">
-              <input type="checkbox" checked={overwriteOnApply} onChange={e => setOverwriteOnApply(e.target.checked)} />
-              Overwrite
-            </label>
-          </div>
-          {/* @ts-ignore Spectrum web component */}
-          <sp-button variant="secondary" onClick={onApply} style={{ marginTop: 4, width: "100%" }}>Apply Curves</sp-button>
-          <div style={{ marginTop: 6, fontSize: 10, opacity: 0.7, whiteSpace: "pre-wrap" }}>{status}</div>
-        </div>
+      {/* Matched preview (full-width, large) */}
+      <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7 }}>Matched preview</div>
+      <div style={{ height: 240 }}>
+        {useMemo(() => (
+          <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap} imgHandleRef={matchedHandleRef} hideSelector height={240} />
+        ), [tgt.snap])}
       </div>
+
+      {/* Accordion controls */}
+      <div style={{ borderTop: "1px solid #444", margin: "6px 0 0" }} />
+      <button onClick={() => toggleSection("basic")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", background: "transparent", color: "#ccc", border: "none", cursor: "pointer", fontSize: 11 }}>
+        <span><Icon name={openSection === "basic" ? "chevronDown" : "chevronRight"} size={11} /> Match controls</span>
+      </button>
+      {openSection === "basic" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: "0 4px" }}>
+          {slider("Amount",     amountRef,  amountLabel,  setAmountLabel,  0, 100, "%", 100)}
+          {slider("Smooth",     smoothRef,  smoothLabel,  setSmoothLabel,  0,  32, "",  0)}
+          {slider("Stretch",    stretchRef, stretchLabel, setStretchLabel, 1,  32, "",  8)}
+          {/* @ts-ignore Spectrum web component */}
+          <sp-checkbox checked={chromaOnly || undefined} onInput={(e: any) => setChromaOnly(e.target.checked)} style={{ marginTop: 4, fontSize: 11 }}>
+            Chroma only (preserve target luminance)
+          {/* @ts-ignore */}
+          </sp-checkbox>
+        </div>
+      )}
+
+      <div style={{ borderTop: "1px solid #444" }} />
+      <button onClick={() => toggleSection("dims")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", background: "transparent", color: "#ccc", border: "none", cursor: "pointer", fontSize: 11 }}>
+        <span><Icon name={openSection === "dims" ? "chevronDown" : "chevronRight"} size={11} /> Dimension warps</span>
+        {openSection === "dims" && <span onClick={(e: any) => { e.stopPropagation(); dimsRef.current = { ...DEFAULT_DIMENSIONS }; setDimsLabel({ ...DEFAULT_DIMENSIONS }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>}
+      </button>
+      {openSection === "dims" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: "0 4px" }}>
+          {dimSlider("Value",       "value",      0, 200, "%")}
+          {dimSlider("Chroma",      "chroma",     0, 200, "%")}
+          {dimSlider("Hue shift",   "hueShift", -180, 180, "°")}
+          {dimSlider("Contrast",    "contrast",   1, 200, "%")}
+          {dimSlider("Neutralize",  "neutralize", 0, 100, "%")}
+          {dimSlider("Separation",  "separation", 0, 200, "%")}
+        </div>
+      )}
+
+      <div style={{ borderTop: "1px solid #444" }} />
+      <button onClick={() => toggleSection("zones")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", background: "transparent", color: "#ccc", border: "none", cursor: "pointer", fontSize: 11 }}>
+        <span><Icon name={openSection === "zones" ? "chevronDown" : "chevronRight"} size={11} /> Zone targeting</span>
+        {openSection === "zones" && <span onClick={(e: any) => { e.stopPropagation(); zonesRef.current = { ...DEFAULT_ZONES }; setZonesLabel({ ...DEFAULT_ZONES }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>}
+      </button>
+      {openSection === "zones" && (["shadows", "mids", "highlights"] as const).map(zone => {
+        const colorMap: Record<string, string> = { shadows: "#4a7fc1", mids: "#bbb", highlights: "#e0b85a" };
+        const ankKey = `${zone}Anchor` as keyof ZoneOpts;
+        const falKey = `${zone}Falloff` as keyof ZoneOpts;
+        return (
+          <div key={zone} style={{ padding: "0 4px" }}>
+            <ZoneCompoundSlider
+              label={zone}
+              color={colorMap[zone]}
+              value={{ amount: zonesLabel[zone], anchor: zonesLabel[ankKey], falloff: zonesLabel[falKey] }}
+              defaults={{ amount: DEFAULT_ZONES[zone], anchor: DEFAULT_ZONES[ankKey], falloff: DEFAULT_ZONES[falKey] }}
+              onChange={next => {
+                zonesRef.current = { ...zonesRef.current, [zone]: next.amount, [ankKey]: next.anchor, [falKey]: next.falloff } as ZoneOpts;
+                setZonesLabel(z => ({ ...z, [zone]: next.amount, [ankKey]: next.anchor, [falKey]: next.falloff }));
+                scheduleRedraw();
+              }}
+            />
+          </div>
+        );
+      })}
+
+      {/* Bottom action bar: Deselect | Overwrite | RGB toggle | refresh */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 10, marginTop: 8, opacity: 0.9 }}>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: "pointer" }} title="Drop active marquee selection before creating the layer (so curves apply to the full target).">
+          <input type="checkbox" checked={deselectOnApply} onChange={e => setDeselectOnApply(e.target.checked)} />
+          Deselect
+        </label>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: "pointer" }} title="On: replace the prior Match Curves layer. Off: keep prior layers (hidden) so you can stack alternatives.">
+          <input type="checkbox" checked={overwriteOnApply} onChange={e => setOverwriteOnApply(e.target.checked)} />
+          Overwrite
+        </label>
+        <div style={{ flex: 1 }} />
+        <button onClick={() => setColorSpace(c => c === "rgb" ? "lab" : "rgb")}
+          title="Toggle color space — RGB matches per-channel histograms; Lab matches in perceptual space."
+          style={{ padding: "1px 8px", fontSize: 10, fontWeight: 600, minWidth: 36,
+                   background: "transparent", color: "#cccccc",
+                   border: "1px solid #555", borderRadius: 3, cursor: "pointer" }}>
+          {colorSpace.toUpperCase()}
+        </button>
+        <button onClick={onRefreshAll} title="Refresh source + target previews" style={resetIconBtn}><Icon name="refresh" size={11} /></button>
+      </div>
+
+      {/* @ts-ignore Spectrum web component */}
+      <sp-button variant="secondary" onClick={onApply} style={{ marginTop: 4, width: "100%" }}>Apply Curves</sp-button>
+
+      {/* Curves graph below Apply */}
+      <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7 }}>Fitted curves (R G B)</div>
+      <CurvesGraph curves={renderedCurves} />
+
+      <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7, whiteSpace: "pre-wrap" }}>{status}</div>
     </div>
   );
 }
