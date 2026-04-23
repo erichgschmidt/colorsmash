@@ -1,6 +1,7 @@
-// Inline Spectrum SMOCK icons. SVGs are bundled as raw strings (asset/source webpack rule),
-// then dropped into a span via dangerouslySetInnerHTML so the inner CSS .fill: currentColor
-// inherits from the surrounding text color.
+// Inline Spectrum SMOCK icons. SVGs are bundled as raw strings (asset/source webpack rule).
+// We strip the <title> + transparent canvas rect + width/height attrs, then encode the SVG
+// as a data URL and render via <img>. UXP's dangerouslySetInnerHTML doesn't parse SVG markup
+// reliably (the <title> bled through as text), so the img+dataURL path is what renders.
 
 // @ts-ignore raw svg import
 import refresh from "../../assets/icons/Smock_Refresh_18_N.svg";
@@ -17,33 +18,36 @@ import selection from "../../assets/icons/Smock_Selection_18_N.svg";
 // @ts-ignore
 import sampler from "../../assets/icons/Smock_Sampler_18_N.svg";
 
-// Strip the SVG's hardcoded width/height attrs so the span's box-size dictates render size.
-function normalize(svg: string): string {
-  return svg.replace(/\s(width|height)="\d+"/g, "");
+function svgToDataUrl(svg: string, fillColor: string): string {
+  const cleaned = svg
+    .replace(/<title>[^<]*<\/title>/g, "")
+    .replace(/\s(width|height)="\d+"/g, "")
+    .replace(/<rect\s+id="Canvas"[^/]*\/>/g, "")
+    // Replace currentColor with the explicit color (img can't inherit currentColor).
+    .replace(/currentColor/g, fillColor);
+  // Encode minimally — escape only the chars that break a URL.
+  const enc = cleaned.replace(/#/g, "%23").replace(/"/g, "'");
+  return `data:image/svg+xml;utf8,${enc}`;
 }
 
-const ICONS: Record<string, string> = {
-  refresh: normalize(refresh),
-  revert: normalize(revert),
-  chevronDown: normalize(chevronDown),
-  chevronRight: normalize(chevronRight),
-  layers: normalize(layers),
-  selection: normalize(selection),
-  sampler: normalize(sampler),
+const RAW: Record<string, string> = {
+  refresh, revert, chevronDown, chevronRight, layers, selection, sampler,
 };
 
-export type IconName = keyof typeof ICONS;
+export type IconName = keyof typeof RAW;
 
 export function Icon(props: { name: IconName; size?: number; color?: string; style?: React.CSSProperties }) {
   const size = props.size ?? 14;
+  const color = props.color ?? "%23bbb"; // default mid-gray, works on light + dark themes
+  const url = svgToDataUrl(RAW[props.name], color);
   return (
-    <span
+    <img
+      src={url}
+      width={size}
+      height={size}
+      alt=""
       aria-hidden
-      style={{
-        display: "inline-flex", width: size, height: size,
-        color: props.color ?? "currentColor", lineHeight: 0, ...props.style,
-      }}
-      dangerouslySetInnerHTML={{ __html: ICONS[props.name] }}
+      style={{ display: "inline-block", verticalAlign: "middle", ...props.style }}
     />
   );
 }
