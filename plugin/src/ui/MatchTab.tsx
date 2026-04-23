@@ -358,40 +358,40 @@ export function MatchTab() {
 
   return (
     <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-      {/* Two columns with divider between; rows aligned via grid */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1px 1fr", gridTemplateRows: "auto auto auto", columnGap: 8, rowGap: 4 }}>
-        {/* Row 1 */}
-        <div style={{ gridColumn: 1, gridRow: 1, display: "flex", alignItems: "center", gap: 0 }}>
-          <span style={{ fontSize: 10, opacity: 0.7, width: 22 }}>Src</span>
-          <button style={tabBtn(srcMode === "layer")}     onClick={() => switchMode("layer")}     title="Layer">L</button>
-          <button style={tabBtn(srcMode === "preset")}    onClick={() => switchMode("preset")}    title="Preset">P</button>
-          <button style={tabBtn(srcMode === "selection")} onClick={() => switchMode("selection")} title="Selection">S</button>
+      {/* Two flex columns + center divider. Stretch makes columns equal height,
+          marginTop:auto on previews pushes them to bottom so they align. */}
+      <div style={{ display: "flex", gap: 8, alignItems: "stretch" }}>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 0 }}>
+            <span style={{ fontSize: 10, opacity: 0.7, width: 22 }}>Src</span>
+            <button style={tabBtn(srcMode === "layer")}     onClick={() => switchMode("layer")}     title="Layer">L</button>
+            <button style={tabBtn(srcMode === "preset")}    onClick={() => switchMode("preset")}    title="Preset">P</button>
+            <button style={tabBtn(srcMode === "selection")} onClick={() => switchMode("selection")} title="Selection">S</button>
+          </div>
+          <div style={{ minHeight: 22, display: "flex", flexDirection: "column", gap: 4 }}>{sourceModeContent()}</div>
+          <div style={{ marginTop: "auto" }}>
+            <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}}
+              snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}
+              onRefresh={srcMode === "layer" ? src.refresh : undefined}
+              hideSelector fitAspect maxHeight={160} />
+          </div>
         </div>
-        <div style={{ gridColumn: 2, gridRow: "1 / 4", background: "#444", width: 1 }} />
-        <div style={{ gridColumn: 3, gridRow: 1, display: "flex", alignItems: "center", gap: 0 }}>
-          <span style={{ fontSize: 10, opacity: 0.7, width: 22 }}>Tgt</span>
-          <div style={{ ...tabBtn(true), cursor: "default" }} title="Layer">L</div>
-        </div>
-
-        {/* Row 2 */}
-        <div style={{ gridColumn: 1, gridRow: 2, minHeight: 22, display: "flex", flexDirection: "column", gap: 4 }}>{sourceModeContent()}</div>
-        <div style={{ gridColumn: 3, gridRow: 2, minHeight: 22, display: "flex" }}>
-          <select style={sel} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}>
-            {layers.length === 0 && <option value="">— none —</option>}
-            {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-          </select>
-        </div>
-
-        {/* Row 3 — previews share the row, bottoms align via align-self end */}
-        <div style={{ gridColumn: 1, gridRow: 3, display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
-          <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}}
-            snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}
-            onRefresh={srcMode === "layer" ? src.refresh : undefined}
-            hideSelector fitAspect maxHeight={160} />
-        </div>
-        <div style={{ gridColumn: 3, gridRow: 3, display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
-          <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap} onRefresh={tgt.refresh}
-            hideSelector fitAspect maxHeight={160} />
+        <div style={{ width: 1, background: "#444" }} />
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 0 }}>
+            <span style={{ fontSize: 10, opacity: 0.7, width: 22 }}>Tgt</span>
+            <div style={{ ...tabBtn(true), cursor: "default" }} title="Layer">L</div>
+          </div>
+          <div style={{ minHeight: 22, display: "flex" }}>
+            <select style={sel} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}>
+              {layers.length === 0 && <option value="">— none —</option>}
+              {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+            </select>
+          </div>
+          <div style={{ marginTop: "auto" }}>
+            <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap} onRefresh={tgt.refresh}
+              hideSelector fitAspect maxHeight={160} />
+          </div>
         </div>
       </div>
 
