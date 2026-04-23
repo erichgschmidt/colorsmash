@@ -8,7 +8,8 @@ import {
 import { downsampleToMaxEdge } from "../core/downsample";
 import {
   fitHistogramCurves, sampleControlPoints, processChannelCurves, applyDimensions,
-  ChannelCurves, DimensionOpts, DEFAULT_DIMENSIONS,
+  applyZoneWeightsToChannels,
+  ChannelCurves, DimensionOpts, DEFAULT_DIMENSIONS, ZoneOpts, DEFAULT_ZONES,
 } from "../core/histogramMatch";
 
 const STATS_MAX_EDGE = 512;
@@ -23,6 +24,9 @@ export interface ApplyMatchParams {
   maxStretch?: number;   // local slope cap; large = no cap
   chromaOnly?: boolean;  // set the Curves layer to "Color" blend mode
   dimensions?: DimensionOpts;
+  zones?: ZoneOpts;
+  sourcePixelsOverride?: Uint8Array; // if set, use these RGBA pixels instead of reading source layer
+  sourceLabel?: string; // optional name shown in result message
 }
 
 export async function fitMatchCurves(params: ApplyMatchParams): Promise<ChannelCurves> {
@@ -44,7 +48,8 @@ export async function fitMatchCurves(params: ApplyMatchParams): Promise<ChannelC
       smoothRadius: params.smoothRadius ?? 0,
       maxStretch: params.maxStretch ?? 999,
     });
-    return applyDimensions(processed, params.dimensions ?? DEFAULT_DIMENSIONS);
+    const dim = applyDimensions(processed, params.dimensions ?? DEFAULT_DIMENSIONS);
+    return applyZoneWeightsToChannels(dim, params.zones ?? DEFAULT_ZONES);
   });
 }
 
@@ -53,16 +58,19 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     const doc = getActiveDoc();
     const target = doc.layers.find((l: any) => l.id === params.targetLayerId);
     if (!target) throw new Error("Target layer no longer exists.");
-    const source = doc.layers.find((l: any) => l.id === params.sourceLayerId);
-    if (!source) throw new Error("Source layer no longer exists.");
 
-    // Fit curves (re-read inside modal so stats are fresh).
-    const [s, t] = await Promise.all([
-      readLayerPixels(source, statsRectForLayer(source)),
-      readLayerPixels(target, statsRectForLayer(target)),
-    ]);
+    let srcPixels: Uint8Array;
+    if (params.sourcePixelsOverride) {
+      srcPixels = params.sourcePixelsOverride;
+    } else {
+      const source = doc.layers.find((l: any) => l.id === params.sourceLayerId);
+      if (!source) throw new Error("Source layer no longer exists.");
+      const s = await readLayerPixels(source, statsRectForLayer(source));
+      srcPixels = downsampleToMaxEdge(s, STATS_MAX_EDGE).data;
+    }
+    const t = await readLayerPixels(target, statsRectForLayer(target));
     const raw = fitHistogramCurves(
-      downsampleToMaxEdge(s, STATS_MAX_EDGE).data,
+      srcPixels,
       downsampleToMaxEdge(t, STATS_MAX_EDGE).data,
     );
     const processed = processChannelCurves(raw, {
@@ -70,7 +78,8 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       smoothRadius: params.smoothRadius ?? 0,
       maxStretch: params.maxStretch ?? 999,
     });
-    const curves: ChannelCurves = applyDimensions(processed, params.dimensions ?? DEFAULT_DIMENSIONS);
+    const dim = applyDimensions(processed, params.dimensions ?? DEFAULT_DIMENSIONS);
+    const curves: ChannelCurves = applyZoneWeightsToChannels(dim, params.zones ?? DEFAULT_ZONES);
 
     // Reuse existing [Color Smash] group; remove any prior Match layer to avoid stacking.
     const findGroup = () => doc.layers.find((l: any) => l.name === GROUP_NAME && l.layers);
@@ -100,6 +109,7 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     if (params.smoothRadius) tags.push(`smooth ${params.smoothRadius}`);
     if (params.maxStretch && params.maxStretch < 100) tags.push(`cap ${params.maxStretch}`);
     if (params.chromaOnly) tags.push("chroma-only");
+    if (params.sourceLabel) tags.unshift(`src "${params.sourceLabel}"`);
     return `Matched · ${tags.join(" · ")}`;
   });
 }

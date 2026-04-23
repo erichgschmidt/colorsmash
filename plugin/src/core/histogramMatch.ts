@@ -215,6 +215,63 @@ export function applyDimensions(curves: ChannelCurves, opts: DimensionOpts): Cha
   return out;
 }
 
+// ─── Zone-targeted weighting (Color Range fuzziness analog) ───────────────
+// Modulates the matched-vs-identity blend by input value: shadows/mids/highlights
+// each get an amount, with a single falloff controlling how much they overlap.
+
+export interface ZoneOpts {
+  shadows: number;            // 0..200, % strength
+  shadowsAnchor: number;      // 0..255, where the shadow zone is centered
+  shadowsFalloff: number;     // 0..100, how broad (sigma)
+  mids: number;
+  midsAnchor: number;
+  midsFalloff: number;
+  highlights: number;
+  highlightsAnchor: number;
+  highlightsFalloff: number;
+}
+
+export const DEFAULT_ZONES: ZoneOpts = {
+  shadows: 100,    shadowsAnchor: 42,    shadowsFalloff: 50,
+  mids: 100,       midsAnchor: 127,      midsFalloff: 50,
+  highlights: 100, highlightsAnchor: 212, highlightsFalloff: 50,
+};
+
+// Per-input weight in [0,1]: how strongly the matched curve replaces the identity at that input.
+// When all three amounts = 100, weight ≡ 1 by partition-of-unity normalization → identity behavior.
+export function buildZoneWeights(opts: ZoneOpts): Float64Array {
+  const w = new Float64Array(256);
+  const sig = (f: number) => { const s = 18 + (f / 100) * 60; return 1 / (2 * s * s); };
+  const sInv = sig(opts.shadowsFalloff), mInv = sig(opts.midsFalloff), hInv = sig(opts.highlightsFalloff);
+  const sCtr = opts.shadowsAnchor, mCtr = opts.midsAnchor, hCtr = opts.highlightsAnchor;
+  const s = opts.shadows / 100, m = opts.mids / 100, h = opts.highlights / 100;
+  for (let v = 0; v < 256; v++) {
+    const ws = Math.exp(-((v - sCtr) ** 2) * sInv);
+    const wm = Math.exp(-((v - mCtr) ** 2) * mInv);
+    const wh = Math.exp(-((v - hCtr) ** 2) * hInv);
+    const sum = ws + wm + wh || 1;
+    w[v] = (s * ws + m * wm + h * wh) / sum;
+  }
+  return w;
+}
+
+export function applyZoneWeights(curve: Uint8Array, weights: Float64Array): Uint8Array {
+  const out = new Uint8Array(256);
+  for (let v = 0; v < 256; v++) {
+    out[v] = Math.max(0, Math.min(255, Math.round(v + (curve[v] - v) * weights[v])));
+  }
+  return out;
+}
+
+export function applyZoneWeightsToChannels(c: ChannelCurves, opts: ZoneOpts): ChannelCurves {
+  const w = buildZoneWeights(opts);
+  return {
+    r: enforceMonotonic(applyZoneWeights(c.r, w)),
+    g: enforceMonotonic(applyZoneWeights(c.g, w)),
+    b: enforceMonotonic(applyZoneWeights(c.b, w)),
+  };
+}
+
 // Sample a 256-entry curve down to N control points evenly spaced on [0,255].
 export function sampleControlPoints(curve: Uint8Array, n: number): { input: number; output: number }[] {
   const pts: { input: number; output: number }[] = [];
