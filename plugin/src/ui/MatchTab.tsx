@@ -269,6 +269,11 @@ export function MatchTab() {
   // ─── Styles ─────────────────────────────────────────────────────────────
   const tinyBtn: React.CSSProperties = { padding: "1px 6px", background: "transparent", color: "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 9 };
   const sel: React.CSSProperties = { flex: 1, padding: "2px 4px", fontSize: 10, minWidth: 0, background: "#333", color: "#ddd", border: "1px solid #555" };
+  const numInputStyle: React.CSSProperties = {
+    width: 36, padding: "0 3px", fontSize: 10, textAlign: "right",
+    background: "#3c3c3c", color: "#ddd", border: "1px solid #666", borderRadius: 2,
+    boxSizing: "border-box", height: 16, lineHeight: "14px",
+  };
   const resetIconBtn: React.CSSProperties = {
     width: 16, height: 16, padding: 0, lineHeight: "14px", fontSize: 10, textAlign: "center",
     background: "transparent", color: "#888", border: "1px solid #444", borderRadius: 2, cursor: "pointer",
@@ -287,12 +292,22 @@ export function MatchTab() {
       if (el) el.value = String(defaultVal);
       scheduleRedraw();
     };
+    const setFromTyped = (raw: string) => {
+      const v = Math.max(min, Math.min(max, Math.round(Number(raw) || 0)));
+      ref.current = v; setValue(v);
+      const el = sliderRefs.current[label];
+      if (el) el.value = String(v);
+      scheduleRedraw();
+    };
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 0, fontSize: 11, marginBottom: 0 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: 0 }}>
           <span style={{ opacity: 0.75 }}>{label}</span>
-          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            <span style={{ opacity: 0.85, fontSize: 10 }}>{value}{suffix}</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+            <input type="number" min={min} max={max} value={value}
+              onChange={e => setFromTyped(e.target.value)}
+              style={numInputStyle} />
+            {suffix && <span style={{ opacity: 0.7, fontSize: 10, marginLeft: 1 }}>{suffix}</span>}
             {defaultVal != null && <button onClick={reset} title={`Reset to ${defaultVal}${suffix}`} style={resetIconBtn}><Icon name="revert" size={11} /></button>}
           </div>
         </div>
@@ -312,12 +327,21 @@ export function MatchTab() {
       setDimsLabel(d => ({ ...d, [key]: def }));
       scheduleRedraw();
     };
+    const setFromTyped = (raw: string) => {
+      const v = Math.max(min, Math.min(max, Math.round(Number(raw) || 0)));
+      dimsRef.current = { ...dimsRef.current, [key]: v };
+      setDimsLabel(d => ({ ...d, [key]: v }));
+      scheduleRedraw();
+    };
     return (
       <div key={key} style={{ display: "flex", flexDirection: "column", gap: 0, fontSize: 11, marginBottom: 0 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: 0 }}>
           <span style={{ opacity: 0.75 }}>{label}</span>
-          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            <span style={{ opacity: 0.85, fontSize: 10 }}>{value}{suffix}</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+            <input type="number" min={min} max={max} value={value}
+              onChange={e => setFromTyped(e.target.value)}
+              style={numInputStyle} />
+            {suffix && <span style={{ opacity: 0.7, fontSize: 10, marginLeft: 1 }}>{suffix}</span>}
             <button onClick={reset} title={`Reset to ${def}${suffix}`} style={resetIconBtn}><Icon name="revert" size={11} /></button>
           </div>
         </div>
