@@ -83,20 +83,38 @@ export function ZoneCompoundSlider(props: ZoneCompoundSliderProps) {
   const bandOpacity = Math.min(1, props.value.amount / 100) * 0.55;
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, fontSize: 10 }}>
-      <span style={{ width: 64, opacity: 0.75, flexShrink: 0, textTransform: "capitalize" }}>{props.label}</span>
+    <div style={{ display: "flex", flexDirection: "column", gap: 2, marginBottom: 6, fontSize: 10 }}>
+      {/* Row 1: name + amount slider + value + reset */}
+      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        <span style={{ width: 56, opacity: 0.75, flexShrink: 0, textTransform: "capitalize", color: props.color }}>{props.label}</span>
+        <input type="range" min={0} max={200} value={props.value.amount} tabIndex={-1}
+          onInput={e => {
+            const v = Number((e.target as HTMLInputElement).value);
+            valueRef.current = { ...valueRef.current, amount: v };
+            props.onChange(valueRef.current);
+          }}
+          onFocus={e => e.currentTarget.blur()}
+          title="Amount %"
+          style={{ flex: 1, minWidth: 30 }} />
+        <span style={{ width: 32, textAlign: "right", opacity: 0.8 }}>{props.value.amount}%</span>
+        {props.defaults && (
+          <button onClick={() => { valueRef.current = { ...props.defaults! }; props.onChange({ ...props.defaults! }); }}
+            title="Reset zone"
+            style={{ width: 16, height: 16, padding: 0, lineHeight: "14px", fontSize: 10, textAlign: "center",
+                     background: "transparent", color: "#888", border: "1px solid #444", borderRadius: 2, cursor: "pointer", flexShrink: 0, boxSizing: "border-box" }}>↺</button>
+        )}
+      </div>
+      {/* Row 2: full-width multi-thumb anchor + falloff track */}
       <div ref={trackRef}
         style={{
-          flex: 1, height: 18, position: "relative", background: "#222",
+          height: 18, position: "relative", background: "#222",
           border: "1px solid #444", borderRadius: 9, overflow: "hidden", touchAction: "none",
         }}>
-        {/* Colored band representing the zone's coverage; opacity reflects amount. */}
         <div style={{
           position: "absolute", top: 0, bottom: 0,
           left: `${bandStartPct}%`, width: `${Math.max(0, bandEndPct - bandStartPct)}%`,
           background: props.color, opacity: bandOpacity, pointerEvents: "none",
         }} />
-        {/* Left edge thumb */}
         <div onPointerDown={onTrackPointerDown("leftEdge")}
           style={{
             position: "absolute", top: "50%", left: `${bandStartPct}%`,
@@ -104,7 +122,6 @@ export function ZoneCompoundSlider(props: ZoneCompoundSliderProps) {
             width: 6, height: 14, background: props.color, opacity: 0.8,
             border: "1px solid #111", borderRadius: 2, cursor: "ew-resize",
           }} title={`falloff edge (${Math.round(leftEdge)})`} />
-        {/* Right edge thumb */}
         <div onPointerDown={onTrackPointerDown("rightEdge")}
           style={{
             position: "absolute", top: "50%", left: `${bandEndPct}%`,
@@ -112,7 +129,6 @@ export function ZoneCompoundSlider(props: ZoneCompoundSliderProps) {
             width: 6, height: 14, background: props.color, opacity: 0.8,
             border: "1px solid #111", borderRadius: 2, cursor: "ew-resize",
           }} title={`falloff edge (${Math.round(rightEdge)})`} />
-        {/* Anchor center knob */}
         <div onPointerDown={onTrackPointerDown("anchor")}
           style={{
             position: "absolute", top: "50%", left: `${anchorPct}%`,
@@ -121,23 +137,6 @@ export function ZoneCompoundSlider(props: ZoneCompoundSliderProps) {
             borderRadius: "50%", cursor: "ew-resize", zIndex: 2,
           }} title={`anchor (${props.value.anchor})`} />
       </div>
-      {/* Amount slider */}
-      <input type="range" min={0} max={200} value={props.value.amount} tabIndex={-1}
-        onInput={e => {
-          const v = Number((e.target as HTMLInputElement).value);
-          valueRef.current = { ...valueRef.current, amount: v };
-          props.onChange(valueRef.current);
-        }}
-        onFocus={e => e.currentTarget.blur()}
-        title="Amount %"
-        style={{ width: 60, flexShrink: 0 }} />
-      <span style={{ width: 36, textAlign: "right", opacity: 0.8 }}>{props.value.amount}%</span>
-      {props.defaults && (
-        <button onClick={() => { valueRef.current = { ...props.defaults! }; props.onChange({ ...props.defaults! }); }}
-          title="Reset zone"
-          style={{ width: 16, height: 16, padding: 0, lineHeight: "14px", fontSize: 10, textAlign: "center",
-                   background: "transparent", color: "#888", border: "1px solid #444", borderRadius: 2, cursor: "pointer", flexShrink: 0, boxSizing: "border-box" }}>↺</button>
-      )}
     </div>
   );
 }
