@@ -23,11 +23,8 @@ function svgToDataUrl(svg: string, fillColor: string): string {
     .replace(/<title>[^<]*<\/title>/g, "")
     .replace(/\s(width|height)="\d+"/g, "")
     .replace(/<rect\s+id="Canvas"[^/]*\/>/g, "")
-    // Replace currentColor with the explicit color (img can't inherit currentColor).
     .replace(/currentColor/g, fillColor);
-  // Encode minimally — escape only the chars that break a URL.
-  const enc = cleaned.replace(/#/g, "%23").replace(/"/g, "'");
-  return `data:image/svg+xml;utf8,${enc}`;
+  return `data:image/svg+xml;base64,${btoa(cleaned)}`;
 }
 
 const RAW: Record<string, string> = {
@@ -38,7 +35,7 @@ export type IconName = keyof typeof RAW;
 
 export function Icon(props: { name: IconName; size?: number; color?: string; style?: React.CSSProperties }) {
   const size = props.size ?? 14;
-  const color = props.color ?? "%23bbb"; // default mid-gray, works on light + dark themes
+  const color = props.color ?? "#bbb"; // default mid-gray, works on light + dark themes
   const url = svgToDataUrl(RAW[props.name], color);
   return (
     <img

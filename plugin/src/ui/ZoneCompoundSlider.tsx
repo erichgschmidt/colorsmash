@@ -90,7 +90,7 @@ export function ZoneCompoundSlider(props: ZoneCompoundSliderProps) {
         <span style={{ width: 56, opacity: 0.75, flexShrink: 0, textTransform: "capitalize", color: props.color }}>{props.label}</span>
         <input type="range" min={0} max={200} value={props.value.amount} tabIndex={-1}
           onInput={e => {
-            const v = Number((e.target as HTMLInputElement).value);
+            const v = Math.round(Number((e.target as HTMLInputElement).value));
             valueRef.current = { ...valueRef.current, amount: v };
             props.onChange(valueRef.current);
           }}

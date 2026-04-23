@@ -406,7 +406,7 @@ export function MatchTab() {
           })}
 
           {/* @ts-ignore Spectrum web component */}
-          <sp-button variant="cta" onClick={onApply} style={{ marginTop: 6, width: "100%" }}>Apply Match (1 Curves layer)</sp-button>
+          <sp-button variant="secondary" onClick={onApply} style={{ marginTop: 6, width: "100%" }}>Apply Match (1 Curves layer)</sp-button>
           <div style={{ marginTop: 6, fontSize: 10, opacity: 0.7, whiteSpace: "pre-wrap" }}>{status}</div>
         </div>
       </div>
