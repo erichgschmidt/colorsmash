@@ -1,6 +1,5 @@
-// Color-match tab. One Curves layer fitted via per-channel histogram specification.
-// Source is one of three modes (tabbed): Layer / Preset / Selection.
-// Selection mode supports auto-update — re-snapshots when the marquee changes.
+// Color Match: fits per-channel R/G/B Curves so target's histograms match source's.
+// Source = a layer in the active doc, OR a snapshot of the active marquee selection.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLayers } from "./useLayers";
@@ -15,19 +14,15 @@ import {
   DimensionOpts, DEFAULT_DIMENSIONS, ZoneOpts, DEFAULT_ZONES,
 } from "../core/histogramMatch";
 import { applyMatch } from "../app/applyMatch";
-import { readLayerPixels, executeAsModal, getActiveDoc, getSelectionBounds, app, action as psAction } from "../services/photoshop";
+import {
+  app, action as psAction, readLayerPixels, executeAsModal, getActiveDoc, getSelectionBounds,
+} from "../services/photoshop";
 import { downsampleToMaxEdge } from "../core/downsample";
-import {
-  listPresets, savePreset, deletePreset, loadPresetSnap,
-  SourcePreset, SourcePresetSnapshot,
-} from "../services/sourcePresets";
-import {
-  snapshotFromClipboard, importRecentScreenshots, resetScreenshotFolder,
-} from "../services/sourceCapture";
 
 const SOURCE_MAX_EDGE = 256;
+type SrcMode = "layer" | "selection";
 
-type SrcMode = "layer" | "preset" | "selection";
+interface SourceSnap { width: number; height: number; data: Uint8Array; name: string; }
 
 export function MatchTab() {
   const layers = useLayers();
@@ -49,13 +44,12 @@ export function MatchTab() {
   const [zonesLabel, setZonesLabel] = useState<ZoneOpts>({ ...DEFAULT_ZONES });
 
   const [srcMode, setSrcMode] = useState<SrcMode>("layer");
-  const [srcOverride, setSrcOverride] = useState<SourcePresetSnapshot | null>(null);
-  const [presets, setPresets] = useState<SourcePreset[]>([]);
-  const [selectedPresetId, setSelectedPresetId] = useState("");
+  const [srcOverride, setSrcOverride] = useState<SourceSnap | null>(null);
   const [autoUpdate, setAutoUpdate] = useState(false);
-  const [importN, setImportN] = useState(10);
-  const [presetMore, setPresetMore] = useState(false);
+
   const [openSection, setOpenSection] = useState<"basic" | "dims" | "zones" | null>("basic");
+  const toggleSection = (s: "basic" | "dims" | "zones") => setOpenSection(o => o === s ? null : s);
+
   const [docs, setDocs] = useState<{ id: number; name: string }[]>([]);
   const [activeDocId, setActiveDocId] = useState<number | null>(null);
 
@@ -78,9 +72,6 @@ export function MatchTab() {
     if (!d) return;
     try { app.activeDocument = d; setActiveDocId(id); } catch (e: any) { setStatus(`Error switching doc: ${e?.message ?? e}`); }
   };
-  const toggleSection = (s: "basic" | "dims" | "zones") => setOpenSection(o => o === s ? null : s);
-
-  useEffect(() => { listPresets().then(setPresets).catch(() => {}); }, []);
 
   useEffect(() => {
     if (layers.length >= 2) {
@@ -91,9 +82,58 @@ export function MatchTab() {
 
   const src = useLayerPreview(srcMode === "layer" ? sourceId : null);
   const tgt = useLayerPreview(targetId);
-
-  // Effective source = override (preset/selection) or live layer snap.
   const srcSnap = srcOverride ?? src.snap;
+
+  // ─── Selection mode: snapshot from active marquee on active layer ───────
+  const snapshotSelectionInner = async (): Promise<SourceSnap> => {
+    return executeAsModal("Color Smash snap selection", async () => {
+      const doc = getActiveDoc();
+      const sel = getSelectionBounds();
+      if (!sel) throw new Error("No active marquee selection.");
+      const layer = doc.activeLayers?.[0];
+      if (!layer) throw new Error("No active layer.");
+      const buf = await readLayerPixels(layer, sel);
+      const small = downsampleToMaxEdge(buf, SOURCE_MAX_EDGE);
+      return { width: small.width, height: small.height, data: small.data, name: `${layer.name} (selection)` };
+    });
+  };
+
+  const onSnapSelection = async () => {
+    setStatus("Snapping selection...");
+    try {
+      const snap = await snapshotSelectionInner();
+      setSrcOverride(snap);
+      setStatus(`Source = ${snap.name}`);
+    } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
+  };
+
+  // Auto-update: poll selection bounds; re-snap when stable.
+  const lastBoundsRef = useRef<string>("");
+  const stableTicksRef = useRef(0);
+  useEffect(() => {
+    if (srcMode !== "selection" || !autoUpdate) return;
+    const interval = setInterval(async () => {
+      let bounds: any = null;
+      try { bounds = getSelectionBounds(); } catch { /* */ }
+      if (!bounds) { lastBoundsRef.current = ""; stableTicksRef.current = 0; return; }
+      const key = `${bounds.left},${bounds.top},${bounds.right},${bounds.bottom}`;
+      if (key === lastBoundsRef.current) {
+        stableTicksRef.current++;
+        if (stableTicksRef.current === 1) {
+          try { setSrcOverride(await snapshotSelectionInner()); } catch { /* ignore */ }
+        }
+      } else {
+        lastBoundsRef.current = key;
+        stableTicksRef.current = 0;
+      }
+    }, 200);
+    return () => clearInterval(interval);
+  }, [srcMode, autoUpdate]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const switchSrcMode = (m: SrcMode) => {
+    setSrcMode(m);
+    if (m === "layer") { setSrcOverride(null); setAutoUpdate(false); }
+  };
 
   const fittedRaw = useMemo(() => {
     if (!srcSnap || !tgt.snap) return null;
@@ -116,7 +156,6 @@ export function MatchTab() {
     });
     const dim = applyDimensions(processed, dimsRef.current);
     const c = applyZoneWeightsToChannels(dim, zonesRef.current);
-    // Throttle the React state update for the curves graph (SVG re-render is the bottleneck).
     curvesPendingRef.current = c;
     if (!curvesTimeoutRef.current) {
       curvesTimeoutRef.current = setTimeout(() => {
@@ -132,138 +171,15 @@ export function MatchTab() {
   const scheduleRedraw = () => {
     if (rafPendingRef.current) return;
     rafPendingRef.current = true;
-    // ~30fps throttle (33ms) — halves PNG-encode load vs. rAF every frame, still feels live.
     setTimeout(() => { rafPendingRef.current = false; redrawMatched(); }, 33);
   };
 
   useEffect(() => { scheduleRedraw(); }, [fittedRaw, tgt.snap, chromaOnly]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ─── Source-mode actions ────────────────────────────────────────────────
-  const snapshotSelectionInner = async (): Promise<SourcePresetSnapshot> => {
-    return executeAsModal("Color Smash snap selection", async () => {
-      const doc = getActiveDoc();
-      const sel = getSelectionBounds();
-      if (!sel) throw new Error("No active marquee selection.");
-      const layer = doc.activeLayers?.[0];
-      if (!layer) throw new Error("No active layer.");
-      const buf = await readLayerPixels(layer, sel);
-      const small = downsampleToMaxEdge(buf, SOURCE_MAX_EDGE);
-      return { width: small.width, height: small.height, data: small.data, name: `${layer.name} (selection)` };
-    });
-  };
-
-  const onSnapSelection = async () => {
-    setStatus("Snapping selection...");
-    try {
-      const snap = await snapshotSelectionInner();
-      setSrcOverride(snap);
-      setStatus(`Source = ${snap.name}`);
-    } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
-  };
-
-  // Auto-update polling when in Selection mode + autoUpdate on. Debounced via stability count.
-  const lastBoundsRef = useRef<string>("");
-  const stableTicksRef = useRef(0);
-  useEffect(() => {
-    if (srcMode !== "selection" || !autoUpdate) return;
-    const interval = setInterval(async () => {
-      let bounds: any = null;
-      try { bounds = getSelectionBounds(); } catch { /* */ }
-      if (!bounds) { lastBoundsRef.current = ""; stableTicksRef.current = 0; return; }
-      const key = `${bounds.left},${bounds.top},${bounds.right},${bounds.bottom}`;
-      if (key === lastBoundsRef.current) {
-        stableTicksRef.current++;
-        if (stableTicksRef.current === 1) {
-          try { setSrcOverride(await snapshotSelectionInner()); } catch { /* ignore transient */ }
-        }
-      } else {
-        lastBoundsRef.current = key;
-        stableTicksRef.current = 0;
-      }
-    }, 200);
-    return () => clearInterval(interval);
-  }, [srcMode, autoUpdate]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Switching mode: clear conflicting state.
-  const switchMode = (m: SrcMode) => {
-    setSrcMode(m);
-    if (m === "layer") { setSrcOverride(null); setAutoUpdate(false); }
-    if (m === "preset") setAutoUpdate(false);
-    // Selection mode: leave srcOverride; user can Snap now or enable auto-update.
-  };
-
-  const onLoadPreset = (id: string) => {
-    setSelectedPresetId(id);
-    if (!id) { setSrcOverride(null); return; }
-    const p = presets.find(x => x.id === id);
-    if (!p) return;
-    setSrcOverride(loadPresetSnap(p));
-    setStatus(`Source = preset "${p.name}"`);
-  };
-
-  const onSavePreset = async () => {
-    if (!srcSnap) { setStatus("No source snapshot to save."); return; }
-    const defaultName = srcOverride?.name ?? src.snap?.layerName ?? "Untitled";
-    const name = prompt("Preset name:", defaultName);
-    if (!name) return;
-    try {
-      await savePreset({ width: srcSnap.width, height: srcSnap.height, data: srcSnap.data, name });
-      setPresets(await listPresets());
-      setStatus(`Saved preset "${name}".`);
-    } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
-  };
-
-  const onDeletePreset = async () => {
-    if (!selectedPresetId) { setStatus("Pick a preset to delete."); return; }
-    const p = presets.find(x => x.id === selectedPresetId);
-    if (!p) return;
-    if (!confirm(`Delete preset "${p.name}"?`)) return;
-    await deletePreset(selectedPresetId);
-    setPresets(await listPresets());
-    setSelectedPresetId("");
-    if (srcOverride?.name === p.name) setSrcOverride(null);
-    setStatus("Preset deleted.");
-  };
-
-  const onSnapshotClipboard = async (alsoSave: boolean) => {
-    setStatus("Pasting from clipboard...");
-    try {
-      const snap = await snapshotFromClipboard();
-      setSrcOverride(snap);
-      let msg = `Source = ${snap.name}`;
-      if (alsoSave) {
-        const name = prompt("Preset name:", snap.name);
-        if (name) {
-          await savePreset({ ...snap, name });
-          setPresets(await listPresets());
-          msg += ` · saved as "${name}"`;
-        }
-      }
-      setStatus(msg);
-    } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
-  };
-
-  const onImportFolder = async () => {
-    setStatus(`Importing last ${importN}...`);
-    try {
-      const existing = new Set(presets.map(p => p.name));
-      const snaps = await importRecentScreenshots(importN, existing);
-      if (snaps.length === 0) { setStatus("No new images (already imported or folder empty)."); return; }
-      for (const s of snaps) await savePreset(s);
-      const fresh = await listPresets();
-      setPresets(fresh);
-      const newest = fresh.find(p => p.name === snaps[0].name);
-      if (newest) { setSrcOverride(loadPresetSnap(newest)); setSelectedPresetId(newest.id); }
-      setStatus(`Imported ${snaps.length} preset${snaps.length === 1 ? "" : "s"}.`);
-    } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
-  };
-
-  const onResetFolder = async () => { setStatus(await resetScreenshotFolder()); };
-
   const onApply = async () => {
     if (targetId == null) { setStatus("Pick target layer."); return; }
     if (srcMode === "layer" && sourceId == null) { setStatus("Pick source layer."); return; }
-    if (srcMode !== "layer" && !srcOverride) { setStatus("No source snapshot — capture one first."); return; }
+    if (srcMode === "selection" && !srcOverride) { setStatus("Snap a selection first."); return; }
     setStatus("Applying match...");
     try {
       setStatus(await applyMatch({
@@ -281,20 +197,15 @@ export function MatchTab() {
     } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
   };
 
-  // ─── UI helpers ─────────────────────────────────────────────────────────
+  // ─── Styles ─────────────────────────────────────────────────────────────
   const btn: React.CSSProperties = { padding: "6px 12px", marginTop: 6, background: "#1473e6", color: "white", border: "none", cursor: "pointer", borderRadius: 3 };
   const tinyBtn: React.CSSProperties = { padding: "1px 6px", background: "transparent", color: "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 9 };
   const sel: React.CSSProperties = { flex: 1, padding: "2px 4px", fontSize: 10, minWidth: 0, background: "#333", color: "#ddd", border: "1px solid #555" };
   const tabBtn = (active: boolean): React.CSSProperties => ({
     width: 20, height: 16, padding: 0, fontSize: 10, cursor: "pointer", textAlign: "center",
-    lineHeight: "14px",
-    background: active ? "#1473e6" : "transparent",
-    color: active ? "white" : "#aaa",
-    border: "1px solid #555",
-    fontWeight: 600,
-    boxSizing: "border-box",
+    lineHeight: "14px", background: active ? "#1473e6" : "transparent", color: active ? "white" : "#aaa",
+    border: "1px solid #555", fontWeight: 600, boxSizing: "border-box",
   });
-
   const resetIconBtn: React.CSSProperties = {
     width: 16, height: 16, padding: 0, lineHeight: "14px", fontSize: 10, textAlign: "center",
     background: "transparent", color: "#888", border: "1px solid #444", borderRadius: 2, cursor: "pointer",
@@ -308,8 +219,7 @@ export function MatchTab() {
   ) => {
     const reset = () => {
       if (defaultVal == null) return;
-      ref.current = defaultVal;
-      setValue(defaultVal);
+      ref.current = defaultVal; setValue(defaultVal);
       const el = sliderRefs.current[label];
       if (el) el.value = String(defaultVal);
       scheduleRedraw();
@@ -327,7 +237,7 @@ export function MatchTab() {
     );
   };
 
-const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: number, suffix = "") => {
+  const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: number, suffix = "") => {
     const value = dimsLabel[key];
     const def = DEFAULT_DIMENSIONS[key];
     const reset = () => {
@@ -347,186 +257,139 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
     );
   };
 
-  // ─── Source mode tab content ────────────────────────────────────────────
-  const sourceModeContent = () => {
-    if (srcMode === "layer") {
-      return (
-        <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
-          <select style={sel} value={sourceId ?? ""} onChange={e => setSourceId(Number(e.target.value))}>
-            {layers.length === 0 && <option value="">— none —</option>}
-            {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-          </select>
-        </div>
-      );
-    }
-    if (srcMode === "preset") {
-      return (
-        <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
-          <select style={sel} value={selectedPresetId} onChange={e => onLoadPreset(e.target.value)}>
-            <option value="">— pick a preset —</option>
-            {presets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
-          <button onClick={onDeletePreset} style={tinyBtn} title="Delete selected preset">Del</button>
-          <button onClick={() => setPresetMore(m => !m)} style={tinyBtn} title="Show preset creation options">{presetMore ? "▾" : "+"}</button>
-        </div>
-      );
-    }
-    // selection
-    return (
-      <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, whiteSpace: "nowrap", overflow: "hidden" }}>
-        <button onClick={onSnapSelection} style={tinyBtn}>Snap now</button>
-        <label style={{ display: "flex", alignItems: "center", gap: 3, cursor: "pointer", opacity: 0.85 }} title="Auto-update from selection">
-          <input type="checkbox" checked={autoUpdate} onChange={e => setAutoUpdate(e.target.checked)} />
-          Auto{autoUpdate && <span style={{ color: "#7d7" }}> ●</span>}
-        </label>
-      </div>
-    );
-  };
-
   const onRefreshAll = () => { src.refresh(); tgt.refresh(); };
+
+  const sourceModeContent = () => srcMode === "layer" ? (
+    <select style={sel} value={sourceId ?? ""} onChange={e => setSourceId(Number(e.target.value))}>
+      {layers.length === 0 && <option value="">— none —</option>}
+      {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+    </select>
+  ) : (
+    <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, whiteSpace: "nowrap", overflow: "hidden" }}>
+      <button onClick={onSnapSelection} style={tinyBtn}>Snap now</button>
+      <label style={{ display: "flex", alignItems: "center", gap: 3, cursor: "pointer", opacity: 0.85 }} title="Auto-update from selection">
+        <input type="checkbox" checked={autoUpdate} onChange={e => setAutoUpdate(e.target.checked)} />
+        Auto{autoUpdate && <span style={{ color: "#7d7" }}> ●</span>}
+      </label>
+    </div>
+  );
 
   return (
     <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-      {/* Top row: source mode tabs (above source preview) | doc picker (above target preview) */}
+      {/* Top row: source mode tabs + doc picker */}
       <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
         <span style={{ opacity: 0.7 }}>Src:</span>
-        <button style={tabBtn(srcMode === "layer")}     onClick={() => switchMode("layer")}     title="Layer">L</button>
-        <button style={tabBtn(srcMode === "preset")}    onClick={() => switchMode("preset")}    title="Preset">P</button>
-        <button style={tabBtn(srcMode === "selection")} onClick={() => switchMode("selection")} title="Selection">S</button>
+        <button style={tabBtn(srcMode === "layer")}     onClick={() => switchSrcMode("layer")}     title="Layer">L</button>
+        <button style={tabBtn(srcMode === "selection")} onClick={() => switchSrcMode("selection")} title="Selection">S</button>
         <span style={{ opacity: 0.7, marginLeft: 8 }}>Doc:</span>
         <select style={{ flex: 1, padding: "2px 4px", fontSize: 10, minWidth: 0, background: "#333", color: "#ddd", border: "1px solid #555" }}
           value={activeDocId ?? ""} onChange={e => onSwitchDoc(Number(e.target.value))}>
           {docs.length === 0 && <option value="">— no docs —</option>}
           {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
         </select>
-        <button onClick={onRefreshAll} title="Refresh source + target previews from active doc"
+        <button onClick={onRefreshAll} title="Refresh source + target previews"
           style={{ padding: "2px 8px", background: "transparent", color: "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 10 }}>↻</button>
       </div>
 
-      {/* 2-column body: previews on left, controls on right */}
+      {/* Body: previews left, controls right */}
       <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
         <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
-      {useMemo(() => (
-        <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-            <div style={{ minHeight: 24, display: "flex", flexDirection: "column", gap: 4 }}>{sourceModeContent()}</div>
-            <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}}
-              snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}
-              hideSelector fitAspect maxHeight={160} />
-          </div>
-          <div style={{ width: 1, background: "#444", alignSelf: "stretch" }} />
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-            <div style={{ minHeight: 24, display: "flex" }}>
-              <select style={sel} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}>
-                {layers.length === 0 && <option value="">— none —</option>}
-                {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-              </select>
+          {useMemo(() => (
+            <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+                <div style={{ minHeight: 24, display: "flex" }}>{sourceModeContent()}</div>
+                <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}}
+                  snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}
+                  hideSelector fitAspect maxHeight={160} />
+              </div>
+              <div style={{ width: 1, background: "#444", alignSelf: "stretch" }} />
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+                <div style={{ minHeight: 24, display: "flex" }}>
+                  <select style={sel} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}>
+                    {layers.length === 0 && <option value="">— none —</option>}
+                    {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                  </select>
+                </div>
+                <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap}
+                  hideSelector fitAspect maxHeight={160} />
+              </div>
             </div>
-            <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap}
-              hideSelector fitAspect maxHeight={160} />
+          ), [src.snap, tgt.snap, sourceId, targetId, layers, srcMode, srcOverride, autoUpdate])}
+
+          <div style={{ marginTop: 4 }}>
+            <span style={{ fontSize: 10, opacity: 0.7 }}>Matched preview</span>
+          </div>
+          <div style={{ height: 240 }}>
+            {useMemo(() => (
+              <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap} imgHandleRef={matchedHandleRef} hideSelector height={240} />
+            ), [tgt.snap])}
           </div>
         </div>
-      ), [src.snap, tgt.snap, sourceId, targetId, srcMode, srcOverride, layers, selectedPresetId, presets, autoUpdate, importN, presetMore])}
 
-{srcMode === "preset" && presetMore && (
-        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4, fontSize: 10, padding: "4px 6px", background: "#1a1a1a", borderRadius: 3, border: "1px solid #333" }}>
-          <span style={{ opacity: 0.6 }}>New preset:</span>
-          <button onClick={onSavePreset} style={tinyBtn}>Save current</button>
-          <button onClick={() => onSnapshotClipboard(false)} style={tinyBtn}>Clipboard</button>
-          <button onClick={() => onSnapshotClipboard(true)} style={tinyBtn}>Clip → preset</button>
-          <span style={{ opacity: 0.6, marginLeft: 4 }}>folder last</span>
-          <input type="number" min={1} max={30} value={importN} tabIndex={-1}
-            onChange={e => setImportN(Math.max(1, Math.min(30, Number(e.target.value) || 1)))}
-            style={{ width: 36, padding: "1px 4px", background: "#333", color: "#ddd", border: "1px solid #555", fontSize: 10 }} />
-          <button onClick={onImportFolder} style={tinyBtn}>Import</button>
-          <button onClick={onResetFolder} style={tinyBtn} title="Forget saved screenshot folder">⟲</button>
-        </div>
-      )}
-
-<div style={{ marginTop: 4 }}>
-        <span style={{ fontSize: 10, opacity: 0.7 }}>Matched preview</span>
-      </div>
-      {/* Fixed height; img letterboxes inside via object-fit: contain. No aspect-ratio reflow possible. */}
-      <div style={{ height: 240 }}>
-        {useMemo(() => (
-          <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap} imgHandleRef={matchedHandleRef} hideSelector height={240} />
-        ), [tgt.snap])}
-      </div>
-        </div>
-
-        {/* Right column: curves graph + accordion controls */}
         <div style={{ width: 1, background: "#444", alignSelf: "stretch" }} />
         <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-      <div style={{ fontSize: 10, opacity: 0.7 }}>Fitted curves (R G B)</div>
-      <CurvesGraph curves={renderedCurves} />
+          <div style={{ fontSize: 10, opacity: 0.7 }}>Fitted curves (R G B)</div>
+          <CurvesGraph curves={renderedCurves} />
 
-      {/* ── Accordion: Basic ────────────────────────────── */}
-      <div style={{ borderTop: "1px solid #444", margin: "8px 0 0" }} />
-      <button onClick={() => toggleSection("basic")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", background: "transparent", color: "#ccc", border: "none", cursor: "pointer", fontSize: 11 }}>
-        <span>{openSection === "basic" ? "▾" : "▸"} Match controls</span>
-      </button>
-      {openSection === "basic" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          {slider("Amount",     amountRef,  amountLabel,  setAmountLabel,  0, 100, "%", 100)}
-          {slider("Smoothing",  smoothRef,  smoothLabel,  setSmoothLabel,  0,  32, "",  0)}
-          {slider("Max stretch",stretchRef, stretchLabel, setStretchLabel, 1,  32, "",  8)}
-          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, marginTop: 2, cursor: "pointer", opacity: 0.85 }}>
-            <input type="checkbox" checked={chromaOnly} onChange={e => setChromaOnly(e.target.checked)} />
-            Chroma only (preserve target luminance)
-          </label>
-        </div>
-      )}
+          <div style={{ borderTop: "1px solid #444", margin: "8px 0 0" }} />
+          <button onClick={() => toggleSection("basic")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", background: "transparent", color: "#ccc", border: "none", cursor: "pointer", fontSize: 11 }}>
+            <span>{openSection === "basic" ? "▾" : "▸"} Match controls</span>
+          </button>
+          {openSection === "basic" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {slider("Amount",     amountRef,  amountLabel,  setAmountLabel,  0, 100, "%", 100)}
+              {slider("Smoothing",  smoothRef,  smoothLabel,  setSmoothLabel,  0,  32, "",  0)}
+              {slider("Max stretch",stretchRef, stretchLabel, setStretchLabel, 1,  32, "",  8)}
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, marginTop: 2, cursor: "pointer", opacity: 0.85 }}>
+                <input type="checkbox" checked={chromaOnly} onChange={e => setChromaOnly(e.target.checked)} />
+                Chroma only (preserve target luminance)
+              </label>
+            </div>
+          )}
 
-      {/* ── Accordion: Dimensions ──────────────────────── */}
-      <div style={{ borderTop: "1px solid #444" }} />
-      <button onClick={() => toggleSection("dims")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", background: "transparent", color: "#ccc", border: "none", cursor: "pointer", fontSize: 11 }}>
-        <span>{openSection === "dims" ? "▾" : "▸"} Dimension warps</span>
-        {openSection === "dims" && <span onClick={(e: any) => { e.stopPropagation(); dimsRef.current = { ...DEFAULT_DIMENSIONS }; setDimsLabel({ ...DEFAULT_DIMENSIONS }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>}
-      </button>
-      {openSection === "dims" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          {dimSlider("Value",       "value",      0, 200, "%")}
-          {dimSlider("Chroma",      "chroma",     0, 200, "%")}
-          {dimSlider("Hue shift",   "hueShift", -180, 180, "°")}
-          {dimSlider("Contrast",    "contrast",   1, 200, "%")}
-          {dimSlider("Neutralize",  "neutralize", 0, 100, "%")}
-          {dimSlider("Separation",  "separation", 0, 200, "%")}
-        </div>
-      )}
+          <div style={{ borderTop: "1px solid #444" }} />
+          <button onClick={() => toggleSection("dims")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", background: "transparent", color: "#ccc", border: "none", cursor: "pointer", fontSize: 11 }}>
+            <span>{openSection === "dims" ? "▾" : "▸"} Dimension warps</span>
+            {openSection === "dims" && <span onClick={(e: any) => { e.stopPropagation(); dimsRef.current = { ...DEFAULT_DIMENSIONS }; setDimsLabel({ ...DEFAULT_DIMENSIONS }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>}
+          </button>
+          {openSection === "dims" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {dimSlider("Value",       "value",      0, 200, "%")}
+              {dimSlider("Chroma",      "chroma",     0, 200, "%")}
+              {dimSlider("Hue shift",   "hueShift", -180, 180, "°")}
+              {dimSlider("Contrast",    "contrast",   1, 200, "%")}
+              {dimSlider("Neutralize",  "neutralize", 0, 100, "%")}
+              {dimSlider("Separation",  "separation", 0, 200, "%")}
+            </div>
+          )}
 
-      {/* ── Accordion: Zones ───────────────────────────── */}
-      <div style={{ borderTop: "1px solid #444" }} />
-      <button onClick={() => toggleSection("zones")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", background: "transparent", color: "#ccc", border: "none", cursor: "pointer", fontSize: 11 }}>
-        <span>{openSection === "zones" ? "▾" : "▸"} Zone targeting</span>
-        {openSection === "zones" && <span onClick={(e: any) => { e.stopPropagation(); zonesRef.current = { ...DEFAULT_ZONES }; setZonesLabel({ ...DEFAULT_ZONES }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>}
-      </button>
-      {openSection === "zones" && (["shadows", "mids", "highlights"] as const).map(zone => {
-        const colorMap: Record<string, string> = { shadows: "#4a7fc1", mids: "#bbb", highlights: "#e0b85a" };
-        const ankKey = `${zone}Anchor` as keyof ZoneOpts;
-        const falKey = `${zone}Falloff` as keyof ZoneOpts;
-        return (
-          <ZoneCompoundSlider
-            key={zone}
-            label={zone}
-            color={colorMap[zone]}
-            value={{ amount: zonesLabel[zone], anchor: zonesLabel[ankKey], falloff: zonesLabel[falKey] }}
-            defaults={{ amount: DEFAULT_ZONES[zone], anchor: DEFAULT_ZONES[ankKey], falloff: DEFAULT_ZONES[falKey] }}
-            onChange={next => {
-              zonesRef.current = {
-                ...zonesRef.current,
-                [zone]: next.amount,
-                [ankKey]: next.anchor,
-                [falKey]: next.falloff,
-              } as ZoneOpts;
-              setZonesLabel(z => ({ ...z, [zone]: next.amount, [ankKey]: next.anchor, [falKey]: next.falloff }));
-              scheduleRedraw();
-            }}
-          />
-        );
-      })}
+          <div style={{ borderTop: "1px solid #444" }} />
+          <button onClick={() => toggleSection("zones")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", background: "transparent", color: "#ccc", border: "none", cursor: "pointer", fontSize: 11 }}>
+            <span>{openSection === "zones" ? "▾" : "▸"} Zone targeting</span>
+            {openSection === "zones" && <span onClick={(e: any) => { e.stopPropagation(); zonesRef.current = { ...DEFAULT_ZONES }; setZonesLabel({ ...DEFAULT_ZONES }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>}
+          </button>
+          {openSection === "zones" && (["shadows", "mids", "highlights"] as const).map(zone => {
+            const colorMap: Record<string, string> = { shadows: "#4a7fc1", mids: "#bbb", highlights: "#e0b85a" };
+            const ankKey = `${zone}Anchor` as keyof ZoneOpts;
+            const falKey = `${zone}Falloff` as keyof ZoneOpts;
+            return (
+              <ZoneCompoundSlider
+                key={zone}
+                label={zone}
+                color={colorMap[zone]}
+                value={{ amount: zonesLabel[zone], anchor: zonesLabel[ankKey], falloff: zonesLabel[falKey] }}
+                defaults={{ amount: DEFAULT_ZONES[zone], anchor: DEFAULT_ZONES[ankKey], falloff: DEFAULT_ZONES[falKey] }}
+                onChange={next => {
+                  zonesRef.current = { ...zonesRef.current, [zone]: next.amount, [ankKey]: next.anchor, [falKey]: next.falloff } as ZoneOpts;
+                  setZonesLabel(z => ({ ...z, [zone]: next.amount, [ankKey]: next.anchor, [falKey]: next.falloff }));
+                  scheduleRedraw();
+                }}
+              />
+            );
+          })}
 
-      <button onClick={onApply} style={btn}>Apply Match (1 Curves layer)</button>
-      <div style={{ marginTop: 6, fontSize: 10, opacity: 0.7, whiteSpace: "pre-wrap" }}>{status}</div>
+          <button onClick={onApply} style={btn}>Apply Match (1 Curves layer)</button>
+          <div style={{ marginTop: 6, fontSize: 10, opacity: 0.7, whiteSpace: "pre-wrap" }}>{status}</div>
         </div>
       </div>
     </div>
