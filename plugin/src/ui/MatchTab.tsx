@@ -268,7 +268,7 @@ export function MatchTab() {
 
   // ─── Styles ─────────────────────────────────────────────────────────────
   const tinyBtn: React.CSSProperties = { padding: "1px 6px", background: "transparent", color: "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 9 };
-  const sel: React.CSSProperties = { width: "100%", maxWidth: "100%", padding: "2px 4px", fontSize: 10, minWidth: 0, background: "#333", color: "#ddd", border: "1px solid #555", textAlign: "left" };
+  const sel: React.CSSProperties = { width: "100%", maxWidth: "100%", padding: "2px 2px", fontSize: 10, minWidth: 0, background: "#333", color: "#ddd", border: "1px solid #555", textAlign: "left" };
   const numInputStyle: React.CSSProperties = {
     width: 38, padding: "1px 3px", fontSize: 10, textAlign: "right",
     background: "#404040", color: "#dddddd",
@@ -445,7 +445,7 @@ export function MatchTab() {
         <span><Icon name={openSection === "basic" ? "chevronDown" : "chevronRight"} size={11} /> Match controls</span>
       </button>
       {openSection === "basic" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: "0 4px" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: 0 }}>
           {slider("Amount",     amountRef,  amountLabel,  setAmountLabel,  0, 100, "%", 100)}
           {slider("Smooth",     smoothRef,  smoothLabel,  setSmoothLabel,  0,  32, "",  0)}
           {slider("Stretch",    stretchRef, stretchLabel, setStretchLabel, 1,  32, "",  8)}
@@ -463,7 +463,7 @@ export function MatchTab() {
         {openSection === "dims" && <span onClick={(e: any) => { e.stopPropagation(); dimsRef.current = { ...DEFAULT_DIMENSIONS }; setDimsLabel({ ...DEFAULT_DIMENSIONS }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>}
       </button>
       {openSection === "dims" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: "0 4px" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: 0 }}>
           {dimSlider("Value",       "value",      0, 200, "%")}
           {dimSlider("Chroma",      "chroma",     0, 200, "%")}
           {dimSlider("Hue shift",   "hueShift", -180, 180, "°")}
@@ -483,7 +483,7 @@ export function MatchTab() {
         const ankKey = `${zone}Anchor` as keyof ZoneOpts;
         const falKey = `${zone}Falloff` as keyof ZoneOpts;
         return (
-          <div key={zone} style={{ padding: "0 4px" }}>
+          <div key={zone} style={{ padding: 0 }}>
             <ZoneCompoundSlider
               label={zone}
               color={colorMap[zone]}
