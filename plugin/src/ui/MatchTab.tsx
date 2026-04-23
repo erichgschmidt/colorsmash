@@ -387,7 +387,7 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
 
   return (
     <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-      {/* Top row: doc picker (full width) */}
+      {/* Top row: doc picker + refresh + source mode tabs */}
       <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
         <span style={{ opacity: 0.7 }}>Doc:</span>
         <select style={{ flex: 1, padding: "2px 4px", fontSize: 10, minWidth: 0, background: "#333", color: "#ddd", border: "1px solid #555" }}
@@ -396,9 +396,11 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
           {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
         </select>
         <button onClick={onRefreshAll} title="Refresh source + target previews from active doc"
-          style={{ padding: "2px 8px", background: "transparent", color: "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 10 }}>
-          ↻
-        </button>
+          style={{ padding: "2px 8px", background: "transparent", color: "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 10 }}>↻</button>
+        <span style={{ opacity: 0.7, marginLeft: 6 }}>Src:</span>
+        <button style={tabBtn(srcMode === "layer")}     onClick={() => switchMode("layer")}     title="Layer">L</button>
+        <button style={tabBtn(srcMode === "preset")}    onClick={() => switchMode("preset")}    title="Preset">P</button>
+        <button style={tabBtn(srcMode === "selection")} onClick={() => switchMode("selection")} title="Selection">S</button>
       </div>
 
       {/* 2-column body: previews on left, controls on right */}
@@ -407,12 +409,6 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
       {useMemo(() => (
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
           <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 0, height: 18 }}>
-              <span style={{ fontSize: 10, opacity: 0.7, width: 22 }}>Src</span>
-              <button style={tabBtn(srcMode === "layer")}     onClick={() => switchMode("layer")}     title="Layer">L</button>
-              <button style={tabBtn(srcMode === "preset")}    onClick={() => switchMode("preset")}    title="Preset">P</button>
-              <button style={tabBtn(srcMode === "selection")} onClick={() => switchMode("selection")} title="Selection">S</button>
-            </div>
             <div style={{ minHeight: 24, display: "flex", flexDirection: "column", gap: 4 }}>{sourceModeContent()}</div>
             <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}}
               snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}
@@ -420,10 +416,6 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
           </div>
           <div style={{ width: 1, background: "#444", alignSelf: "stretch" }} />
           <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 0, height: 18 }}>
-              <span style={{ fontSize: 10, opacity: 0.7, width: 22 }}>Tgt</span>
-              <button style={{ ...tabBtn(true), cursor: "default" }} title="Layer" disabled>L</button>
-            </div>
             <div style={{ minHeight: 24, display: "flex" }}>
               <select style={sel} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}>
                 {layers.length === 0 && <option value="">— none —</option>}
