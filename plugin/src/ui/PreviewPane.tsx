@@ -84,9 +84,9 @@ export function PreviewPane(props: PreviewPaneProps & { imgHandleRef?: React.Mut
         display: "flex", alignItems: "center", justifyContent: "center",
         ...aspectStyle, overflow: "hidden", position: "relative",
       }}>
-        {props.snapshot
+        {(props.snapshot || props.imgHandleRef)
           ? <img ref={imgRef} alt={props.label} onClick={onImgClick}
-              style={{ maxWidth: "100%", maxHeight: "100%", cursor: props.onPickColor ? "crosshair" : "default" }} />
+              style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", cursor: props.onPickColor ? "crosshair" : "default" }} />
           : <span style={{ color: "#666", fontSize: 10 }}>{props.layers.length === 0 ? "no layers" : "select a layer"}</span>}
       </div>
       {props.onRefresh && (

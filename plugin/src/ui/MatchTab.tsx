@@ -115,7 +115,8 @@ export function MatchTab() {
   const scheduleRedraw = () => {
     if (rafPendingRef.current) return;
     rafPendingRef.current = true;
-    requestAnimationFrame(() => { rafPendingRef.current = false; redrawMatched(); });
+    // ~30fps throttle (33ms) — halves PNG-encode load vs. rAF every frame, still feels live.
+    setTimeout(() => { rafPendingRef.current = false; redrawMatched(); }, 33);
   };
 
   useEffect(() => { scheduleRedraw(); }, [fittedRaw, tgt.snap, chromaOnly, showOriginal]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -399,10 +400,10 @@ const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: nu
           style={{ padding: "1px 8px", background: showOriginal ? "#e80" : "transparent", color: showOriginal ? "white" : "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 9 }}
         >Hold for A/B</button>
       </div>
-      {/* Wrapper with explicit minHeight prevents panel reflow if inner container momentarily collapses during reconcile */}
-      <div style={{ minHeight: 180 }}>
+      {/* Fixed height; img letterboxes inside via object-fit: contain. No aspect-ratio reflow possible. */}
+      <div style={{ height: 200 }}>
         {useMemo(() => (
-          <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap} imgHandleRef={matchedHandleRef} hideSelector fitAspect maxHeight={220} />
+          <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap} imgHandleRef={matchedHandleRef} hideSelector height={200} />
         ), [tgt.snap])}
       </div>
 
