@@ -268,7 +268,11 @@ export function MatchTab() {
 
   // ─── Styles ─────────────────────────────────────────────────────────────
   const tinyBtn: React.CSSProperties = { padding: "1px 6px", background: "transparent", color: "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 9 };
-  const sel: React.CSSProperties = { flex: 1, width: "100%", padding: "2px 2px", fontSize: 10, minWidth: 0, background: "#333", color: "#ddd", border: "1px solid #555", textAlign: "left", margin: 0, boxSizing: "border-box" };
+  const sel: React.CSSProperties = {
+    width: "100%", display: "block", padding: "2px 4px", fontSize: 10,
+    background: "#333", color: "#ddd", border: "1px solid #555",
+    margin: 0, boxSizing: "border-box", appearance: "none" as any, WebkitAppearance: "none" as any,
+  };
   const numInputStyle: React.CSSProperties = {
     width: 38, padding: "1px 3px", fontSize: 10, textAlign: "right",
     background: "#404040", color: "#dddddd",
@@ -397,7 +401,7 @@ export function MatchTab() {
       {useMemo(() => (
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
           <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-            <div style={{ height: 26, display: "flex", alignItems: "center" }}>
+            <div style={{ height: 26 }}>
               <select style={sel}
                 value={srcMode === "selection" ? "__selection__" : (activeDocId ?? "")}
                 onChange={e => {
@@ -408,18 +412,18 @@ export function MatchTab() {
                 <option value="__selection__">⊞ Use Selection</option>
               </select>
             </div>
-            <div style={{ height: 26, display: "flex", alignItems: "center" }}>{sourceModeContent()}</div>
+            <div style={{ height: 26 }}>{sourceModeContent()}</div>
             <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}}
               snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}
               hideSelector fitAspect maxHeight={120} />
           </div>
           <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-            <div style={{ height: 26, display: "flex", alignItems: "center" }}>
+            <div style={{ height: 26 }}>
               <select style={sel} value={activeDocId ?? ""} onChange={e => onSwitchDoc(Number(e.target.value))}>
                 {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
               </select>
             </div>
-            <div style={{ height: 26, display: "flex", alignItems: "center" }}>
+            <div style={{ height: 26 }}>
               <select style={sel} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}>
                 {layers.length === 0 && <option value="">— none —</option>}
                 {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
