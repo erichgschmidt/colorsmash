@@ -97,19 +97,23 @@ export function MatchTab() {
       let sourceName: string;
       if (sampleMerged) {
         // Read the merged composite within sel: imaging.getPixels with no layerID returns the doc composite.
-        const { imaging } = require("photoshop");
-        const result = await imaging.getPixels({ documentID: doc.id, sourceBounds: sel, componentSize: 8, applyAlpha: false, colorSpace: "RGB" });
-        const id = result.imageData;
-        const raw = await id.getData();
-        const src = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
-        const w = id.width, h = id.height;
-        const components = id.components ?? (src.length / (w * h));
-        const data = new Uint8Array(w * h * 4);
-        if (components === 4) data.set(src);
-        else for (let i = 0, j = 0; i < w * h; i++, j += 3) { const o = i * 4; data[o] = src[j]; data[o + 1] = src[j + 1]; data[o + 2] = src[j + 2]; data[o + 3] = 255; }
-        if (id.dispose) id.dispose();
-        buf = { width: w, height: h, data, bounds: sel };
-        sourceName = "Composite (selection)";
+        try {
+          const { imaging } = require("photoshop");
+          const result = await imaging.getPixels({ documentID: doc.id, sourceBounds: sel, componentSize: 8, applyAlpha: false, colorSpace: "RGB" });
+          const id = result.imageData;
+          const raw = await id.getData();
+          const src = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
+          const w = id.width, h = id.height;
+          const components = id.components ?? (src.length / (w * h));
+          const data = new Uint8Array(w * h * 4);
+          if (components === 4) data.set(src);
+          else for (let i = 0, j = 0; i < w * h; i++, j += 3) { const o = i * 4; data[o] = src[j]; data[o + 1] = src[j + 1]; data[o + 2] = src[j + 2]; data[o + 3] = 255; }
+          if (id.dispose) id.dispose();
+          buf = { width: w, height: h, data, bounds: sel };
+          sourceName = "Composite (selection)";
+        } catch (e: any) {
+          throw new Error(`Merged sample failed (UXP version may not support compositeless getPixels): ${e?.message ?? e}`);
+        }
       } else {
         const layer = doc.activeLayers?.[0];
         if (!layer) throw new Error("No active layer.");
