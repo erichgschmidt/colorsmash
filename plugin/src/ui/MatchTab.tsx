@@ -266,11 +266,11 @@ export function MatchTab() {
     </select>
   ) : (
     <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, whiteSpace: "nowrap", overflow: "hidden" }}>
-      <button onClick={onSnapSelection} style={tinyBtn}>Snap now</button>
-      <label style={{ display: "flex", alignItems: "center", gap: 3, cursor: "pointer", opacity: 0.85 }} title="Auto-update from selection">
+      <label style={{ display: "flex", alignItems: "center", gap: 3, cursor: "pointer", opacity: 0.85 }} title="Auto-sample as you change the marquee selection">
         <input type="checkbox" checked={autoUpdate} onChange={e => setAutoUpdate(e.target.checked)} />
         Auto{autoUpdate && <span style={{ color: "#7d7" }}> ●</span>}
       </label>
+      <button onClick={onSnapSelection} style={tinyBtn} title="Sample the current marquee selection now">Sample</button>
     </div>
   );
 
