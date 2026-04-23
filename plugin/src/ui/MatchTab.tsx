@@ -354,8 +354,8 @@ export function MatchTab() {
           {openSection === "basic" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               {slider("Amount",     amountRef,  amountLabel,  setAmountLabel,  0, 100, "%", 100)}
-              {slider("Smoothing",  smoothRef,  smoothLabel,  setSmoothLabel,  0,  32, "",  0)}
-              {slider("Max stretch",stretchRef, stretchLabel, setStretchLabel, 1,  32, "",  8)}
+              {slider("Smooth",     smoothRef,  smoothLabel,  setSmoothLabel,  0,  32, "",  0)}
+              {slider("Stretch",    stretchRef, stretchLabel, setStretchLabel, 1,  32, "",  8)}
               {/* @ts-ignore Spectrum web component */}
               <sp-checkbox checked={chromaOnly || undefined} onInput={(e: any) => setChromaOnly(e.target.checked)} style={{ marginTop: 4, fontSize: 11 }}>
                 Chroma only (preserve target luminance)

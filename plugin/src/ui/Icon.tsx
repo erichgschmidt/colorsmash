@@ -1,30 +1,24 @@
-// Spectrum sp-icon web component (UXP runtime built-in).
-// Names follow Adobe Spectrum's workflow icon set.
+// Pragmatic icon fallback: Unicode glyphs (UXP renders these reliably).
+// Spectrum sp-icon / svg / img approaches all failed to render in this UXP build.
+// If you want proper Adobe icons later, pursue them via spectrum-web-components
+// after verifying UXP version / required polyfills.
 
-const NAMES: Record<string, string> = {
-  refresh: "ui:Refresh",
-  revert: "ui:Revert",
-  chevronDown: "ui:ChevronDown",
-  chevronRight: "ui:ChevronRight",
-  layers: "workflow:Layers",
-  selection: "workflow:Selection",
-  sampler: "workflow:Sampler",
+const GLYPHS: Record<string, string> = {
+  refresh:      "↻",
+  revert:       "↺",
+  chevronDown:  "▾",
+  chevronRight: "▸",
+  layers:       "L",
+  selection:    "◫",
+  sampler:      "◉",
 };
 
-export type IconName = keyof typeof NAMES;
-
-// Map numeric (legacy) sizes to Spectrum t-shirt sizes.
-function spSize(n?: number): "xs" | "s" | "m" | "l" {
-  if (n == null) return "s";
-  if (n <= 11) return "xs";
-  if (n <= 14) return "s";
-  if (n <= 18) return "m";
-  return "l";
-}
+export type IconName = keyof typeof GLYPHS;
 
 export function Icon(props: { name: IconName; size?: number; style?: React.CSSProperties }) {
   return (
-    // @ts-ignore Spectrum web component
-    <sp-icon name={NAMES[props.name]} size={spSize(props.size)} style={{ flexShrink: 0, ...props.style }}></sp-icon>
+    <span style={{ fontSize: props.size ?? 11, lineHeight: 1, flexShrink: 0, ...props.style }}>
+      {GLYPHS[props.name]}
+    </span>
   );
 }
