@@ -297,14 +297,14 @@ export function MatchTab() {
           {useMemo(() => (
             <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
               <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-                <div style={{ minHeight: 24, display: "flex" }}>{sourceModeContent()}</div>
+                <div style={{ height: 26, display: "flex", alignItems: "center" }}>{sourceModeContent()}</div>
                 <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}}
                   snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}
                   hideSelector fitAspect maxHeight={160} />
               </div>
               <div style={{ width: 1, background: "#444", alignSelf: "stretch" }} />
               <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-                <div style={{ minHeight: 24, display: "flex" }}>
+                <div style={{ height: 26, display: "flex", alignItems: "center" }}>
                   <select style={sel} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}>
                     {layers.length === 0 && <option value="">— none —</option>}
                     {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
