@@ -155,6 +155,10 @@ export function MatchTab() {
   // Auto-update: re-snap on EITHER selection-bounds change OR PS pixel-changing events.
   const lastBoundsRef = useRef<string>("");
   const snapInFlightRef = useRef(false);
+  // Ref the latest snapshot fn so the long-lived effect doesn't capture a stale closure.
+  const snapshotFnRef = useRef(snapshotSelectionInner);
+  useEffect(() => { snapshotFnRef.current = snapshotSelectionInner; });
+
   useEffect(() => {
     if (srcMode !== "selection" || !autoUpdate) return;
     let cancelled = false;
@@ -164,8 +168,8 @@ export function MatchTab() {
       try { bounds = getSelectionBounds(); } catch { /* */ }
       if (!bounds) return;
       snapInFlightRef.current = true;
-      try { const snap = await snapshotSelectionInner(); if (!cancelled) setSrcOverride(snap); }
-      catch { /* ignore transient */ }
+      try { const snap = await snapshotFnRef.current(); if (!cancelled) { setSrcOverride(snap); setStatus(`Auto: ${snap.name}`); } }
+      catch (e: any) { if (!cancelled) setStatus(`Auto err: ${e?.message ?? e}`); }
       finally { snapInFlightRef.current = false; }
     };
     // Immediate re-snap on bounds change (cheap poll: just reads doc.selection.bounds).
