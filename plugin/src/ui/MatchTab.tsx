@@ -48,6 +48,9 @@ export function MatchTab() {
   const [srcOverride, setSrcOverride] = useState<SourceSnap | null>(null);
   const [autoUpdate, setAutoUpdate] = useState(false);
   const [sampleMerged, setSampleMerged] = useState(false);
+  const [sampleLock, setSampleLock] = useState(false);
+  const sampleLockRef = useRef(false);
+  useEffect(() => { sampleLockRef.current = sampleLock; }, [sampleLock]);
   const [colorSpace, setColorSpace] = useState<"rgb" | "lab">("rgb");
 
   const [openSection, setOpenSection] = useState<"basic" | "dims" | "zones" | null>("basic");
@@ -154,7 +157,7 @@ export function MatchTab() {
     if (srcMode !== "selection" || !autoUpdate) return;
     let cancelled = false;
     const trySnap = async () => {
-      if (snapInFlightRef.current) return;
+      if (snapInFlightRef.current || sampleLockRef.current) return;
       let bounds: any = null;
       try { bounds = getSelectionBounds(); } catch { /* */ }
       if (!bounds) return;
@@ -337,7 +340,11 @@ export function MatchTab() {
         title="Sample merged composite (everything visible at the selection) instead of just the active layer"
         style={{ cursor: "pointer", flexShrink: 0, marginLeft: 4 }} />
       <span style={{ opacity: 0.8 }}>Merged</span>
-      <button onClick={onSnapSelection} style={{ ...tinyBtn, flexShrink: 0 }} title="Sample the current marquee selection now">Sample</button>
+      <input type="checkbox" checked={sampleLock} onChange={e => setSampleLock(e.target.checked)}
+        title="Lock current sample — auto-update + manual Sample are disabled while on. Use to freeze a sample while you experiment."
+        style={{ cursor: "pointer", flexShrink: 0, marginLeft: 4 }} />
+      <span style={{ opacity: 0.8 }}>Lock</span>
+      <button onClick={onSnapSelection} disabled={sampleLock} style={{ ...tinyBtn, flexShrink: 0, opacity: sampleLock ? 0.4 : 1 }} title="Sample the current marquee selection now">Sample</button>
     </div>
   );
 
