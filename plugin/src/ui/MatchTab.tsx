@@ -8,6 +8,7 @@ import { useLayerPreview } from "./useLayerPreview";
 import { PreviewPane, PreviewImgHandle } from "./PreviewPane";
 import {
   fitHistogramCurves, processChannelCurves, applyChannelCurvesToRgba, applyChromaOnly,
+  applyDimensions, DimensionOpts, DEFAULT_DIMENSIONS,
 } from "../core/histogramMatch";
 import { applyMatch } from "../app/applyMatch";
 
@@ -23,6 +24,10 @@ export function MatchTab() {
   const [smoothLabel, setSmoothLabel] = useState(0);
   const [stretchLabel, setStretchLabel] = useState(8);
   const [status, setStatus] = useState("Pick source + target.");
+
+  // Post-fit dimension warps. All defaults = identity (no change to base match).
+  const dimsRef = useRef<DimensionOpts>({ ...DEFAULT_DIMENSIONS });
+  const [dimsLabel, setDimsLabel] = useState<DimensionOpts>({ ...DEFAULT_DIMENSIONS });
 
   useEffect(() => {
     if (layers.length >= 2) {
@@ -44,11 +49,12 @@ export function MatchTab() {
 
   const redrawMatched = () => {
     if (!fittedRaw || !tgt.snap || !matchedHandleRef.current) return;
-    const c = processChannelCurves(fittedRaw, {
+    const processed = processChannelCurves(fittedRaw, {
       amount: amountRef.current / 100,
       smoothRadius: smoothRef.current,
       maxStretch: stretchRef.current,
     });
+    const c = applyDimensions(processed, dimsRef.current);
     let out = applyChannelCurvesToRgba(tgt.snap.data, c);
     if (chromaOnly) out = applyChromaOnly(tgt.snap.data, out);
     matchedHandleRef.current.setPixels(out, tgt.snap.width, tgt.snap.height);
@@ -73,6 +79,7 @@ export function MatchTab() {
         smoothRadius: smoothRef.current,
         maxStretch: stretchRef.current,
         chromaOnly,
+        dimensions: dimsRef.current,
       }));
     } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
   };
@@ -95,6 +102,26 @@ export function MatchTab() {
     </div>
   );
 
+  const dimSlider = (
+    label: string, key: keyof DimensionOpts, min: number, max: number, suffix = "",
+  ) => {
+    const value = dimsLabel[key];
+    return (
+      <div key={key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
+        <span style={{ width: 64, opacity: 0.7 }}>{label}</span>
+        <input type="range" min={min} max={max} value={value}
+          onInput={e => {
+            const v = Number((e.target as HTMLInputElement).value);
+            dimsRef.current = { ...dimsRef.current, [key]: v };
+            setDimsLabel(d => ({ ...d, [key]: v }));
+            scheduleRedraw();
+          }}
+          style={{ flex: 1, minWidth: 0 }} />
+        <span style={{ width: 40, textAlign: "right", opacity: 0.8 }}>{value}{suffix}</span>
+      </div>
+    );
+  };
+
   return (
     <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
       <div style={{ display: "flex", gap: 8 }}>
@@ -115,6 +142,24 @@ export function MatchTab() {
         <input type="checkbox" checked={chromaOnly} onChange={e => setChromaOnly(e.target.checked)} />
         Chroma only (preserve target luminance)
       </label>
+
+      <div style={{ borderTop: "1px solid #444", margin: "8px 0 4px" }} />
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 10, opacity: 0.7 }}>
+        <span>Post-fit dimension warps (defaults = no change)</span>
+        <button onClick={() => {
+          dimsRef.current = { ...DEFAULT_DIMENSIONS };
+          setDimsLabel({ ...DEFAULT_DIMENSIONS });
+          scheduleRedraw();
+        }} style={{ padding: "1px 6px", background: "transparent", color: "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 9 }}>Reset</button>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        {dimSlider("Value",       "value",      0, 200, "%")}
+        {dimSlider("Chroma",      "chroma",     0, 200, "%")}
+        {dimSlider("Hue shift",   "hueShift", -180, 180, "°")}
+        {dimSlider("Contrast",    "contrast",   1, 200, "%")}
+        {dimSlider("Neutralize",  "neutralize", 0, 100, "%")}
+        {dimSlider("Separation",  "separation", 0, 200, "%")}
+      </div>
 
       <button onClick={onApply} style={btn}>Apply Match (1 Curves layer)</button>
       <div style={{ marginTop: 6, fontSize: 10, opacity: 0.7, whiteSpace: "pre-wrap" }}>{status}</div>

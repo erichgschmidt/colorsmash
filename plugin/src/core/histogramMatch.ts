@@ -119,6 +119,102 @@ export function processChannelCurves(raw: ChannelCurves, opts: CurveProcessOpts)
   };
 }
 
+// ─── Post-fit dimension warps ─────────────────────────────────────────────
+// Manipulate the fitted curves along perceptual axes without adding layers.
+// All values expressed as percentages (100 = neutral / no change).
+
+export interface DimensionOpts {
+  value: number;       // 0..200, scales the luma delta part of each curve
+  chroma: number;      // 0..200, scales the chroma delta (orthogonal to luma)
+  hueShift: number;    // -180..180 degrees, rotates chroma vector around (1,1,1)
+  contrast: number;    // 0..200, S-curve steepness applied after
+  neutralize: number;  // 0..100, pins endpoints toward identity (quadratic rolloff from mid)
+  separation: number;  // 0..200, stretches output values away from midpoint
+}
+
+export const DEFAULT_DIMENSIONS: DimensionOpts = {
+  value: 100, chroma: 100, hueShift: 0, contrast: 100, neutralize: 0, separation: 100,
+};
+
+function clamp255(v: number): number { return v < 0 ? 0 : v > 255 ? 255 : Math.round(v); }
+
+// Gamma-based S-curve around 0.5. k=1 identity. k>1 steeper (more contrast). k<1 flatter.
+function scurve(x01: number, k: number): number {
+  const t = (x01 - 0.5) * 2;
+  const sign = t < 0 ? -1 : 1;
+  const mag = Math.abs(t);
+  return 0.5 + sign * Math.pow(mag, 1 / k) * 0.5;
+}
+
+export function applyDimensions(curves: ChannelCurves, opts: DimensionOpts): ChannelCurves {
+  const vAmt = opts.value / 100;
+  const cAmt = opts.chroma / 100;
+  const kAmt = opts.contrast / 100;
+  const nAmt = Math.max(0, Math.min(1, opts.neutralize / 100));
+  const sAmt = opts.separation / 100;
+  const hAng = opts.hueShift * Math.PI / 180;
+  const cosH = Math.cos(hAng), sinH = Math.sin(hAng);
+  const k = 1 / Math.sqrt(3);
+
+  const out: ChannelCurves = { r: new Uint8Array(256), g: new Uint8Array(256), b: new Uint8Array(256) };
+
+  for (let v = 0; v < 256; v++) {
+    let r = curves.r[v], g = curves.g[v], b = curves.b[v];
+    const luma = (r + g + b) / 3;
+    let dr = r - luma, dg = g - luma, db = b - luma;
+
+    // Chroma scale.
+    dr *= cAmt; dg *= cAmt; db *= cAmt;
+
+    // Hue rotation around (1,1,1) axis (Rodrigues).
+    if (hAng !== 0) {
+      const dot = (dr + dg + db) * k * k;  // k·v projected onto axis, then axis·dot
+      const cr = k * (dg - db), cg = k * (db - dr), cb = k * (dr - dg); // axis × v
+      const nr = dr * cosH + cr * sinH + (dot) * (1 - cosH);
+      const ng = dg * cosH + cg * sinH + (dot) * (1 - cosH);
+      const nb = db * cosH + cb * sinH + (dot) * (1 - cosH);
+      dr = nr; dg = ng; db = nb;
+    }
+
+    // Value scale on luma delta from input v.
+    const newLuma = v + (luma - v) * vAmt;
+    r = newLuma + dr; g = newLuma + dg; b = newLuma + db;
+
+    // Neutralize endpoints (quadratic rolloff — stronger at v=0 and v=255, none at v=127).
+    if (nAmt > 0) {
+      const d = (v - 127.5) / 127.5;
+      const pull = nAmt * d * d;
+      r = r + (v - r) * pull;
+      g = g + (v - g) * pull;
+      b = b + (v - b) * pull;
+    }
+
+    // Tonal separation: stretch outputs away from midpoint.
+    if (sAmt !== 1) {
+      r = 127.5 + (r - 127.5) * sAmt;
+      g = 127.5 + (g - 127.5) * sAmt;
+      b = 127.5 + (b - 127.5) * sAmt;
+    }
+
+    // Contrast (S-curve).
+    if (kAmt !== 1 && kAmt > 0) {
+      r = scurve(Math.max(0, Math.min(255, r)) / 255, kAmt) * 255;
+      g = scurve(Math.max(0, Math.min(255, g)) / 255, kAmt) * 255;
+      b = scurve(Math.max(0, Math.min(255, b)) / 255, kAmt) * 255;
+    }
+
+    out.r[v] = clamp255(r);
+    out.g[v] = clamp255(g);
+    out.b[v] = clamp255(b);
+  }
+
+  // Keep curves monotonic after all the warping.
+  out.r = enforceMonotonic(out.r);
+  out.g = enforceMonotonic(out.g);
+  out.b = enforceMonotonic(out.b);
+  return out;
+}
+
 // Sample a 256-entry curve down to N control points evenly spaced on [0,255].
 export function sampleControlPoints(curve: Uint8Array, n: number): { input: number; output: number }[] {
   const pts: { input: number; output: number }[] = [];

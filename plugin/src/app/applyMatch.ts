@@ -7,7 +7,8 @@ import {
 } from "../services/photoshop";
 import { downsampleToMaxEdge } from "../core/downsample";
 import {
-  fitHistogramCurves, sampleControlPoints, processChannelCurves, ChannelCurves,
+  fitHistogramCurves, sampleControlPoints, processChannelCurves, applyDimensions,
+  ChannelCurves, DimensionOpts, DEFAULT_DIMENSIONS,
 } from "../core/histogramMatch";
 
 const STATS_MAX_EDGE = 512;
@@ -21,6 +22,7 @@ export interface ApplyMatchParams {
   smoothRadius?: number; // 0..64
   maxStretch?: number;   // local slope cap; large = no cap
   chromaOnly?: boolean;  // set the Curves layer to "Color" blend mode
+  dimensions?: DimensionOpts;
 }
 
 export async function fitMatchCurves(params: ApplyMatchParams): Promise<ChannelCurves> {
@@ -37,11 +39,12 @@ export async function fitMatchCurves(params: ApplyMatchParams): Promise<ChannelC
       downsampleToMaxEdge(s, STATS_MAX_EDGE).data,
       downsampleToMaxEdge(t, STATS_MAX_EDGE).data,
     );
-    return processChannelCurves(raw, {
+    const processed = processChannelCurves(raw, {
       amount: params.amount,
       smoothRadius: params.smoothRadius ?? 0,
       maxStretch: params.maxStretch ?? 999,
     });
+    return applyDimensions(processed, params.dimensions ?? DEFAULT_DIMENSIONS);
   });
 }
 
@@ -62,11 +65,12 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       downsampleToMaxEdge(s, STATS_MAX_EDGE).data,
       downsampleToMaxEdge(t, STATS_MAX_EDGE).data,
     );
-    const curves: ChannelCurves = processChannelCurves(raw, {
+    const processed = processChannelCurves(raw, {
       amount: params.amount,
       smoothRadius: params.smoothRadius ?? 0,
       maxStretch: params.maxStretch ?? 999,
     });
+    const curves: ChannelCurves = applyDimensions(processed, params.dimensions ?? DEFAULT_DIMENSIONS);
 
     // Reuse existing [Color Smash] group; remove any prior Match layer to avoid stacking.
     const findGroup = () => doc.layers.find((l: any) => l.name === GROUP_NAME && l.layers);
