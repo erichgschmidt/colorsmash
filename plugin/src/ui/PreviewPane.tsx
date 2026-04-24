@@ -105,13 +105,11 @@ export function PreviewPane(props: PreviewPaneProps & { imgHandleRef?: React.Mut
                 <img ref={imgRef} alt={props.label} onClick={onImgClick}
                   style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain",
                            cursor: props.onPickColor ? "crosshair" : "default",
-                           position: "absolute", top: 0, left: 0, right: 0, bottom: 0, margin: "auto",
-                           transform: props.imgTransform, transformOrigin: "center center" }} />
+                           position: "absolute", top: 0, left: 0, right: 0, bottom: 0, margin: "auto" }} />
                 <img ref={imgBackRef} alt="" aria-hidden
                   style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain",
                            position: "absolute", top: 0, left: 0, right: 0, bottom: 0, margin: "auto",
-                           opacity: 0, pointerEvents: "none",
-                           transform: props.imgTransform, transformOrigin: "center center" }} />
+                           opacity: 0, pointerEvents: "none" }} />
               </>
             : <img ref={imgRef} alt={props.label} onClick={onImgClick}
                 style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain",
