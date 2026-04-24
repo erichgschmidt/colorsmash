@@ -55,7 +55,7 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, {}>(function Matc
   return (
     <>
       <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span>Matched preview</span>
+        <span>Preview</span>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
           <button onClick={() => setZoom(z => Math.max(0.25, z - 0.25))} disabled={zoom <= 0.25} title="Zoom out" style={{ width: 18, height: 16, padding: 0, fontSize: 12, lineHeight: "12px", background: "transparent", color: zoom <= 0.25 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: zoom <= 0.25 ? "default" : "pointer" }}>−</button>
           <span style={{ minWidth: 36, textAlign: "center" }}>{Math.round(zoom * 100)}%</span>
