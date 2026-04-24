@@ -257,6 +257,20 @@ export function MatchTab() {
     window.addEventListener("mouseup", onUp);
   };
   const resetZoom = () => { setZoom(1); setPan({ x: 0, y: 0 }); };
+
+  // Non-passive wheel listener so preventDefault actually stops the panel from scrolling.
+  const matchedContainerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = matchedContainerRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? -0.25 : 0.25;
+      setZoom(z => Math.max(0.25, Math.min(8, z + delta)));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => { el.removeEventListener("wheel", onWheel as any); };
+  }, []);
   const rafPendingRef = useRef(false);
   const [renderedCurves, setRenderedCurves] = useState<ChannelCurves | null>(null);
   const curvesPendingRef = useRef<ChannelCurves | null>(null);
@@ -505,13 +519,8 @@ export function MatchTab() {
           <button onClick={resetZoom} disabled={zoom === 1 && pan.x === 0 && pan.y === 0} title="Reset zoom + pan" style={{ height: 16, padding: "0 6px", fontSize: 9, background: "transparent", color: zoom === 1 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: "pointer" }}>1:1</button>
         </div>
       </div>
-      <div style={{ height: 240, overflow: "hidden", cursor: "grab", background: "#111", border: "1px solid #555", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center" }}
-        onMouseDown={onZoomMouseDown}
-        onWheel={(e) => {
-          e.preventDefault();
-          const delta = e.deltaY > 0 ? -0.25 : 0.25;
-          setZoom(z => Math.max(0.25, Math.min(8, z + delta)));
-        }}>
+      <div ref={matchedContainerRef} style={{ height: 240, overflow: "hidden", cursor: "grab", background: "#111", border: "1px solid #555", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center" }}
+        onMouseDown={onZoomMouseDown}>
         <img ref={matchedFrontRef} alt=""
           style={{
             width: `${100 * zoom}%`, height: `${100 * zoom}%`,
