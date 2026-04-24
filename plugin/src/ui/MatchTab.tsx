@@ -277,7 +277,6 @@ export function MatchTab() {
       return null;
     };
     const onEnter = () => {
-      el.focus();
       const sa = findScrollAncestor();
       if (sa && !savedScrollRef.current) {
         savedScrollRef.current = { el: sa, overflow: sa.style.overflowY };
@@ -285,7 +284,6 @@ export function MatchTab() {
       }
     };
     const onLeave = () => {
-      el.blur();
       if (savedScrollRef.current) {
         savedScrollRef.current.el.style.overflowY = savedScrollRef.current.overflow;
         savedScrollRef.current = null;
@@ -557,7 +555,7 @@ export function MatchTab() {
           <button onClick={resetZoom} disabled={zoom === 1 && pan.x === 0 && pan.y === 0} title="Reset zoom + pan" style={{ height: 16, padding: "0 6px", fontSize: 9, background: "transparent", color: zoom === 1 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: "pointer" }}>1:1</button>
         </div>
       </div>
-      <div ref={matchedContainerRef} tabIndex={0} style={{ height: 240, overflow: "hidden", cursor: "grab", background: "#111", border: "1px solid #555", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center", outline: "none" }}
+      <div ref={matchedContainerRef} style={{ height: 240, overflow: "hidden", cursor: "grab", background: "#111", border: "1px solid #555", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center" }}
         onMouseDown={onZoomMouseDown}>
         <img ref={matchedFrontRef} alt=""
           style={{
