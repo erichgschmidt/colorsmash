@@ -500,21 +500,19 @@ export function MatchTab() {
       <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span>Matched preview</span>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <button onClick={() => { const v = Math.max(1, zoom - 0.25); setZoom(v); setStatus(`zoom ${v}`); }} disabled={zoom <= 1} title="Zoom out" style={{ width: 18, height: 16, padding: 0, fontSize: 12, lineHeight: "12px", background: "transparent", color: zoom <= 1 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: zoom <= 1 ? "default" : "pointer" }}>−</button>
+          <button onClick={() => { const v = Math.max(0.25, zoom - 0.25); setZoom(v); setStatus(`zoom ${v}`); }} disabled={zoom <= 0.25} title="Zoom out" style={{ width: 18, height: 16, padding: 0, fontSize: 12, lineHeight: "12px", background: "transparent", color: zoom <= 0.25 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: zoom <= 0.25 ? "default" : "pointer" }}>−</button>
           <span style={{ minWidth: 36, textAlign: "center" }}>{Math.round(zoom * 100)}%</span>
           <button onClick={() => { const v = Math.min(8, zoom + 0.25); setZoom(v); setStatus(`zoom ${v}`); }} disabled={zoom >= 8} title="Zoom in" style={{ width: 18, height: 16, padding: 0, fontSize: 12, lineHeight: "12px", background: "transparent", color: zoom >= 8 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: zoom >= 8 ? "default" : "pointer" }}>+</button>
           <button onClick={resetZoom} disabled={zoom === 1 && pan.x === 0 && pan.y === 0} title="Reset zoom + pan" style={{ height: 16, padding: "0 6px", fontSize: 9, background: "transparent", color: zoom === 1 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: "pointer" }}>1:1</button>
         </div>
       </div>
-      <div style={{ height: 240, overflow: "hidden", cursor: zoom > 1 ? "grab" : "default", background: "#111", border: "1px solid #555", borderRadius: 2, position: "relative" }} onMouseDown={onZoomMouseDown}>
+      <div style={{ height: 240, overflow: "hidden", cursor: zoom > 1 ? "grab" : "default", background: "#111", border: "1px solid #555", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center" }} onMouseDown={onZoomMouseDown}>
         <img ref={matchedFrontRef} alt=""
           style={{
-            position: "absolute",
-            top: "50%", left: "50%",
             width: `${100 * zoom}%`, height: `${100 * zoom}%`,
-            marginLeft: `${-50 * zoom + (pan.x / 240 * 100)}%`,
-            marginTop: `${-50 * zoom + (pan.y / 240 * 100)}%`,
             objectFit: "contain",
+            marginLeft: `${pan.x}px`, marginTop: `${pan.y}px`,
+            flexShrink: 0,
           }} />
       </div>
 
