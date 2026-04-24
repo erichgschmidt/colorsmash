@@ -247,7 +247,6 @@ export function MatchTab() {
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const dragStartRef = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
   const onZoomMouseDown = (e: React.MouseEvent) => {
-    if (zoom <= 1) return;
     dragStartRef.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y };
     const onMove = (ev: MouseEvent) => {
       if (!dragStartRef.current) return;
@@ -506,7 +505,7 @@ export function MatchTab() {
           <button onClick={resetZoom} disabled={zoom === 1 && pan.x === 0 && pan.y === 0} title="Reset zoom + pan" style={{ height: 16, padding: "0 6px", fontSize: 9, background: "transparent", color: zoom === 1 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: "pointer" }}>1:1</button>
         </div>
       </div>
-      <div style={{ height: 240, overflow: "hidden", cursor: zoom > 1 ? "grab" : "default", background: "#111", border: "1px solid #555", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center" }} onMouseDown={onZoomMouseDown}>
+      <div style={{ height: 240, overflow: "hidden", cursor: "grab", background: "#111", border: "1px solid #555", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center" }} onMouseDown={onZoomMouseDown}>
         <img ref={matchedFrontRef} alt=""
           style={{
             width: `${100 * zoom}%`, height: `${100 * zoom}%`,
