@@ -87,7 +87,7 @@ export function MatchTab() {
   const [deselectOnApply, setDeselectOnApply] = useState(true);
   const [overwriteOnApply, setOverwriteOnApply] = useState(true);
 
-  const [openSection, setOpenSection] = useState<"basic" | "dims" | "zones" | null>("basic");
+  const [openSection, setOpenSection] = useState<"basic" | "dims" | "zones" | null>(null);
   const toggleSection = (s: "basic" | "dims" | "zones") => setOpenSection(o => o === s ? null : s);
 
   const [docs, setDocs] = useState<{ id: number; name: string }[]>([]);
