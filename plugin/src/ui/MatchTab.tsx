@@ -270,8 +270,9 @@ export function MatchTab() {
   const tinyBtn: React.CSSProperties = { padding: "1px 6px", background: "transparent", color: "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 9 };
   const sel: React.CSSProperties = {
     width: "100%", display: "block", padding: "2px 4px", fontSize: 10,
-    background: "#333", color: "#ddd", border: "1px solid #555",
+    background: "#333", color: "#dddddd", border: "1px solid #555",
     margin: 0, boxSizing: "border-box", appearance: "none" as any, WebkitAppearance: "none" as any,
+    fontWeight: 600,
   };
   const numInputStyle: React.CSSProperties = {
     width: 38, padding: "1px 3px", fontSize: 10, textAlign: "right",
@@ -445,7 +446,7 @@ export function MatchTab() {
 
       {/* Accordion controls */}
       <div style={{ borderTop: "1px solid #444", margin: "6px 0 0" }} />
-      <div onClick={() => toggleSection("basic")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#ccc", cursor: "pointer", fontSize: 11 }}>
+      <div onClick={() => toggleSection("basic")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#dddddd", cursor: "pointer", fontSize: 11, fontWeight: 700 }}>
         <span><Icon name={openSection === "basic" ? "chevronDown" : "chevronRight"} size={11} /> Match controls</span>
       </div>
       {openSection === "basic" && (
@@ -462,7 +463,7 @@ export function MatchTab() {
       )}
 
       <div style={{ borderTop: "1px solid #444" }} />
-      <div onClick={() => toggleSection("dims")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#ccc", cursor: "pointer", fontSize: 11 }}>
+      <div onClick={() => toggleSection("dims")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#dddddd", cursor: "pointer", fontSize: 11, fontWeight: 700 }}>
         <span><Icon name={openSection === "dims" ? "chevronDown" : "chevronRight"} size={11} /> Dimension warps</span>
         {openSection === "dims" && <span onClick={(e: any) => { e.stopPropagation(); dimsRef.current = { ...DEFAULT_DIMENSIONS }; setDimsLabel({ ...DEFAULT_DIMENSIONS }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>}
       </div>
@@ -478,7 +479,7 @@ export function MatchTab() {
       )}
 
       <div style={{ borderTop: "1px solid #444" }} />
-      <div onClick={() => toggleSection("zones")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#ccc", cursor: "pointer", fontSize: 11 }}>
+      <div onClick={() => toggleSection("zones")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#dddddd", cursor: "pointer", fontSize: 11, fontWeight: 700 }}>
         <span><Icon name={openSection === "zones" ? "chevronDown" : "chevronRight"} size={11} /> Zone targeting</span>
         {openSection === "zones" && <span onClick={(e: any) => { e.stopPropagation(); zonesRef.current = { ...DEFAULT_ZONES }; setZonesLabel({ ...DEFAULT_ZONES }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>}
       </div>
