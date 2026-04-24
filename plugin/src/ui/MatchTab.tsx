@@ -99,17 +99,22 @@ export function MatchTab() {
   const [activeDocId, setActiveDocId] = useState<number | null>(null);
 
   useEffect(() => {
-    const refresh = () => {
+    let cancelled = false;
+    const readNow = () => {
+      if (cancelled) return;
       try {
         const list = (app.documents ?? []).map((d: any) => ({ id: d.id, name: d.name }));
         setDocs(list);
         setActiveDocId(app.activeDocument?.id ?? null);
       } catch { /* */ }
     };
-    refresh();
+    // PS fires events during modal scope before doc.documents reflects the mutation;
+    // defer so we read after the tree settles. Two passes for fast vs late settle.
+    const refresh = () => { setTimeout(readNow, 0); setTimeout(readNow, 120); };
+    readNow();
     const events = ["open", "close", "select", "make"];
     psAction.addNotificationListener(events, refresh);
-    return () => { psAction.removeNotificationListener?.(events, refresh); };
+    return () => { cancelled = true; psAction.removeNotificationListener?.(events, refresh); };
   }, []);
 
   const onSwitchDoc = (id: number) => {
