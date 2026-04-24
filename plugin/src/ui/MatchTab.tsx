@@ -258,25 +258,10 @@ export function MatchTab() {
   };
   const resetZoom = () => { setZoom(1); setPan({ x: 0, y: 0 }); };
 
-  // Wheel-zoom: capture-phase document listener. When the wheel event's target lies
-  // inside the matched preview, intercept (preventDefault + stopPropagation) BEFORE the
-  // ancestor overflow:auto container processes it. Scrollbar stays visible/functional
-  // everywhere else; no overflow toggling, no focus dance.
+  // Wheel-zoom was attempted but UXP's host-level scroll routing pre-empts our document
+  // handler unless an active mouse interaction is happening. Conceded — buttons + drag-pan
+  // are the supported zoom controls. Container ref kept for the drag handler.
   const matchedContainerRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const onWheel = (e: WheelEvent) => {
-      const el = matchedContainerRef.current;
-      if (!el) return;
-      const t = e.target as Node | null;
-      if (!t || !el.contains(t)) return;
-      e.preventDefault();
-      e.stopPropagation();
-      const delta = e.deltaY > 0 ? -0.25 : 0.25;
-      setZoom(z => Math.max(0.25, Math.min(8, z + delta)));
-    };
-    document.addEventListener("wheel", onWheel, { passive: false, capture: true });
-    return () => { document.removeEventListener("wheel", onWheel as any, { capture: true } as any); };
-  }, []);
   const rafPendingRef = useRef(false);
   const [renderedCurves, setRenderedCurves] = useState<ChannelCurves | null>(null);
   const curvesPendingRef = useRef<ChannelCurves | null>(null);
@@ -519,9 +504,9 @@ export function MatchTab() {
       <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span>Matched preview</span>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <button onClick={() => { const v = Math.max(0.25, zoom - 0.25); setZoom(v); setStatus(`zoom ${v}`); }} disabled={zoom <= 0.25} title="Zoom out" style={{ width: 18, height: 16, padding: 0, fontSize: 12, lineHeight: "12px", background: "transparent", color: zoom <= 0.25 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: zoom <= 0.25 ? "default" : "pointer" }}>−</button>
+          <button onClick={() => setZoom(z => Math.max(0.25, z - 0.25))} disabled={zoom <= 0.25} title="Zoom out" style={{ width: 18, height: 16, padding: 0, fontSize: 12, lineHeight: "12px", background: "transparent", color: zoom <= 0.25 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: zoom <= 0.25 ? "default" : "pointer" }}>−</button>
           <span style={{ minWidth: 36, textAlign: "center" }}>{Math.round(zoom * 100)}%</span>
-          <button onClick={() => { const v = Math.min(8, zoom + 0.25); setZoom(v); setStatus(`zoom ${v}`); }} disabled={zoom >= 8} title="Zoom in" style={{ width: 18, height: 16, padding: 0, fontSize: 12, lineHeight: "12px", background: "transparent", color: zoom >= 8 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: zoom >= 8 ? "default" : "pointer" }}>+</button>
+          <button onClick={() => setZoom(z => Math.min(8, z + 0.25))} disabled={zoom >= 8} title="Zoom in" style={{ width: 18, height: 16, padding: 0, fontSize: 12, lineHeight: "12px", background: "transparent", color: zoom >= 8 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: zoom >= 8 ? "default" : "pointer" }}>+</button>
           <button onClick={resetZoom} disabled={zoom === 1 && pan.x === 0 && pan.y === 0} title="Reset zoom + pan" style={{ height: 16, padding: "0 6px", fontSize: 9, background: "transparent", color: zoom === 1 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: "pointer" }}>1:1</button>
         </div>
       </div>
