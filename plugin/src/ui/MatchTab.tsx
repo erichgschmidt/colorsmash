@@ -260,8 +260,20 @@ export function MatchTab() {
 
   // Wheel-zoom was attempted but UXP's host-level scroll routing pre-empts our document
   // handler unless an active mouse interaction is happening. Conceded — buttons + drag-pan
-  // are the supported zoom controls. Container ref kept for the drag handler.
+  // + keyboard shortcuts are the supported zoom controls.
   const matchedContainerRef = useRef<HTMLDivElement>(null);
+  // Keyboard shortcuts: + zoom in, - zoom out, 0 reset (when matched preview is hovered).
+  const mouseOverMatchedRef = useRef(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!mouseOverMatchedRef.current) return;
+      if (e.key === "+" || e.key === "=") { e.preventDefault(); setZoom(z => Math.min(8, z + 0.25)); }
+      else if (e.key === "-" || e.key === "_") { e.preventDefault(); setZoom(z => Math.max(0.25, z - 0.25)); }
+      else if (e.key === "0") { e.preventDefault(); setZoom(1); setPan({ x: 0, y: 0 }); }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("keydown", onKey); };
+  }, []);
   const rafPendingRef = useRef(false);
   const [renderedCurves, setRenderedCurves] = useState<ChannelCurves | null>(null);
   const curvesPendingRef = useRef<ChannelCurves | null>(null);
@@ -511,7 +523,9 @@ export function MatchTab() {
         </div>
       </div>
       <div ref={matchedContainerRef} style={{ height: 240, overflow: "hidden", cursor: "grab", background: "#111", border: "1px solid #555", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center" }}
-        onMouseDown={onZoomMouseDown}>
+        onMouseDown={onZoomMouseDown}
+        onMouseEnter={() => { mouseOverMatchedRef.current = true; }}
+        onMouseLeave={() => { mouseOverMatchedRef.current = false; }}>
         <img ref={matchedFrontRef} alt=""
           style={{
             width: `${100 * zoom}%`, height: `${100 * zoom}%`,
