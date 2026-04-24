@@ -51,6 +51,52 @@ export function MatchTab() {
   const [sampleLock, setSampleLock] = useState(false);
   const sampleLockRef = useRef(false);
   useEffect(() => { sampleLockRef.current = sampleLock; }, [sampleLock]);
+
+  // Browse Folder source: pick a folder once, then its image files become picks in the source dropdown.
+  const [folderEntries, setFolderEntries] = useState<{ name: string; entry: any }[]>([]);
+  const [folderName, setFolderName] = useState<string>("");
+  const [activeFolderImg, setActiveFolderImg] = useState<string>("");
+
+  const onPickBrowseFolder = async () => {
+    setStatus("Picking folder...");
+    try {
+      const uxp = require("uxp");
+      const folder = await uxp.storage.localFileSystem.getFolder();
+      if (!folder) { setStatus("Cancelled."); return; }
+      const entries = await folder.getEntries();
+      const imgs = entries.filter((e: any) => e.isFile && /\.(png|jpe?g|tiff?|bmp|gif|webp)$/i.test(e.name))
+        .map((e: any) => ({ name: e.name, entry: e }));
+      setFolderEntries(imgs);
+      setFolderName(folder.name ?? "(folder)");
+      setStatus(`Loaded ${imgs.length} image${imgs.length === 1 ? "" : "s"} from ${folder.name}.`);
+    } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
+  };
+
+  const loadFolderImage = async (name: string) => {
+    const item = folderEntries.find(f => f.name === name);
+    if (!item) return;
+    setStatus(`Loading ${name}...`);
+    try {
+      const uxp = require("uxp");
+      const { app, action: psA } = require("photoshop");
+      const snap = await executeAsModal("Color Smash load image", async () => {
+        const token = uxp.storage.localFileSystem.createSessionToken(item.entry);
+        const beforeId = app.activeDocument?.id ?? null;
+        await psA.batchPlay([{ _obj: "open", null: { _path: token } }], {});
+        const opened = app.activeDocument;
+        if (!opened || opened.id === beforeId) throw new Error("Open failed.");
+        const bg = opened.backgroundLayer ?? opened.layers[opened.layers.length - 1];
+        const buf = await readLayerPixels(bg);
+        const small = downsampleToMaxEdge(buf, SOURCE_MAX_EDGE);
+        try { await opened.closeWithoutSaving(); } catch { /* ignore */ }
+        return { width: small.width, height: small.height, data: small.data, name };
+      });
+      setSrcOverride(snap);
+      setSrcMode("selection"); // tag as override-mode so layer-mode src snap doesn't override
+      setActiveFolderImg(name);
+      setStatus(`Source = ${name}`);
+    } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
+  };
   const [colorSpace, setColorSpace] = useState<"rgb" | "lab">("rgb");
   const [deselectOnApply, setDeselectOnApply] = useState(true);
   const [overwriteOnApply, setOverwriteOnApply] = useState(true);
@@ -394,13 +440,25 @@ export function MatchTab() {
           <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
             <div style={{ height: 26 }}>
               <select style={sel}
-                value={srcMode === "selection" ? "__selection__" : (activeDocId ?? "")}
+                value={
+                  activeFolderImg ? `__file__${activeFolderImg}` :
+                  srcMode === "selection" ? "__selection__" : (activeDocId ?? "")
+                }
                 onChange={e => {
-                  if (e.target.value === "__selection__") switchSrcMode("selection");
-                  else { switchSrcMode("layer"); onSwitchDoc(Number(e.target.value)); }
+                  const v = e.target.value;
+                  if (v === "__selection__") { setActiveFolderImg(""); switchSrcMode("selection"); }
+                  else if (v === "__browse__") { setActiveFolderImg(""); onPickBrowseFolder(); }
+                  else if (v.startsWith("__file__")) { loadFolderImage(v.slice(8)); }
+                  else { setActiveFolderImg(""); switchSrcMode("layer"); onSwitchDoc(Number(v)); }
                 }}>
                 {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                 <option value="__selection__">⊞ Use Selection</option>
+                <option value="__browse__">📁 Browse Folder…</option>
+                {folderEntries.length > 0 && (
+                  <optgroup label={folderName ? `— ${folderName} —` : "— folder —"}>
+                    {folderEntries.map(f => <option key={f.name} value={`__file__${f.name}`}>{f.name}</option>)}
+                  </optgroup>
+                )}
               </select>
             </div>
             <div style={{ height: 26 }}>{sourceModeContent()}</div>
