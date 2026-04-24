@@ -52,35 +52,20 @@ export function MatchTab() {
   const sampleLockRef = useRef(false);
   useEffect(() => { sampleLockRef.current = sampleLock; }, [sampleLock]);
 
-  // Browse Folder source: pick a folder once, then its image files become picks in the source dropdown.
-  const [folderEntries, setFolderEntries] = useState<{ name: string; entry: any }[]>([]);
-  const [folderName, setFolderName] = useState<string>("");
-  const [activeFolderImg, setActiveFolderImg] = useState<string>("");
+  // Browse Image source: pick a single image file from disk; loads as srcOverride.
+  const [browsedFile, setBrowsedFile] = useState<string>("");
 
-  const onPickBrowseFolder = async () => {
-    setStatus("Picking folder...");
+  const onBrowseImage = async () => {
+    setStatus("Picking image...");
     try {
       const uxp = require("uxp");
-      const folder = await uxp.storage.localFileSystem.getFolder();
-      if (!folder) { setStatus("Cancelled."); return; }
-      const entries = await folder.getEntries();
-      const imgs = entries.filter((e: any) => e.isFile && /\.(png|jpe?g|tiff?|bmp|gif|webp)$/i.test(e.name))
-        .map((e: any) => ({ name: e.name, entry: e }));
-      setFolderEntries(imgs);
-      setFolderName(folder.name ?? "(folder)");
-      setStatus(`Loaded ${imgs.length} image${imgs.length === 1 ? "" : "s"} from ${folder.name}.`);
-    } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
-  };
-
-  const loadFolderImage = async (name: string) => {
-    const item = folderEntries.find(f => f.name === name);
-    if (!item) return;
-    setStatus(`Loading ${name}...`);
-    try {
-      const uxp = require("uxp");
+      const file = await uxp.storage.localFileSystem.getFileForOpening({
+        types: ["png", "jpg", "jpeg", "tif", "tiff", "bmp", "gif", "webp"],
+      });
+      if (!file) { setStatus("Cancelled."); return; }
       const { app, action: psA } = require("photoshop");
       const snap = await executeAsModal("Color Smash load image", async () => {
-        const token = uxp.storage.localFileSystem.createSessionToken(item.entry);
+        const token = uxp.storage.localFileSystem.createSessionToken(file);
         const beforeId = app.activeDocument?.id ?? null;
         await psA.batchPlay([{ _obj: "open", null: { _path: token } }], {});
         const opened = app.activeDocument;
@@ -89,12 +74,12 @@ export function MatchTab() {
         const buf = await readLayerPixels(bg);
         const small = downsampleToMaxEdge(buf, SOURCE_MAX_EDGE);
         try { await opened.closeWithoutSaving(); } catch { /* ignore */ }
-        return { width: small.width, height: small.height, data: small.data, name };
+        return { width: small.width, height: small.height, data: small.data, name: file.name };
       });
       setSrcOverride(snap);
       setSrcMode("folder");
-      setActiveFolderImg(name);
-      setStatus(`Source = ${name}`);
+      setBrowsedFile(file.name);
+      setStatus(`Source = ${file.name}`);
     } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
   };
   const [colorSpace, setColorSpace] = useState<"rgb" | "lab">("rgb");
@@ -234,7 +219,7 @@ export function MatchTab() {
 
   const switchSrcMode = (m: SrcMode) => {
     setSrcMode(m);
-    if (m === "layer") { setSrcOverride(null); setActiveFolderImg(""); }
+    if (m === "layer") { setSrcOverride(null); setBrowsedFile(""); }
   };
 
   const fittedRaw = useMemo(() => {
@@ -416,7 +401,7 @@ export function MatchTab() {
       {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
     </select>
   ) : srcMode === "folder" ? (
-    <span style={{ fontSize: 10, opacity: 0.7 }}>{folderName ? `📁 ${folderName}` : ""}</span>
+    <span style={{ fontSize: 10, opacity: 0.7 }}>{browsedFile ? `📁 ${browsedFile}` : ""}</span>
   ) : (
     <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, height: 26 }}>
       <input type="checkbox" checked={autoUpdate} onChange={e => setAutoUpdate(e.target.checked)}
@@ -443,24 +428,20 @@ export function MatchTab() {
             <div style={{ height: 26 }}>
               <select style={sel}
                 value={
-                  activeFolderImg ? `__file__${activeFolderImg}` :
+                  srcMode === "folder" ? "__file__" :
                   srcMode === "selection" ? "__selection__" : (activeDocId ?? "")
                 }
                 onChange={e => {
                   const v = e.target.value;
-                  if (v === "__selection__") { setActiveFolderImg(""); switchSrcMode("selection"); }
-                  else if (v === "__browse__") { setActiveFolderImg(""); onPickBrowseFolder(); }
-                  else if (v.startsWith("__file__")) { loadFolderImage(v.slice(8)); }
-                  else { setActiveFolderImg(""); switchSrcMode("layer"); onSwitchDoc(Number(v)); }
+                  if (v === "__selection__") { setBrowsedFile(""); switchSrcMode("selection"); }
+                  else if (v === "__browse__") { onBrowseImage(); }
+                  else if (v === "__file__") { /* sticky display, ignore */ }
+                  else { setBrowsedFile(""); switchSrcMode("layer"); onSwitchDoc(Number(v)); }
                 }}>
                 {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                 <option value="__selection__">⊞ Use Selection</option>
-                <option value="__browse__">📁 Browse Folder…</option>
-                {folderEntries.length > 0 && (
-                  <optgroup label={folderName ? `— ${folderName} —` : "— folder —"}>
-                    {folderEntries.map(f => <option key={f.name} value={`__file__${f.name}`}>{f.name}</option>)}
-                  </optgroup>
-                )}
+                <option value="__browse__">📁 Browse Image…</option>
+                {browsedFile && <option value="__file__">📁 {browsedFile}</option>}
               </select>
             </div>
             <div style={{ height: 26 }}>{sourceModeContent()}</div>
