@@ -4,7 +4,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLayers } from "./useLayers";
 import { useLayerPreview } from "./useLayerPreview";
-import { PreviewPane, PreviewImgHandle } from "./PreviewPane";
+import { PreviewPane } from "./PreviewPane";
+import { CanvasPreview, CanvasPreviewHandle } from "./CanvasPreview";
 import { CurvesGraph } from "./CurvesGraph";
 import { ZoneCompoundSlider } from "./ZoneCompoundSlider";
 import { Icon } from "./Icon";
@@ -228,7 +229,7 @@ export function MatchTab() {
     return fit(srcSnap.data, tgt.snap.data);
   }, [srcSnap, tgt.snap, colorSpace]);
 
-  const matchedHandleRef = useRef<PreviewImgHandle | null>(null);
+  const matchedHandleRef = useRef<CanvasPreviewHandle | null>(null);
   const rafPendingRef = useRef(false);
   const [renderedCurves, setRenderedCurves] = useState<ChannelCurves | null>(null);
   const curvesPendingRef = useRef<ChannelCurves | null>(null);
@@ -470,9 +471,7 @@ export function MatchTab() {
       {/* Matched preview (full-width, large) */}
       <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7 }}>Matched preview</div>
       <div style={{ height: 240 }}>
-        {useMemo(() => (
-          <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap} imgHandleRef={matchedHandleRef} hideSelector height={240} />
-        ), [tgt.snap])}
+        <CanvasPreview height={240} handleRef={matchedHandleRef} />
       </div>
 
       {/* Accordion controls */}
