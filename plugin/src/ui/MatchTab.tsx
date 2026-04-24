@@ -17,6 +17,7 @@ import {
   fitHistogramCurves, fitHistogramCurvesLab, processChannelCurves, applyChannelCurvesToRgba, applyChromaOnly,
   applyDimensions, applyZoneWeightsToChannels, MERGED_LAYER_ID,
   DimensionOpts, DEFAULT_DIMENSIONS, ZoneOpts, DEFAULT_ZONES,
+  computeLumaBins, bandMeanColor,
 } from "../core/histogramMatch";
 import { applyMatch } from "../app/applyMatch";
 import {
@@ -233,6 +234,10 @@ export function MatchTab() {
     return fit(srcSnap.data, tgt.snap.data);
   }, [srcSnap, tgt.snap, colorSpace]);
 
+  // Luma-binned color stats from target pixels — used to color the zone band swatches with the
+  // actual mean color of pixels at each luminance level. Recomputed only when target pixels change.
+  const lumaBins = useMemo(() => tgt.snap ? computeLumaBins(tgt.snap.data) : null, [tgt.snap]);
+
   // Matched preview is rendered by <MatchedPreview/>; we drive it imperatively via a handle.
   const matchedHandleRef = useRef<MatchedPreviewHandle | null>(null);
   const rafPendingRef = useRef(false);
@@ -411,15 +416,22 @@ export function MatchTab() {
         )}
       </div>
       {openSection === "zones" && (["shadows", "mids", "highlights"] as const).map(zone => {
-        const colorMap: Record<string, string> = { shadows: "#4a7fc1", mids: "#bbb", highlights: "#e0b85a" };
+        const fallback: Record<string, string> = { shadows: "#4a7fc1", mids: "#bbb", highlights: "#e0b85a" };
         const ankKey = `${zone}Anchor` as keyof ZoneOpts;
         const falKey = `${zone}Falloff` as keyof ZoneOpts;
         const biasKey = `${zone}Bias` as keyof ZoneOpts;
+        // Derive band color from target pixels at this zone's luma range. Falls back to
+        // fixed palette if no target snapshot yet or if the zone has no pixels in range.
+        let bandColor = fallback[zone];
+        if (lumaBins) {
+          const c = bandMeanColor(lumaBins, zonesLabel[ankKey], zonesLabel[falKey]);
+          if (c) bandColor = `rgb(${Math.round(c.r)}, ${Math.round(c.g)}, ${Math.round(c.b)})`;
+        }
         return (
           <div key={zone} style={{ padding: 0 }}>
             <ZoneCompoundSlider
               label={zone}
-              color={colorMap[zone]}
+              color={bandColor}
               value={{ amount: zonesLabel[zone], anchor: zonesLabel[ankKey], falloff: zonesLabel[falKey], bias: zonesLabel[biasKey] }}
               defaults={{ amount: DEFAULT_ZONES[zone], anchor: DEFAULT_ZONES[ankKey], falloff: DEFAULT_ZONES[falKey], bias: DEFAULT_ZONES[biasKey] }}
               onChange={next => {

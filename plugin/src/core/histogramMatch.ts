@@ -381,6 +381,43 @@ export function applyZoneWeights(curve: Uint8Array, weights: Float64Array): Uint
   return out;
 }
 
+// Build a 256-bin luma histogram of average RGB from RGBA pixels. Used to color the zone
+// band swatches with the actual mean color of pixels at each luminance level.
+export interface LumaBins {
+  sumR: Float64Array; sumG: Float64Array; sumB: Float64Array; count: Uint32Array;
+}
+export function computeLumaBins(rgba: Uint8Array): LumaBins {
+  const sumR = new Float64Array(256), sumG = new Float64Array(256), sumB = new Float64Array(256);
+  const count = new Uint32Array(256);
+  for (let i = 0; i < rgba.length; i += 4) {
+    if (rgba[i + 3] < 8) continue; // skip transparent
+    const r = rgba[i], g = rgba[i + 1], b = rgba[i + 2];
+    // Rec.709 luma
+    const l = Math.round(0.2126 * r + 0.7152 * g + 0.0722 * b);
+    sumR[l] += r; sumG[l] += g; sumB[l] += b; count[l]++;
+  }
+  return { sumR, sumG, sumB, count };
+}
+
+// Gaussian-weighted mean RGB color centered at `anchor` with the given falloff.
+// Returns null if no pixels in range. Falloff scaling matches buildZoneWeights.
+export function bandMeanColor(bins: LumaBins, anchor: number, falloff: number): { r: number; g: number; b: number } | null {
+  const sigma = 18 + (falloff / 100) * 60;
+  const inv2s2 = 1 / (2 * sigma * sigma);
+  let R = 0, G = 0, B = 0, W = 0;
+  for (let v = 0; v < 256; v++) {
+    if (bins.count[v] === 0) continue;
+    const w = Math.exp(-((v - anchor) ** 2) * inv2s2);
+    const cw = w * bins.count[v];
+    R += bins.sumR[v] * w;
+    G += bins.sumG[v] * w;
+    B += bins.sumB[v] * w;
+    W += cw;
+  }
+  if (W < 1e-6) return null;
+  return { r: R / W, g: G / W, b: B / W };
+}
+
 export function applyZoneWeightsToChannels(c: ChannelCurves, opts: ZoneOpts): ChannelCurves {
   const w = buildZoneWeights(opts);
   return {

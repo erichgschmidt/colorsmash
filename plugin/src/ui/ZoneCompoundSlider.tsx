@@ -85,10 +85,9 @@ export function ZoneCompoundSlider(props: ZoneCompoundSliderProps) {
   const bandOpacity = Math.min(1, props.value.amount / 100) * 0.55;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 2, marginBottom: 6, fontSize: 10 }}>
-      {/* Row 1: name + amount slider + value + reset */}
-      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-        <span style={{ width: 56, opacity: 0.75, flexShrink: 0, textTransform: "capitalize", color: props.color }}>{props.label}</span>
+    <div style={{ display: "flex", flexDirection: "column", gap: 2, marginBottom: 4, fontSize: 10 }}>
+      {/* Row 1: amount slider | bias slider | reset — label is implicit (band color + tooltip) */}
+      <div style={{ display: "flex", alignItems: "center", gap: 4 }} title={`${props.label} — amount % and bias`}>
         <input type="range" min={0} max={200} value={props.value.amount} tabIndex={-1}
           onInput={e => {
             const v = Math.round(Number((e.target as HTMLInputElement).value));
@@ -96,12 +95,26 @@ export function ZoneCompoundSlider(props: ZoneCompoundSliderProps) {
             props.onChange(valueRef.current);
           }}
           onFocus={e => e.currentTarget.blur()}
-          title="Amount %"
-          style={{ flex: 1, minWidth: 30 }} />
-        <span style={{ width: 32, textAlign: "right", opacity: 0.8 }}>{props.value.amount}%</span>
+          title={`${props.label} amount: ${props.value.amount}%`}
+          style={{ flex: 1, minWidth: 24 }} />
+        <span style={{ width: 28, textAlign: "right", opacity: 0.8, fontSize: 9 }}>{props.value.amount}%</span>
+        <input type="range" min={-100} max={100} value={props.value.bias} tabIndex={-1}
+          onInput={e => {
+            const v = Math.round(Number((e.target as HTMLInputElement).value));
+            valueRef.current = { ...valueRef.current, bias: v };
+            props.onChange(valueRef.current);
+          }}
+          onDoubleClick={() => {
+            valueRef.current = { ...valueRef.current, bias: 0 };
+            props.onChange(valueRef.current);
+          }}
+          onFocus={e => e.currentTarget.blur()}
+          title={`${props.label} bias: ${props.value.bias > 0 ? "+" : ""}${props.value.bias} — positive grows this zone at neighbors' expense; double-click to reset`}
+          style={{ flex: 1, minWidth: 24, height: 10 }} />
+        <span style={{ width: 22, textAlign: "right", opacity: 0.6, fontSize: 9 }}>{props.value.bias > 0 ? "+" : ""}{props.value.bias}</span>
         {props.defaults && (
           <button onClick={() => { valueRef.current = { ...props.defaults! }; props.onChange({ ...props.defaults! }); }}
-            title="Reset zone"
+            title={`Reset ${props.label} zone`}
             style={{ width: 16, height: 16, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
                      background: "transparent", color: "#888", border: "1px solid #444", borderRadius: 2, cursor: "pointer", flexShrink: 0, boxSizing: "border-box" }}><Icon name="revert" size={11} /></button>
         )}
@@ -138,25 +151,6 @@ export function ZoneCompoundSlider(props: ZoneCompoundSliderProps) {
             width: 14, height: 14, background: "#ddd", border: "2px solid #111",
             borderRadius: "50%", cursor: "ew-resize", zIndex: 2,
           }} title={`anchor (${props.value.anchor})`} />
-      </div>
-      {/* Row 3: bias slider — competitive pressure (positive grows zone at neighbors' expense) */}
-      <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 1 }}>
-        <span style={{ width: 56, opacity: 0.5, flexShrink: 0, fontSize: 9 }}>bias</span>
-        <input type="range" min={-100} max={100} value={props.value.bias} tabIndex={-1}
-          onInput={e => {
-            const v = Math.round(Number((e.target as HTMLInputElement).value));
-            valueRef.current = { ...valueRef.current, bias: v };
-            props.onChange(valueRef.current);
-          }}
-          onDoubleClick={() => {
-            valueRef.current = { ...valueRef.current, bias: 0 };
-            props.onChange(valueRef.current);
-          }}
-          onFocus={e => e.currentTarget.blur()}
-          title={`Bias (${props.value.bias > 0 ? "+" : ""}${props.value.bias}) — positive grows this zone at the expense of neighbors at overlap; double-click to reset`}
-          style={{ flex: 1, minWidth: 30, height: 10 }} />
-        <span style={{ width: 32, textAlign: "right", opacity: 0.6, fontSize: 9 }}>{props.value.bias > 0 ? "+" : ""}{props.value.bias}</span>
-        <span style={{ width: 16, flexShrink: 0 }} />
       </div>
     </div>
   );
