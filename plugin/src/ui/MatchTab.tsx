@@ -231,11 +231,16 @@ export function MatchTab() {
 
   // Inline matched-preview img (single img, no double buffer for now — diagnose render).
   const matchedFrontRef = useRef<HTMLImageElement>(null);
+  const matchedSetCountRef = useRef(0);
   const matchedHandleRef = useRef<PreviewImgHandle | null>({
     setPixels: (rgba, w, h) => {
+      matchedSetCountRef.current++;
       const img = matchedFrontRef.current;
-      if (!img) return;
-      img.src = rgbaToPngDataUrl(rgba, w, h);
+      if (!img) { setStatus(`setPixels#${matchedSetCountRef.current} — img ref null`); return; }
+      try {
+        img.src = rgbaToPngDataUrl(rgba, w, h);
+        setStatus(`setPixels#${matchedSetCountRef.current} → ${w}×${h} (${(img.src.length / 1024).toFixed(0)}KB url)`);
+      } catch (e: any) { setStatus(`encode err: ${e?.message ?? e}`); }
     },
   });
   const [zoom, setZoom] = useState(1);
