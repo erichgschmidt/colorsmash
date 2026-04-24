@@ -258,18 +258,31 @@ export function MatchTab() {
   };
   const resetZoom = () => { setZoom(1); setPan({ x: 0, y: 0 }); };
 
-  // Non-passive wheel listener so preventDefault actually stops the panel from scrolling.
+  // Capture wheel at the document level when mouse is over the matched preview, so the
+  // panel's overflow scroll doesn't get the event first. Capture phase + stopPropagation
+  // + preventDefault overrides any ancestor scroll handler in UXP.
   const matchedContainerRef = useRef<HTMLDivElement>(null);
+  const mouseOverMatchedRef = useRef(false);
   useEffect(() => {
     const el = matchedContainerRef.current;
     if (!el) return;
+    const onEnter = () => { mouseOverMatchedRef.current = true; };
+    const onLeave = () => { mouseOverMatchedRef.current = false; };
     const onWheel = (e: WheelEvent) => {
+      if (!mouseOverMatchedRef.current) return;
       e.preventDefault();
+      e.stopPropagation();
       const delta = e.deltaY > 0 ? -0.25 : 0.25;
       setZoom(z => Math.max(0.25, Math.min(8, z + delta)));
     };
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => { el.removeEventListener("wheel", onWheel as any); };
+    el.addEventListener("mouseenter", onEnter);
+    el.addEventListener("mouseleave", onLeave);
+    document.addEventListener("wheel", onWheel, { passive: false, capture: true });
+    return () => {
+      el.removeEventListener("mouseenter", onEnter);
+      el.removeEventListener("mouseleave", onLeave);
+      document.removeEventListener("wheel", onWheel as any, { capture: true } as any);
+    };
   }, []);
   const rafPendingRef = useRef(false);
   const [renderedCurves, setRenderedCurves] = useState<ChannelCurves | null>(null);
