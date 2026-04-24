@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { app, action, readLayerPixels, executeAsModal } from "../services/photoshop";
 import { downsampleToMaxEdge } from "../core/downsample";
+import { MERGED_LAYER_ID } from "../core/histogramMatch";
 
 const PREVIEW_MAX_EDGE = 640;
 
@@ -25,8 +26,8 @@ export function useLayerPreview(layerId: number | null): { snap: LayerSnapshot |
       const result = await executeAsModal("Color Smash layer snapshot", async () => {
         const doc = app.activeDocument;
         if (!doc) throw new Error("No doc");
-        // -2 = "Merged" sentinel: read the full document composite (no layerID).
-        if (layerId === -2) {
+        // MERGED_LAYER_ID sentinel: read the full document composite (no layerID).
+        if (layerId === MERGED_LAYER_ID) {
           const { imaging } = require("photoshop");
           const r = await imaging.getPixels({ documentID: doc.id, componentSize: 8, applyAlpha: false, colorSpace: "RGB" });
           const id = r.imageData;

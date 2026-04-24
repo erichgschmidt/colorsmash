@@ -2,6 +2,10 @@
 // makes target's per-channel histogram match source's. Captures range, contrast, value, and
 // color cast in a single Curves-shaped function (no cross-channel coupling).
 
+// Sentinel layer-id used by the source/target dropdowns to mean "the document composite"
+// instead of any specific layer. PS layer IDs are positive, so -2 is safe.
+export const MERGED_LAYER_ID = -2;
+
 export interface ChannelCurves {
   r: Uint8Array; // length 256, input → output
   g: Uint8Array;

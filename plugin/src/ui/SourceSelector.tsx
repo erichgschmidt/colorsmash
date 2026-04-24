@@ -2,6 +2,8 @@
 //   - Document/source dropdown (active doc list + "Use Selection" + "Browse Image…")
 //   - Mode-specific selector (layer dropdown / selection toggles / browsed-file label)
 
+import { MERGED_LAYER_ID } from "../core/histogramMatch";
+
 type SrcMode = "layer" | "selection" | "folder";
 
 export interface SourceSelectorProps {
@@ -43,7 +45,7 @@ export function SourceSelector(props: SourceSelectorProps) {
     <select style={selStyle} value={sourceId ?? ""} onChange={e => setSourceId(Number(e.target.value))}>
       {layers.length === 0 && <option value="">— none —</option>}
       {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-      <option value={-2}>🔀 Merged</option>
+      <option value={MERGED_LAYER_ID}>🔀 Merged</option>
     </select>
   ) : srcMode === "folder" ? (
     <span style={{ fontSize: 10, opacity: 0.7 }}>{browsedFile ? `📁 ${browsedFile}` : ""}</span>

@@ -8,7 +8,7 @@ import {
 import { downsampleToMaxEdge } from "../core/downsample";
 import {
   fitHistogramCurves, fitHistogramCurvesLab, sampleControlPoints, processChannelCurves, applyDimensions,
-  applyZoneWeightsToChannels,
+  applyZoneWeightsToChannels, MERGED_LAYER_ID,
   ChannelCurves, DimensionOpts, DEFAULT_DIMENSIONS, ZoneOpts, DEFAULT_ZONES,
 } from "../core/histogramMatch";
 
@@ -60,7 +60,7 @@ export async function fitMatchCurves(params: ApplyMatchParams): Promise<ChannelC
 export async function applyMatch(params: ApplyMatchParams): Promise<string> {
   return executeAsModal("Color Smash match", async () => {
     const doc = getActiveDoc();
-    const targetIsMerged = params.targetLayerId === -2;
+    const targetIsMerged = params.targetLayerId === MERGED_LAYER_ID;
     const target = targetIsMerged ? null : doc.layers.find((l: any) => l.id === params.targetLayerId);
     if (!targetIsMerged && !target) throw new Error("Target layer no longer exists.");
 
@@ -82,7 +82,7 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     let srcPixels: Uint8Array;
     if (params.sourcePixelsOverride) {
       srcPixels = params.sourcePixelsOverride;
-    } else if (params.sourceLayerId === -2) {
+    } else if (params.sourceLayerId === MERGED_LAYER_ID) {
       const merged = await readMergedPixels();
       srcPixels = downsampleToMaxEdge(merged, STATS_MAX_EDGE).data;
     } else {

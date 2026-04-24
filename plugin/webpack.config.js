@@ -1,12 +1,13 @@
 const path = require("path");
 
-module.exports = {
+module.exports = (_env, argv) => ({
   entry: "./src/index.tsx",
   target: "web",
-  // UXP blocks eval()/new Function() (CSP). Webpack's default devtool for development is
-  // "eval" which produces such code — override to a non-eval source map (or none) so
-  // npm run watch builds stay UXP-loadable.
-  devtool: "source-map",
+  mode: argv?.mode ?? "development",
+  // UXP blocks eval()/new Function() (CSP). Default devtool for dev is "eval" which would
+  // break loading. For dev: source-map (debuggable, slightly bigger). For production: no
+  // source map at all (smaller bundle, no .js.map shipping with the .ccx).
+  devtool: argv?.mode === "production" ? false : "source-map",
   output: {
     path: path.resolve(__dirname),
     filename: "index.js",
@@ -26,4 +27,4 @@ module.exports = {
       { test: /\.svg$/, type: "asset/inline" },
     ],
   },
-};
+});

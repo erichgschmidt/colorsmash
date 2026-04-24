@@ -15,7 +15,7 @@ import { BasicSlider, DimSlider, matchStyles } from "./MatchSliders";
 import { ChannelCurves } from "../core/histogramMatch";
 import {
   fitHistogramCurves, fitHistogramCurvesLab, processChannelCurves, applyChannelCurvesToRgba, applyChromaOnly,
-  applyDimensions, applyZoneWeightsToChannels,
+  applyDimensions, applyZoneWeightsToChannels, MERGED_LAYER_ID,
   DimensionOpts, DEFAULT_DIMENSIONS, ZoneOpts, DEFAULT_ZONES,
 } from "../core/histogramMatch";
 import { applyMatch } from "../app/applyMatch";
@@ -271,7 +271,12 @@ export function MatchTab() {
     setTimeout(() => { rafPendingRef.current = false; redrawMatched(); }, 33);
   };
 
-  useEffect(() => { scheduleRedraw(); }, [fittedRaw, tgt.snap, chromaOnly]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    // Reset throttle so an in-flight no-op (from before snapshots loaded) doesn't block
+    // this redraw — fixes "preview blank until I wiggle a slider" on first mount.
+    rafPendingRef.current = false;
+    scheduleRedraw();
+  }, [fittedRaw, tgt.snap, chromaOnly]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onApply = async () => {
     if (targetId == null) { setStatus("Pick target layer."); return; }
@@ -338,7 +343,7 @@ export function MatchTab() {
               <select style={sel} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}>
                 {layers.length === 0 && <option value="">— none —</option>}
                 {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                <option value={-2}>🔀 Merged</option>
+                <option value={MERGED_LAYER_ID}>🔀 Merged</option>
               </select>
             </div>
             <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap}
