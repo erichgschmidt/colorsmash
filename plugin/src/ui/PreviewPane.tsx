@@ -103,11 +103,10 @@ export function PreviewPane(props: PreviewPaneProps & { imgHandleRef?: React.Mut
           ? props.imgHandleRef
             ? // Double-buffered path: wrap both imgs in an absolutely-positioned flex container
               // so we get reliable horizontal centering or left-alignment via justifyContent.
-              <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: props.centerImg ? "center" : "flex-start" }}>
+              <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: props.centerImg ? "center" : "flex-start", transform: props.imgTransform, transformOrigin: "center center" }}>
                 <img ref={imgRef} alt={props.label} onClick={onImgClick}
                   style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain",
-                           cursor: props.onPickColor ? "crosshair" : "default",
-                           transform: props.imgTransform, transformOrigin: "center center" }} />
+                           cursor: props.onPickColor ? "crosshair" : "default" }} />
                 <img ref={imgBackRef} alt="" aria-hidden
                   style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain",
                            position: "absolute", top: 0, left: props.centerImg ? "50%" : 0,
