@@ -471,7 +471,7 @@ export function MatchTab() {
       <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7 }}>Matched preview</div>
       <div style={{ height: 240 }}>
         {useMemo(() => (
-          <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap} imgHandleRef={matchedHandleRef} hideSelector height={240} />
+          <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap} imgHandleRef={matchedHandleRef} hideSelector height={240} centerImg />
         ), [tgt.snap])}
       </div>
 

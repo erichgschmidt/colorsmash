@@ -18,6 +18,7 @@ export interface PreviewPaneProps {
   hideSelector?: boolean;
   fitAspect?: boolean;  // if true, container height tracks snapshot aspect ratio
   maxHeight?: number;   // cap for fitAspect (default 180)
+  centerImg?: boolean;  // if true, image is centered horizontally in its container (default left)
 }
 
 export interface PreviewImgHandle {
@@ -94,7 +95,7 @@ export function PreviewPane(props: PreviewPaneProps & { imgHandleRef?: React.Mut
       )}
       <div style={{
         background: "#111", border: "1px solid #555", borderRadius: 2,
-        display: "flex", alignItems: "center", justifyContent: "flex-start",
+        display: "flex", alignItems: "center", justifyContent: props.centerImg ? "center" : "flex-start",
         ...aspectStyle, overflow: "hidden", position: "relative",
       }}>
         {(props.snapshot || props.imgHandleRef)
