@@ -103,15 +103,28 @@ export function PreviewPane(props: PreviewPaneProps & { imgHandleRef?: React.Mut
           ? props.imgHandleRef
             ? // Double-buffered path: wrap both imgs in an absolutely-positioned flex container
               // so we get reliable horizontal centering or left-alignment via justifyContent.
-              <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: props.centerImg ? "center" : "flex-start", transform: props.imgTransform, transformOrigin: "center center" }}>
-                <img ref={imgRef} alt={props.label} onClick={onImgClick}
-                  style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain",
-                           cursor: props.onPickColor ? "crosshair" : "default" }} />
-                <img ref={imgBackRef} alt="" aria-hidden
-                  style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain",
-                           position: "absolute", top: 0, left: props.centerImg ? "50%" : 0,
-                           transform: props.centerImg ? "translateX(-50%)" : "none",
-                           opacity: 0, pointerEvents: "none" }} />
+              {/* Both buffers absolute-centered with identical positioning; user transform appends to the centering one. */}
+              <div style={{ position: "absolute", inset: 0, overflow: "hidden" }}>
+                {(() => {
+                  const baseTransform = props.centerImg ? "translate(-50%, -50%)" : "translateY(-50%)";
+                  const fullTransform = `${baseTransform}${props.imgTransform ? " " + props.imgTransform : ""}`;
+                  const imgStyle: React.CSSProperties = {
+                    position: "absolute",
+                    top: "50%",
+                    left: props.centerImg ? "50%" : 0,
+                    maxWidth: "100%", maxHeight: "100%", objectFit: "contain",
+                    transform: fullTransform,
+                    transformOrigin: "center center",
+                  };
+                  return (
+                    <>
+                      <img ref={imgRef} alt={props.label} onClick={onImgClick}
+                        style={{ ...imgStyle, cursor: props.onPickColor ? "crosshair" : "default" }} />
+                      <img ref={imgBackRef} alt="" aria-hidden
+                        style={{ ...imgStyle, opacity: 0, pointerEvents: "none" }} />
+                    </>
+                  );
+                })()}
               </div>
             : <img ref={imgRef} alt={props.label} onClick={onImgClick}
                 style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain",
