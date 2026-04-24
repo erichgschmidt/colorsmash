@@ -21,7 +21,7 @@ import {
 import { downsampleToMaxEdge } from "../core/downsample";
 
 const SOURCE_MAX_EDGE = 256;
-type SrcMode = "layer" | "selection";
+type SrcMode = "layer" | "selection" | "folder";
 
 interface SourceSnap { width: number; height: number; data: Uint8Array; name: string; }
 
@@ -92,7 +92,7 @@ export function MatchTab() {
         return { width: small.width, height: small.height, data: small.data, name };
       });
       setSrcOverride(snap);
-      setSrcMode("selection"); // tag as override-mode so layer-mode src snap doesn't override
+      setSrcMode("folder");
       setActiveFolderImg(name);
       setStatus(`Source = ${name}`);
     } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
@@ -234,7 +234,7 @@ export function MatchTab() {
 
   const switchSrcMode = (m: SrcMode) => {
     setSrcMode(m);
-    if (m === "layer") { setSrcOverride(null); setAutoUpdate(false); }
+    if (m === "layer") { setSrcOverride(null); setActiveFolderImg(""); }
   };
 
   const fittedRaw = useMemo(() => {
@@ -415,6 +415,8 @@ export function MatchTab() {
       {layers.length === 0 && <option value="">— none —</option>}
       {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
     </select>
+  ) : srcMode === "folder" ? (
+    <span style={{ fontSize: 10, opacity: 0.7 }}>{folderName ? `📁 ${folderName}` : ""}</span>
   ) : (
     <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, height: 26 }}>
       <input type="checkbox" checked={autoUpdate} onChange={e => setAutoUpdate(e.target.checked)}
