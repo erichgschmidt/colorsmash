@@ -101,10 +101,9 @@ export function PreviewPane(props: PreviewPaneProps & { imgHandleRef?: React.Mut
       }}>
         {(props.snapshot || props.imgHandleRef)
           ? props.imgHandleRef
-            ? // Double-buffered path: wrap both imgs in an absolutely-positioned flex container
-              // so we get reliable horizontal centering or left-alignment via justifyContent.
-              {/* Both buffers absolute-centered with identical positioning; user transform appends to the centering one. */}
-              <div style={{ position: "absolute", inset: 0, overflow: "hidden" }}>
+            // Double-buffered path: both imgs absolute-centered with identical positioning;
+            // the user's imgTransform string appends to the base centering transform on each img.
+            ? <div style={{ position: "absolute", inset: 0, overflow: "hidden" }}>
                 {(() => {
                   const baseTransform = props.centerImg ? "translate(-50%, -50%)" : "translateY(-50%)";
                   const fullTransform = `${baseTransform}${props.imgTransform ? " " + props.imgTransform : ""}`;
