@@ -191,8 +191,8 @@ export function MatchTab() {
       try { bounds = getSelectionBounds(); } catch { /* */ }
       if (!bounds) return;
       snapInFlightRef.current = true;
-      try { const snap = await snapshotFnRef.current(); if (!cancelled) { setSrcOverride(snap); setStatus(`Auto: ${snap.name}`); } }
-      catch (e: any) { if (!cancelled) setStatus(`Auto err: ${e?.message ?? e}`); }
+      try { const snap = await snapshotFnRef.current(); if (!cancelled) setSrcOverride(snap); }
+      catch { /* ignore transient auto-update failures */ }
       finally { snapInFlightRef.current = false; }
     };
     // Immediate re-snap on bounds change (cheap poll: just reads doc.selection.bounds).
@@ -231,16 +231,11 @@ export function MatchTab() {
 
   // Inline matched-preview img (single img, no double buffer for now — diagnose render).
   const matchedFrontRef = useRef<HTMLImageElement>(null);
-  const matchedSetCountRef = useRef(0);
   const matchedHandleRef = useRef<PreviewImgHandle | null>({
     setPixels: (rgba, w, h) => {
-      matchedSetCountRef.current++;
       const img = matchedFrontRef.current;
-      if (!img) { setStatus(`setPixels#${matchedSetCountRef.current} — img ref null`); return; }
-      try {
-        img.src = rgbaToPngDataUrl(rgba, w, h);
-        setStatus(`setPixels#${matchedSetCountRef.current} → ${w}×${h} (${(img.src.length / 1024).toFixed(0)}KB url)`);
-      } catch (e: any) { setStatus(`encode err: ${e?.message ?? e}`); }
+      if (!img) return;
+      try { img.src = rgbaToPngDataUrl(rgba, w, h); } catch { /* ignore encode errors during drag */ }
     },
   });
   const [zoom, setZoom] = useState(1);
