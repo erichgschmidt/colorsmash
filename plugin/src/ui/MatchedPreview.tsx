@@ -58,9 +58,9 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, {}>(function Matc
       <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span>Preview</span>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <button onClick={() => setZoom(z => Math.max(0.25, z - 0.25))} disabled={zoom <= 0.25} title="Zoom out" style={{ width: 18, height: 16, padding: 0, fontSize: 12, lineHeight: "12px", background: "transparent", color: zoom <= 0.25 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: zoom <= 0.25 ? "default" : "pointer" }}>−</button>
+          <button onClick={() => setZoom(z => Math.max(0.25, z - 0.25))} disabled={zoom <= 0.25} title="Zoom out" style={{ width: 18, height: 16, padding: 0, fontSize: 14, fontWeight: 700, lineHeight: "12px", background: "transparent", color: zoom <= 0.25 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: zoom <= 0.25 ? "default" : "pointer" }}>-</button>
           <span style={{ minWidth: 36, textAlign: "center" }}>{Math.round(zoom * 100)}%</span>
-          <button onClick={() => setZoom(z => Math.min(8, z + 0.25))} disabled={zoom >= 8} title="Zoom in" style={{ width: 18, height: 16, padding: 0, fontSize: 12, lineHeight: "12px", background: "transparent", color: zoom >= 8 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: zoom >= 8 ? "default" : "pointer" }}>+</button>
+          <button onClick={() => setZoom(z => Math.min(8, z + 0.25))} disabled={zoom >= 8} title="Zoom in" style={{ width: 18, height: 16, padding: 0, fontSize: 12, fontWeight: 700, lineHeight: "12px", background: "transparent", color: zoom >= 8 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: zoom >= 8 ? "default" : "pointer" }}>+</button>
           <button
             onClick={() => setBgMatchPanel(b => !b)}
             title={bgMatchPanel ? "Preview background: panel gray (click for dark)" : "Preview background: dark (click to match panel)"}
