@@ -508,7 +508,7 @@ export function MatchTab() {
       </div>
       <div style={{ height: 240, overflow: "hidden", cursor: zoom > 1 ? "grab" : "default", position: "relative", background: "#111", border: "1px solid #555", borderRadius: 2 }} onMouseDown={onZoomMouseDown}>
         <div style={{ position: "absolute", inset: 0, transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: "center center" }}>
-          <img ref={matchedFrontRef} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", position: "absolute", top: 0, left: 0, right: 0, bottom: 0, margin: "auto" }} />
+          <img ref={matchedFrontRef} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", position: "absolute", top: 0, left: 0, right: 0, bottom: 0, margin: "auto", background: "rgba(255, 0, 255, 0.3)", border: "2px solid lime" }} />
         </div>
       </div>
 
