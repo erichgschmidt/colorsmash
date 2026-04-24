@@ -3,6 +3,10 @@ const path = require("path");
 module.exports = {
   entry: "./src/index.tsx",
   target: "web",
+  // UXP blocks eval()/new Function() (CSP). Webpack's default devtool for development is
+  // "eval" which produces such code — override to a non-eval source map (or none) so
+  // npm run watch builds stay UXP-loadable.
+  devtool: "source-map",
   output: {
     path: path.resolve(__dirname),
     filename: "index.js",
