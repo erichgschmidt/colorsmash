@@ -243,7 +243,7 @@ export function MatchTab() {
       } catch (e: any) { setStatus(`encode err: ${e?.message ?? e}`); }
     },
   });
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoom] = useState(2);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const dragStartRef = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
   const onZoomMouseDown = (e: React.MouseEvent) => {
