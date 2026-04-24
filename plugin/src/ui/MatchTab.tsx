@@ -229,6 +229,21 @@ export function MatchTab() {
   }, [srcSnap, tgt.snap, colorSpace]);
 
   const matchedHandleRef = useRef<PreviewImgHandle | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const dragStartRef = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
+  const onZoomMouseDown = (e: React.MouseEvent) => {
+    if (zoom <= 1) return;
+    dragStartRef.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y };
+    const onMove = (ev: MouseEvent) => {
+      if (!dragStartRef.current) return;
+      setPan({ x: dragStartRef.current.px + (ev.clientX - dragStartRef.current.x), y: dragStartRef.current.py + (ev.clientY - dragStartRef.current.y) });
+    };
+    const onUp = () => { dragStartRef.current = null; window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+  const resetZoom = () => { setZoom(1); setPan({ x: 0, y: 0 }); };
   const rafPendingRef = useRef(false);
   const [renderedCurves, setRenderedCurves] = useState<ChannelCurves | null>(null);
   const curvesPendingRef = useRef<ChannelCurves | null>(null);
@@ -467,12 +482,21 @@ export function MatchTab() {
         </div>
       ), [src.snap, tgt.snap, sourceId, targetId, layers, srcMode, srcOverride, autoUpdate, docs, activeDocId])}
 
-      {/* Matched preview (full-width, large) */}
-      <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7 }}>Matched preview</div>
-      <div style={{ height: 240 }}>
+      {/* Matched preview (full-width, large) with zoom controls */}
+      <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span>Matched preview</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <button onClick={() => setZoom(z => Math.max(1, z - 0.25))} disabled={zoom <= 1} title="Zoom out" style={{ width: 18, height: 16, padding: 0, fontSize: 12, lineHeight: "12px", background: "transparent", color: zoom <= 1 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: zoom <= 1 ? "default" : "pointer" }}>−</button>
+          <span style={{ minWidth: 36, textAlign: "center" }}>{Math.round(zoom * 100)}%</span>
+          <button onClick={() => setZoom(z => Math.min(8, z + 0.25))} disabled={zoom >= 8} title="Zoom in" style={{ width: 18, height: 16, padding: 0, fontSize: 12, lineHeight: "12px", background: "transparent", color: zoom >= 8 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: zoom >= 8 ? "default" : "pointer" }}>+</button>
+          <button onClick={resetZoom} disabled={zoom === 1 && pan.x === 0 && pan.y === 0} title="Reset zoom + pan" style={{ height: 16, padding: "0 6px", fontSize: 9, background: "transparent", color: zoom === 1 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: "pointer" }}>1:1</button>
+        </div>
+      </div>
+      <div style={{ height: 240, cursor: zoom > 1 ? "grab" : "default" }} onMouseDown={onZoomMouseDown}>
         {useMemo(() => (
-          <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap} imgHandleRef={matchedHandleRef} hideSelector height={240} centerImg />
-        ), [tgt.snap])}
+          <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap} imgHandleRef={matchedHandleRef} hideSelector height={240} centerImg
+            imgTransform={`translate(${pan.x}px, ${pan.y}px) scale(${zoom})`} />
+        ), [tgt.snap, zoom, pan.x, pan.y])}
       </div>
 
       {/* Accordion controls */}
