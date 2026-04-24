@@ -46,7 +46,7 @@ export function MatchTab() {
 
   const [srcMode, setSrcMode] = useState<SrcMode>("layer");
   const [srcOverride, setSrcOverride] = useState<SourceSnap | null>(null);
-  const [autoUpdate, setAutoUpdate] = useState(false);
+  const [autoUpdate, setAutoUpdate] = useState(true);
   const [sampleMerged, setSampleMerged] = useState(false);
   const [sampleLock, setSampleLock] = useState(false);
   const sampleLockRef = useRef(false);
