@@ -258,30 +258,55 @@ export function MatchTab() {
   };
   const resetZoom = () => { setZoom(1); setPan({ x: 0, y: 0 }); };
 
-  // Capture wheel at the document level when mouse is over the matched preview, so the
-  // panel's overflow scroll doesn't get the event first. Capture phase + stopPropagation
-  // + preventDefault overrides any ancestor scroll handler in UXP.
+  // Wheel-zoom handler that ALSO disables ancestor scroll while the mouse is over the preview.
+  // Without this, when the panel is small enough to be scrollable, the scroll container
+  // captures the wheel before our listener does (UXP/Chromium scrolls inside an overflow:auto
+  // ancestor before any local handler can preventDefault).
   const matchedContainerRef = useRef<HTMLDivElement>(null);
-  const mouseOverMatchedRef = useRef(false);
+  const savedScrollRef = useRef<{ el: HTMLElement; overflow: string } | null>(null);
   useEffect(() => {
     const el = matchedContainerRef.current;
     if (!el) return;
-    const onEnter = () => { mouseOverMatchedRef.current = true; el.focus(); };
-    const onLeave = () => { mouseOverMatchedRef.current = false; el.blur(); };
+    const findScrollAncestor = (): HTMLElement | null => {
+      let p: HTMLElement | null = el.parentElement;
+      while (p) {
+        const o = window.getComputedStyle(p).overflowY;
+        if (o === "auto" || o === "scroll") return p;
+        p = p.parentElement;
+      }
+      return null;
+    };
+    const onEnter = () => {
+      el.focus();
+      const sa = findScrollAncestor();
+      if (sa && !savedScrollRef.current) {
+        savedScrollRef.current = { el: sa, overflow: sa.style.overflowY };
+        sa.style.overflowY = "hidden";
+      }
+    };
+    const onLeave = () => {
+      el.blur();
+      if (savedScrollRef.current) {
+        savedScrollRef.current.el.style.overflowY = savedScrollRef.current.overflow;
+        savedScrollRef.current = null;
+      }
+    };
     const onWheel = (e: WheelEvent) => {
-      if (!mouseOverMatchedRef.current) return;
       e.preventDefault();
-      e.stopPropagation();
       const delta = e.deltaY > 0 ? -0.25 : 0.25;
       setZoom(z => Math.max(0.25, Math.min(8, z + delta)));
     };
     el.addEventListener("mouseenter", onEnter);
     el.addEventListener("mouseleave", onLeave);
-    document.addEventListener("wheel", onWheel, { passive: false, capture: true });
+    el.addEventListener("wheel", onWheel, { passive: false });
     return () => {
       el.removeEventListener("mouseenter", onEnter);
       el.removeEventListener("mouseleave", onLeave);
-      document.removeEventListener("wheel", onWheel as any, { capture: true } as any);
+      el.removeEventListener("wheel", onWheel as any);
+      if (savedScrollRef.current) {
+        savedScrollRef.current.el.style.overflowY = savedScrollRef.current.overflow;
+        savedScrollRef.current = null;
+      }
     };
   }, []);
   const rafPendingRef = useRef(false);
