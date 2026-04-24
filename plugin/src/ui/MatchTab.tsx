@@ -240,8 +240,12 @@ export function MatchTab() {
   const curvesTimeoutRef = useRef<any>(null);
 
   const redrawMatched = () => {
-    if (!tgt.snap || !matchedHandleRef.current) return;
-    if (!fittedRaw) return;
+    if (!tgt.snap || !fittedRaw) return;
+    // Handle ref may not be bound yet on first render — retry shortly.
+    if (!matchedHandleRef.current) {
+      setTimeout(() => redrawMatched(), 100);
+      return;
+    }
     const processed = processChannelCurves(fittedRaw, {
       amount: amountRef.current / 100,
       smoothRadius: smoothRef.current,
@@ -334,6 +338,7 @@ export function MatchTab() {
               <select style={sel} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}>
                 {layers.length === 0 && <option value="">— none —</option>}
                 {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                <option value={-2}>🔀 Merged</option>
               </select>
             </div>
             <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap}

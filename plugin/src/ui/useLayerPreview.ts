@@ -25,6 +25,22 @@ export function useLayerPreview(layerId: number | null): { snap: LayerSnapshot |
       const result = await executeAsModal("Color Smash layer snapshot", async () => {
         const doc = app.activeDocument;
         if (!doc) throw new Error("No doc");
+        // -2 = "Merged" sentinel: read the full document composite (no layerID).
+        if (layerId === -2) {
+          const { imaging } = require("photoshop");
+          const r = await imaging.getPixels({ documentID: doc.id, componentSize: 8, applyAlpha: false, colorSpace: "RGB" });
+          const id = r.imageData;
+          const raw = await id.getData();
+          const src = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
+          const w = id.width, h = id.height;
+          const components = id.components ?? (src.length / (w * h));
+          const data = new Uint8Array(w * h * 4);
+          if (components === 4) data.set(src);
+          else for (let i = 0, j = 0; i < w * h; i++, j += 3) { const o = i * 4; data[o] = src[j]; data[o + 1] = src[j + 1]; data[o + 2] = src[j + 2]; data[o + 3] = 255; }
+          if (id.dispose) id.dispose();
+          const small = downsampleToMaxEdge({ width: w, height: h, data, bounds: { left: 0, top: 0, right: w, bottom: h } }, PREVIEW_MAX_EDGE);
+          return { width: small.width, height: small.height, data: small.data, layerName: "Merged", layerId };
+        }
         const layer = doc.layers.find((l: any) => l.id === layerId);
         if (!layer) throw new Error(`Layer ${layerId} not found`);
         const buf = await readLayerPixels(layer);

@@ -60,19 +60,38 @@ export async function fitMatchCurves(params: ApplyMatchParams): Promise<ChannelC
 export async function applyMatch(params: ApplyMatchParams): Promise<string> {
   return executeAsModal("Color Smash match", async () => {
     const doc = getActiveDoc();
-    const target = doc.layers.find((l: any) => l.id === params.targetLayerId);
-    if (!target) throw new Error("Target layer no longer exists.");
+    const targetIsMerged = params.targetLayerId === -2;
+    const target = targetIsMerged ? null : doc.layers.find((l: any) => l.id === params.targetLayerId);
+    if (!targetIsMerged && !target) throw new Error("Target layer no longer exists.");
+
+    const readMergedPixels = async () => {
+      const { imaging } = require("photoshop");
+      const r = await imaging.getPixels({ documentID: doc.id, componentSize: 8, applyAlpha: false, colorSpace: "RGB" });
+      const id = r.imageData;
+      const raw = await id.getData();
+      const src = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
+      const w = id.width, h = id.height;
+      const components = id.components ?? (src.length / (w * h));
+      const data = new Uint8Array(w * h * 4);
+      if (components === 4) data.set(src);
+      else for (let i = 0, j = 0; i < w * h; i++, j += 3) { const o = i * 4; data[o] = src[j]; data[o + 1] = src[j + 1]; data[o + 2] = src[j + 2]; data[o + 3] = 255; }
+      if (id.dispose) id.dispose();
+      return { width: w, height: h, data, bounds: { left: 0, top: 0, right: w, bottom: h } };
+    };
 
     let srcPixels: Uint8Array;
     if (params.sourcePixelsOverride) {
       srcPixels = params.sourcePixelsOverride;
+    } else if (params.sourceLayerId === -2) {
+      const merged = await readMergedPixels();
+      srcPixels = downsampleToMaxEdge(merged, STATS_MAX_EDGE).data;
     } else {
       const source = doc.layers.find((l: any) => l.id === params.sourceLayerId);
       if (!source) throw new Error("Source layer no longer exists.");
       const s = await readLayerPixels(source, statsRectForLayer(source));
       srcPixels = downsampleToMaxEdge(s, STATS_MAX_EDGE).data;
     }
-    const t = await readLayerPixels(target, statsRectForLayer(target));
+    const t = targetIsMerged ? await readMergedPixels() : await readLayerPixels(target, statsRectForLayer(target));
     const fit2 = params.colorSpace === "lab" ? fitHistogramCurvesLab : fitHistogramCurves;
     const raw = fit2(
       srcPixels,
@@ -112,8 +131,15 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       }
     }
 
-    // Select target so the new adjustment layer is created above it (then we clip + move into group).
-    await action.batchPlay([{ _obj: "select", _target: [{ _ref: "layer", _id: target.id }], makeVisible: false }], {});
+    // For a layer target, select it first so the new Curves goes above it. For Merged target,
+    // the Curves layer goes at the top of the stack (selecting top-most existing layer, no clip).
+    if (target) {
+      await action.batchPlay([{ _obj: "select", _target: [{ _ref: "layer", _id: target.id }], makeVisible: false }], {});
+    } else {
+      // Merged target: select topmost layer in doc so new Curves goes above everything.
+      const top = doc.layers[0];
+      if (top) await action.batchPlay([{ _obj: "select", _target: [{ _ref: "layer", _id: top.id }], makeVisible: false }], {});
+    }
 
     // Optionally deselect (so curves apply to the full target, not masked to the marquee).
     if (params.deselectFirst !== false) {
@@ -129,7 +155,8 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       { channel: "green", points: sampleControlPoints(curves.g, CONTROL_POINTS) },
       { channel: "blue",  points: sampleControlPoints(curves.b, CONTROL_POINTS) },
     ]);
-    await setClippingMask(curveLayer, true);
+    // Only clip if there's a specific target layer. Merged target = no clip (affects everything below).
+    if (target) await setClippingMask(curveLayer, true);
     if (params.chromaOnly) {
       try { curveLayer.blendMode = "color"; } catch { /* ignore */ }
     }
