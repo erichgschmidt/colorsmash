@@ -26,33 +26,6 @@ export interface PreviewImgHandle {
   setPixels: (rgba: Uint8Array, width: number, height: number) => void;
 }
 
-function DoubleBufferImg(props: {
-  imgRef: React.RefObject<HTMLImageElement>;
-  backRef: React.RefObject<HTMLImageElement>;
-  centerImg: boolean;
-  userTransform?: string;
-  cursor: string;
-  onClick: (e: React.MouseEvent<HTMLImageElement>) => void;
-  alt: string;
-}) {
-  const baseTransform = props.centerImg ? "translate(-50%, -50%)" : "translateY(-50%)";
-  const fullTransform = `${baseTransform}${props.userTransform ? " " + props.userTransform : ""}`;
-  const imgStyle: React.CSSProperties = {
-    position: "absolute",
-    top: "50%",
-    left: props.centerImg ? "50%" : 0,
-    maxWidth: "100%", maxHeight: "100%", objectFit: "contain",
-    transform: fullTransform,
-    transformOrigin: "center center",
-  };
-  return (
-    <div style={{ position: "absolute", inset: 0, overflow: "hidden" }}>
-      <img ref={props.imgRef} alt={props.alt} onClick={props.onClick} style={{ ...imgStyle, cursor: props.cursor }} />
-      <img ref={props.backRef} alt="" aria-hidden style={{ ...imgStyle, opacity: 0, pointerEvents: "none" }} />
-    </div>
-  );
-}
-
 export function PreviewPane(props: PreviewPaneProps & { imgHandleRef?: React.MutableRefObject<PreviewImgHandle | null> }) {
   const imgRef = useRef<HTMLImageElement>(null);
   // Second buffer img for double-buffering when imgHandleRef is used. Eliminates the
@@ -128,10 +101,18 @@ export function PreviewPane(props: PreviewPaneProps & { imgHandleRef?: React.Mut
       }}>
         {(props.snapshot || props.imgHandleRef)
           ? props.imgHandleRef
-            ? <DoubleBufferImg
-                imgRef={imgRef as any} backRef={imgBackRef as any}
-                centerImg={!!props.centerImg} userTransform={props.imgTransform}
-                cursor={props.onPickColor ? "crosshair" : "default"} onClick={onImgClick} alt={props.label} />
+            ? <>
+                <img ref={imgRef} alt={props.label} onClick={onImgClick}
+                  style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain",
+                           cursor: props.onPickColor ? "crosshair" : "default",
+                           position: "absolute", top: 0, left: 0, right: 0, bottom: 0, margin: "auto",
+                           transform: props.imgTransform, transformOrigin: "center center" }} />
+                <img ref={imgBackRef} alt="" aria-hidden
+                  style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain",
+                           position: "absolute", top: 0, left: 0, right: 0, bottom: 0, margin: "auto",
+                           opacity: 0, pointerEvents: "none",
+                           transform: props.imgTransform, transformOrigin: "center center" }} />
+              </>
             : <img ref={imgRef} alt={props.label} onClick={onImgClick}
                 style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain",
                          cursor: props.onPickColor ? "crosshair" : "default" }} />
