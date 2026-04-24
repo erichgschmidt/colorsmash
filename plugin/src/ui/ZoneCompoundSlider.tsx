@@ -9,6 +9,7 @@ export interface ZoneCompoundValue {
   amount: number;   // 0..200
   anchor: number;   // 0..255
   falloff: number;  // 0..100
+  bias: number;     // -100..100, competitive pressure vs other zones
 }
 
 export interface ZoneCompoundSliderProps {
@@ -137,6 +138,25 @@ export function ZoneCompoundSlider(props: ZoneCompoundSliderProps) {
             width: 14, height: 14, background: "#ddd", border: "2px solid #111",
             borderRadius: "50%", cursor: "ew-resize", zIndex: 2,
           }} title={`anchor (${props.value.anchor})`} />
+      </div>
+      {/* Row 3: bias slider — competitive pressure (positive grows zone at neighbors' expense) */}
+      <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 1 }}>
+        <span style={{ width: 56, opacity: 0.5, flexShrink: 0, fontSize: 9 }}>bias</span>
+        <input type="range" min={-100} max={100} value={props.value.bias} tabIndex={-1}
+          onInput={e => {
+            const v = Math.round(Number((e.target as HTMLInputElement).value));
+            valueRef.current = { ...valueRef.current, bias: v };
+            props.onChange(valueRef.current);
+          }}
+          onDoubleClick={() => {
+            valueRef.current = { ...valueRef.current, bias: 0 };
+            props.onChange(valueRef.current);
+          }}
+          onFocus={e => e.currentTarget.blur()}
+          title={`Bias (${props.value.bias > 0 ? "+" : ""}${props.value.bias}) — positive grows this zone at the expense of neighbors at overlap; double-click to reset`}
+          style={{ flex: 1, minWidth: 30, height: 10 }} />
+        <span style={{ width: 32, textAlign: "right", opacity: 0.6, fontSize: 9 }}>{props.value.bias > 0 ? "+" : ""}{props.value.bias}</span>
+        <span style={{ width: 16, flexShrink: 0 }} />
       </div>
     </div>
   );

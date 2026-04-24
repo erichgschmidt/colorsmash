@@ -47,6 +47,7 @@ export function MatchTab() {
 
   const zonesRef = useRef<ZoneOpts>({ ...DEFAULT_ZONES });
   const [zonesLabel, setZonesLabel] = useState<ZoneOpts>({ ...DEFAULT_ZONES });
+  const [lockZoneTotal, setLockZoneTotal] = useState(false);
 
   const [srcMode, setSrcMode] = useState<SrcMode>("layer");
   const [srcOverride, setSrcOverride] = useState<SourceSnap | null>(null);
@@ -397,22 +398,50 @@ export function MatchTab() {
       <div style={{ borderTop: "1px solid #444" }} />
       <div onClick={() => toggleSection("zones")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#dddddd", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
         <span><Icon name={openSection === "zones" ? "chevronDown" : "chevronRight"} size={11} /> Zone targeting</span>
-        {openSection === "zones" && <span onClick={(e: any) => { e.stopPropagation(); zonesRef.current = { ...DEFAULT_ZONES }; setZonesLabel({ ...DEFAULT_ZONES }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>}
+        {openSection === "zones" && (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <label onClick={(e: any) => e.stopPropagation()} title="Lock total: when one amount changes, the other two rebalance proportionally to preserve the sum"
+              style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 10, fontWeight: 400, opacity: 0.85, cursor: "pointer" }}>
+              <input type="checkbox" checked={lockZoneTotal} onChange={e => setLockZoneTotal(e.target.checked)}
+                style={{ cursor: "pointer", margin: 0 }} />
+              Lock total
+            </label>
+            <span onClick={(e: any) => { e.stopPropagation(); zonesRef.current = { ...DEFAULT_ZONES }; setZonesLabel({ ...DEFAULT_ZONES }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>
+          </span>
+        )}
       </div>
       {openSection === "zones" && (["shadows", "mids", "highlights"] as const).map(zone => {
         const colorMap: Record<string, string> = { shadows: "#4a7fc1", mids: "#bbb", highlights: "#e0b85a" };
         const ankKey = `${zone}Anchor` as keyof ZoneOpts;
         const falKey = `${zone}Falloff` as keyof ZoneOpts;
+        const biasKey = `${zone}Bias` as keyof ZoneOpts;
         return (
           <div key={zone} style={{ padding: 0 }}>
             <ZoneCompoundSlider
               label={zone}
               color={colorMap[zone]}
-              value={{ amount: zonesLabel[zone], anchor: zonesLabel[ankKey], falloff: zonesLabel[falKey] }}
-              defaults={{ amount: DEFAULT_ZONES[zone], anchor: DEFAULT_ZONES[ankKey], falloff: DEFAULT_ZONES[falKey] }}
+              value={{ amount: zonesLabel[zone], anchor: zonesLabel[ankKey], falloff: zonesLabel[falKey], bias: zonesLabel[biasKey] }}
+              defaults={{ amount: DEFAULT_ZONES[zone], anchor: DEFAULT_ZONES[ankKey], falloff: DEFAULT_ZONES[falKey], bias: DEFAULT_ZONES[biasKey] }}
               onChange={next => {
-                zonesRef.current = { ...zonesRef.current, [zone]: next.amount, [ankKey]: next.anchor, [falKey]: next.falloff } as ZoneOpts;
-                setZonesLabel(z => ({ ...z, [zone]: next.amount, [ankKey]: next.anchor, [falKey]: next.falloff }));
+                const cur = zonesRef.current;
+                const amountChanged = next.amount !== cur[zone];
+                let patch: Partial<ZoneOpts> = { [zone]: next.amount, [ankKey]: next.anchor, [falKey]: next.falloff, [biasKey]: next.bias } as Partial<ZoneOpts>;
+                // Lock-total: if this drag changed the amount, redistribute the delta across the other two zones
+                // proportionally to their current values (so their ratio is preserved).
+                if (lockZoneTotal && amountChanged) {
+                  const others = (["shadows", "mids", "highlights"] as const).filter(z => z !== zone);
+                  const [a, b] = others;
+                  const prevTotal = cur.shadows + cur.mids + cur.highlights;
+                  const remaining = Math.max(0, prevTotal - next.amount);
+                  const otherSum = cur[a] + cur[b];
+                  let na: number, nb: number;
+                  if (otherSum <= 0) { na = remaining / 2; nb = remaining / 2; }
+                  else { na = (cur[a] / otherSum) * remaining; nb = remaining - na; }
+                  patch[a] = Math.max(0, Math.min(200, Math.round(na)));
+                  patch[b] = Math.max(0, Math.min(200, Math.round(nb)));
+                }
+                zonesRef.current = { ...cur, ...patch } as ZoneOpts;
+                setZonesLabel(z => ({ ...z, ...patch }));
                 scheduleRedraw();
               }}
             />

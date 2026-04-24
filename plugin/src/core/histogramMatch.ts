@@ -331,32 +331,42 @@ export interface ZoneOpts {
   shadows: number;            // 0..200, % strength
   shadowsAnchor: number;      // 0..255, where the shadow zone is centered
   shadowsFalloff: number;     // 0..100, how broad (sigma)
+  shadowsBias: number;        // -100..100, competitive pressure (eats into neighbors at overlap)
   mids: number;
   midsAnchor: number;
   midsFalloff: number;
+  midsBias: number;
   highlights: number;
   highlightsAnchor: number;
   highlightsFalloff: number;
+  highlightsBias: number;
 }
 
 export const DEFAULT_ZONES: ZoneOpts = {
-  shadows: 100,    shadowsAnchor: 42,    shadowsFalloff: 50,
-  mids: 100,       midsAnchor: 127,      midsFalloff: 50,
-  highlights: 100, highlightsAnchor: 212, highlightsFalloff: 50,
+  shadows: 100,    shadowsAnchor: 42,    shadowsFalloff: 50,    shadowsBias: 0,
+  mids: 100,       midsAnchor: 127,      midsFalloff: 50,       midsBias: 0,
+  highlights: 100, highlightsAnchor: 212, highlightsFalloff: 50, highlightsBias: 0,
 };
 
 // Per-input weight in [0,1]: how strongly the matched curve replaces the identity at that input.
-// When all three amounts = 100, weight ≡ 1 by partition-of-unity normalization → identity behavior.
+// When all three amounts = 100 and biases = 0, weight ≡ 1 by partition-of-unity normalization →
+// identity behavior. Per-zone bias acts like softmax pressure: bumping a zone's bias makes it
+// claim a larger share of the partition wherever it has any presence, eating into neighbors at
+// the overlap regions (Color-Range-style "grow this range" behavior).
 export function buildZoneWeights(opts: ZoneOpts): Float64Array {
   const w = new Float64Array(256);
   const sig = (f: number) => { const s = 18 + (f / 100) * 60; return 1 / (2 * s * s); };
   const sInv = sig(opts.shadowsFalloff), mInv = sig(opts.midsFalloff), hInv = sig(opts.highlightsFalloff);
   const sCtr = opts.shadowsAnchor, mCtr = opts.midsAnchor, hCtr = opts.highlightsAnchor;
   const s = opts.shadows / 100, m = opts.mids / 100, h = opts.highlights / 100;
+  // bias/50 → exp gain in [exp(-2)≈0.135, exp(2)≈7.39] range. Felt good in testing.
+  const bs = Math.exp((opts.shadowsBias ?? 0) / 50);
+  const bm = Math.exp((opts.midsBias ?? 0) / 50);
+  const bh = Math.exp((opts.highlightsBias ?? 0) / 50);
   for (let v = 0; v < 256; v++) {
-    const ws = Math.exp(-((v - sCtr) ** 2) * sInv);
-    const wm = Math.exp(-((v - mCtr) ** 2) * mInv);
-    const wh = Math.exp(-((v - hCtr) ** 2) * hInv);
+    const ws = bs * Math.exp(-((v - sCtr) ** 2) * sInv);
+    const wm = bm * Math.exp(-((v - mCtr) ** 2) * mInv);
+    const wh = bh * Math.exp(-((v - hCtr) ** 2) * hInv);
     const sum = ws + wm + wh || 1;
     w[v] = (s * ws + m * wm + h * wh) / sum;
   }
