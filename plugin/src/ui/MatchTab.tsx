@@ -266,8 +266,8 @@ export function MatchTab() {
   useEffect(() => {
     const el = matchedContainerRef.current;
     if (!el) return;
-    const onEnter = () => { mouseOverMatchedRef.current = true; };
-    const onLeave = () => { mouseOverMatchedRef.current = false; };
+    const onEnter = () => { mouseOverMatchedRef.current = true; el.focus(); };
+    const onLeave = () => { mouseOverMatchedRef.current = false; el.blur(); };
     const onWheel = (e: WheelEvent) => {
       if (!mouseOverMatchedRef.current) return;
       e.preventDefault();
@@ -532,7 +532,7 @@ export function MatchTab() {
           <button onClick={resetZoom} disabled={zoom === 1 && pan.x === 0 && pan.y === 0} title="Reset zoom + pan" style={{ height: 16, padding: "0 6px", fontSize: 9, background: "transparent", color: zoom === 1 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: "pointer" }}>1:1</button>
         </div>
       </div>
-      <div ref={matchedContainerRef} style={{ height: 240, overflow: "hidden", cursor: "grab", background: "#111", border: "1px solid #555", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center" }}
+      <div ref={matchedContainerRef} tabIndex={0} style={{ height: 240, overflow: "hidden", cursor: "grab", background: "#111", border: "1px solid #555", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center", outline: "none" }}
         onMouseDown={onZoomMouseDown}>
         <img ref={matchedFrontRef} alt=""
           style={{
