@@ -19,6 +19,7 @@ import {
   app, action as psAction, readLayerPixels, executeAsModal, getActiveDoc, getSelectionBounds,
 } from "../services/photoshop";
 import { downsampleToMaxEdge } from "../core/downsample";
+import { rgbaToPngDataUrl } from "./encodePng";
 
 const SOURCE_MAX_EDGE = 256;
 type SrcMode = "layer" | "selection" | "folder";
@@ -244,8 +245,6 @@ export function MatchTab() {
         other.style.opacity = "0";
         matchedVisibleRef.current = showFront ? "back" : "front";
       };
-      // Inline tiny PNG encoder usage: re-import to avoid coupling.
-      const { rgbaToPngDataUrl } = require("./encodePng");
       target.src = rgbaToPngDataUrl(rgba, w, h);
     },
   });
