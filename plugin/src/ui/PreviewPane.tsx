@@ -99,18 +99,22 @@ export function PreviewPane(props: PreviewPaneProps & { imgHandleRef?: React.Mut
         ...aspectStyle, overflow: "hidden", position: "relative",
       }}>
         {(props.snapshot || props.imgHandleRef)
-          ? <>
-              <img ref={imgRef} alt={props.label} onClick={onImgClick}
-                style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", cursor: props.onPickColor ? "crosshair" : "default",
-                         position: props.imgHandleRef ? "absolute" : "static", top: 0, left: 0, right: 0, bottom: 0, margin: "auto",
-                         transition: "opacity 0ms" }} />
-              {props.imgHandleRef && (
+          ? props.imgHandleRef
+            ? // Double-buffered path: wrap both imgs in an absolutely-positioned flex container
+              // so we get reliable horizontal centering or left-alignment via justifyContent.
+              <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: props.centerImg ? "center" : "flex-start" }}>
+                <img ref={imgRef} alt={props.label} onClick={onImgClick}
+                  style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain",
+                           cursor: props.onPickColor ? "crosshair" : "default" }} />
                 <img ref={imgBackRef} alt="" aria-hidden
                   style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain",
-                           position: "absolute", top: 0, left: 0, right: 0, bottom: 0, margin: "auto",
+                           position: "absolute", top: 0, left: props.centerImg ? "50%" : 0,
+                           transform: props.centerImg ? "translateX(-50%)" : "none",
                            opacity: 0, pointerEvents: "none" }} />
-              )}
-            </>
+              </div>
+            : <img ref={imgRef} alt={props.label} onClick={onImgClick}
+                style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain",
+                         cursor: props.onPickColor ? "crosshair" : "default" }} />
           : <span style={{ color: "#666", fontSize: 10 }}>{props.layers.length === 0 ? "no layers" : "select a layer"}</span>}
       </div>
       {props.onRefresh && (
