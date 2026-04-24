@@ -507,7 +507,9 @@ export function MatchTab() {
         </div>
       </div>
       <div style={{ height: 240, overflow: "hidden", cursor: zoom > 1 ? "grab" : "default", background: "#111", border: "1px solid #555", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center" }} onMouseDown={onZoomMouseDown}>
-        <img ref={matchedFrontRef} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: "center center" }} />
+        <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: "center center" }}>
+          <img ref={matchedFrontRef} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+        </div>
       </div>
 
       {/* Accordion controls */}
