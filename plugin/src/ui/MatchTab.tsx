@@ -506,10 +506,16 @@ export function MatchTab() {
           <button onClick={resetZoom} disabled={zoom === 1 && pan.x === 0 && pan.y === 0} title="Reset zoom + pan" style={{ height: 16, padding: "0 6px", fontSize: 9, background: "transparent", color: zoom === 1 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: "pointer" }}>1:1</button>
         </div>
       </div>
-      <div style={{ height: 240, overflow: "hidden", cursor: zoom > 1 ? "grab" : "default", background: "#111", border: "1px solid #555", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center" }} onMouseDown={onZoomMouseDown}>
-        <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: "center center" }}>
-          <img ref={matchedFrontRef} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
-        </div>
+      <div style={{ height: 240, overflow: "hidden", cursor: zoom > 1 ? "grab" : "default", background: "#111", border: "1px solid #555", borderRadius: 2, position: "relative" }} onMouseDown={onZoomMouseDown}>
+        <img ref={matchedFrontRef} alt=""
+          style={{
+            position: "absolute",
+            top: "50%", left: "50%",
+            width: `${100 * zoom}%`, height: `${100 * zoom}%`,
+            marginLeft: `${-50 * zoom + (pan.x / 240 * 100)}%`,
+            marginTop: `${-50 * zoom + (pan.y / 240 * 100)}%`,
+            objectFit: "contain",
+          }} />
       </div>
 
       {/* Accordion controls */}
