@@ -374,11 +374,11 @@ export function MatchTab() {
       <input type="checkbox" checked={autoUpdate} onChange={e => setAutoUpdate(e.target.checked)}
         title={autoUpdate ? "Auto-sample on (selection changes re-sample)" : "Auto-sample on selection change"}
         style={{ cursor: "pointer", flexShrink: 0, margin: 0 }} />
-      {autoUpdate && <span style={{ color: "#7d7", flexShrink: 0 }}>●</span>}
+      <span style={{ color: autoUpdate ? "#7d7" : "#555", flexShrink: 0 }}>●</span>
       <input type="checkbox" checked={sampleMerged} onChange={e => setSampleMerged(e.target.checked)}
         title="Sample merged composite (everything visible at the selection) instead of just the active layer"
         style={{ cursor: "pointer", flexShrink: 0, marginLeft: 4, margin: 0 }} />
-      <span style={{ opacity: 0.8 }}>Merged</span>
+      <span style={{ opacity: 0.8 }}>Merge</span>
       <input type="checkbox" checked={sampleLock} onChange={e => setSampleLock(e.target.checked)}
         title="Lock current sample — auto-update is disabled while on. Use to freeze a sample while you experiment."
         style={{ cursor: "pointer", flexShrink: 0, marginLeft: 4, margin: 0 }} />
