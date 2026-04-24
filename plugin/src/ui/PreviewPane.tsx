@@ -22,49 +22,17 @@ export interface PreviewPaneProps {
   imgTransform?: string; // CSS transform applied to the img (for zoom/pan)
 }
 
-export interface PreviewImgHandle {
-  setPixels: (rgba: Uint8Array, width: number, height: number) => void;
-}
-
-export function PreviewPane(props: PreviewPaneProps & { imgHandleRef?: React.MutableRefObject<PreviewImgHandle | null> }) {
+export function PreviewPane(props: PreviewPaneProps) {
   const imgRef = useRef<HTMLImageElement>(null);
-  // Second buffer img for double-buffering when imgHandleRef is used. Eliminates the
-  // load-cycle blank-frame flash inherent to img.src reassignment with dataURLs.
-  const imgBackRef = useRef<HTMLImageElement>(null);
-  const visibleRef = useRef<"front" | "back">("front");
   const wrapRef = useRef<HTMLDivElement>(null);
   const height = props.height ?? 140;
 
   useEffect(() => {
-    if (!props.imgHandleRef) return;
-    props.imgHandleRef.current = {
-      setPixels: (rgba, w, h) => {
-        const front = imgRef.current;
-        const back = imgBackRef.current;
-        if (!front || !back) return;
-        const showFront = visibleRef.current === "front";
-        const target = showFront ? back : front;
-        const other  = showFront ? front : back;
-        target.onload = () => {
-          target.style.opacity = "1";
-          other.style.opacity = "0";
-          visibleRef.current = showFront ? "back" : "front";
-        };
-        target.src = rgbaToPngDataUrl(rgba, w, h);
-      },
-    };
-    return () => { if (props.imgHandleRef) props.imgHandleRef.current = null; };
-  }, [props.imgHandleRef]);
-
-  useEffect(() => {
-    // When imgHandleRef is provided, the parent owns img.src updates imperatively
-    // (e.g. live preview redraws). Don't double-write here or we cause flicker.
-    if (props.imgHandleRef) return;
     const img = imgRef.current;
     if (!img || !props.snapshot) return;
     const data = props.transformedRgba ?? props.snapshot.data;
     img.src = rgbaToPngDataUrl(data, props.snapshot.width, props.snapshot.height);
-  }, [props.snapshot, props.transformedRgba, props.imgHandleRef]);
+  }, [props.snapshot, props.transformedRgba]);
 
   const onImgClick = (e: React.MouseEvent<HTMLImageElement>) => {
     if (!props.onPickColor || !props.snapshot) return;
@@ -99,21 +67,10 @@ export function PreviewPane(props: PreviewPaneProps & { imgHandleRef?: React.Mut
         display: "flex", alignItems: "center", justifyContent: props.centerImg ? "center" : "flex-start",
         ...aspectStyle, overflow: "hidden", position: "relative",
       }}>
-        {(props.snapshot || props.imgHandleRef)
-          ? props.imgHandleRef
-            ? <>
-                <img ref={imgRef} alt={props.label} onClick={onImgClick}
-                  style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain",
-                           cursor: props.onPickColor ? "crosshair" : "default",
-                           position: "absolute", top: 0, left: 0, right: 0, bottom: 0, margin: "auto" }} />
-                <img ref={imgBackRef} alt="" aria-hidden
-                  style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain",
-                           position: "absolute", top: 0, left: 0, right: 0, bottom: 0, margin: "auto",
-                           opacity: 0, pointerEvents: "none" }} />
-              </>
-            : <img ref={imgRef} alt={props.label} onClick={onImgClick}
-                style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain",
-                         cursor: props.onPickColor ? "crosshair" : "default" }} />
+        {props.snapshot
+          ? <img ref={imgRef} alt={props.label} onClick={onImgClick}
+              style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain",
+                       cursor: props.onPickColor ? "crosshair" : "default" }} />
           : <span style={{ color: "#666", fontSize: 10 }}>{props.layers.length === 0 ? "no layers" : "select a layer"}</span>}
       </div>
       {props.onRefresh && (

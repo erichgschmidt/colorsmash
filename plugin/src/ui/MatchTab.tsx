@@ -4,10 +4,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLayers } from "./useLayers";
 import { useLayerPreview } from "./useLayerPreview";
-import { PreviewPane, PreviewImgHandle } from "./PreviewPane";
+import { PreviewPane } from "./PreviewPane";
 import { CurvesGraph } from "./CurvesGraph";
 import { ZoneCompoundSlider } from "./ZoneCompoundSlider";
 import { Icon } from "./Icon";
+import { MatchedPreview, MatchedPreviewHandle } from "./MatchedPreview";
+import { SourceSelector } from "./SourceSelector";
+import { BottomActionBar } from "./BottomActionBar";
+import { BasicSlider, DimSlider, matchStyles } from "./MatchSliders";
 import { ChannelCurves } from "../core/histogramMatch";
 import {
   fitHistogramCurves, fitHistogramCurvesLab, processChannelCurves, applyChannelCurvesToRgba, applyChromaOnly,
@@ -19,7 +23,6 @@ import {
   app, action as psAction, readLayerPixels, executeAsModal, getActiveDoc, getSelectionBounds,
 } from "../services/photoshop";
 import { downsampleToMaxEdge } from "../core/downsample";
-import { rgbaToPngDataUrl } from "./encodePng";
 
 const SOURCE_MAX_EDGE = 256;
 type SrcMode = "layer" | "selection" | "folder";
@@ -229,46 +232,8 @@ export function MatchTab() {
     return fit(srcSnap.data, tgt.snap.data);
   }, [srcSnap, tgt.snap, colorSpace]);
 
-  // Inline matched-preview img (single img, no double buffer for now — diagnose render).
-  const matchedFrontRef = useRef<HTMLImageElement>(null);
-  const matchedHandleRef = useRef<PreviewImgHandle | null>({
-    setPixels: (rgba, w, h) => {
-      const img = matchedFrontRef.current;
-      if (!img) return;
-      try { img.src = rgbaToPngDataUrl(rgba, w, h); } catch { /* ignore encode errors during drag */ }
-    },
-  });
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
-  const dragStartRef = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
-  const onZoomMouseDown = (e: React.MouseEvent) => {
-    dragStartRef.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y };
-    const onMove = (ev: MouseEvent) => {
-      if (!dragStartRef.current) return;
-      setPan({ x: dragStartRef.current.px + (ev.clientX - dragStartRef.current.x), y: dragStartRef.current.py + (ev.clientY - dragStartRef.current.y) });
-    };
-    const onUp = () => { dragStartRef.current = null; window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  };
-  const resetZoom = () => { setZoom(1); setPan({ x: 0, y: 0 }); };
-
-  // Wheel-zoom was attempted but UXP's host-level scroll routing pre-empts our document
-  // handler unless an active mouse interaction is happening. Conceded — buttons + drag-pan
-  // + keyboard shortcuts are the supported zoom controls.
-  const matchedContainerRef = useRef<HTMLDivElement>(null);
-  // Keyboard shortcuts: + zoom in, - zoom out, 0 reset (when matched preview is hovered).
-  const mouseOverMatchedRef = useRef(false);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!mouseOverMatchedRef.current) return;
-      if (e.key === "+" || e.key === "=") { e.preventDefault(); setZoom(z => Math.min(8, z + 0.25)); }
-      else if (e.key === "-" || e.key === "_") { e.preventDefault(); setZoom(z => Math.max(0.25, z - 0.25)); }
-      else if (e.key === "0") { e.preventDefault(); setZoom(1); setPan({ x: 0, y: 0 }); }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => { document.removeEventListener("keydown", onKey); };
-  }, []);
+  // Matched preview is rendered by <MatchedPreview/>; we drive it imperatively via a handle.
+  const matchedHandleRef = useRef<MatchedPreviewHandle | null>(null);
   const rafPendingRef = useRef(false);
   const [renderedCurves, setRenderedCurves] = useState<ChannelCurves | null>(null);
   const curvesPendingRef = useRef<ChannelCurves | null>(null);
@@ -328,104 +293,8 @@ export function MatchTab() {
     } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
   };
 
-  // ─── Styles ─────────────────────────────────────────────────────────────
-  const tinyBtn: React.CSSProperties = { padding: "1px 6px", background: "transparent", color: "#aaa", border: "1px solid #555", borderRadius: 3, cursor: "pointer", fontSize: 9 };
-  const sel: React.CSSProperties = {
-    width: "100%", display: "block", padding: "2px 4px", fontSize: 10,
-    background: "#333", color: "#dddddd", border: "1px solid #555",
-    margin: 0, boxSizing: "border-box", appearance: "none" as any, WebkitAppearance: "none" as any,
-    fontWeight: 600,
-  };
-  const numInputStyle: React.CSSProperties = {
-    width: 38, padding: "1px 3px", fontSize: 10, textAlign: "right",
-    background: "#404040", color: "#dddddd",
-    border: "1px solid #6e6e6e", borderRadius: 2,
-    boxSizing: "border-box", height: 18, lineHeight: "14px", margin: 0,
-    // Strip browser-default input chrome (inset shadows, spinners, focus ring).
-    appearance: "none" as any,
-    WebkitAppearance: "none" as any,
-    MozAppearance: "textfield" as any,
-    outline: "none",
-    boxShadow: "none",
-    verticalAlign: "middle",
-  };
-  const resetIconBtn: React.CSSProperties = {
-    width: 16, height: 16, padding: 0, lineHeight: "14px", fontSize: 10, textAlign: "center",
-    background: "transparent", color: "#888", border: "1px solid #444", borderRadius: 2, cursor: "pointer",
-    flexShrink: 0, boxSizing: "border-box",
-  };
-
-  const sliderRefs = useRef<Record<string, HTMLInputElement | null>>({});
-  const slider = (
-    label: string, ref: React.MutableRefObject<number>, value: number, setValue: (n: number) => void,
-    min: number, max: number, suffix = "", defaultVal?: number,
-  ) => {
-    const reset = () => {
-      if (defaultVal == null) return;
-      ref.current = defaultVal; setValue(defaultVal);
-      const el = sliderRefs.current[label];
-      if (el) el.value = String(defaultVal);
-      scheduleRedraw();
-    };
-    const setFromTyped = (raw: string) => {
-      const v = Math.max(min, Math.min(max, Math.round(Number(raw) || 0)));
-      ref.current = v; setValue(v);
-      const el = sliderRefs.current[label];
-      if (el) el.value = String(v);
-      scheduleRedraw();
-    };
-    return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 0, fontSize: 11, marginBottom: 0 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: 0 }}>
-          <span style={{ opacity: 0.75 }}>{label}</span>
-          <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
-            <input type="number" min={min} max={max} value={value}
-              onChange={e => setFromTyped(e.target.value)}
-              style={numInputStyle} />
-            {suffix && <span style={{ opacity: 0.7, fontSize: 10, marginLeft: 1 }}>{suffix}</span>}
-            {defaultVal != null && <button onClick={reset} title={`Reset to ${defaultVal}${suffix}`} style={resetIconBtn}><Icon name="revert" size={11} /></button>}
-          </div>
-        </div>
-        <input type="range" min={min} max={max} defaultValue={value}
-          ref={el => { sliderRefs.current[label] = el; }}
-          onInput={e => { const v = Math.round(Number((e.target as HTMLInputElement).value)); ref.current = v; setValue(v); scheduleRedraw(); }}
-          style={{ width: "calc(100% + 16px)", marginLeft: -8, marginTop: -2, marginBottom: -2 }} />
-      </div>
-    );
-  };
-
-  const dimSlider = (label: string, key: keyof DimensionOpts, min: number, max: number, suffix = "") => {
-    const value = dimsLabel[key];
-    const def = DEFAULT_DIMENSIONS[key];
-    const reset = () => {
-      dimsRef.current = { ...dimsRef.current, [key]: def };
-      setDimsLabel(d => ({ ...d, [key]: def }));
-      scheduleRedraw();
-    };
-    const setFromTyped = (raw: string) => {
-      const v = Math.max(min, Math.min(max, Math.round(Number(raw) || 0)));
-      dimsRef.current = { ...dimsRef.current, [key]: v };
-      setDimsLabel(d => ({ ...d, [key]: v }));
-      scheduleRedraw();
-    };
-    return (
-      <div key={key} style={{ display: "flex", flexDirection: "column", gap: 0, fontSize: 11, marginBottom: 0 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: 0 }}>
-          <span style={{ opacity: 0.75 }}>{label}</span>
-          <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
-            <input type="number" min={min} max={max} value={value}
-              onChange={e => setFromTyped(e.target.value)}
-              style={numInputStyle} />
-            {suffix && <span style={{ opacity: 0.7, fontSize: 10, marginLeft: 1 }}>{suffix}</span>}
-            <button onClick={reset} title={`Reset to ${def}${suffix}`} style={resetIconBtn}><Icon name="revert" size={11} /></button>
-          </div>
-        </div>
-        <input type="range" min={min} max={max} value={value}
-          onInput={e => { const v = Math.round(Number((e.target as HTMLInputElement).value)); dimsRef.current = { ...dimsRef.current, [key]: v }; setDimsLabel(d => ({ ...d, [key]: v })); scheduleRedraw(); }}
-          style={{ width: "calc(100% + 16px)", marginLeft: -8, marginTop: -2, marginBottom: -2 }} />
-      </div>
-    );
-  };
+  const sel = matchStyles.sel;
+  const tinyBtn = matchStyles.tinyBtn;
 
   const onRefreshAll = async () => {
     src.refresh();
@@ -435,56 +304,22 @@ export function MatchTab() {
     }
   };
 
-  const sourceModeContent = () => srcMode === "layer" ? (
-    <select style={sel} value={sourceId ?? ""} onChange={e => setSourceId(Number(e.target.value))}>
-      {layers.length === 0 && <option value="">— none —</option>}
-      {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-    </select>
-  ) : srcMode === "folder" ? (
-    <span style={{ fontSize: 10, opacity: 0.7 }}>{browsedFile ? `📁 ${browsedFile}` : ""}</span>
-  ) : (
-    <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, height: 26 }}>
-      <input type="checkbox" checked={autoUpdate} onChange={e => setAutoUpdate(e.target.checked)}
-        title={autoUpdate ? "Auto-sample on (selection changes re-sample)" : "Auto-sample on selection change"}
-        style={{ cursor: "pointer", flexShrink: 0, margin: 0 }} />
-      <span style={{ color: autoUpdate ? "#7d7" : "#555", flexShrink: 0 }}>●</span>
-      <input type="checkbox" checked={sampleMerged} onChange={e => setSampleMerged(e.target.checked)}
-        title="Sample merged composite (everything visible at the selection) instead of just the active layer"
-        style={{ cursor: "pointer", flexShrink: 0, marginLeft: 4, margin: 0 }} />
-      <span style={{ opacity: 0.8 }}>Merge</span>
-      <input type="checkbox" checked={sampleLock} onChange={e => setSampleLock(e.target.checked)}
-        title="Lock current sample — auto-update is disabled while on. Use to freeze a sample while you experiment."
-        style={{ cursor: "pointer", flexShrink: 0, marginLeft: 4, margin: 0 }} />
-      <span style={{ opacity: 0.8 }}>Lock</span>
-    </div>
-  );
-
   return (
     <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
       {/* Top: source + target side-by-side mini panes (each: doc dropdown + layer picker + small preview) */}
       {useMemo(() => (
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
           <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-            <div style={{ height: 26 }}>
-              <select style={sel}
-                value={
-                  srcMode === "folder" ? "__file__" :
-                  srcMode === "selection" ? "__selection__" : (activeDocId ?? "")
-                }
-                onChange={e => {
-                  const v = e.target.value;
-                  if (v === "__selection__") { setBrowsedFile(""); switchSrcMode("selection"); }
-                  else if (v === "__browse__") { onBrowseImage(); }
-                  else if (v === "__file__") { /* sticky display, ignore */ }
-                  else { setBrowsedFile(""); switchSrcMode("layer"); onSwitchDoc(Number(v)); }
-                }}>
-                {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                <option value="__selection__">⊞ Use Selection</option>
-                <option value="__browse__">📁 Browse Image…</option>
-                {browsedFile && <option value="__file__">📁 {browsedFile}</option>}
-              </select>
-            </div>
-            <div style={{ height: 26 }}>{sourceModeContent()}</div>
+            <SourceSelector
+              docs={docs} activeDocId={activeDocId} srcMode={srcMode} browsedFile={browsedFile}
+              onSwitchDoc={onSwitchDoc} onSwitchSrcMode={switchSrcMode}
+              setBrowsedFile={setBrowsedFile} onBrowseImage={onBrowseImage}
+              layers={layers} sourceId={sourceId} setSourceId={setSourceId}
+              autoUpdate={autoUpdate} setAutoUpdate={setAutoUpdate}
+              sampleMerged={sampleMerged} setSampleMerged={setSampleMerged}
+              sampleLock={sampleLock} setSampleLock={setSampleLock}
+              selStyle={sel}
+            />
             <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}}
               snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}
               hideSelector fitAspect maxHeight={120} />
@@ -505,30 +340,10 @@ export function MatchTab() {
               hideSelector fitAspect maxHeight={120} />
           </div>
         </div>
-      ), [src.snap, tgt.snap, sourceId, targetId, layers, srcMode, srcOverride, autoUpdate, docs, activeDocId])}
+      ), [src.snap, tgt.snap, sourceId, targetId, layers, srcMode, srcOverride, autoUpdate, sampleMerged, sampleLock, browsedFile, docs, activeDocId])}
 
       {/* Matched preview (full-width, large) with zoom controls */}
-      <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span>Matched preview</span>
-        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <button onClick={() => setZoom(z => Math.max(0.25, z - 0.25))} disabled={zoom <= 0.25} title="Zoom out" style={{ width: 18, height: 16, padding: 0, fontSize: 12, lineHeight: "12px", background: "transparent", color: zoom <= 0.25 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: zoom <= 0.25 ? "default" : "pointer" }}>−</button>
-          <span style={{ minWidth: 36, textAlign: "center" }}>{Math.round(zoom * 100)}%</span>
-          <button onClick={() => setZoom(z => Math.min(8, z + 0.25))} disabled={zoom >= 8} title="Zoom in" style={{ width: 18, height: 16, padding: 0, fontSize: 12, lineHeight: "12px", background: "transparent", color: zoom >= 8 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: zoom >= 8 ? "default" : "pointer" }}>+</button>
-          <button onClick={resetZoom} disabled={zoom === 1 && pan.x === 0 && pan.y === 0} title="Reset zoom + pan" style={{ height: 16, padding: "0 6px", fontSize: 9, background: "transparent", color: zoom === 1 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: "pointer" }}>1:1</button>
-        </div>
-      </div>
-      <div ref={matchedContainerRef} style={{ height: 240, overflow: "hidden", cursor: "grab", background: "#111", border: "1px solid #555", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center" }}
-        onMouseDown={onZoomMouseDown}
-        onMouseEnter={() => { mouseOverMatchedRef.current = true; }}
-        onMouseLeave={() => { mouseOverMatchedRef.current = false; }}>
-        <img ref={matchedFrontRef} alt=""
-          style={{
-            width: `${100 * zoom}%`, height: `${100 * zoom}%`,
-            objectFit: "contain",
-            marginLeft: `${pan.x}px`, marginTop: `${pan.y}px`,
-            flexShrink: 0,
-          }} />
-      </div>
+      <MatchedPreview ref={matchedHandleRef} />
 
       {/* Accordion controls */}
       <div style={{ borderTop: "1px solid #444", margin: "6px 0 0" }} />
@@ -537,9 +352,9 @@ export function MatchTab() {
       </div>
       {openSection === "basic" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: 0 }}>
-          {slider("Amount",     amountRef,  amountLabel,  setAmountLabel,  0, 100, "%", 100)}
-          {slider("Smooth",     smoothRef,  smoothLabel,  setSmoothLabel,  0,  32, "",  0)}
-          {slider("Stretch",    stretchRef, stretchLabel, setStretchLabel, 1,  32, "",  8)}
+          <BasicSlider label="Amount"  refObj={amountRef}  value={amountLabel}  setValue={setAmountLabel}  min={0} max={100} suffix="%" defaultVal={100} scheduleRedraw={scheduleRedraw} />
+          <BasicSlider label="Smooth"  refObj={smoothRef}  value={smoothLabel}  setValue={setSmoothLabel}  min={0} max={32}  defaultVal={0}   scheduleRedraw={scheduleRedraw} />
+          <BasicSlider label="Stretch" refObj={stretchRef} value={stretchLabel} setValue={setStretchLabel} min={1} max={32}  defaultVal={8}   scheduleRedraw={scheduleRedraw} />
           {/* @ts-ignore Spectrum web component */}
           <sp-checkbox checked={chromaOnly || undefined} onInput={(e: any) => setChromaOnly(e.target.checked)} style={{ marginTop: 4, fontSize: 11 }}>
             Chroma only (preserve target luminance)
@@ -555,12 +370,17 @@ export function MatchTab() {
       </div>
       {openSection === "dims" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: 0 }}>
-          {dimSlider("Value",       "value",      0, 200, "%")}
-          {dimSlider("Chroma",      "chroma",     0, 200, "%")}
-          {dimSlider("Hue shift",   "hueShift", -180, 180, "°")}
-          {dimSlider("Contrast",    "contrast",   1, 200, "%")}
-          {dimSlider("Neutralize",  "neutralize", 0, 100, "%")}
-          {dimSlider("Separation",  "separation", 0, 200, "%")}
+          {([
+            ["Value",      "value",      0, 200, "%"],
+            ["Chroma",     "chroma",     0, 200, "%"],
+            ["Hue shift",  "hueShift", -180, 180, "°"],
+            ["Contrast",   "contrast",   1, 200, "%"],
+            ["Neutralize", "neutralize", 0, 100, "%"],
+            ["Separation", "separation", 0, 200, "%"],
+          ] as Array<[string, keyof DimensionOpts, number, number, string]>).map(([lbl, k, mn, mx, sfx]) => (
+            <DimSlider key={k} label={lbl} dimKey={k} min={mn} max={mx} suffix={sfx}
+              dimsLabel={dimsLabel} dimsRef={dimsRef} setDimsLabel={setDimsLabel} scheduleRedraw={scheduleRedraw} />
+          ))}
         </div>
       )}
 
@@ -590,35 +410,12 @@ export function MatchTab() {
         );
       })}
 
-      {/* Bottom action bar: Deselect | Overwrite | RGB toggle | refresh */}
-      {/* Bottom action bar: labels left-anchored, buttons right-anchored over panel BG so when
-          space gets tight, the buttons visually occlude the labels (no wrap, no shift). */}
-      <div style={{ position: "relative", height: 18, marginTop: 8, fontSize: 10, color: "#cccccc" }}>
-        <div style={{ position: "absolute", left: 0, top: 0, height: 18, display: "flex", alignItems: "center", gap: 10, whiteSpace: "nowrap" }}>
-          <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: "pointer" }} title="Drop active marquee selection before creating the layer (so curves apply to the full target).">
-            <input type="checkbox" checked={deselectOnApply} onChange={e => setDeselectOnApply(e.target.checked)} style={{ margin: 0, verticalAlign: "middle" }} />
-            Deselect
-          </label>
-          <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: "pointer" }} title="On: replace the prior Match Curves layer. Off: keep prior layers (hidden) so you can stack alternatives.">
-            <input type="checkbox" checked={overwriteOnApply} onChange={e => setOverwriteOnApply(e.target.checked)} style={{ margin: 0, verticalAlign: "middle" }} />
-            Overwrite
-          </label>
-        </div>
-        <div style={{ position: "absolute", right: 0, top: 0, height: 18, display: "flex", alignItems: "center", gap: 4, background: "#535353", paddingLeft: 6 }}>
-          <button onClick={() => setColorSpace(c => c === "rgb" ? "lab" : "rgb")}
-            title="Toggle color space — RGB matches per-channel histograms; Lab matches in perceptual space."
-            style={{ height: 16, padding: "0 6px", fontSize: 10, fontWeight: 600, lineHeight: "14px",
-                     background: "transparent", color: "#dddddd",
-                     border: "1px solid #888", borderRadius: 3, cursor: "pointer", boxSizing: "border-box" }}>
-            {colorSpace.toUpperCase()}
-          </button>
-          <button onClick={onRefreshAll} title="Refresh source + target previews"
-            style={{ width: 16, height: 16, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
-                     background: "transparent", border: "1px solid #888", borderRadius: 3, cursor: "pointer", boxSizing: "border-box" }}>
-            <span style={{ width: 8, height: 8, background: "#bbbbbb", borderRadius: 1 }} />
-          </button>
-        </div>
-      </div>
+      <BottomActionBar
+        deselectOnApply={deselectOnApply} setDeselectOnApply={setDeselectOnApply}
+        overwriteOnApply={overwriteOnApply} setOverwriteOnApply={setOverwriteOnApply}
+        colorSpace={colorSpace} setColorSpace={setColorSpace}
+        onRefreshAll={onRefreshAll}
+      />
 
       {/* @ts-ignore Spectrum web component */}
       <sp-button variant="secondary" onClick={onApply} style={{ marginTop: 10, width: "100%" }}>Apply Curves</sp-button>
