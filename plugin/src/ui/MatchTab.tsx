@@ -143,15 +143,6 @@ export function MatchTab() {
     });
   };
 
-  const onSnapSelection = async () => {
-    setStatus("Snapping selection...");
-    try {
-      const snap = await snapshotSelectionInner();
-      setSrcOverride(snap);
-      setStatus(`Source = ${snap.name}`);
-    } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
-  };
-
   // Auto-update: re-snap on EITHER selection-bounds change OR PS pixel-changing events.
   const lastBoundsRef = useRef<string>("");
   const snapInFlightRef = useRef(false);
@@ -379,20 +370,19 @@ export function MatchTab() {
       {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
     </select>
   ) : (
-    <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, height: 26 }}>
       <input type="checkbox" checked={autoUpdate} onChange={e => setAutoUpdate(e.target.checked)}
         title={autoUpdate ? "Auto-sample on (selection changes re-sample)" : "Auto-sample on selection change"}
-        style={{ cursor: "pointer", flexShrink: 0 }} />
+        style={{ cursor: "pointer", flexShrink: 0, margin: 0 }} />
       {autoUpdate && <span style={{ color: "#7d7", flexShrink: 0 }}>●</span>}
       <input type="checkbox" checked={sampleMerged} onChange={e => setSampleMerged(e.target.checked)}
         title="Sample merged composite (everything visible at the selection) instead of just the active layer"
-        style={{ cursor: "pointer", flexShrink: 0, marginLeft: 4 }} />
+        style={{ cursor: "pointer", flexShrink: 0, marginLeft: 4, margin: 0 }} />
       <span style={{ opacity: 0.8 }}>Merged</span>
       <input type="checkbox" checked={sampleLock} onChange={e => setSampleLock(e.target.checked)}
-        title="Lock current sample — auto-update + manual Sample are disabled while on. Use to freeze a sample while you experiment."
-        style={{ cursor: "pointer", flexShrink: 0, marginLeft: 4 }} />
+        title="Lock current sample — auto-update is disabled while on. Use to freeze a sample while you experiment."
+        style={{ cursor: "pointer", flexShrink: 0, marginLeft: 4, margin: 0 }} />
       <span style={{ opacity: 0.8 }}>Lock</span>
-      <button onClick={onSnapSelection} disabled={sampleLock} style={{ ...tinyBtn, flexShrink: 0, opacity: sampleLock ? 0.4 : 1 }} title="Sample the current marquee selection now">Sample</button>
     </div>
   );
 
@@ -446,7 +436,7 @@ export function MatchTab() {
 
       {/* Accordion controls */}
       <div style={{ borderTop: "1px solid #444", margin: "6px 0 0" }} />
-      <div onClick={() => toggleSection("basic")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#dddddd", cursor: "pointer", fontSize: 11, fontWeight: 700 }}>
+      <div onClick={() => toggleSection("basic")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#dddddd", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
         <span><Icon name={openSection === "basic" ? "chevronDown" : "chevronRight"} size={11} /> Match controls</span>
       </div>
       {openSection === "basic" && (
@@ -463,7 +453,7 @@ export function MatchTab() {
       )}
 
       <div style={{ borderTop: "1px solid #444" }} />
-      <div onClick={() => toggleSection("dims")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#dddddd", cursor: "pointer", fontSize: 11, fontWeight: 700 }}>
+      <div onClick={() => toggleSection("dims")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#dddddd", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
         <span><Icon name={openSection === "dims" ? "chevronDown" : "chevronRight"} size={11} /> Dimension warps</span>
         {openSection === "dims" && <span onClick={(e: any) => { e.stopPropagation(); dimsRef.current = { ...DEFAULT_DIMENSIONS }; setDimsLabel({ ...DEFAULT_DIMENSIONS }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>}
       </div>
@@ -479,7 +469,7 @@ export function MatchTab() {
       )}
 
       <div style={{ borderTop: "1px solid #444" }} />
-      <div onClick={() => toggleSection("zones")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#dddddd", cursor: "pointer", fontSize: 11, fontWeight: 700 }}>
+      <div onClick={() => toggleSection("zones")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#dddddd", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
         <span><Icon name={openSection === "zones" ? "chevronDown" : "chevronRight"} size={11} /> Zone targeting</span>
         {openSection === "zones" && <span onClick={(e: any) => { e.stopPropagation(); zonesRef.current = { ...DEFAULT_ZONES }; setZonesLabel({ ...DEFAULT_ZONES }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>}
       </div>
