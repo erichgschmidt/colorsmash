@@ -229,23 +229,13 @@ export function MatchTab() {
     return fit(srcSnap.data, tgt.snap.data);
   }, [srcSnap, tgt.snap, colorSpace]);
 
-  // Inline matched-preview imgs (bypass PreviewPane; lets us own positioning + transform).
+  // Inline matched-preview img (single img, no double buffer for now — diagnose render).
   const matchedFrontRef = useRef<HTMLImageElement>(null);
-  const matchedBackRef = useRef<HTMLImageElement>(null);
-  const matchedVisibleRef = useRef<"front" | "back">("front");
   const matchedHandleRef = useRef<PreviewImgHandle | null>({
     setPixels: (rgba, w, h) => {
-      const front = matchedFrontRef.current, back = matchedBackRef.current;
-      if (!front || !back) return;
-      const showFront = matchedVisibleRef.current === "front";
-      const target = showFront ? back : front;
-      const other = showFront ? front : back;
-      target.onload = () => {
-        target.style.opacity = "1";
-        other.style.opacity = "0";
-        matchedVisibleRef.current = showFront ? "back" : "front";
-      };
-      target.src = rgbaToPngDataUrl(rgba, w, h);
+      const img = matchedFrontRef.current;
+      if (!img) return;
+      img.src = rgbaToPngDataUrl(rgba, w, h);
     },
   });
   const [zoom, setZoom] = useState(1);
@@ -514,7 +504,6 @@ export function MatchTab() {
       <div style={{ height: 240, overflow: "hidden", cursor: zoom > 1 ? "grab" : "default", position: "relative", background: "#111", border: "1px solid #555", borderRadius: 2 }} onMouseDown={onZoomMouseDown}>
         <div style={{ position: "absolute", inset: 0, transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: "center center" }}>
           <img ref={matchedFrontRef} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", position: "absolute", top: 0, left: 0, right: 0, bottom: 0, margin: "auto" }} />
-          <img ref={matchedBackRef} alt="" aria-hidden style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", position: "absolute", top: 0, left: 0, right: 0, bottom: 0, margin: "auto", opacity: 0, pointerEvents: "none" }} />
         </div>
       </div>
 
