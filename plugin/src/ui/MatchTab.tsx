@@ -258,54 +258,24 @@ export function MatchTab() {
   };
   const resetZoom = () => { setZoom(1); setPan({ x: 0, y: 0 }); };
 
-  // Wheel-zoom handler that ALSO disables ancestor scroll while the mouse is over the preview.
-  // Without this, when the panel is small enough to be scrollable, the scroll container
-  // captures the wheel before our listener does (UXP/Chromium scrolls inside an overflow:auto
-  // ancestor before any local handler can preventDefault).
+  // Wheel-zoom: capture-phase document listener. When the wheel event's target lies
+  // inside the matched preview, intercept (preventDefault + stopPropagation) BEFORE the
+  // ancestor overflow:auto container processes it. Scrollbar stays visible/functional
+  // everywhere else; no overflow toggling, no focus dance.
   const matchedContainerRef = useRef<HTMLDivElement>(null);
-  const savedScrollRef = useRef<{ el: HTMLElement; overflow: string } | null>(null);
   useEffect(() => {
-    const el = matchedContainerRef.current;
-    if (!el) return;
-    const findScrollAncestor = (): HTMLElement | null => {
-      let p: HTMLElement | null = el.parentElement;
-      while (p) {
-        const o = window.getComputedStyle(p).overflowY;
-        if (o === "auto" || o === "scroll") return p;
-        p = p.parentElement;
-      }
-      return null;
-    };
-    const onEnter = () => {
-      const sa = findScrollAncestor();
-      if (sa && !savedScrollRef.current) {
-        savedScrollRef.current = { el: sa, overflow: sa.style.overflowY };
-        sa.style.overflowY = "hidden";
-      }
-    };
-    const onLeave = () => {
-      if (savedScrollRef.current) {
-        savedScrollRef.current.el.style.overflowY = savedScrollRef.current.overflow;
-        savedScrollRef.current = null;
-      }
-    };
     const onWheel = (e: WheelEvent) => {
+      const el = matchedContainerRef.current;
+      if (!el) return;
+      const t = e.target as Node | null;
+      if (!t || !el.contains(t)) return;
       e.preventDefault();
+      e.stopPropagation();
       const delta = e.deltaY > 0 ? -0.25 : 0.25;
       setZoom(z => Math.max(0.25, Math.min(8, z + delta)));
     };
-    el.addEventListener("mouseenter", onEnter);
-    el.addEventListener("mouseleave", onLeave);
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => {
-      el.removeEventListener("mouseenter", onEnter);
-      el.removeEventListener("mouseleave", onLeave);
-      el.removeEventListener("wheel", onWheel as any);
-      if (savedScrollRef.current) {
-        savedScrollRef.current.el.style.overflowY = savedScrollRef.current.overflow;
-        savedScrollRef.current = null;
-      }
-    };
+    document.addEventListener("wheel", onWheel, { passive: false, capture: true });
+    return () => { document.removeEventListener("wheel", onWheel as any, { capture: true } as any); };
   }, []);
   const rafPendingRef = useRef(false);
   const [renderedCurves, setRenderedCurves] = useState<ChannelCurves | null>(null);
