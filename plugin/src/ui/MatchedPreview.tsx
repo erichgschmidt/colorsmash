@@ -60,12 +60,12 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, {}>(function Matc
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
           <div onClick={() => zoom > 0.25 && setZoom(z => Math.max(0.25, z - 0.25))} title="Zoom out"
             style={{ width: 18, height: 16, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, color: zoom <= 0.25 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: zoom <= 0.25 ? "default" : "pointer", userSelect: "none", boxSizing: "border-box" }}>
-            <span style={{ marginTop: -2, marginLeft: 1, lineHeight: 1 }}>-</span>
+            <span style={{ marginTop: -2, marginLeft: 0, lineHeight: 1 }}>-</span>
           </div>
           <span style={{ minWidth: 36, textAlign: "center" }}>{Math.round(zoom * 100)}%</span>
           <div onClick={() => zoom < 8 && setZoom(z => Math.min(8, z + 0.25))} title="Zoom in"
             style={{ width: 18, height: 16, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, color: zoom >= 8 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: zoom >= 8 ? "default" : "pointer", userSelect: "none", boxSizing: "border-box" }}>
-            <span style={{ marginTop: -2, marginLeft: 1, lineHeight: 1 }}>+</span>
+            <span style={{ marginTop: -2, marginLeft: 0, lineHeight: 1 }}>+</span>
           </div>
           <button
             onClick={() => setBgMatchPanel(b => !b)}
