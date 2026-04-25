@@ -8,8 +8,9 @@ import {
 import { downsampleToMaxEdge } from "../core/downsample";
 import {
   fitHistogramCurves, fitHistogramCurvesLab, sampleControlPoints, processChannelCurves, applyDimensions,
-  applyZoneWeightsToChannels, MERGED_LAYER_ID,
+  applyZoneAndEnvelopeToChannels, MERGED_LAYER_ID,
   ChannelCurves, DimensionOpts, DEFAULT_DIMENSIONS, ZoneOpts, DEFAULT_ZONES,
+  EnvelopePoint, DEFAULT_ENVELOPE,
 } from "../core/histogramMatch";
 
 const STATS_MAX_EDGE = 512;
@@ -25,6 +26,7 @@ export interface ApplyMatchParams {
   chromaOnly?: boolean;  // set the Curves layer to "Color" blend mode
   dimensions?: DimensionOpts;
   zones?: ZoneOpts;
+  envelope?: EnvelopePoint[];
   sourcePixelsOverride?: Uint8Array; // if set, use these RGBA pixels instead of reading source layer
   sourceLabel?: string; // optional name shown in result message
   colorSpace?: "rgb" | "lab";
@@ -53,7 +55,7 @@ export async function fitMatchCurves(params: ApplyMatchParams): Promise<ChannelC
       maxStretch: params.maxStretch ?? 999,
     });
     const dim = applyDimensions(processed, params.dimensions ?? DEFAULT_DIMENSIONS);
-    return applyZoneWeightsToChannels(dim, params.zones ?? DEFAULT_ZONES);
+    return applyZoneAndEnvelopeToChannels(dim, params.zones ?? DEFAULT_ZONES, params.envelope ?? DEFAULT_ENVELOPE);
   });
 }
 
@@ -103,7 +105,7 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       maxStretch: params.maxStretch ?? 999,
     });
     const dim = applyDimensions(processed, params.dimensions ?? DEFAULT_DIMENSIONS);
-    const curves: ChannelCurves = applyZoneWeightsToChannels(dim, params.zones ?? DEFAULT_ZONES);
+    const curves: ChannelCurves = applyZoneAndEnvelopeToChannels(dim, params.zones ?? DEFAULT_ZONES, params.envelope ?? DEFAULT_ENVELOPE);
 
     // Reuse existing [Color Smash] group. Prior Match Curves layers are either deleted
     // (overwritePrior=true, default) or just hidden (overwritePrior=false, so user can keep

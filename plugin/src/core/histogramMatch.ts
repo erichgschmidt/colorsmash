@@ -427,6 +427,52 @@ export function applyZoneWeightsToChannels(c: ChannelCurves, opts: ZoneOpts): Ch
   };
 }
 
+// ─── Envelope: arbitrary-N piecewise-linear weight curve over input 0..255 ─────
+// Generalizes the 3-zone gaussians: user places N points along the input axis,
+// each with a strength 0..2. Linear interpolation between sorted points; clamped
+// to the endpoint values outside [first,last]. Empty array → identity (no effect).
+//
+// Composes with zones by multiplication: w_final[v] = w_zone[v] * w_envelope[v].
+// Default empty preserves prior behavior bit-exactly.
+
+export interface EnvelopePoint { position: number; weight: number; }
+export const DEFAULT_ENVELOPE: EnvelopePoint[] = [];
+
+export function buildEnvelopeWeights(pts: EnvelopePoint[]): Float64Array {
+  const w = new Float64Array(256);
+  if (!pts || pts.length === 0) { w.fill(1); return w; }
+  if (pts.length === 1) { w.fill(Math.max(0, pts[0].weight)); return w; }
+  const sorted = [...pts].sort((a, b) => a.position - b.position);
+  const first = sorted[0], last = sorted[sorted.length - 1];
+  let i = 0;
+  for (let v = 0; v < 256; v++) {
+    if (v <= first.position) { w[v] = Math.max(0, first.weight); continue; }
+    if (v >= last.position) { w[v] = Math.max(0, last.weight); continue; }
+    while (i < sorted.length - 2 && v > sorted[i + 1].position) i++;
+    const a = sorted[i], b = sorted[i + 1];
+    const span = (b.position - a.position) || 1;
+    const t = (v - a.position) / span;
+    w[v] = Math.max(0, a.weight + (b.weight - a.weight) * t);
+  }
+  return w;
+}
+
+// Combined zone + envelope application. Multiplies the two weight arrays then applies
+// the standard zone-weight blend per channel.
+export function applyZoneAndEnvelopeToChannels(
+  c: ChannelCurves, opts: ZoneOpts, envelope: EnvelopePoint[]
+): ChannelCurves {
+  const wz = buildZoneWeights(opts);
+  const we = buildEnvelopeWeights(envelope);
+  const w = new Float64Array(256);
+  for (let i = 0; i < 256; i++) w[i] = wz[i] * we[i];
+  return {
+    r: enforceMonotonic(applyZoneWeights(c.r, w)),
+    g: enforceMonotonic(applyZoneWeights(c.g, w)),
+    b: enforceMonotonic(applyZoneWeights(c.b, w)),
+  };
+}
+
 // Sample a 256-entry curve down to N control points evenly spaced on [0,255].
 export function sampleControlPoints(curve: Uint8Array, n: number): { input: number; output: number }[] {
   const pts: { input: number; output: number }[] = [];

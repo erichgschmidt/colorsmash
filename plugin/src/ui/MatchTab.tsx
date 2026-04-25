@@ -15,10 +15,12 @@ import { BasicSlider, DimSlider, matchStyles } from "./MatchSliders";
 import { ChannelCurves } from "../core/histogramMatch";
 import {
   fitHistogramCurves, fitHistogramCurvesLab, processChannelCurves, applyChannelCurvesToRgba, applyChromaOnly,
-  applyDimensions, applyZoneWeightsToChannels, MERGED_LAYER_ID,
+  applyDimensions, applyZoneAndEnvelopeToChannels, MERGED_LAYER_ID,
   DimensionOpts, DEFAULT_DIMENSIONS, ZoneOpts, DEFAULT_ZONES,
   computeLumaBins, bandMeanColor,
+  EnvelopePoint, DEFAULT_ENVELOPE,
 } from "../core/histogramMatch";
+import { EnvelopeEditor } from "./EnvelopeEditor";
 import { applyMatch } from "../app/applyMatch";
 import {
   app, action as psAction, readLayerPixels, executeAsModal, getActiveDoc, getSelectionBounds,
@@ -49,6 +51,9 @@ export function MatchTab() {
   const zonesRef = useRef<ZoneOpts>({ ...DEFAULT_ZONES });
   const [zonesLabel, setZonesLabel] = useState<ZoneOpts>({ ...DEFAULT_ZONES });
   const [lockZoneTotal, setLockZoneTotal] = useState(false);
+
+  const envelopeRef = useRef<EnvelopePoint[]>([...DEFAULT_ENVELOPE]);
+  const [envelopeLabel, setEnvelopeLabel] = useState<EnvelopePoint[]>([...DEFAULT_ENVELOPE]);
 
   const [srcMode, setSrcMode] = useState<SrcMode>("layer");
   const [srcOverride, setSrcOverride] = useState<SourceSnap | null>(null);
@@ -92,8 +97,8 @@ export function MatchTab() {
   const [deselectOnApply, setDeselectOnApply] = useState(true);
   const [overwriteOnApply, setOverwriteOnApply] = useState(true);
 
-  const [openSection, setOpenSection] = useState<"basic" | "dims" | "zones" | null>(null);
-  const toggleSection = (s: "basic" | "dims" | "zones") => setOpenSection(o => o === s ? null : s);
+  const [openSection, setOpenSection] = useState<"basic" | "dims" | "zones" | "envelope" | null>(null);
+  const toggleSection = (s: "basic" | "dims" | "zones" | "envelope") => setOpenSection(o => o === s ? null : s);
 
   const [docs, setDocs] = useState<{ id: number; name: string }[]>([]);
   const [activeDocId, setActiveDocId] = useState<number | null>(null);
@@ -263,7 +268,7 @@ export function MatchTab() {
       maxStretch: stretchRef.current,
     });
     const dim = applyDimensions(processed, dimsRef.current);
-    const c = applyZoneWeightsToChannels(dim, zonesRef.current);
+    const c = applyZoneAndEnvelopeToChannels(dim, zonesRef.current, envelopeRef.current);
     curvesPendingRef.current = c;
     if (!curvesTimeoutRef.current) {
       curvesTimeoutRef.current = setTimeout(() => {
@@ -304,6 +309,7 @@ export function MatchTab() {
         chromaOnly,
         dimensions: dimsRef.current,
         zones: zonesRef.current,
+        envelope: envelopeRef.current,
         sourcePixelsOverride: srcOverride?.data,
         sourceLabel: srcOverride?.name,
         colorSpace,
@@ -465,6 +471,27 @@ export function MatchTab() {
           </div>
         );
       })}
+
+      <div style={{ borderTop: "1px solid #444" }} />
+      <div onClick={() => toggleSection("envelope")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#dddddd", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
+        <span><Icon name={openSection === "envelope" ? "chevronDown" : "chevronRight"} size={11} /> Envelope <span style={{ fontSize: 9, fontWeight: 400, opacity: 0.55 }}>(test)</span>{envelopeLabel.length > 0 && <span style={{ fontSize: 9, fontWeight: 400, opacity: 0.7, marginLeft: 6 }}>· {envelopeLabel.length} pt{envelopeLabel.length === 1 ? "" : "s"} active</span>}</span>
+        {openSection === "envelope" && envelopeLabel.length > 0 && (
+          <span onClick={(e: any) => { e.stopPropagation(); envelopeRef.current = []; setEnvelopeLabel([]); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Clear</span>
+        )}
+      </div>
+      {openSection === "envelope" && (
+        <div style={{ padding: "2px 0" }}>
+          <EnvelopeEditor
+            points={envelopeLabel}
+            lumaBins={lumaBins}
+            onChange={pts => {
+              envelopeRef.current = pts;
+              setEnvelopeLabel(pts);
+              scheduleRedraw();
+            }}
+          />
+        </div>
+      )}
 
       <BottomActionBar
         deselectOnApply={deselectOnApply} setDeselectOnApply={setDeselectOnApply}
