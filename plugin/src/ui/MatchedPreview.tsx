@@ -71,7 +71,7 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, {}>(function Matc
             onClick={() => setBgMatchPanel(b => !b)}
             title={bgMatchPanel ? "Preview background: panel gray (click for dark)" : "Preview background: dark (click to match panel)"}
             style={{ width: 16, height: 16, marginLeft: 8, background: bgMatchPanel ? "#535353" : "#111", border: "1px solid #888", borderRadius: 2, cursor: "pointer", boxSizing: "border-box" }} />
-          <button onClick={resetZoom} disabled={zoom === 1 && pan.x === 0 && pan.y === 0} title="Reset zoom + pan" style={{ height: 16, width: 24, padding: 0, fontSize: 9, background: "transparent", color: zoom === 1 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: "pointer", boxSizing: "border-box" }}>1:1</button>
+          <button onClick={resetZoom} disabled={zoom === 1 && pan.x === 0 && pan.y === 0} title="Reset zoom + pan" style={{ height: 16, width: 30, padding: 0, fontSize: 10, background: "transparent", color: zoom === 1 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: "pointer", boxSizing: "border-box" }}>1:1</button>
         </div>
       </div>
       <div ref={matchedContainerRef} style={{ height: 240, overflow: "hidden", cursor: "grab", background: bgMatchPanel ? "#535353" : "#111", border: "1px solid #555", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center" }}
