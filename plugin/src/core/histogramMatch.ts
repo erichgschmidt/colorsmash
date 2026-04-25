@@ -436,7 +436,14 @@ export function applyZoneWeightsToChannels(c: ChannelCurves, opts: ZoneOpts): Ch
 // Default empty preserves prior behavior bit-exactly.
 
 export interface EnvelopePoint { position: number; weight: number; }
-export const DEFAULT_ENVELOPE: EnvelopePoint[] = [];
+// Three identity-weight points (0, 127, 255 all at weight=1) — produces a flat line at the
+// reference, mathematically a no-op until the user moves any handle. Picked over an empty
+// default so the middle handle is immediately grabbable for bending.
+export const DEFAULT_ENVELOPE: EnvelopePoint[] = [
+  { position: 0,   weight: 1 },
+  { position: 127, weight: 1 },
+  { position: 255, weight: 1 },
+];
 
 export function buildEnvelopeWeights(pts: EnvelopePoint[]): Float64Array {
   const w = new Float64Array(256);

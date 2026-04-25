@@ -475,9 +475,9 @@ export function MatchTab() {
 
       <div style={{ borderTop: "1px solid #444" }} />
       <div onClick={() => toggleSection("envelope")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#dddddd", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
-        <span><Icon name={openSection === "envelope" ? "chevronDown" : "chevronRight"} size={11} /> Envelope <span style={{ fontSize: 9, fontWeight: 400, opacity: 0.55 }}>(test)</span>{envelopeLabel.length > 0 && <span style={{ fontSize: 9, fontWeight: 400, opacity: 0.7, marginLeft: 6 }}>· {envelopeLabel.length} pt{envelopeLabel.length === 1 ? "" : "s"} active</span>}</span>
-        {openSection === "envelope" && envelopeLabel.length > 0 && (
-          <span onClick={(e: any) => { e.stopPropagation(); envelopeRef.current = []; setEnvelopeLabel([]); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Clear</span>
+        <span><Icon name={openSection === "envelope" ? "chevronDown" : "chevronRight"} size={11} /> Envelope <span style={{ fontSize: 9, fontWeight: 400, opacity: 0.55 }}>(test)</span>{envelopeLabel.length > 0 && <span style={{ fontSize: 9, fontWeight: 400, opacity: 0.7, marginLeft: 6 }}>· {envelopeLabel.length} pt{envelopeLabel.length === 1 ? "" : "s"}</span>}</span>
+        {openSection === "envelope" && (
+          <span onClick={(e: any) => { e.stopPropagation(); const def = [...DEFAULT_ENVELOPE]; envelopeRef.current = def; setEnvelopeLabel(def); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>
         )}
       </div>
       {openSection === "envelope" && (
