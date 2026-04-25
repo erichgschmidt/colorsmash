@@ -247,6 +247,7 @@ export function MatchTab() {
   // Luma-binned color stats from target pixels — used to color the zone band swatches with the
   // actual mean color of pixels at each luminance level. Recomputed only when target pixels change.
   const lumaBins = useMemo(() => tgt.snap ? computeLumaBins(tgt.snap.data) : null, [tgt.snap]);
+  const sourceLumaBins = useMemo(() => srcSnap ? computeLumaBins(srcSnap.data) : null, [srcSnap]);
 
   // Matched preview is rendered by <MatchedPreview/>; we drive it imperatively via a handle.
   const matchedHandleRef = useRef<MatchedPreviewHandle | null>(null);
@@ -484,6 +485,7 @@ export function MatchTab() {
           <EnvelopeEditor
             points={envelopeLabel}
             lumaBins={lumaBins}
+            sourceLumaBins={sourceLumaBins}
             onChange={pts => {
               envelopeRef.current = pts;
               setEnvelopeLabel(pts);

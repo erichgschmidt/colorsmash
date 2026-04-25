@@ -10,7 +10,8 @@ import { EnvelopePoint, LumaBins } from "../core/histogramMatch";
 export interface EnvelopeEditorProps {
   points: EnvelopePoint[];
   onChange: (pts: EnvelopePoint[]) => void;
-  lumaBins: LumaBins | null;     // optional histogram backdrop
+  lumaBins: LumaBins | null;        // target luma histogram (filled bars)
+  sourceLumaBins?: LumaBins | null; // source luma histogram (outline overlay)
   height?: number;
 }
 
@@ -21,17 +22,34 @@ export function EnvelopeEditor(props: EnvelopeEditorProps) {
   const trackRef = useRef<HTMLDivElement>(null);
   const trackH = props.height ?? TRACK_H_DEFAULT;
 
-  // Histogram backdrop: log-scaled bin counts, normalized to 0..1.
-  const histBars: number[] = (() => {
-    if (!props.lumaBins) return [];
-    const c = props.lumaBins.count;
+  // Log-scaled, normalized [0..1] bin heights for both target and source.
+  const normBars = (bins: LumaBins | null | undefined): number[] | null => {
+    if (!bins) return null;
+    const c = bins.count;
     let max = 0;
     for (let i = 0; i < 256; i++) { const v = Math.log1p(c[i]); if (v > max) max = v; }
-    if (max < 1e-6) return [];
+    if (max < 1e-6) return null;
     const out = new Array(256);
     for (let i = 0; i < 256; i++) out[i] = Math.log1p(c[i]) / max;
     return out;
-  })();
+  };
+  const tgtBars = normBars(props.lumaBins);
+  const srcBars = normBars(props.sourceLumaBins);
+
+  // Build SVG polyline points string for a histogram (for source outline overlay).
+  const barsToPolyPoints = (bars: number[]): string => {
+    // Down-sample to ~64 segments so the outline is smooth, not noisy.
+    const N = 64;
+    const stride = 256 / N;
+    const out: string[] = [];
+    for (let i = 0; i <= N; i++) {
+      const idx = Math.min(255, Math.round(i * stride));
+      const x = (idx / 255) * 100;
+      const y = (1 - bars[idx]) * 100;
+      out.push(`${x.toFixed(2)},${y.toFixed(2)}`);
+    }
+    return out.join(" ");
+  };
 
   const xyFromEvent = (e: React.PointerEvent | PointerEvent) => {
     const r = trackRef.current!.getBoundingClientRect();
@@ -93,13 +111,21 @@ export function EnvelopeEditor(props: EnvelopeEditorProps) {
           overflow: "hidden", touchAction: "none", cursor: "crosshair",
         }}
         title="Click empty area to add a point. Drag to move. Double-click a point to delete.">
-        {/* Histogram backdrop */}
-        {histBars.length > 0 && (
+        {/* Target histogram backdrop — filled bars in mid-gray */}
+        {tgtBars && (
           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "flex-end", pointerEvents: "none" }}>
-            {histBars.map((h, i) => (
-              <div key={i} style={{ flex: 1, height: `${h * 100}%`, background: "#3a3a3a" }} />
+            {tgtBars.map((h, i) => (
+              <div key={i} style={{ flex: 1, height: `${h * 100}%`, background: "#6a6a6a" }} />
             ))}
           </div>
+        )}
+        {/* Source histogram outline — overlay so user sees where the match is pulling toward */}
+        {srcBars && (
+          <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }} preserveAspectRatio="none" viewBox="0 0 100 100">
+            <polyline
+              points={barsToPolyPoints(srcBars)}
+              fill="none" stroke="#e8a060" strokeWidth="0.7" vectorEffect="non-scaling-stroke" opacity="0.85" />
+          </svg>
         )}
         {/* Reference line at weight=1 (no modulation) */}
         <div style={{ position: "absolute", left: 0, right: 0, top: "50%", height: 1, background: "#555", pointerEvents: "none", opacity: 0.6 }} />
@@ -129,7 +155,7 @@ export function EnvelopeEditor(props: EnvelopeEditorProps) {
       </div>
       <div style={{ fontSize: 9, opacity: 0.55, marginTop: 2, display: "flex", justifyContent: "space-between" }}>
         <span>0 (shadows)</span>
-        <span>{props.points.length} pt{props.points.length === 1 ? "" : "s"} · click to add · dbl-click to remove</span>
+        <span><span style={{ color: "#999" }}>■ target</span>{srcBars ? <> · <span style={{ color: "#e8a060" }}>— source</span></> : null} · {props.points.length} pt{props.points.length === 1 ? "" : "s"} · click to add</span>
         <span>255 (highlights)</span>
       </div>
     </div>
