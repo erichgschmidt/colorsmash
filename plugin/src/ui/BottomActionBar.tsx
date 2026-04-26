@@ -40,7 +40,7 @@ export function BottomActionBar(props: BottomActionBarProps) {
       <div style={{ position: "absolute", right: 0, top: 0, height: 18, display: "flex", alignItems: "center", gap: 4, background: "#535353", paddingLeft: 6 }}>
         <button onClick={() => setColorSpace(c => c === "rgb" ? "lab" : "rgb")}
           title="Toggle color space — RGB matches per-channel histograms; Lab matches in perceptual space."
-          style={{ height: 16, padding: "0 6px", fontSize: 10, fontWeight: 600, lineHeight: "14px",
+          style={{ height: 16, padding: "0 3px", fontSize: 9, fontWeight: 600, lineHeight: "14px",
                    background: "transparent", color: "#dddddd",
                    border: "1px solid #888", borderRadius: 3, cursor: "pointer", boxSizing: "border-box" }}>
           {colorSpace.toUpperCase()}
