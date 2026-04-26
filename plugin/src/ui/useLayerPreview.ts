@@ -1,7 +1,7 @@
 // Snapshot a chosen layer at low resolution. Variant of useTargetPreview that takes an explicit
 // layerId instead of always using the active layer. Returns null until a layer is selected.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { app, action, readLayerPixels, executeAsModal } from "../services/photoshop";
 import { downsampleToMaxEdge } from "../core/downsample";
 import { MERGED_LAYER_ID } from "../core/histogramMatch";
@@ -29,16 +29,19 @@ export interface LayerSnapshot {
   layerId: number;
 }
 
-export function useLayerPreview(layerId: number | null): { snap: LayerSnapshot | null; refresh: () => void; error: string | null } {
+export function useLayerPreview(docId: number | null, layerId: number | null): { snap: LayerSnapshot | null; refresh: () => void; error: string | null } {
   const [snap, setSnap] = useState<LayerSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Reset snap immediately when doc id changes so we don't briefly show old-doc pixels.
+  useEffect(() => { setSnap(null); setError(null); }, [docId]);
+
   const refresh = useCallback(async () => {
-    if (layerId == null) { setSnap(null); setError(null); return; }
+    if (layerId == null || docId == null) { setSnap(null); setError(null); return; }
     try {
       const result = await executeAsModal("Color Smash layer snapshot", async () => {
-        const doc = app.activeDocument;
-        if (!doc) throw new Error("No doc");
+        const doc = (app.documents ?? []).find((d: any) => d.id === docId);
+        if (!doc) throw new Error("Doc not found");
         // MERGED_LAYER_ID sentinel: read the full document composite (no layerID).
         if (layerId === MERGED_LAYER_ID) {
           const { imaging } = require("photoshop");
@@ -67,31 +70,15 @@ export function useLayerPreview(layerId: number | null): { snap: LayerSnapshot |
       setSnap(null);
       setError(e?.message ?? String(e));
     }
-  }, [layerId]);
-
-  // Track which doc the last successful snap came from. If app.activeDocument.id changes
-  // (PS doc switch — events for this aren't reliable, especially in-PS switches), force a
-  // refresh on the next poll tick. Same defense applies to LayerSquish-style batch operations
-  // that PS coalesces into a single notification we may never see.
-  const lastDocIdRef = useRef<number | null>(null);
+  }, [docId, layerId]);
 
   useEffect(() => {
     refresh();
-    lastDocIdRef.current = app.activeDocument?.id ?? null;
-    const events = ["select", "make", "delete", "set", "open", "close", "rename"];
-    const handler = () => {
-      lastDocIdRef.current = app.activeDocument?.id ?? null;
-      refresh();
-    };
+    const events = ["select", "make", "delete", "set", "open", "close", "rename", "historyStateChanged"];
+    const handler = () => refresh();
     action.addNotificationListener(events, handler);
-    // 1.5s safety poll: catches doc switches and silent batch ops.
-    const pollTimer = setInterval(() => {
-      const currentId = app.activeDocument?.id ?? null;
-      if (currentId !== lastDocIdRef.current) {
-        lastDocIdRef.current = currentId;
-        refresh();
-      }
-    }, 1500);
+    // Backup poll for batch ops PS may coalesce/suppress notifications for.
+    const pollTimer = setInterval(refresh, 1500);
     return () => {
       clearInterval(pollTimer);
       action.removeNotificationListener?.(events, handler);

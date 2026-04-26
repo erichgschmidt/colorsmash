@@ -2,8 +2,8 @@
 // then creates ONE Curves adjustment layer (clipped to target). Single editable node.
 
 import {
-  readLayerPixels, executeAsModal, getActiveDoc, statsRectForLayer,
-  makeCurvesLayer, setClippingMask, GROUP_NAME, action,
+  readLayerPixels, executeAsModal, statsRectForLayer,
+  makeCurvesLayer, setClippingMask, GROUP_NAME, action, app,
 } from "../services/photoshop";
 import { downsampleToMaxEdge } from "../core/downsample";
 import {
@@ -17,7 +17,26 @@ const STATS_MAX_EDGE = 512;
 const CONTROL_POINTS = 12;
 const RESULT_LAYER_NAME = "Match Curves";
 
+// Recursive layer lookup — layers may live inside groups (auto-grouping plugins, normal usage).
+function findLayerById(layers: any[], id: number): any | null {
+  for (const l of layers) {
+    if (l.id === id) return l;
+    if (Array.isArray(l.layers)) {
+      const found = findLayerById(l.layers, id);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function getDocById(docId: number): any {
+  const doc = (app.documents ?? []).find((d: any) => d.id === docId);
+  if (!doc) throw new Error(`Document ${docId} not found (was it closed?).`);
+  return doc;
+}
+
 export interface ApplyMatchParams {
+  docId: number;          // doc that holds source + target layers (panel-selected, NOT app.activeDocument)
   sourceLayerId: number;
   targetLayerId: number;
   amount: number;        // 0..1
@@ -37,9 +56,10 @@ export interface ApplyMatchParams {
 
 export async function fitMatchCurves(params: ApplyMatchParams): Promise<ChannelCurves> {
   return executeAsModal("Color Smash fit match curves", async () => {
-    const doc = getActiveDoc();
-    const source = doc.layers.find((l: any) => l.id === params.sourceLayerId);
-    const target = doc.layers.find((l: any) => l.id === params.targetLayerId);
+    const doc = getDocById(params.docId);
+    if (app.activeDocument?.id !== doc.id) app.activeDocument = doc;
+    const source = findLayerById(doc.layers, params.sourceLayerId);
+    const target = findLayerById(doc.layers, params.targetLayerId);
     if (!source || !target) throw new Error("Picked layer no longer exists.");
     const [s, t] = await Promise.all([
       readLayerPixels(source, statsRectForLayer(source)),
@@ -63,9 +83,13 @@ export async function fitMatchCurves(params: ApplyMatchParams): Promise<ChannelC
 
 export async function applyMatch(params: ApplyMatchParams): Promise<string> {
   return executeAsModal("Color Smash match", async () => {
-    const doc = getActiveDoc();
+    const doc = getDocById(params.docId);
+    // PS DOM operations (createLayerGroup, layer.move, etc.) implicitly target the active doc.
+    // Activate the panel-selected doc so apply lands in the right place regardless of what
+    // the user has clicked in PS chrome since picking layers in our panel.
+    if (app.activeDocument?.id !== doc.id) app.activeDocument = doc;
     const targetIsMerged = params.targetLayerId === MERGED_LAYER_ID;
-    const target = targetIsMerged ? null : doc.layers.find((l: any) => l.id === params.targetLayerId);
+    const target = targetIsMerged ? null : findLayerById(doc.layers, params.targetLayerId);
     if (!targetIsMerged && !target) throw new Error("Target layer no longer exists.");
 
     const readMergedPixels = async () => {
@@ -90,7 +114,7 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       const merged = await readMergedPixels();
       srcPixels = downsampleToMaxEdge(merged, STATS_MAX_EDGE).data;
     } else {
-      const source = doc.layers.find((l: any) => l.id === params.sourceLayerId);
+      const source = findLayerById(doc.layers, params.sourceLayerId);
       if (!source) throw new Error("Source layer no longer exists.");
       const s = await readLayerPixels(source, statsRectForLayer(source));
       srcPixels = downsampleToMaxEdge(s, STATS_MAX_EDGE).data;

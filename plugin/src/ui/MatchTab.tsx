@@ -34,7 +34,10 @@ type SrcMode = "layer" | "selection" | "folder";
 interface SourceSnap { width: number; height: number; data: Uint8Array; name: string; }
 
 export function MatchTab() {
-  const { layers, refresh: refreshLayers } = useLayers();
+  // selectedDocId is the panel's chosen working doc — authoritative regardless of what PS
+  // chrome currently has active. All layer reads + apply target this doc.
+  const [selectedDocId, setSelectedDocId] = useState<number | null>(null);
+  const { layers, refresh: refreshLayers } = useLayers(selectedDocId);
   const [sourceId, setSourceId] = useState<number | null>(null);
   const [targetId, setTargetId] = useState<number | null>(null);
   const amountRef = useRef(100);
@@ -157,7 +160,6 @@ export function MatchTab() {
       zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel]);
 
   const [docs, setDocs] = useState<{ id: number; name: string }[]>([]);
-  const [activeDocId, setActiveDocId] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -166,7 +168,12 @@ export function MatchTab() {
       try {
         const list = (app.documents ?? []).map((d: any) => ({ id: d.id, name: d.name }));
         setDocs(list);
-        setActiveDocId(app.activeDocument?.id ?? null);
+        // Auto-pick the active doc if nothing is selected yet, or if the previously selected
+        // doc has been closed. Otherwise, keep the panel selection — don't follow PS chrome.
+        setSelectedDocId(prev => {
+          if (prev != null && list.some((d: { id: number }) => d.id === prev)) return prev;
+          return app.activeDocument?.id ?? list[0]?.id ?? null;
+        });
       } catch { /* */ }
     };
     // PS fires events during modal scope before doc.documents reflects the mutation;
@@ -175,8 +182,6 @@ export function MatchTab() {
     readNow();
     const events = ["open", "close", "select", "make", "rename", "selectDocument"];
     psAction.addNotificationListener(events, refresh);
-    // Backup poll: PS doc-switch events are unreliable (especially when triggered inside
-    // PS rather than via our dropdown). Polling every 1.5s catches anything missed.
     const pollTimer = setInterval(readNow, 1500);
     return () => {
       cancelled = true;
@@ -185,10 +190,10 @@ export function MatchTab() {
     };
   }, []);
 
+  // Picking a doc in our dropdown is panel-only — we do NOT change PS's active document.
+  // The plugin operates on the panel-selected doc regardless of what's active in PS chrome.
   const onSwitchDoc = (id: number) => {
-    const d = (app.documents ?? []).find((x: any) => x.id === id);
-    if (!d) return;
-    try { app.activeDocument = d; setActiveDocId(id); } catch (e: any) { setStatus(`Error switching doc: ${e?.message ?? e}`); }
+    if ((app.documents ?? []).find((x: any) => x.id === id)) setSelectedDocId(id);
   };
 
   useEffect(() => {
@@ -198,8 +203,8 @@ export function MatchTab() {
     }
   }, [layers]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const src = useLayerPreview(srcMode === "layer" ? sourceId : null);
-  const tgt = useLayerPreview(targetId);
+  const src = useLayerPreview(selectedDocId, srcMode === "layer" ? sourceId : null);
+  const tgt = useLayerPreview(selectedDocId, targetId);
   const srcSnap = srcOverride ?? src.snap;
 
   // ─── Selection mode: snapshot from active marquee on active layer ───────
@@ -366,7 +371,9 @@ export function MatchTab() {
     if (srcMode === "selection" && !srcOverride) { setStatus("Snap a selection first."); return; }
     setStatus("Applying match...");
     try {
+      if (selectedDocId == null) { setStatus("No document selected."); return; }
       setStatus(await applyMatch({
+        docId: selectedDocId,
         sourceLayerId: sourceId ?? -1,
         targetLayerId: targetId,
         amount: amountRef.current / 100,
@@ -405,7 +412,7 @@ export function MatchTab() {
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
           <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
             <SourceSelector
-              docs={docs} activeDocId={activeDocId} srcMode={srcMode} browsedFile={browsedFile}
+              docs={docs} activeDocId={selectedDocId} srcMode={srcMode} browsedFile={browsedFile}
               onSwitchDoc={onSwitchDoc} onSwitchSrcMode={switchSrcMode}
               setBrowsedFile={setBrowsedFile} onBrowseImage={onBrowseImage}
               layers={layers} sourceId={sourceId} setSourceId={setSourceId}
@@ -421,7 +428,7 @@ export function MatchTab() {
           </div>
           <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
             <div style={{ height: 26 }}>
-              <select style={sel} value={activeDocId ?? ""} onChange={e => onSwitchDoc(Number(e.target.value))}>
+              <select style={sel} value={selectedDocId ?? ""} onChange={e => onSwitchDoc(Number(e.target.value))}>
                 {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
               </select>
             </div>
@@ -436,7 +443,7 @@ export function MatchTab() {
               hideSelector fitAspect maxHeight={120} />
           </div>
         </div>
-      ), [src.snap, tgt.snap, sourceId, targetId, layers, srcMode, srcOverride, autoUpdate, sampleMerged, sampleLock, browsedFile, docs, activeDocId])}
+      ), [src.snap, tgt.snap, sourceId, targetId, layers, srcMode, srcOverride, autoUpdate, sampleMerged, sampleLock, browsedFile, docs, selectedDocId])}
 
       {/* Matched preview (full-width, large) with zoom controls */}
       <MatchedPreview ref={matchedHandleRef} />

@@ -34,8 +34,9 @@ function walkLayers(layers: any[], parentPath: string[] = []): { layer: any; pat
   return out;
 }
 
-function readLayersFromDom(): { id: number; name: string; path: string[] }[] {
-  const doc = app.activeDocument;
+function readLayersFromDom(docId: number | null): { id: number; name: string; path: string[] }[] {
+  if (docId == null) return [];
+  const doc = (app.documents ?? []).find((d: any) => d.id === docId);
   if (!doc) return [];
   return walkLayers(doc.layers)
     .filter(({ layer: l }) => l.kind === "pixel" || l.kind === "smartObject" || l.kind === undefined)
@@ -45,18 +46,16 @@ function readLayersFromDom(): { id: number; name: string; path: string[] }[] {
 // Bypass the UXP DOM's name cache by querying each layer's current name via batchPlay.
 // PS evaluates the descriptor against live document state — there's no caching layer in
 // front of it. One batched call regardless of layer count.
-async function fetchFreshNames(ids: number[]): Promise<Map<number, string>> {
+async function fetchFreshNames(docId: number, ids: number[]): Promise<Map<number, string>> {
   const out = new Map<number, string>();
   if (ids.length === 0) return out;
-  const doc = app.activeDocument;
-  if (!doc) return out;
   try {
     const queries = ids.map(id => ({
       _obj: "get",
       _target: [
         { _property: "name" },
         { _ref: "layer", _id: id },
-        { _ref: "document", _id: doc.id },
+        { _ref: "document", _id: docId },
       ],
     }));
     const results: any[] = await action.batchPlay(queries, { synchronousExecution: false } as any);
@@ -68,10 +67,11 @@ async function fetchFreshNames(ids: number[]): Promise<Map<number, string>> {
   return out;
 }
 
-async function readLayersFresh(): Promise<LayerInfo[]> {
-  const dom = readLayersFromDom();
+async function readLayersFresh(docId: number | null): Promise<LayerInfo[]> {
+  if (docId == null) return [];
+  const dom = readLayersFromDom(docId);
   if (dom.length === 0) return [];
-  const fresh = await fetchFreshNames(dom.map(l => l.id));
+  const fresh = await fetchFreshNames(docId, dom.map(l => l.id));
   // Also refresh group path names — group renames have the same DOM-cache problem. Walk
   // the dom result and resolve each path segment to a fresh name where possible.
   const allPathIds = new Set<string>();
@@ -95,10 +95,18 @@ function sameLayers(a: LayerInfo[], b: LayerInfo[]): boolean {
   return true;
 }
 
-export function useLayers(): { layers: LayerInfo[]; refresh: () => void } {
+// Layers for the panel-selected document — NOT app.activeDocument. The panel is the source
+// of truth: even if the user clicks another doc tab in PS chrome, this hook keeps reading
+// from the doc they picked in the panel dropdown.
+export function useLayers(docId: number | null): { layers: LayerInfo[]; refresh: () => void } {
   const [layers, setLayers] = useState<LayerInfo[]>([]);
-  const lastDocIdRef = useRef<number | null>(null);
   const refreshFnRef = useRef<() => Promise<void>>(async () => {});
+  const docIdRef = useRef(docId);
+  docIdRef.current = docId;
+
+  // Reset list immediately when the panel-selected doc id changes so we don't briefly show
+  // the previous doc's layers under the new doc's selection.
+  useEffect(() => { setLayers([]); }, [docId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -107,7 +115,7 @@ export function useLayers(): { layers: LayerInfo[]; refresh: () => void } {
       if (cancelled || inflight) return;
       inflight = true;
       try {
-        const next = await readLayersFresh();
+        const next = await readLayersFresh(docIdRef.current);
         if (!cancelled) {
           setLayers(prev => (force || !sameLayers(prev, next)) ? next : prev);
         }
@@ -121,7 +129,6 @@ export function useLayers(): { layers: LayerInfo[]; refresh: () => void } {
       setTimeout(() => tryRefresh(false), 120);
     };
     refresh();
-    lastDocIdRef.current = app.activeDocument?.id ?? null;
     const events = [
       "select", "make", "delete", "set", "open", "close", "move",
       "duplicate", "copyToLayer", "copyMerged", "paste", "placeEvent",
@@ -129,29 +136,13 @@ export function useLayers(): { layers: LayerInfo[]; refresh: () => void } {
       "rename", "historyStateChanged", "selectDocument",
     ];
     action.addNotificationListener(events, refresh);
-    // Poll: every 600ms, check active doc id. If it changed (user switched tab in PS),
-    // force a full re-read regardless of dedupe — layer ids overlap across docs and the
-    // dedupe could otherwise miss a swap. Otherwise just run a normal refresh.
-    const pollTimer = setInterval(() => {
-      if (cancelled) return;
-      const currentId = app.activeDocument?.id ?? null;
-      const docChanged = currentId !== lastDocIdRef.current;
-      if (docChanged) {
-        lastDocIdRef.current = currentId;
-        // Clear immediately so the dropdown doesn't briefly show old-doc layers under the
-        // new doc's selection — the next read will repopulate within the same tick.
-        setLayers([]);
-        tryRefresh(true);
-      } else {
-        tryRefresh(false);
-      }
-    }, 600);
+    const pollTimer = setInterval(() => tryRefresh(false), 600);
     return () => {
       cancelled = true;
       clearInterval(pollTimer);
       action.removeNotificationListener?.(events, refresh);
     };
-  }, []);
+  }, [docId]);
 
   return {
     layers,
