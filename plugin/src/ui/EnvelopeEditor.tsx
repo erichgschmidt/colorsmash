@@ -74,11 +74,13 @@ export function EnvelopeEditor(props: EnvelopeEditorProps) {
     const move = (ev: PointerEvent) => {
       const { position, weight } = xyFromEvent(ev);
       const next = dragging.slice();
-      // Shift held: lock horizontal axis (preserve original position, only update weight).
+      // Shift = lock horizontal axis (vertical movement only — change weight, preserve position).
+      // Ctrl  = lock vertical axis (horizontal movement only — change position, preserve weight).
       const lockX = ev.shiftKey;
+      const lockY = ev.ctrlKey || ev.metaKey;
       next[idx] = {
         position: lockX ? startPt.position : position,
-        weight: Math.round(weight * 100) / 100,
+        weight: lockY ? startPt.weight : Math.round(weight * 100) / 100,
       };
       dragging = next;
       props.onChange(next);
@@ -141,7 +143,7 @@ export function EnvelopeEditor(props: EnvelopeEditorProps) {
           touchAction: "none", cursor: "crosshair",
           paddingLeft: pad, paddingRight: pad, boxSizing: "border-box",
         }}
-        title="Click empty area to add a point. Drag to move. Shift-drag locks horizontal. Right-click or Delete to remove.">
+        title="Click empty area to add a point. Drag to move. Shift-drag = vertical only. Ctrl-drag = horizontal only. Right-click or Delete to remove.">
         {/* Inner clipped layer: histogram + lines. Position 0 / 255 align with this area. */}
         <div ref={innerRef} style={{ position: "absolute", top: 0, bottom: 0, left: pad, right: pad, overflow: "hidden", pointerEvents: "none" }}>
           {tgtBars && (
@@ -172,7 +174,7 @@ export function EnvelopeEditor(props: EnvelopeEditorProps) {
                 onPointerDown={startDrag(idx)}
                 onDoubleClick={(e) => { e.stopPropagation(); deletePoint(idx); }}
                 onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); deletePoint(idx); }}
-                title={`pos ${p.position}, weight ${p.weight.toFixed(2)} — drag to move (Shift = vertical only); right-click or Delete to remove`}
+                title={`pos ${p.position}, weight ${p.weight.toFixed(2)} — drag to move (Shift = vertical, Ctrl = horizontal); right-click or Delete to remove`}
                 style={{
                   position: "absolute",
                   left: `${xPct(p.position)}%`, top: `${yPct(p.weight)}%`,
@@ -189,7 +191,7 @@ export function EnvelopeEditor(props: EnvelopeEditorProps) {
       </div>
       <div style={{ fontSize: 9, opacity: 0.55, marginTop: 2, display: "flex", justifyContent: "space-between" }}>
         <span>0 (shadows)</span>
-        <span><span style={{ color: "#999" }}>■ target</span>{srcBars ? <> · <span style={{ color: "#e8a060" }}>— source</span></> : null} · {props.points.length} pt{props.points.length === 1 ? "" : "s"} · click to add · Shift = vertical · Delete to remove</span>
+        <span><span style={{ color: "#999" }}>■ target</span>{srcBars ? <> · <span style={{ color: "#e8a060" }}>— source</span></> : null} · {props.points.length} pt{props.points.length === 1 ? "" : "s"} · click to add · Shift = vertical · Ctrl = horizontal · Delete to remove</span>
         <span>255 (highlights)</span>
       </div>
     </div>
