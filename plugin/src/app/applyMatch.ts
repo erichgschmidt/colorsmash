@@ -23,7 +23,7 @@ export interface ApplyMatchParams {
   amount: number;        // 0..1
   smoothRadius?: number; // 0..64
   maxStretch?: number;   // local slope cap; large = no cap
-  chromaOnly?: boolean;  // set the Curves layer to "Color" blend mode
+  chromaOnly?: boolean;  // set the Curves layer to "Hue" blend mode (preserves target sat+luma)
   dimensions?: DimensionOpts;
   zones?: ZoneOpts;
   envelope?: EnvelopePoint[];
@@ -160,14 +160,16 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     // Only clip if there's a specific target layer. Merged target = no clip (affects everything below).
     if (target) await setClippingMask(curveLayer, true);
     if (params.chromaOnly) {
-      try { curveLayer.blendMode = "color"; } catch { /* ignore */ }
+      // Hue blend (not Color): per-channel curves inflate saturation; Color blend propagates
+      // that inflation, Hue blend keeps target's S+L and only takes H from the curves output.
+      try { curveLayer.blendMode = "hue"; } catch { /* ignore */ }
     }
     try { await curveLayer.move(group, "placeInside"); } catch { /* ignore */ }
 
     const tags = [`amt ${Math.round(params.amount * 100)}%`];
     if (params.smoothRadius) tags.push(`smooth ${params.smoothRadius}`);
     if (params.maxStretch && params.maxStretch < 100) tags.push(`cap ${params.maxStretch}`);
-    if (params.chromaOnly) tags.push("chroma-only");
+    if (params.chromaOnly) tags.push("hue-only");
     if (params.sourceLabel) tags.unshift(`src "${params.sourceLabel}"`);
     return `Matched · ${tags.join(" · ")}`;
   });

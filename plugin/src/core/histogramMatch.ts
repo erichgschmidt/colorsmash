@@ -501,15 +501,27 @@ export function applyChannelCurvesToRgba(rgba: Uint8Array, c: ChannelCurves): Ui
   return out;
 }
 
-// Simulate PS "Color" blend mode: keep target's HSL Lightness, take H+S from mapped pixels.
-// Matches the visual effect of setting the Curves layer's blend mode to Color in PS.
+// Simulate PS "Hue" blend mode: take H from mapped, keep S + L (Rec.709 luma) from original.
+// Matches the visual effect of setting the Curves layer's blend mode to Hue in PS — which is
+// what Color Smash uses for "Hue only" matching. Hue blend avoids the saturation inflation
+// that per-channel curves naturally produce, so the result tracks the target's existing
+// chroma rather than getting pumped up by the curve fit.
 export function applyChromaOnly(original: Uint8Array, mapped: Uint8Array): Uint8Array {
   const out = new Uint8Array(mapped.length);
   for (let i = 0; i < mapped.length; i += 4) {
-    const [h, s] = rgbToHsl(mapped[i], mapped[i + 1], mapped[i + 2]);
-    const [, , l] = rgbToHsl(original[i], original[i + 1], original[i + 2]);
-    const [r, g, b] = hslToRgb(h, s, l);
-    out[i] = r; out[i + 1] = g; out[i + 2] = b; out[i + 3] = mapped[i + 3];
+    const [h] = rgbToHsl(mapped[i], mapped[i + 1], mapped[i + 2]);
+    const [, sOrig] = rgbToHsl(original[i], original[i + 1], original[i + 2]);
+    // Build candidate at (h_mapped, s_orig, l_HSL_orig) then re-impose Rec.709 luma
+    // from the original. This is closer to PS's HSY-style Hue blend than pure HSL.
+    const [, , lHsl] = rgbToHsl(original[i], original[i + 1], original[i + 2]);
+    const [r0, g0, b0] = hslToRgb(h, sOrig, lHsl);
+    const lumaOrig = 0.2126 * original[i] + 0.7152 * original[i + 1] + 0.0722 * original[i + 2];
+    const lumaCand = 0.2126 * r0 + 0.7152 * g0 + 0.0722 * b0;
+    const delta = lumaOrig - lumaCand;
+    out[i]     = Math.max(0, Math.min(255, Math.round(r0 + delta)));
+    out[i + 1] = Math.max(0, Math.min(255, Math.round(g0 + delta)));
+    out[i + 2] = Math.max(0, Math.min(255, Math.round(b0 + delta)));
+    out[i + 3] = mapped[i + 3];
   }
   return out;
 }

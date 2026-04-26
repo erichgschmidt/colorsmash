@@ -385,7 +385,7 @@ export function MatchTab() {
           <BasicSlider label="Stretch" refObj={stretchRef} value={stretchLabel} setValue={setStretchLabel} min={1} max={32}  defaultVal={8}   scheduleRedraw={scheduleRedraw} />
           {/* @ts-ignore Spectrum web component */}
           <sp-checkbox checked={chromaOnly || undefined} onInput={(e: any) => setChromaOnly(e.target.checked)} style={{ marginTop: 4, fontSize: 11 }}>
-            Chroma only (preserve target luminance)
+            Hue only (preserve target saturation + luminance)
           {/* @ts-ignore */}
           </sp-checkbox>
         </div>
