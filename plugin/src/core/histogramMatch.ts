@@ -455,31 +455,77 @@ export function applyZoneWeightsToChannels(c: ChannelCurves, opts: ZoneOpts): Ch
 // Composes with zones by multiplication: w_final[v] = w_zone[v] * w_envelope[v].
 // Default empty preserves prior behavior bit-exactly.
 
-export interface EnvelopePoint { position: number; weight: number; }
+// `smooth` (optional, defaults to true): when both endpoints of a segment are smooth, the
+// segment is interpolated with monotone cubic Hermite (Fritsch-Carlson). When either endpoint
+// is a corner (smooth=false), the segment falls back to linear. Lets users mix sharp rolloffs
+// and gentle curves in one envelope, like Photoshop's Curves dialog.
+export interface EnvelopePoint { position: number; weight: number; smooth?: boolean; }
+
 // Three identity-weight points (0, 127, 255 all at weight=1) — produces a flat line at the
 // reference, mathematically a no-op until the user moves any handle. Picked over an empty
 // default so the middle handle is immediately grabbable for bending.
 export const DEFAULT_ENVELOPE: EnvelopePoint[] = [
-  { position: 0,   weight: 1 },
-  { position: 127, weight: 1 },
-  { position: 255, weight: 1 },
+  { position: 0,   weight: 1, smooth: true },
+  { position: 127, weight: 1, smooth: true },
+  { position: 255, weight: 1, smooth: true },
 ];
+
+const isSmooth = (p: EnvelopePoint) => p.smooth !== false;
 
 export function buildEnvelopeWeights(pts: EnvelopePoint[]): Float64Array {
   const w = new Float64Array(256);
   if (!pts || pts.length === 0) { w.fill(1); return w; }
   if (pts.length === 1) { w.fill(Math.max(0, pts[0].weight)); return w; }
   const sorted = [...pts].sort((a, b) => a.position - b.position);
-  const first = sorted[0], last = sorted[sorted.length - 1];
+  const n = sorted.length;
+  const first = sorted[0], last = sorted[n - 1];
+
+  // Fritsch-Carlson monotone cubic Hermite tangents. Computed once, used only for segments
+  // where both endpoints are smooth — non-monotonic, no overshoot, well-behaved for weights.
+  const x = sorted.map(p => p.position);
+  const y = sorted.map(p => Math.max(0, p.weight));
+  const d = new Array(n - 1);  // secant slopes
+  for (let k = 0; k < n - 1; k++) {
+    const dx = x[k + 1] - x[k] || 1;
+    d[k] = (y[k + 1] - y[k]) / dx;
+  }
+  const m = new Array(n);
+  m[0] = d[0]; m[n - 1] = d[n - 2];
+  for (let k = 1; k < n - 1; k++) m[k] = (d[k - 1] + d[k]) / 2;
+  // Monotonicity correction.
+  for (let k = 0; k < n - 1; k++) {
+    if (d[k] === 0) { m[k] = 0; m[k + 1] = 0; continue; }
+    const a = m[k] / d[k], b = m[k + 1] / d[k];
+    const s = a * a + b * b;
+    if (s > 9) {
+      const t = 3 / Math.sqrt(s);
+      m[k] = t * a * d[k];
+      m[k + 1] = t * b * d[k];
+    }
+  }
+
   let i = 0;
   for (let v = 0; v < 256; v++) {
     if (v <= first.position) { w[v] = Math.max(0, first.weight); continue; }
     if (v >= last.position) { w[v] = Math.max(0, last.weight); continue; }
-    while (i < sorted.length - 2 && v > sorted[i + 1].position) i++;
-    const a = sorted[i], b = sorted[i + 1];
-    const span = (b.position - a.position) || 1;
-    const t = (v - a.position) / span;
-    w[v] = Math.max(0, a.weight + (b.weight - a.weight) * t);
+    while (i < n - 2 && v > x[i + 1]) i++;
+    const xa = x[i], xb = x[i + 1];
+    const ya = y[i], yb = y[i + 1];
+    const h = (xb - xa) || 1;
+    const t = (v - xa) / h;
+    let val: number;
+    if (isSmooth(sorted[i]) && isSmooth(sorted[i + 1])) {
+      // Cubic Hermite basis.
+      const t2 = t * t, t3 = t2 * t;
+      const h00 = 2 * t3 - 3 * t2 + 1;
+      const h10 = t3 - 2 * t2 + t;
+      const h01 = -2 * t3 + 3 * t2;
+      const h11 = t3 - t2;
+      val = h00 * ya + h10 * h * m[i] + h01 * yb + h11 * h * m[i + 1];
+    } else {
+      val = ya + (yb - ya) * t;
+    }
+    w[v] = Math.max(0, val);
   }
   return w;
 }
