@@ -20,24 +20,26 @@ export function BottomActionBar(props: BottomActionBarProps) {
           colorSpace, setColorSpace, onRefreshAll } = props;
 
   return (
-    // Bottom action bar: labels left-anchored, buttons right-anchored over panel BG so when
-    // space gets tight, the buttons visually occlude the labels (no wrap, no shift).
+    // Bottom action bar: RGB/LAB + refresh anchored LEFT over panel BG, labels right-anchored
+    // with their checkboxes on the right edge of each label. When the panel narrows, the
+    // left buttons occlude the label *text* first (text sits to the left of each checkbox),
+    // while the checkboxes themselves remain visible on the right edge.
     <div style={{ position: "relative", height: 18, marginTop: 8, fontSize: 10, color: "#cccccc" }}>
-      <div style={{ position: "absolute", left: 0, top: 0, height: 18, display: "flex", alignItems: "center", gap: 10, whiteSpace: "nowrap" }}>
+      <div style={{ position: "absolute", right: 0, top: 0, height: 18, display: "flex", alignItems: "center", gap: 10, whiteSpace: "nowrap" }}>
         <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: "pointer" }} title="Drop active marquee selection before creating the layer (so curves apply to the full target).">
-          <input type="checkbox" checked={deselectOnApply} onChange={e => setDeselectOnApply(e.target.checked)} style={{ margin: 0, verticalAlign: "middle" }} />
           Deselect
+          <input type="checkbox" checked={deselectOnApply} onChange={e => setDeselectOnApply(e.target.checked)} style={{ margin: 0, verticalAlign: "middle" }} />
         </label>
         <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: "pointer" }} title="On: replace the prior Match Curves layer. Off: keep prior layers (hidden) so you can stack alternatives.">
-          <input type="checkbox" checked={overwriteOnApply} onChange={e => setOverwriteOnApply(e.target.checked)} style={{ margin: 0, verticalAlign: "middle" }} />
           Overwrite
+          <input type="checkbox" checked={overwriteOnApply} onChange={e => setOverwriteOnApply(e.target.checked)} style={{ margin: 0, verticalAlign: "middle" }} />
         </label>
         <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: "pointer" }} title="Persist all panel settings across reloads (sliders, zones, envelope, toggles).">
-          <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} style={{ margin: 0, verticalAlign: "middle" }} />
           Remember
+          <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} style={{ margin: 0, verticalAlign: "middle" }} />
         </label>
       </div>
-      <div style={{ position: "absolute", right: 0, top: 0, height: 18, display: "flex", alignItems: "center", gap: 4, background: "#535353", paddingLeft: 6 }}>
+      <div style={{ position: "absolute", left: 0, top: 0, height: 18, display: "flex", alignItems: "center", gap: 4, background: "#535353", paddingRight: 6 }}>
         <button onClick={() => setColorSpace(c => c === "rgb" ? "lab" : "rgb")}
           title="Toggle color space — RGB matches per-channel histograms; Lab matches in perceptual space."
           style={{ height: 16, padding: "0 3px", fontSize: 9, fontWeight: 600, lineHeight: "14px",
