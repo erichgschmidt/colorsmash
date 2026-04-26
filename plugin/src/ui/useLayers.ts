@@ -1,10 +1,14 @@
 // Tracks the active document's pixel layers and refreshes on PS notifications.
 //
-// Important: PS fires `make`/`delete`/etc. notifications *during* the modal scope, before
-// doc.layers is updated. Reading synchronously in the handler returns stale state — the
-// new layer wouldn't show up until the *next* notification arrived. We defer the read to
-// the next tick (and again ~120ms later as a backup) so by the time we read, the document
-// tree reflects the change. Also dedupe so React doesn't re-render on no-op refreshes.
+// Three layered defenses against staleness:
+//   1. Listen for explicit PS notifications (set, rename, make, delete, etc.).
+//   2. Defer reads with setTimeout so doc.layers reflects just-finished mutations.
+//   3. Poll every 1.5s as backup for events PS coalesces or never fires.
+//
+// Even with all of that, `layer.name` returned by the UXP DOM is *cached* — PS only
+// invalidates the cache on certain notifications, which other plugins' batch operations
+// (e.g. LayerSquish auto-rename) sometimes don't trigger. To bypass that cache, we re-query
+// each layer's name via action.batchPlay, which always reads PS state directly in real time.
 
 import { useEffect, useState } from "react";
 import { app, action } from "../services/photoshop";
@@ -30,15 +34,57 @@ function walkLayers(layers: any[], parentPath: string[] = []): { layer: any; pat
   return out;
 }
 
-function readLayers(): LayerInfo[] {
+function readLayersFromDom(): { id: number; name: string; path: string[] }[] {
   const doc = app.activeDocument;
   if (!doc) return [];
   return walkLayers(doc.layers)
     .filter(({ layer: l }) => l.kind === "pixel" || l.kind === "smartObject" || l.kind === undefined)
-    .map(({ layer: l, path }) => ({
-      id: l.id,
-      name: path.length > 0 ? `${path.join(" / ")} / ${l.name}` : l.name,
+    .map(({ layer: l, path }) => ({ id: l.id, name: l.name, path }));
+}
+
+// Bypass the UXP DOM's name cache by querying each layer's current name via batchPlay.
+// PS evaluates the descriptor against live document state — there's no caching layer in
+// front of it. One batched call regardless of layer count.
+async function fetchFreshNames(ids: number[]): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  if (ids.length === 0) return out;
+  const doc = app.activeDocument;
+  if (!doc) return out;
+  try {
+    const queries = ids.map(id => ({
+      _obj: "get",
+      _target: [
+        { _property: "name" },
+        { _ref: "layer", _id: id },
+        { _ref: "document", _id: doc.id },
+      ],
     }));
+    const results: any[] = await action.batchPlay(queries, { synchronousExecution: false } as any);
+    ids.forEach((id, i) => {
+      const n = results[i]?.name;
+      if (typeof n === "string") out.set(id, n);
+    });
+  } catch { /* fall back to whatever the DOM gave us */ }
+  return out;
+}
+
+async function readLayersFresh(): Promise<LayerInfo[]> {
+  const dom = readLayersFromDom();
+  if (dom.length === 0) return [];
+  const fresh = await fetchFreshNames(dom.map(l => l.id));
+  // Also refresh group path names — group renames have the same DOM-cache problem. Walk
+  // the dom result and resolve each path segment to a fresh name where possible.
+  const allPathIds = new Set<string>();
+  for (const { path } of dom) for (const segment of path) allPathIds.add(segment);
+  // Path segments are by name not id, so a second pass would need group ids. Skip for now —
+  // the leaf name is what users care about most.
+  return dom.map(({ id, name, path }) => ({
+    id,
+    name: (() => {
+      const leafName = fresh.get(id) ?? name;
+      return path.length > 0 ? `${path.join(" / ")} / ${leafName}` : leafName;
+    })(),
+  }));
 }
 
 function sameLayers(a: LayerInfo[], b: LayerInfo[]): boolean {
@@ -50,14 +96,20 @@ function sameLayers(a: LayerInfo[], b: LayerInfo[]): boolean {
 }
 
 export function useLayers(): { layers: LayerInfo[]; refresh: () => void } {
-  const [layers, setLayers] = useState<LayerInfo[]>(() => readLayers());
+  const [layers, setLayers] = useState<LayerInfo[]>([]);
 
   useEffect(() => {
     let cancelled = false;
-    const tryRefresh = () => {
-      if (cancelled) return;
-      const next = readLayers();
-      setLayers(prev => sameLayers(prev, next) ? prev : next);
+    let inflight = false;
+    const tryRefresh = async () => {
+      if (cancelled || inflight) return;
+      inflight = true;
+      try {
+        const next = await readLayersFresh();
+        if (!cancelled) setLayers(prev => sameLayers(prev, next) ? prev : next);
+      } finally {
+        inflight = false;
+      }
     };
     // Defer so the doc tree reflects the just-finished mutation. Two passes catch fast-then-late
     // updates (some events settle on microtask, others after a frame or two).
@@ -70,13 +122,11 @@ export function useLayers(): { layers: LayerInfo[]; refresh: () => void } {
       "select", "make", "delete", "set", "open", "close", "move",
       "duplicate", "copyToLayer", "copyMerged", "paste", "placeEvent",
       "rasterizeLayer", "groupLayer", "ungroupLayer", "mergeLayers", "mergeVisible",
-      "rename",
+      "rename", "historyStateChanged",
     ];
     action.addNotificationListener(events, refresh);
-    // Low-frequency poll as backup: catches changes made by other plugins that wrap many ops
-    // in one executeAsModal (e.g. LayerSquish's batch rename) — PS may coalesce/suppress the
-    // individual notifications so we never see them. 1.5s is light and indistinguishable from
-    // event-driven refresh in normal use.
+    // Backup poll. Combined with batchPlay-based name fetch, this catches both events PS
+    // coalesces (LayerSquish-style) and the DOM name-cache problem.
     const pollTimer = setInterval(tryRefresh, 1500);
     return () => {
       cancelled = true;
@@ -87,6 +137,6 @@ export function useLayers(): { layers: LayerInfo[]; refresh: () => void } {
 
   return {
     layers,
-    refresh: () => setLayers(readLayers()),
+    refresh: () => { void readLayersFresh().then(setLayers); },
   };
 }
