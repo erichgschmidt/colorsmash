@@ -10,7 +10,7 @@
 // (e.g. LayerSquish auto-rename) sometimes don't trigger. To bypass that cache, we re-query
 // each layer's name via action.batchPlay, which always reads PS state directly in real time.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { app, action } from "../services/photoshop";
 
 export interface LayerInfo { id: number; name: string; }
@@ -97,37 +97,55 @@ function sameLayers(a: LayerInfo[], b: LayerInfo[]): boolean {
 
 export function useLayers(): { layers: LayerInfo[]; refresh: () => void } {
   const [layers, setLayers] = useState<LayerInfo[]>([]);
+  const lastDocIdRef = useRef<number | null>(null);
+  const refreshFnRef = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
     let cancelled = false;
     let inflight = false;
-    const tryRefresh = async () => {
+    const tryRefresh = async (force = false) => {
       if (cancelled || inflight) return;
       inflight = true;
       try {
         const next = await readLayersFresh();
-        if (!cancelled) setLayers(prev => sameLayers(prev, next) ? prev : next);
+        if (!cancelled) {
+          setLayers(prev => (force || !sameLayers(prev, next)) ? next : prev);
+        }
       } finally {
         inflight = false;
       }
     };
-    // Defer so the doc tree reflects the just-finished mutation. Two passes catch fast-then-late
-    // updates (some events settle on microtask, others after a frame or two).
+    refreshFnRef.current = () => tryRefresh(true);
     const refresh = () => {
-      setTimeout(tryRefresh, 0);
-      setTimeout(tryRefresh, 120);
+      setTimeout(() => tryRefresh(false), 0);
+      setTimeout(() => tryRefresh(false), 120);
     };
     refresh();
+    lastDocIdRef.current = app.activeDocument?.id ?? null;
     const events = [
       "select", "make", "delete", "set", "open", "close", "move",
       "duplicate", "copyToLayer", "copyMerged", "paste", "placeEvent",
       "rasterizeLayer", "groupLayer", "ungroupLayer", "mergeLayers", "mergeVisible",
-      "rename", "historyStateChanged",
+      "rename", "historyStateChanged", "selectDocument",
     ];
     action.addNotificationListener(events, refresh);
-    // Backup poll. Combined with batchPlay-based name fetch, this catches both events PS
-    // coalesces (LayerSquish-style) and the DOM name-cache problem.
-    const pollTimer = setInterval(tryRefresh, 1500);
+    // Poll: every 600ms, check active doc id. If it changed (user switched tab in PS),
+    // force a full re-read regardless of dedupe — layer ids overlap across docs and the
+    // dedupe could otherwise miss a swap. Otherwise just run a normal refresh.
+    const pollTimer = setInterval(() => {
+      if (cancelled) return;
+      const currentId = app.activeDocument?.id ?? null;
+      const docChanged = currentId !== lastDocIdRef.current;
+      if (docChanged) {
+        lastDocIdRef.current = currentId;
+        // Clear immediately so the dropdown doesn't briefly show old-doc layers under the
+        // new doc's selection — the next read will repopulate within the same tick.
+        setLayers([]);
+        tryRefresh(true);
+      } else {
+        tryRefresh(false);
+      }
+    }, 600);
     return () => {
       cancelled = true;
       clearInterval(pollTimer);
@@ -137,6 +155,6 @@ export function useLayers(): { layers: LayerInfo[]; refresh: () => void } {
 
   return {
     layers,
-    refresh: () => { void readLayersFresh().then(setLayers); },
+    refresh: () => { void refreshFnRef.current(); },
   };
 }

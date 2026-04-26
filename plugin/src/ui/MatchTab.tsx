@@ -413,6 +413,7 @@ export function MatchTab() {
               sampleMerged={sampleMerged} setSampleMerged={setSampleMerged}
               sampleLock={sampleLock} setSampleLock={setSampleLock}
               selStyle={sel}
+              onRefreshLayers={refreshLayers}
             />
             <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}}
               snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}

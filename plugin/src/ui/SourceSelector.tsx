@@ -31,6 +31,7 @@ export interface SourceSelectorProps {
   setSampleLock: (b: boolean) => void;
 
   selStyle: React.CSSProperties;
+  onRefreshLayers?: () => void;
 }
 
 export function SourceSelector(props: SourceSelectorProps) {
@@ -42,11 +43,19 @@ export function SourceSelector(props: SourceSelectorProps) {
   } = props;
 
   const sourceModeContent = srcMode === "layer" ? (
-    <select style={selStyle} value={sourceId ?? ""} onChange={e => setSourceId(Number(e.target.value))}>
-      {layers.length === 0 && <option value="">— none —</option>}
-      {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-      <option value={MERGED_LAYER_ID}>🔀 Merged</option>
-    </select>
+    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+      <select style={{ ...selStyle, flex: 1 }} value={sourceId ?? ""} onChange={e => setSourceId(Number(e.target.value))}>
+        {layers.length === 0 && <option value="">— none —</option>}
+        {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+        <option value={MERGED_LAYER_ID}>🔀 Merged</option>
+      </select>
+      {props.onRefreshLayers && (
+        <div onClick={props.onRefreshLayers} title="Force-refresh layer list (use if names look stale after another plugin renamed/regrouped)"
+          style={{ width: 22, height: 22, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", border: "1px solid #888", borderRadius: 2, color: "#ddd", fontSize: 12, userSelect: "none", boxSizing: "border-box", flexShrink: 0 }}>
+          <span style={{ marginTop: -1, lineHeight: 1 }}>⟳</span>
+        </div>
+      )}
+    </div>
   ) : srcMode === "folder" ? (
     <span style={{ fontSize: 10, opacity: 0.7 }}>{browsedFile ? `📁 ${browsedFile}` : ""}</span>
   ) : (
