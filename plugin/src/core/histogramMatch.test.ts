@@ -234,35 +234,47 @@ describe("buildEnvelopeWeights", () => {
     expect(w[96]).toBeCloseTo(0.25, 2);
   });
 
-  it("smooth=true 3-point envelope with peak in middle: monotonic between adjacent extrema, no overshoot", () => {
+  it("smooth=true 3-point envelope with peak in middle: strict no-overshoot (Fritsch-Carlson)", () => {
+    // Regression test for the FC peak-tangent bug: at extremum points where adjacent
+    // secants change sign, the tangent must be forced to 0 to prevent overshoot. Without
+    // that step, this peak-in-middle envelope bulges visibly above weight=2.
     const pts: EnvelopePoint[] = [
       { position: 0,   weight: 1, smooth: true },
       { position: 127, weight: 2, smooth: true },
       { position: 255, weight: 0, smooth: true },
     ];
     const w = buildEnvelopeWeights(pts);
-    // No overshoot beyond endpoint extrema (Fritsch-Carlson guarantee).
+    // Strict bounds — no value should exceed the peak weight or dip below 0. Allow only
+    // float-rounding epsilon (1e-9), not algorithmic slop.
     for (let v = 0; v < 256; v++) {
       expect(w[v]).toBeGreaterThanOrEqual(-1e-9);
-      // Fritsch-Carlson bounds segment values by adjacent y[k]/y[k+1] (no overshoot
-      // beyond endpoints). Allow a small tolerance — values stay close to the peak
-      // without exploding.
-      expect(w[v]).toBeLessThanOrEqual(2.05);
+      expect(w[v]).toBeLessThanOrEqual(2 + 1e-9);
     }
-    // Roughly monotonic increasing 0..127 then decreasing 127..255 (small wiggle
-    // tolerated near the peak from the cubic Hermite tangents being averaged
-    // secants — the FC monotonicity clip only engages on steeper slope ratios
-    // than this gentle envelope produces).
-    const tol = 0.05;
-    for (let v = 1; v <= 120; v++) {
-      expect(w[v]).toBeGreaterThanOrEqual(w[v - 1] - tol);
-    }
-    for (let v = 135; v < 256; v++) {
-      expect(w[v]).toBeLessThanOrEqual(w[v - 1] + tol);
-    }
-    // Endpoints exact.
+    // Strictly monotonic on each side of the peak.
+    for (let v = 1; v <= 127; v++) expect(w[v]).toBeGreaterThanOrEqual(w[v - 1] - 1e-9);
+    for (let v = 128; v < 256; v++) expect(w[v]).toBeLessThanOrEqual(w[v - 1] + 1e-9);
+    // Endpoints + peak exact.
     expect(w[0]).toBeCloseTo(1, 9);
+    expect(w[127]).toBeCloseTo(2, 9);
     expect(w[255]).toBeCloseTo(0, 9);
+  });
+
+  it("smooth=true 3-point envelope with valley in middle: strict no-undershoot", () => {
+    // Mirror of the peak test — same FC sign-change rule applies at valleys.
+    const pts: EnvelopePoint[] = [
+      { position: 0,   weight: 1.5, smooth: true },
+      { position: 127, weight: 0.0, smooth: true },
+      { position: 255, weight: 1.5, smooth: true },
+    ];
+    const w = buildEnvelopeWeights(pts);
+    for (let v = 0; v < 256; v++) {
+      expect(w[v]).toBeGreaterThanOrEqual(-1e-9); // never dips below the valley
+      expect(w[v]).toBeLessThanOrEqual(1.5 + 1e-9); // never exceeds the endpoints
+    }
+    // Strictly monotonic decreasing then increasing.
+    for (let v = 1; v <= 127; v++) expect(w[v]).toBeLessThanOrEqual(w[v - 1] + 1e-9);
+    for (let v = 128; v < 256; v++) expect(w[v]).toBeGreaterThanOrEqual(w[v - 1] - 1e-9);
+    expect(w[127]).toBeCloseTo(0, 9);
   });
 });
 
