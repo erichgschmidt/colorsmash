@@ -139,8 +139,6 @@ export function EnvelopeEditor(props: EnvelopeEditorProps) {
     return () => { document.removeEventListener("keydown", onKey); };
   }, [selectedIdx, props.points]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Sorted view for the connecting polyline.
-  const sorted = [...props.points].sort((a, b) => a.position - b.position);
   const xPct = (p: number) => (p / 255) * 100;
   const yPct = (w: number) => (1 - Math.max(0, Math.min(W_MAX, w)) / W_MAX) * 100;
 
