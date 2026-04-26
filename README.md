@@ -6,15 +6,16 @@ A Photoshop UXP plugin that color-matches one image to another by fitting per-ch
 
 Pick a **source** (a layer in any open doc, an active marquee selection, or an image file from disk) and a **target** layer. Color Smash fits a Curves adjustment that makes the target's histograms match the source's. The result is non-destructive: one Curves layer clipped to the target inside a `[Color Smash]` group, fully editable in Photoshop afterward.
 
-Beyond the basic fit, you get:
+Beyond the basic fit:
 
-- **RGB or LAB matching** — toggle between per-channel RGB histogram specification and a perceptual L*a*b*-domain match (curves are still sampled back to per-channel R/G/B so the output stays a standard Curves layer).
-- **Match controls** — overall amount, smoothing (anti-banding), max stretch (slope cap).
-- **Chroma only** — preserves the target's luminance, applies only the color cast (Curves layer set to "Color" blend mode).
+- **RGB or LAB matching** — toggle between per-channel RGB histogram specification and a perceptual L*a*b*-domain match. Curves are sampled back to per-channel R/G/B so the output stays a standard Curves layer.
+- **Match controls** — overall amount, smoothing (anti-banding), max stretch (slope cap), optional anchor of the slope cap to the target's actual histogram range, and a Hue-only mode that preserves target saturation and luminance.
 - **Dimension warps** — value, chroma, hue shift, contrast, neutralize, separation. Each is identity at default, deviating only when you move the slider.
-- **Zone targeting** — separate amount / anchor / falloff for shadows / mids / highlights, so you can apply the match strongly in one tonal range and gently (or not at all) in another.
-- **Live matched preview** with zoom (− / value / + / 1:1 buttons), drag-to-pan, and keyboard shortcuts (`+` / `-` to zoom, `0` to reset) when the preview is hovered.
-- **Selection mode** with Auto, Merge, and Lock toggles — the active marquee re-samples on its own when bounds change or pixels under it change; Merge samples the visible composite instead of the active layer; Lock freezes the current sample while you experiment elsewhere.
+- **Zone targeting** — independent shadows / mids / highlights bands with amount, bias, anchor, and falloff. Optional locked total to keep the three amounts summing to a fixed value. Band swatch colors are sampled from the target image.
+- **Envelope** — arbitrary-N piecewise weight curve over input 0..255 that further modulates the match per tonal value, composed multiplicatively with zones.
+- **Live matched preview** with zoom buttons, drag-to-pan, keyboard shortcuts, and a background-color toggle.
+- **Selection mode** with Auto, Merge, and Lock toggles — the active marquee re-samples on its own when bounds or pixels change; Merge samples the visible composite; Lock freezes the current sample.
+- **Merged target** — sentinel option that uses the document composite as target; the Curves layer is placed at the top of the stack with no clipping.
 
 ## Requirements
 
@@ -44,15 +45,68 @@ The plugin requests `localFileSystem` permission so the **Browse Image…** sour
 2. Open **Color Smash** from the Plugins menu.
 3. In the **Source** dropdown (top-left), pick one of:
    - **Any open document name** — switches to that doc and uses Layer mode; pick the source layer in the dropdown below.
-   - **⊞ Use Selection** — samples the active marquee. Below the dropdown: **Auto** (re-sample on selection or pixel changes), **Merge** (sample the visible composite instead of just the active layer), **Lock** (freeze the current sample).
-   - **📁 Browse Image…** — opens a file picker; the chosen image is loaded as the source. The filename appears as a sticky entry in the dropdown for quick re-selection.
-4. In the **Doc** dropdown (top-right), pick the target document; pick the **Target** layer below it.
-5. Watch the matched preview update live. Zoom with the −/+/1:1 buttons or `+` / `-` / `0` keys; drag inside the preview to pan.
+   - **Use Selection** — samples the active marquee. Below the dropdown: **Auto** (re-sample on selection or pixel changes), **Merge** (sample the visible composite instead of just the active layer), **Lock** (freeze the current sample).
+   - **Browse Image…** — opens a file picker; the chosen image is loaded as the source. The filename appears as a sticky entry in the dropdown for quick re-selection.
+4. In the **Doc** dropdown (top-right), pick the target document; pick the **Target** layer below it. The **MERGED** option uses the document composite as the target.
+5. Watch the matched preview update live. Zoom with the −/+/1:1 buttons or `+` / `-` / `0` keys when the preview is hovered; drag inside the preview to pan; click the swatch to flip the preview background between dark and panel-gray.
 6. Toggle **RGB / LAB** in the matched preview header to switch color-space; click the small refresh button to re-read both source and target previews from Photoshop.
-7. Tweak any of the accordion sections: **Match controls**, **Dimension warps**, **Zone targeting**.
+7. Tweak any of the accordion sections: **Match controls**, **Dimension warps**, **Zone targeting**, **Envelope**.
 8. In the bottom bar, set **Deselect** (drop the active marquee before applying so curves apply to the full target) and **Overwrite** (replace the topmost / selected `Match Curves` layer, vs. hiding the prior one so alternatives stack).
-9. Click **Apply Curves** — a single Curves adjustment layer appears in `[Color Smash]` group, clipped to the target.
-10. Edit the Curves layer further in Photoshop if you want.
+9. Click **Apply Curves** — a single Curves adjustment layer appears in `[Color Smash]` group, clipped to the target (or at the top of the stack if MERGED).
+
+## Match controls
+
+- **Amount** — global blend toward the matched curves (0 = identity).
+- **Smooth** — Gaussian smoothing on the per-channel CDFs to reduce banding from sparse histograms.
+- **Stretch** — maximum allowed slope on the fitted curve. Caps amplification of low-population bins.
+- **Anchor stretch to histogram range** — when on, the slope cap walks from where the target's data actually starts/ends (≥0.5% of peak count) instead of from 0/255. Keeps Stretch behavior consistent across bright vs. dark sources.
+- **Hue only (preserve target saturation + luminance)** — applies a Hue-blend Curves layer. Preview takes H from the mapped pixel, S from the original, then re-imposes Rec.709 luma — matches Photoshop's HSY-style Hue blend and avoids the saturation inflation per-channel curves naturally produce.
+
+## Zone targeting
+
+Three bands (shadows / mids / highlights), each with:
+
+- **Amount** (0..1) — how strongly the match applies inside this band.
+- **Bias** (-100..+100) — softmax-style pressure: positive bias grows the band at its neighbors' expense in overlap regions. Implemented as `exp(bias/50)` multiplicative gain inside partition-of-unity normalization. `0` is bit-identical to the un-biased fit.
+- **Anchor** and **falloff** on a shared compound slider — controls where the band's center sits along 0..255 and how soft its edges are.
+
+A **Lock total** checkbox in the zone header proportionally rebalances the other two amounts when you drag one, preserving `s + m + h`.
+
+Each band's swatch color is the gaussian-weighted mean RGB of target pixels within the band's luma range (computed from the target snapshot via `computeLumaBins` / `bandMeanColor`). Colors update as anchors and falloffs move. Falls back to fixed blue / gray / yellow if no target snapshot is available.
+
+## Envelope
+
+Arbitrary-N piecewise weight curve over input luma 0..255 that modulates the match per tonal value. Composes multiplicatively with the zone weights. Default seeds three identity-weight points at 0 / 127 / 255.
+
+Editor controls:
+
+- **Click empty area** — adds a smooth point and immediately starts dragging it.
+- **Drag point** — moves position and weight.
+- **Shift-drag** — vertical only (weight only).
+- **Ctrl-drag** (Cmd on Mac) — horizontal only (position only).
+- **Alt-click point** — toggles smooth (●) ↔ corner (■). Smooth segments use monotone cubic Hermite interpolation (Fritsch–Carlson); corner segments are linear.
+- **Click point** — selects (highlight). **Delete** / **Backspace** removes.
+- **Right-click point** — removes. **Double-click point** — removes (legacy).
+- **Reset** — restores the three identity points.
+
+Background overlay shows the target luma histogram as filled gray bars and the source luma histogram as an orange polyline.
+
+## Dimension warps
+
+Identity at default. Each slider deviates the fitted curves along one axis:
+
+- **Value** — overall lightness shift.
+- **Chroma** — saturation push/pull.
+- **Hue** — hue rotation.
+- **Contrast** — S-curve / inverse-S around mid-gray.
+- **Neutralize** — pulls per-channel midpoints toward neutral.
+- **Separation** — spreads channels apart in tonal range.
+
+## Bottom bar
+
+- **Deselect on apply** — drops the active marquee before applying so the Curves layer affects the full target.
+- **Overwrite prior** — replaces the topmost / selected `Match Curves` layer instead of stacking a new one beside it.
+- **Apply Curves** — writes the result.
 
 ## Development
 
@@ -62,6 +116,7 @@ npm install
 npm run build         # production build to dist/
 npm run watch         # rebuild on save
 npm run typecheck     # tsc --noEmit
+npm run test          # vitest
 ```
 
 The built bundle is `plugin/dist/index.js`.
@@ -76,11 +131,16 @@ plugin/
 ├── dist/                  # build output (gitignored)
 └── src/
     ├── index.tsx          # React mount
-    ├── ui/                # MatchTab, PreviewPane, CurvesGraph, ZoneCompoundSlider, hooks
-    ├── core/              # pure-TS algorithms (histogramMatch, downsample)
+    ├── ui/                # Panel, PreviewPane, envelope/zone editors, hooks
+    ├── core/              # pure-TS algorithms (histogramMatch, lab, downsample, lut)
     ├── services/          # Photoshop DOM + batchPlay wrappers
-    └── app/               # Apply orchestration (applyMatch)
+    └── app/               # Apply orchestration
 ```
+
+## Implementation notes
+
+- **Layer/doc dropdown freshness** — Photoshop fires make/delete notifications during the modal scope before `doc.layers` reflects the mutation. Reads are deferred (`setTimeout 0` plus a 120 ms backup) and deduped, so newly created layers and documents appear immediately in the dropdowns instead of requiring a second action.
+- **Preview zoom buttons** — rendered as `<div>` elements rather than `<button>`s to work around UXP shadow-DOM text-rendering issues.
 
 ## License
 

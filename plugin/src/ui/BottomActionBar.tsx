@@ -7,6 +7,8 @@ export interface BottomActionBarProps {
   setDeselectOnApply: (b: boolean) => void;
   overwriteOnApply: boolean;
   setOverwriteOnApply: (b: boolean) => void;
+  remember: boolean;
+  setRemember: (b: boolean) => void;
   colorSpace: "rgb" | "lab";
   setColorSpace: (updater: (c: "rgb" | "lab") => "rgb" | "lab") => void;
   onRefreshAll: () => void;
@@ -14,6 +16,7 @@ export interface BottomActionBarProps {
 
 export function BottomActionBar(props: BottomActionBarProps) {
   const { deselectOnApply, setDeselectOnApply, overwriteOnApply, setOverwriteOnApply,
+          remember, setRemember,
           colorSpace, setColorSpace, onRefreshAll } = props;
 
   return (
@@ -28,6 +31,10 @@ export function BottomActionBar(props: BottomActionBarProps) {
         <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: "pointer" }} title="On: replace the prior Match Curves layer. Off: keep prior layers (hidden) so you can stack alternatives.">
           <input type="checkbox" checked={overwriteOnApply} onChange={e => setOverwriteOnApply(e.target.checked)} style={{ margin: 0, verticalAlign: "middle" }} />
           Overwrite
+        </label>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: "pointer" }} title="Persist all panel settings across reloads (sliders, zones, envelope, toggles).">
+          <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} style={{ margin: 0, verticalAlign: "middle" }} />
+          Remember
         </label>
       </div>
       <div style={{ position: "absolute", right: 0, top: 0, height: 18, display: "flex", alignItems: "center", gap: 4, background: "#535353", paddingLeft: 6 }}>

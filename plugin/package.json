@@ -6,7 +6,9 @@
   "scripts": {
     "build": "webpack --mode=production",
     "watch": "webpack --mode=development --watch",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "devDependencies": {
     "@svgr/webpack": "^8.1.0",
@@ -14,6 +16,7 @@
     "@types/react-dom": "^18.2.0",
     "ts-loader": "^9.5.1",
     "typescript": "^5.4.0",
+    "vitest": "^4.1.5",
     "webpack": "^5.91.0",
     "webpack-cli": "^5.1.4"
   },

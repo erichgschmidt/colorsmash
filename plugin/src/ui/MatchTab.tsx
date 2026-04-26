@@ -21,6 +21,7 @@ import {
   EnvelopePoint, DEFAULT_ENVELOPE,
 } from "../core/histogramMatch";
 import { EnvelopeEditor } from "./EnvelopeEditor";
+import { loadSettings, makeDebouncedSaver, PersistedSettings } from "./persistence";
 import { applyMatch } from "../app/applyMatch";
 import {
   app, action as psAction, readLayerPixels, executeAsModal, getActiveDoc, getSelectionBounds,
@@ -97,9 +98,63 @@ export function MatchTab() {
   const [colorSpace, setColorSpace] = useState<"rgb" | "lab">("rgb");
   const [deselectOnApply, setDeselectOnApply] = useState(true);
   const [overwriteOnApply, setOverwriteOnApply] = useState(true);
+  const [remember, setRemember] = useState(false);
 
   const [openSection, setOpenSection] = useState<"basic" | "dims" | "zones" | "envelope" | null>(null);
   const toggleSection = (s: "basic" | "dims" | "zones" | "envelope") => setOpenSection(o => o === s ? null : s);
+
+  // ─── Persistence ───────────────────────────────────────────────────────────
+  // Load once on mount. Always read the file so we know whether 'remember' was on
+  // last session; only restore the rest of the state if it was. After load,
+  // set up a debounced saver that fires on any persisted state change while
+  // remember=true.
+  const loadedRef = useRef(false);
+  useEffect(() => {
+    (async () => {
+      const s = await loadSettings();
+      if (!s) { loadedRef.current = true; return; }
+      // Always restore the toggle itself so users don't have to re-enable it.
+      setRemember(!!s.remember);
+      if (s.remember) {
+        if (s.amount != null) { amountRef.current = s.amount; setAmountLabel(s.amount); }
+        if (s.smooth != null) { smoothRef.current = s.smooth; setSmoothLabel(s.smooth); }
+        if (s.stretch != null) { stretchRef.current = s.stretch; setStretchLabel(s.stretch); }
+        if (s.anchorStretchToHist != null) setAnchorStretchToHist(s.anchorStretchToHist);
+        if (s.chromaOnly != null) setChromaOnly(s.chromaOnly);
+        if (s.colorSpace) setColorSpace(s.colorSpace);
+        if (s.deselectOnApply != null) setDeselectOnApply(s.deselectOnApply);
+        if (s.overwriteOnApply != null) setOverwriteOnApply(s.overwriteOnApply);
+        if (s.openSection !== undefined) setOpenSection(s.openSection);
+        if (s.zones) { zonesRef.current = { ...DEFAULT_ZONES, ...s.zones }; setZonesLabel({ ...DEFAULT_ZONES, ...s.zones }); }
+        if (s.lockZoneTotal != null) setLockZoneTotal(s.lockZoneTotal);
+        if (s.dimensions) { dimsRef.current = { ...DEFAULT_DIMENSIONS, ...s.dimensions }; setDimsLabel({ ...DEFAULT_DIMENSIONS, ...s.dimensions }); }
+        if (s.envelope && Array.isArray(s.envelope) && s.envelope.length > 0) {
+          envelopeRef.current = s.envelope as EnvelopePoint[];
+          setEnvelopeLabel(s.envelope as EnvelopePoint[]);
+        }
+      }
+      loadedRef.current = true;
+    })();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const saveDebouncedRef = useRef<((s: PersistedSettings) => void) | null>(null);
+  if (!saveDebouncedRef.current) saveDebouncedRef.current = makeDebouncedSaver(500);
+  useEffect(() => {
+    if (!loadedRef.current) return; // skip until initial load resolves
+    const snapshot: PersistedSettings = {
+      remember,
+      amount: amountLabel, smooth: smoothLabel, stretch: stretchLabel,
+      anchorStretchToHist, chromaOnly, colorSpace,
+      deselectOnApply, overwriteOnApply,
+      openSection,
+      zones: zonesLabel, lockZoneTotal,
+      dimensions: dimsLabel,
+      envelope: envelopeLabel,
+    };
+    saveDebouncedRef.current!(snapshot);
+  }, [remember, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
+      colorSpace, deselectOnApply, overwriteOnApply, openSection,
+      zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel]);
 
   const [docs, setDocs] = useState<{ id: number; name: string }[]>([]);
   const [activeDocId, setActiveDocId] = useState<number | null>(null);
@@ -507,6 +562,7 @@ export function MatchTab() {
       <BottomActionBar
         deselectOnApply={deselectOnApply} setDeselectOnApply={setDeselectOnApply}
         overwriteOnApply={overwriteOnApply} setOverwriteOnApply={setOverwriteOnApply}
+        remember={remember} setRemember={setRemember}
         colorSpace={colorSpace} setColorSpace={setColorSpace}
         onRefreshAll={onRefreshAll}
       />

@@ -491,7 +491,12 @@ export function buildEnvelopeWeights(pts: EnvelopePoint[]): Float64Array {
   }
   const m = new Array(n);
   m[0] = d[0]; m[n - 1] = d[n - 2];
-  for (let k = 1; k < n - 1; k++) m[k] = (d[k - 1] + d[k]) / 2;
+  for (let k = 1; k < n - 1; k++) {
+    // At peaks/valleys (sign change in adjacent secants), force tangent to 0 — this is
+    // the Fritsch-Carlson rule that prevents overshoot at local extrema.
+    if (d[k - 1] * d[k] <= 0) m[k] = 0;
+    else m[k] = (d[k - 1] + d[k]) / 2;
+  }
   // Monotonicity correction.
   for (let k = 0; k < n - 1; k++) {
     if (d[k] === 0) { m[k] = 0; m[k + 1] = 0; continue; }
