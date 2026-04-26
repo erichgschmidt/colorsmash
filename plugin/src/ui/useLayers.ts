@@ -11,10 +11,28 @@ import { app, action } from "../services/photoshop";
 
 export interface LayerInfo { id: number; name: string; }
 
+// Recursively flatten the layer tree. doc.layers only contains top-level items, so any layer
+// moved into a group (e.g. by another plugin like LayerSquish auto-grouping) would otherwise
+// vanish from our flat list. Skips our own [Color Smash] group so Match Curves adjustment
+// layers don't pollute the source/target picker.
+function flattenLayers(layers: any[]): any[] {
+  const out: any[] = [];
+  for (const l of layers) {
+    const isGroup = Array.isArray(l.layers);
+    if (isGroup) {
+      if (l.name === "[Color Smash]") continue;
+      out.push(...flattenLayers(l.layers));
+    } else {
+      out.push(l);
+    }
+  }
+  return out;
+}
+
 function readLayers(): LayerInfo[] {
   const doc = app.activeDocument;
   if (!doc) return [];
-  return doc.layers
+  return flattenLayers(doc.layers)
     .filter((l: any) => l.kind === "pixel" || l.kind === "smartObject" || l.kind === undefined)
     .map((l: any) => ({ id: l.id, name: l.name }));
 }
