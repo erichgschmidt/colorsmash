@@ -14,7 +14,7 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, {}>(function Matc
   const matchedContainerRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [bgMatchPanel, setBgMatchPanel] = useState(false);
+  const [bgMatchPanel, setBgMatchPanel] = useState(true);
   const dragStartRef = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
   const mouseOverMatchedRef = useRef(false);
 
