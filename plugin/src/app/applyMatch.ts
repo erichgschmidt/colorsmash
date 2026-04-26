@@ -23,6 +23,7 @@ export interface ApplyMatchParams {
   amount: number;        // 0..1
   smoothRadius?: number; // 0..64
   maxStretch?: number;   // local slope cap; large = no cap
+  stretchRange?: { start: number; end: number }; // anchor cap at histogram bounds
   chromaOnly?: boolean;  // set the Curves layer to "Hue" blend mode (preserves target sat+luma)
   dimensions?: DimensionOpts;
   zones?: ZoneOpts;
@@ -53,6 +54,7 @@ export async function fitMatchCurves(params: ApplyMatchParams): Promise<ChannelC
       amount: params.amount,
       smoothRadius: params.smoothRadius ?? 0,
       maxStretch: params.maxStretch ?? 999,
+      stretchRange: params.stretchRange,
     });
     const dim = applyDimensions(processed, params.dimensions ?? DEFAULT_DIMENSIONS);
     return applyZoneAndEnvelopeToChannels(dim, params.zones ?? DEFAULT_ZONES, params.envelope ?? DEFAULT_ENVELOPE);
@@ -103,6 +105,7 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       amount: params.amount,
       smoothRadius: params.smoothRadius ?? 0,
       maxStretch: params.maxStretch ?? 999,
+      stretchRange: params.stretchRange,
     });
     const dim = applyDimensions(processed, params.dimensions ?? DEFAULT_DIMENSIONS);
     const curves: ChannelCurves = applyZoneAndEnvelopeToChannels(dim, params.zones ?? DEFAULT_ZONES, params.envelope ?? DEFAULT_ENVELOPE);

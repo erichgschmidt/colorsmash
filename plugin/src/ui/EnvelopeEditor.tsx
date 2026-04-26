@@ -1,10 +1,11 @@
 // Envelope editor: arbitrary-N piecewise-linear weight curve over input 0..255.
 //
-// Track shows the target's luma histogram as backdrop (so user sees where pixel mass lives).
-// Click empty area → adds a point at click position. Drag point → moves position+weight.
-// Double-click point → deletes it. Reference line at weight=1 (no modulation).
+// Click empty area → adds a point and immediately starts dragging.
+// Drag → moves position+weight. Hold Shift to lock horizontal (weight only).
+// Click point → selects it. Delete/Backspace removes selected. Right-click point also removes.
+// Double-click point → removes (legacy gesture). Reference line at weight=1.
 
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { EnvelopePoint, LumaBins } from "../core/histogramMatch";
 
 export interface EnvelopeEditorProps {
@@ -17,12 +18,16 @@ export interface EnvelopeEditorProps {
 
 const W_MAX = 2;       // weight range 0..2
 const TRACK_H_DEFAULT = 56;
+const HANDLE_SIZE = 10; // px; track gets internal padding so endpoint handles aren't clipped.
 
 export function EnvelopeEditor(props: EnvelopeEditorProps) {
-  const trackRef = useRef<HTMLDivElement>(null);
+  const trackRef = useRef<HTMLDivElement>(null);   // outer (handles live here, no clip)
+  const innerRef = useRef<HTMLDivElement>(null);   // inner clipped area (histogram + lines)
+  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+
   const trackH = props.height ?? TRACK_H_DEFAULT;
 
-  // Log-scaled, normalized [0..1] bin heights for both target and source.
+  // Log-scaled normalized [0..1] bin heights for both target and source.
   const normBars = (bins: LumaBins | null | undefined): number[] | null => {
     if (!bins) return null;
     const c = bins.count;
@@ -36,23 +41,21 @@ export function EnvelopeEditor(props: EnvelopeEditorProps) {
   const tgtBars = normBars(props.lumaBins);
   const srcBars = normBars(props.sourceLumaBins);
 
-  // Build SVG polyline points string for a histogram (for source outline overlay).
   const barsToPolyPoints = (bars: number[]): string => {
-    // Down-sample to ~64 segments so the outline is smooth, not noisy.
     const N = 64;
     const stride = 256 / N;
     const out: string[] = [];
     for (let i = 0; i <= N; i++) {
       const idx = Math.min(255, Math.round(i * stride));
-      const x = (idx / 255) * 100;
-      const y = (1 - bars[idx]) * 100;
-      out.push(`${x.toFixed(2)},${y.toFixed(2)}`);
+      out.push(`${((idx / 255) * 100).toFixed(2)},${((1 - bars[idx]) * 100).toFixed(2)}`);
     }
     return out.join(" ");
   };
 
+  // Convert pointer event → logical (position 0..255, weight 0..W_MAX). Uses inner area
+  // (which excludes the padding) so position 0 / 255 land at the histogram extremes.
   const xyFromEvent = (e: React.PointerEvent | PointerEvent) => {
-    const r = trackRef.current!.getBoundingClientRect();
+    const r = innerRef.current!.getBoundingClientRect();
     const x = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
     const y = Math.max(0, Math.min(1, (e.clientY - r.top) / r.height));
     return { position: Math.round(x * 255), weight: (1 - y) * W_MAX };
@@ -61,6 +64,8 @@ export function EnvelopeEditor(props: EnvelopeEditorProps) {
   const startDrag = (idx: number, initial?: { position: number; weight: number }) => (e: React.PointerEvent) => {
     e.preventDefault(); e.stopPropagation();
     (e.target as Element).setPointerCapture?.(e.pointerId);
+    setSelectedIdx(idx);
+    const startPt = initial ?? props.points[idx];
     let dragging = props.points.slice();
     if (initial !== undefined && idx >= dragging.length) {
       dragging.push(initial);
@@ -69,7 +74,12 @@ export function EnvelopeEditor(props: EnvelopeEditorProps) {
     const move = (ev: PointerEvent) => {
       const { position, weight } = xyFromEvent(ev);
       const next = dragging.slice();
-      next[idx] = { position, weight: Math.round(weight * 100) / 100 };
+      // Shift held: lock horizontal axis (preserve original position, only update weight).
+      const lockX = ev.shiftKey;
+      next[idx] = {
+        position: lockX ? startPt.position : position,
+        weight: Math.round(weight * 100) / 100,
+      };
       dragging = next;
       props.onChange(next);
     };
@@ -83,23 +93,43 @@ export function EnvelopeEditor(props: EnvelopeEditorProps) {
 
   // Click on empty track adds a point at click coords AND immediately starts dragging.
   const onTrackPointerDown = (e: React.PointerEvent) => {
-    if (e.target !== trackRef.current) return; // clicked on a point handle, not empty area
+    if (e.target !== trackRef.current && e.target !== innerRef.current) return; // hit a handle
     const { position, weight } = xyFromEvent(e);
     const newPt = { position, weight: Math.round(weight * 100) / 100 };
-    const newIdx = props.points.length;
-    startDrag(newIdx, newPt)(e);
+    startDrag(props.points.length, newPt)(e);
   };
 
   const deletePoint = (idx: number) => {
     const next = props.points.slice();
     next.splice(idx, 1);
     props.onChange(next);
+    setSelectedIdx(null);
   };
 
-  // Build SVG-like path connecting sorted points (for the line overlay).
-  const sorted = [...props.points].map((p, originalIdx) => ({ ...p, originalIdx })).sort((a, b) => a.position - b.position);
+  // Delete / Backspace removes the currently selected point.
+  useEffect(() => {
+    if (selectedIdx === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Delete" || e.key === "Backspace") {
+        if (selectedIdx !== null && selectedIdx < props.points.length) {
+          e.preventDefault();
+          deletePoint(selectedIdx);
+        }
+      } else if (e.key === "Escape") {
+        setSelectedIdx(null);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("keydown", onKey); };
+  }, [selectedIdx, props.points]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sorted view for the connecting polyline.
+  const sorted = [...props.points].sort((a, b) => a.position - b.position);
   const xPct = (p: number) => (p / 255) * 100;
   const yPct = (w: number) => (1 - Math.max(0, Math.min(W_MAX, w)) / W_MAX) * 100;
+
+  // Padding so endpoint handles sit fully inside the visible track.
+  const pad = HANDLE_SIZE / 2 + 1;
 
   return (
     <div style={{ position: "relative", marginBottom: 4 }}>
@@ -108,54 +138,58 @@ export function EnvelopeEditor(props: EnvelopeEditorProps) {
         style={{
           position: "relative", width: "100%", height: trackH,
           background: "#1a1a1a", border: "1px solid #444", borderRadius: 3,
-          overflow: "hidden", touchAction: "none", cursor: "crosshair",
+          touchAction: "none", cursor: "crosshair",
+          paddingLeft: pad, paddingRight: pad, boxSizing: "border-box",
         }}
-        title="Click empty area to add a point. Drag to move. Double-click a point to delete.">
-        {/* Target histogram backdrop — filled bars in mid-gray */}
-        {tgtBars && (
-          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "flex-end", pointerEvents: "none" }}>
-            {tgtBars.map((h, i) => (
-              <div key={i} style={{ flex: 1, height: `${h * 100}%`, background: "#6a6a6a" }} />
-            ))}
-          </div>
-        )}
-        {/* Source histogram outline — overlay so user sees where the match is pulling toward */}
-        {srcBars && (
-          <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }} preserveAspectRatio="none" viewBox="0 0 100 100">
-            <polyline
-              points={barsToPolyPoints(srcBars)}
-              fill="none" stroke="#e8a060" strokeWidth="0.7" vectorEffect="non-scaling-stroke" opacity="0.85" />
-          </svg>
-        )}
-        {/* Reference line at weight=1 (no modulation) */}
-        <div style={{ position: "absolute", left: 0, right: 0, top: "50%", height: 1, background: "#555", pointerEvents: "none", opacity: 0.6 }} />
-        {/* Connecting polyline */}
-        {sorted.length >= 2 && (
-          <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }} preserveAspectRatio="none" viewBox="0 0 100 100">
-            <polyline
-              points={sorted.map(p => `${xPct(p.position)},${yPct(p.weight)}`).join(" ")}
-              fill="none" stroke="#7d7" strokeWidth="0.6" vectorEffect="non-scaling-stroke" />
-          </svg>
-        )}
-        {/* Point handles */}
-        {props.points.map((p, idx) => (
-          <div key={idx}
-            onPointerDown={startDrag(idx)}
-            onDoubleClick={(e) => { e.stopPropagation(); deletePoint(idx); }}
-            title={`pos ${p.position}, weight ${p.weight.toFixed(2)} — drag to move, double-click to delete`}
-            style={{
-              position: "absolute",
-              left: `${xPct(p.position)}%`, top: `${yPct(p.weight)}%`,
-              transform: "translate(-50%, -50%)",
-              width: 10, height: 10, borderRadius: "50%",
-              background: "#7d7", border: "1.5px solid #111",
-              cursor: "grab", touchAction: "none", zIndex: 2,
-            }} />
-        ))}
+        title="Click empty area to add a point. Drag to move. Shift-drag locks horizontal. Right-click or Delete to remove.">
+        {/* Inner clipped layer: histogram + lines. Position 0 / 255 align with this area. */}
+        <div ref={innerRef} style={{ position: "absolute", top: 0, bottom: 0, left: pad, right: pad, overflow: "hidden", pointerEvents: "none" }}>
+          {tgtBars && (
+            <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "flex-end" }}>
+              {tgtBars.map((h, i) => (
+                <div key={i} style={{ flex: 1, height: `${h * 100}%`, background: "#6a6a6a" }} />
+              ))}
+            </div>
+          )}
+          {srcBars && (
+            <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} preserveAspectRatio="none" viewBox="0 0 100 100">
+              <polyline points={barsToPolyPoints(srcBars)} fill="none" stroke="#e8a060" strokeWidth="0.7" vectorEffect="non-scaling-stroke" opacity="0.85" />
+            </svg>
+          )}
+          <div style={{ position: "absolute", left: 0, right: 0, top: "50%", height: 1, background: "#555", opacity: 0.6 }} />
+          {sorted.length >= 2 && (
+            <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} preserveAspectRatio="none" viewBox="0 0 100 100">
+              <polyline points={sorted.map(p => `${xPct(p.position)},${yPct(p.weight)}`).join(" ")} fill="none" stroke="#7d7" strokeWidth="0.6" vectorEffect="non-scaling-stroke" />
+            </svg>
+          )}
+        </div>
+        {/* Handles layer (no clipping). Positions are relative to the inner area. */}
+        <div style={{ position: "absolute", top: 0, bottom: 0, left: pad, right: pad, pointerEvents: "none" }}>
+          {props.points.map((p, idx) => {
+            const isSel = idx === selectedIdx;
+            return (
+              <div key={idx}
+                onPointerDown={startDrag(idx)}
+                onDoubleClick={(e) => { e.stopPropagation(); deletePoint(idx); }}
+                onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); deletePoint(idx); }}
+                title={`pos ${p.position}, weight ${p.weight.toFixed(2)} — drag to move (Shift = vertical only); right-click or Delete to remove`}
+                style={{
+                  position: "absolute",
+                  left: `${xPct(p.position)}%`, top: `${yPct(p.weight)}%`,
+                  transform: "translate(-50%, -50%)",
+                  width: HANDLE_SIZE, height: HANDLE_SIZE, borderRadius: "50%",
+                  background: isSel ? "#aef" : "#7d7",
+                  border: isSel ? "1.5px solid #fff" : "1.5px solid #111",
+                  cursor: "grab", touchAction: "none", zIndex: 2,
+                  pointerEvents: "auto",
+                }} />
+            );
+          })}
+        </div>
       </div>
       <div style={{ fontSize: 9, opacity: 0.55, marginTop: 2, display: "flex", justifyContent: "space-between" }}>
         <span>0 (shadows)</span>
-        <span><span style={{ color: "#999" }}>■ target</span>{srcBars ? <> · <span style={{ color: "#e8a060" }}>— source</span></> : null} · {props.points.length} pt{props.points.length === 1 ? "" : "s"} · click to add</span>
+        <span><span style={{ color: "#999" }}>■ target</span>{srcBars ? <> · <span style={{ color: "#e8a060" }}>— source</span></> : null} · {props.points.length} pt{props.points.length === 1 ? "" : "s"} · click to add · Shift = vertical · Delete to remove</span>
         <span>255 (highlights)</span>
       </div>
     </div>

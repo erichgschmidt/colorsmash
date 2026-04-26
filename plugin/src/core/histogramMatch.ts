@@ -185,20 +185,26 @@ export function enforceMonotonic(curve: Uint8Array): Uint8Array {
   return out;
 }
 
-// Clamp local slope so |Δoutput / Δinput| ≤ maxRatio. Walks both directions to anchor the
-// midpoint so caps don't drag everything toward 0 or 255. maxRatio < 1 means flatten.
-export function capStretch(curve: Uint8Array, maxRatio: number): Uint8Array {
+// Clamp local slope so |Δoutput / Δinput| ≤ maxRatio. Walks both directions and anchors at
+// either the endpoints (default) or the histogram-data range (when `range` is provided).
+//
+// Default behavior anchors at 0 and 255, which means dark-source images (data near 0) get
+// the cap engaged earlier than bright-source images — making the slider feel uneven across
+// material. Passing `range` from the target's actual luminance bounds keeps the cap's
+// influence consistent regardless of where the data lives.
+export function capStretch(curve: Uint8Array, maxRatio: number, range?: { start: number; end: number }): Uint8Array {
   if (maxRatio <= 0) return curve;
   const out = new Uint8Array(curve);
-  // Forward pass.
-  for (let v = 1; v < 256; v++) {
-    const maxJump = Math.max(1, Math.round(maxRatio));
+  const start = Math.max(0, Math.min(254, range?.start ?? 0));
+  const end = Math.max(start + 1, Math.min(255, range?.end ?? 255));
+  const maxJump = Math.max(1, Math.round(maxRatio));
+  // Forward pass anchored at `start`.
+  for (let v = start + 1; v <= end; v++) {
     if (out[v] > out[v - 1] + maxJump) out[v] = out[v - 1] + maxJump;
   }
-  // Reverse pass to handle compressive (negative-slope-direction) extremes too.
-  for (let v = 254; v >= 0; v--) {
-    const maxDrop = Math.max(1, Math.round(maxRatio));
-    if (out[v] < out[v + 1] - maxDrop) out[v] = out[v + 1] - maxDrop;
+  // Reverse pass anchored at `end`.
+  for (let v = end - 1; v >= start; v--) {
+    if (out[v] < out[v + 1] - maxJump) out[v] = out[v + 1] - maxJump;
   }
   return out;
 }
@@ -207,12 +213,13 @@ export interface CurveProcessOpts {
   amount: number;       // 0..1
   smoothRadius: number; // 0..64
   maxStretch: number;   // local slope cap; 1 = identity-only, large = no cap
+  stretchRange?: { start: number; end: number }; // anchor stretch at histogram bounds
 }
 
 // Full pipeline: stretch-cap → blend with identity by amount → smooth → enforce monotonic.
 export function processCurve(raw: Uint8Array, opts: CurveProcessOpts): Uint8Array {
   let c = raw;
-  if (opts.maxStretch > 0 && opts.maxStretch < 100) c = capStretch(c, opts.maxStretch);
+  if (opts.maxStretch > 0 && opts.maxStretch < 100) c = capStretch(c, opts.maxStretch, opts.stretchRange);
   c = blendWithIdentity(c, opts.amount);
   if (opts.smoothRadius > 0) c = smoothCurve(c, opts.smoothRadius);
   c = enforceMonotonic(c);
@@ -397,6 +404,19 @@ export function computeLumaBins(rgba: Uint8Array): LumaBins {
     sumR[l] += r; sumG[l] += g; sumB[l] += b; count[l]++;
   }
   return { sumR, sumG, sumB, count };
+}
+
+// Find first/last luma bin with non-trivial pixel mass. Used by the stretch-anchor toggle so
+// the slope cap walks from where the data actually starts/ends rather than 0/255.
+// `minFraction` = ignore bins with fewer than this fraction of the peak count (rejects noise).
+export function lumaRange(bins: LumaBins, minFraction = 0.005): { start: number; end: number } {
+  let peak = 0;
+  for (let i = 0; i < 256; i++) if (bins.count[i] > peak) peak = bins.count[i];
+  const thresh = peak * minFraction;
+  let start = 0, end = 255;
+  for (let i = 0; i < 256; i++) { if (bins.count[i] > thresh) { start = i; break; } }
+  for (let i = 255; i >= 0; i--) { if (bins.count[i] > thresh) { end = i; break; } }
+  return { start, end: Math.max(start + 1, end) };
 }
 
 // Gaussian-weighted mean RGB color centered at `anchor` with the given falloff.

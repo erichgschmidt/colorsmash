@@ -17,7 +17,7 @@ import {
   fitHistogramCurves, fitHistogramCurvesLab, processChannelCurves, applyChannelCurvesToRgba, applyChromaOnly,
   applyDimensions, applyZoneAndEnvelopeToChannels, MERGED_LAYER_ID,
   DimensionOpts, DEFAULT_DIMENSIONS, ZoneOpts, DEFAULT_ZONES,
-  computeLumaBins, bandMeanColor,
+  computeLumaBins, bandMeanColor, lumaRange,
   EnvelopePoint, DEFAULT_ENVELOPE,
 } from "../core/histogramMatch";
 import { EnvelopeEditor } from "./EnvelopeEditor";
@@ -40,6 +40,7 @@ export function MatchTab() {
   const smoothRef = useRef(0);
   const stretchRef = useRef(8);
   const [chromaOnly, setChromaOnly] = useState(false);
+  const [anchorStretchToHist, setAnchorStretchToHist] = useState(false);
   const [amountLabel, setAmountLabel] = useState(100);
   const [smoothLabel, setSmoothLabel] = useState(0);
   const [stretchLabel, setStretchLabel] = useState(8);
@@ -263,10 +264,12 @@ export function MatchTab() {
       setTimeout(() => redrawMatched(), 100);
       return;
     }
+    const stretchRange = anchorStretchToHist && lumaBins ? lumaRange(lumaBins) : undefined;
     const processed = processChannelCurves(fittedRaw, {
       amount: amountRef.current / 100,
       smoothRadius: smoothRef.current,
       maxStretch: stretchRef.current,
+      stretchRange,
     });
     const dim = applyDimensions(processed, dimsRef.current);
     const c = applyZoneAndEnvelopeToChannels(dim, zonesRef.current, envelopeRef.current);
@@ -293,7 +296,7 @@ export function MatchTab() {
     // this redraw — fixes "preview blank until I wiggle a slider" on first mount.
     rafPendingRef.current = false;
     scheduleRedraw();
-  }, [fittedRaw, tgt.snap, chromaOnly]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fittedRaw, tgt.snap, chromaOnly, anchorStretchToHist]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onApply = async () => {
     if (targetId == null) { setStatus("Pick target layer."); return; }
@@ -307,6 +310,7 @@ export function MatchTab() {
         amount: amountRef.current / 100,
         smoothRadius: smoothRef.current,
         maxStretch: stretchRef.current,
+        stretchRange: anchorStretchToHist && lumaBins ? lumaRange(lumaBins) : undefined,
         chromaOnly,
         dimensions: dimsRef.current,
         zones: zonesRef.current,
@@ -383,6 +387,11 @@ export function MatchTab() {
           <BasicSlider label="Amount"  refObj={amountRef}  value={amountLabel}  setValue={setAmountLabel}  min={0} max={100} suffix="%" defaultVal={100} scheduleRedraw={scheduleRedraw} />
           <BasicSlider label="Smooth"  refObj={smoothRef}  value={smoothLabel}  setValue={setSmoothLabel}  min={0} max={32}  defaultVal={0}   scheduleRedraw={scheduleRedraw} />
           <BasicSlider label="Stretch" refObj={stretchRef} value={stretchLabel} setValue={setStretchLabel} min={1} max={32}  defaultVal={8}   scheduleRedraw={scheduleRedraw} />
+          <label title="Anchor the slope cap at the target's actual histogram bounds instead of 0/255 — makes Stretch behave consistently regardless of whether the source is bright or dark"
+            style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, opacity: 0.85, cursor: "pointer", marginLeft: 4 }}>
+            <input type="checkbox" checked={anchorStretchToHist} onChange={e => { setAnchorStretchToHist(e.target.checked); scheduleRedraw(); }} style={{ cursor: "pointer", margin: 0 }} />
+            Anchor stretch to histogram range
+          </label>
           {/* @ts-ignore Spectrum web component */}
           <sp-checkbox checked={chromaOnly || undefined} onInput={(e: any) => setChromaOnly(e.target.checked)} style={{ marginTop: 4, fontSize: 11 }}>
             Hue only (preserve target saturation + luminance)
@@ -475,7 +484,7 @@ export function MatchTab() {
 
       <div style={{ borderTop: "1px solid #444" }} />
       <div onClick={() => toggleSection("envelope")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#dddddd", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
-        <span><Icon name={openSection === "envelope" ? "chevronDown" : "chevronRight"} size={11} /> Envelope <span style={{ fontSize: 9, fontWeight: 400, opacity: 0.55 }}>(test)</span>{envelopeLabel.length > 0 && <span style={{ fontSize: 9, fontWeight: 400, opacity: 0.7, marginLeft: 6 }}>· {envelopeLabel.length} pt{envelopeLabel.length === 1 ? "" : "s"}</span>}</span>
+        <span><Icon name={openSection === "envelope" ? "chevronDown" : "chevronRight"} size={11} /> Envelope{envelopeLabel.length > 0 && <span style={{ fontSize: 9, fontWeight: 400, opacity: 0.7, marginLeft: 6 }}>· {envelopeLabel.length} pt{envelopeLabel.length === 1 ? "" : "s"}</span>}</span>
         {openSection === "envelope" && (
           <span onClick={(e: any) => { e.stopPropagation(); const def = [...DEFAULT_ENVELOPE]; envelopeRef.current = def; setEnvelopeLabel(def); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>
         )}
