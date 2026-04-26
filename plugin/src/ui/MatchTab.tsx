@@ -173,9 +173,16 @@ export function MatchTab() {
     // defer so we read after the tree settles. Two passes for fast vs late settle.
     const refresh = () => { setTimeout(readNow, 0); setTimeout(readNow, 120); };
     readNow();
-    const events = ["open", "close", "select", "make"];
+    const events = ["open", "close", "select", "make", "rename", "selectDocument"];
     psAction.addNotificationListener(events, refresh);
-    return () => { cancelled = true; psAction.removeNotificationListener?.(events, refresh); };
+    // Backup poll: PS doc-switch events are unreliable (especially when triggered inside
+    // PS rather than via our dropdown). Polling every 1.5s catches anything missed.
+    const pollTimer = setInterval(readNow, 1500);
+    return () => {
+      cancelled = true;
+      clearInterval(pollTimer);
+      psAction.removeNotificationListener?.(events, refresh);
+    };
   }, []);
 
   const onSwitchDoc = (id: number) => {
