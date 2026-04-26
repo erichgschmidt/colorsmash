@@ -36,7 +36,8 @@ function getDocById(docId: number): any {
 }
 
 export interface ApplyMatchParams {
-  docId: number;          // doc that holds source + target layers (panel-selected, NOT app.activeDocument)
+  srcDocId: number;       // doc that holds the source layer (may differ from tgtDocId)
+  tgtDocId: number;       // doc that holds the target layer + receives the Curves layer
   sourceLayerId: number;
   targetLayerId: number;
   amount: number;        // 0..1
@@ -56,10 +57,10 @@ export interface ApplyMatchParams {
 
 export async function fitMatchCurves(params: ApplyMatchParams): Promise<ChannelCurves> {
   return executeAsModal("Color Smash fit match curves", async () => {
-    const doc = getDocById(params.docId);
-    if (app.activeDocument?.id !== doc.id) app.activeDocument = doc;
-    const source = findLayerById(doc.layers, params.sourceLayerId);
-    const target = findLayerById(doc.layers, params.targetLayerId);
+    const srcDoc = getDocById(params.srcDocId);
+    const tgtDoc = getDocById(params.tgtDocId);
+    const source = findLayerById(srcDoc.layers, params.sourceLayerId);
+    const target = findLayerById(tgtDoc.layers, params.targetLayerId);
     if (!source || !target) throw new Error("Picked layer no longer exists.");
     const [s, t] = await Promise.all([
       readLayerPixels(source, statsRectForLayer(source)),
@@ -83,18 +84,21 @@ export async function fitMatchCurves(params: ApplyMatchParams): Promise<ChannelC
 
 export async function applyMatch(params: ApplyMatchParams): Promise<string> {
   return executeAsModal("Color Smash match", async () => {
-    const doc = getDocById(params.docId);
+    const srcDoc = getDocById(params.srcDocId);
+    const tgtDoc = getDocById(params.tgtDocId);
     // PS DOM operations (createLayerGroup, layer.move, etc.) implicitly target the active doc.
-    // Activate the panel-selected doc so apply lands in the right place regardless of what
-    // the user has clicked in PS chrome since picking layers in our panel.
-    if (app.activeDocument?.id !== doc.id) app.activeDocument = doc;
+    // Activate the TARGET doc so the Curves layer lands in the correct document.
+    if (app.activeDocument?.id !== tgtDoc.id) app.activeDocument = tgtDoc;
     const targetIsMerged = params.targetLayerId === MERGED_LAYER_ID;
-    const target = targetIsMerged ? null : findLayerById(doc.layers, params.targetLayerId);
+    const target = targetIsMerged ? null : findLayerById(tgtDoc.layers, params.targetLayerId);
     if (!targetIsMerged && !target) throw new Error("Target layer no longer exists.");
+    // Local alias used by the rest of the function for the doc that holds Curves layers,
+    // groups, etc. (always the target doc).
+    const doc = tgtDoc;
 
-    const readMergedPixels = async () => {
+    const readMergedPixelsOf = async (d: any) => {
       const { imaging } = require("photoshop");
-      const r = await imaging.getPixels({ documentID: doc.id, componentSize: 8, applyAlpha: false, colorSpace: "RGB" });
+      const r = await imaging.getPixels({ documentID: d.id, componentSize: 8, applyAlpha: false, colorSpace: "RGB" });
       const id = r.imageData;
       const raw = await id.getData();
       const src = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
@@ -111,15 +115,15 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     if (params.sourcePixelsOverride) {
       srcPixels = params.sourcePixelsOverride;
     } else if (params.sourceLayerId === MERGED_LAYER_ID) {
-      const merged = await readMergedPixels();
+      const merged = await readMergedPixelsOf(srcDoc);
       srcPixels = downsampleToMaxEdge(merged, STATS_MAX_EDGE).data;
     } else {
-      const source = findLayerById(doc.layers, params.sourceLayerId);
+      const source = findLayerById(srcDoc.layers, params.sourceLayerId);
       if (!source) throw new Error("Source layer no longer exists.");
       const s = await readLayerPixels(source, statsRectForLayer(source));
       srcPixels = downsampleToMaxEdge(s, STATS_MAX_EDGE).data;
     }
-    const t = targetIsMerged ? await readMergedPixels() : await readLayerPixels(target, statsRectForLayer(target));
+    const t = targetIsMerged ? await readMergedPixelsOf(tgtDoc) : await readLayerPixels(target, statsRectForLayer(target));
     const fit2 = params.colorSpace === "lab" ? fitHistogramCurvesLab : fitHistogramCurves;
     const raw = fit2(
       srcPixels,

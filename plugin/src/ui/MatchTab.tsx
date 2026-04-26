@@ -34,10 +34,12 @@ type SrcMode = "layer" | "selection" | "folder";
 interface SourceSnap { width: number; height: number; data: Uint8Array; name: string; }
 
 export function MatchTab() {
-  // selectedDocId is the panel's chosen working doc — authoritative regardless of what PS
-  // chrome currently has active. All layer reads + apply target this doc.
-  const [selectedDocId, setSelectedDocId] = useState<number | null>(null);
-  const { layers, refresh: refreshLayers } = useLayers(selectedDocId);
+  // Source and target each have their own doc — fully independent. Source can come from
+  // doc A while target lives in doc B. Both default to PS's active doc on first mount.
+  const [srcDocId, setSrcDocId] = useState<number | null>(null);
+  const [tgtDocId, setTgtDocId] = useState<number | null>(null);
+  const { layers: srcLayers, refresh: refreshSrcLayers } = useLayers(srcDocId);
+  const { layers: tgtLayers, refresh: refreshTgtLayers } = useLayers(tgtDocId);
   const [sourceId, setSourceId] = useState<number | null>(null);
   const [targetId, setTargetId] = useState<number | null>(null);
   const amountRef = useRef(100);
@@ -170,10 +172,12 @@ export function MatchTab() {
         setDocs(list);
         // Auto-pick the active doc if nothing is selected yet, or if the previously selected
         // doc has been closed. Otherwise, keep the panel selection — don't follow PS chrome.
-        setSelectedDocId(prev => {
+        const pickFallback = (prev: number | null) => {
           if (prev != null && list.some((d: { id: number }) => d.id === prev)) return prev;
           return app.activeDocument?.id ?? list[0]?.id ?? null;
-        });
+        };
+        setSrcDocId(pickFallback);
+        setTgtDocId(pickFallback);
       } catch { /* */ }
     };
     // PS fires events during modal scope before doc.documents reflects the mutation;
@@ -192,20 +196,30 @@ export function MatchTab() {
   }, []);
 
   // Picking a doc in our dropdown is panel-only — we do NOT change PS's active document.
-  // The plugin operates on the panel-selected doc regardless of what's active in PS chrome.
-  const onSwitchDoc = (id: number) => {
-    if ((app.documents ?? []).find((x: any) => x.id === id)) setSelectedDocId(id);
+  // Source and target each have their own setter so they can point to different docs.
+  const onSwitchSrcDoc = (id: number) => {
+    if ((app.documents ?? []).find((x: any) => x.id === id)) setSrcDocId(id);
+  };
+  const onSwitchTgtDoc = (id: number) => {
+    if ((app.documents ?? []).find((x: any) => x.id === id)) setTgtDocId(id);
   };
 
+  // When source layers list changes (doc switch or refresh), pick a sensible default if the
+  // current sourceId no longer exists in the new list. Bottom-most layer for source.
   useEffect(() => {
-    if (layers.length >= 2) {
-      if (sourceId == null || !layers.find(l => l.id === sourceId)) setSourceId(layers[layers.length - 1].id);
-      if (targetId == null || !layers.find(l => l.id === targetId)) setTargetId(layers[0].id);
+    if (srcLayers.length > 0 && (sourceId == null || !srcLayers.find(l => l.id === sourceId))) {
+      setSourceId(srcLayers[srcLayers.length - 1].id);
     }
-  }, [layers]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [srcLayers]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Same for target layers — top-most layer for target.
+  useEffect(() => {
+    if (tgtLayers.length > 0 && (targetId == null || !tgtLayers.find(l => l.id === targetId))) {
+      setTargetId(tgtLayers[0].id);
+    }
+  }, [tgtLayers]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const src = useLayerPreview(selectedDocId, srcMode === "layer" ? sourceId : null);
-  const tgt = useLayerPreview(selectedDocId, targetId);
+  const src = useLayerPreview(srcDocId, srcMode === "layer" ? sourceId : null);
+  const tgt = useLayerPreview(tgtDocId, targetId);
   const srcSnap = srcOverride ?? src.snap;
 
   // ─── Selection mode: snapshot from active marquee on active layer ───────
@@ -372,9 +386,9 @@ export function MatchTab() {
     if (srcMode === "selection" && !srcOverride) { setStatus("Snap a selection first."); return; }
     setStatus("Applying match...");
     try {
-      if (selectedDocId == null) { setStatus("No document selected."); return; }
+      if (srcDocId == null || tgtDocId == null) { setStatus("Pick source + target docs."); return; }
       setStatus(await applyMatch({
-        docId: selectedDocId,
+        srcDocId, tgtDocId,
         sourceLayerId: sourceId ?? -1,
         targetLayerId: targetId,
         amount: amountRef.current / 100,
@@ -398,7 +412,8 @@ export function MatchTab() {
   const tinyBtn = matchStyles.tinyBtn;
 
   const onRefreshAll = async () => {
-    refreshLayers();
+    refreshSrcLayers();
+    refreshTgtLayers();
     src.refresh();
     tgt.refresh();
     if (srcMode === "selection" && srcOverride) {
@@ -413,15 +428,15 @@ export function MatchTab() {
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
           <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
             <SourceSelector
-              docs={docs} activeDocId={selectedDocId} srcMode={srcMode} browsedFile={browsedFile}
-              onSwitchDoc={onSwitchDoc} onSwitchSrcMode={switchSrcMode}
+              docs={docs} activeDocId={srcDocId} srcMode={srcMode} browsedFile={browsedFile}
+              onSwitchDoc={onSwitchSrcDoc} onSwitchSrcMode={switchSrcMode}
               setBrowsedFile={setBrowsedFile} onBrowseImage={onBrowseImage}
-              layers={layers} sourceId={sourceId} setSourceId={setSourceId}
+              layers={srcLayers} sourceId={sourceId} setSourceId={setSourceId}
               autoUpdate={autoUpdate} setAutoUpdate={setAutoUpdate}
               sampleMerged={sampleMerged} setSampleMerged={setSampleMerged}
               sampleLock={sampleLock} setSampleLock={setSampleLock}
               selStyle={sel}
-              onRefreshLayers={refreshLayers}
+              onRefreshLayers={refreshSrcLayers}
             />
             <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}}
               snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}
@@ -429,22 +444,26 @@ export function MatchTab() {
           </div>
           <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
             <div style={{ height: 26 }}>
-              <select style={sel} value={selectedDocId ?? ""} onChange={e => onSwitchDoc(Number(e.target.value))}>
+              <select style={sel} value={tgtDocId ?? ""} onChange={e => onSwitchTgtDoc(Number(e.target.value))}>
                 {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
               </select>
             </div>
-            <div style={{ height: 26 }}>
-              <select style={sel} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}>
-                {layers.length === 0 && <option value="">— none —</option>}
-                {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+            <div style={{ height: 26, display: "flex", alignItems: "center", gap: 4 }}>
+              <select style={{ ...sel, flex: 1 }} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}>
+                {tgtLayers.length === 0 && <option value="">— none —</option>}
+                {tgtLayers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
                 <option value={MERGED_LAYER_ID}>🔀 Merged</option>
               </select>
+              <div onClick={refreshTgtLayers} title="Force-refresh target layer list"
+                style={{ width: 22, height: 22, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", border: "1px solid #888", borderRadius: 2, color: "#ddd", fontSize: 12, userSelect: "none", boxSizing: "border-box", flexShrink: 0 }}>
+                <span style={{ marginTop: -1, lineHeight: 1 }}>⟳</span>
+              </div>
             </div>
             <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap}
               hideSelector fitAspect maxHeight={120} />
           </div>
         </div>
-      ), [src.snap, tgt.snap, sourceId, targetId, layers, srcMode, srcOverride, autoUpdate, sampleMerged, sampleLock, browsedFile, docs, selectedDocId])}
+      ), [src.snap, tgt.snap, sourceId, targetId, srcLayers, tgtLayers, srcMode, srcOverride, autoUpdate, sampleMerged, sampleLock, browsedFile, docs, srcDocId, tgtDocId])}
 
       {/* Matched preview (full-width, large) with zoom controls */}
       <MatchedPreview ref={matchedHandleRef} />
