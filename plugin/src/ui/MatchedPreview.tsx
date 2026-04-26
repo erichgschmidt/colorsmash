@@ -72,7 +72,7 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, {}>(function Matc
             title={bgMatchPanel ? "Preview background: panel gray (click for dark)" : "Preview background: dark (click to match panel)"}
             style={{ width: 16, height: 16, marginLeft: 8, background: bgMatchPanel ? "#535353" : "#111", border: "1px solid #888", borderRadius: 2, cursor: "pointer", boxSizing: "border-box" }} />
           <div onClick={() => (zoom !== 1 || pan.x !== 0 || pan.y !== 0) && resetZoom()} title="Reset zoom + pan"
-            style={{ height: 16, width: 30, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: (zoom === 1 && pan.x === 0 && pan.y === 0) ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: (zoom === 1 && pan.x === 0 && pan.y === 0) ? "default" : "pointer", userSelect: "none", boxSizing: "border-box" }}>
+            style={{ height: 16, width: 30, marginLeft: 10, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: (zoom === 1 && pan.x === 0 && pan.y === 0) ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: (zoom === 1 && pan.x === 0 && pan.y === 0) ? "default" : "pointer", userSelect: "none", boxSizing: "border-box" }}>
             <span style={{ marginTop: -1, lineHeight: 1 }}>1:1</span>
           </div>
         </div>
