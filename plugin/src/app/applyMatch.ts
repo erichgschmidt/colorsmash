@@ -63,8 +63,8 @@ export async function fitMatchCurves(params: ApplyMatchParams): Promise<ChannelC
     const target = findLayerById(tgtDoc.layers, params.targetLayerId);
     if (!source || !target) throw new Error("Picked layer no longer exists.");
     const [s, t] = await Promise.all([
-      readLayerPixels(source, statsRectForLayer(source)),
-      readLayerPixels(target, statsRectForLayer(target)),
+      readLayerPixels(source, statsRectForLayer(source), srcDoc.id),
+      readLayerPixels(target, statsRectForLayer(target), tgtDoc.id),
     ]);
     const fit = params.colorSpace === "lab" ? fitHistogramCurvesLab : fitHistogramCurves;
     const raw = fit(
@@ -120,10 +120,10 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     } else {
       const source = findLayerById(srcDoc.layers, params.sourceLayerId);
       if (!source) throw new Error("Source layer no longer exists.");
-      const s = await readLayerPixels(source, statsRectForLayer(source));
+      const s = await readLayerPixels(source, statsRectForLayer(source), srcDoc.id);
       srcPixels = downsampleToMaxEdge(s, STATS_MAX_EDGE).data;
     }
-    const t = targetIsMerged ? await readMergedPixelsOf(tgtDoc) : await readLayerPixels(target, statsRectForLayer(target));
+    const t = targetIsMerged ? await readMergedPixelsOf(tgtDoc) : await readLayerPixels(target, statsRectForLayer(target), tgtDoc.id);
     const fit2 = params.colorSpace === "lab" ? fitHistogramCurvesLab : fitHistogramCurves;
     const raw = fit2(
       srcPixels,

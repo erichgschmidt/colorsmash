@@ -60,7 +60,7 @@ export function useLayerPreview(docId: number | null, layerId: number | null): {
         }
         const layer = findLayerById(doc.layers, layerId);
         if (!layer) throw new Error(`Layer ${layerId} not found`);
-        const buf = await readLayerPixels(layer);
+        const buf = await readLayerPixels(layer, undefined, doc.id);
         const small = downsampleToMaxEdge(buf, PREVIEW_MAX_EDGE);
         return { width: small.width, height: small.height, data: small.data, layerName: layer.name, layerId };
       });

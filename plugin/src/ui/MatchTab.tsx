@@ -89,7 +89,7 @@ export function MatchTab() {
         const opened = app.activeDocument;
         if (!opened || opened.id === beforeId) throw new Error("Open failed.");
         const bg = opened.backgroundLayer ?? opened.layers[opened.layers.length - 1];
-        const buf = await readLayerPixels(bg);
+        const buf = await readLayerPixels(bg, undefined, opened.id);
         const small = downsampleToMaxEdge(buf, SOURCE_MAX_EDGE);
         try { await opened.closeWithoutSaving(); } catch { /* ignore */ }
         return { width: small.width, height: small.height, data: small.data, name: file.name };
@@ -252,7 +252,7 @@ export function MatchTab() {
       } else {
         const layer = doc.activeLayers?.[0];
         if (!layer) throw new Error("No active layer.");
-        buf = await readLayerPixels(layer, sel);
+        buf = await readLayerPixels(layer, sel, doc.id);
         sourceName = `${layer.name} (selection)`;
       }
       // Read the selection mask within the same bbox; bake it into the alpha channel

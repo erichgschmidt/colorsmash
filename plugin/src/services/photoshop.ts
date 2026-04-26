@@ -46,12 +46,19 @@ export function statsRectForLayer(layer: any): Rect {
   return intersect(lb, sel) ?? lb;
 }
 
-export async function readLayerPixels(layer: any, sourceBounds?: Rect): Promise<PixelBuffer> {
+export async function readLayerPixels(layer: any, sourceBounds?: Rect, documentId?: number): Promise<PixelBuffer> {
   if (!imaging || !imaging.getPixels) {
     throw new Error("Imaging API unavailable. Requires Photoshop 24.2+.");
   }
+  // Always pass an explicit documentID. Falling back to getActiveDoc() is unsafe across
+  // cross-doc operations — the layer may live in a doc that isn't currently active in PS.
+  // Caller should pass documentId; if absent we infer from layer.parent or fall back to active.
+  const docId = documentId
+    ?? (layer?.parent && typeof layer.parent.id === "number" ? layer.parent.id : undefined)
+    ?? app.activeDocument?.id;
+  if (docId == null) throw new Error("Cannot determine document for layer pixel read.");
   const opts: any = {
-    documentID: getActiveDoc().id,
+    documentID: docId,
     layerID: layer.id,
     componentSize: 8,
     applyAlpha: false,
