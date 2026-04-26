@@ -34,7 +34,7 @@ type SrcMode = "layer" | "selection" | "folder";
 interface SourceSnap { width: number; height: number; data: Uint8Array; name: string; }
 
 export function MatchTab() {
-  const layers = useLayers();
+  const { layers, refresh: refreshLayers } = useLayers();
   const [sourceId, setSourceId] = useState<number | null>(null);
   const [targetId, setTargetId] = useState<number | null>(null);
   const amountRef = useRef(100);
@@ -383,6 +383,7 @@ export function MatchTab() {
   const tinyBtn = matchStyles.tinyBtn;
 
   const onRefreshAll = async () => {
+    refreshLayers();
     src.refresh();
     tgt.refresh();
     if (srcMode === "selection" && srcOverride) {

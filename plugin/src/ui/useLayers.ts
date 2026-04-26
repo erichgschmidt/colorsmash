@@ -11,19 +11,20 @@ import { app, action } from "../services/photoshop";
 
 export interface LayerInfo { id: number; name: string; }
 
-// Recursively flatten the layer tree. doc.layers only contains top-level items, so any layer
-// moved into a group (e.g. by another plugin like LayerSquish auto-grouping) would otherwise
-// vanish from our flat list. Skips our own [Color Smash] group so Match Curves adjustment
-// layers don't pollute the source/target picker.
-function flattenLayers(layers: any[]): any[] {
-  const out: any[] = [];
+// Recursively walk the layer tree, returning {layer, path} pairs where path is the slash-
+// separated group hierarchy ("Group / Subgroup / LayerName"). doc.layers only contains
+// top-level items, so any layer moved into a group (e.g. by another plugin auto-grouping)
+// would otherwise vanish from our flat list. Skips our own [Color Smash] group so Match
+// Curves adjustment layers don't pollute the source/target picker.
+function walkLayers(layers: any[], parentPath: string[] = []): { layer: any; path: string[] }[] {
+  const out: { layer: any; path: string[] }[] = [];
   for (const l of layers) {
     const isGroup = Array.isArray(l.layers);
     if (isGroup) {
       if (l.name === "[Color Smash]") continue;
-      out.push(...flattenLayers(l.layers));
+      out.push(...walkLayers(l.layers, [...parentPath, l.name]));
     } else {
-      out.push(l);
+      out.push({ layer: l, path: parentPath });
     }
   }
   return out;
@@ -32,9 +33,12 @@ function flattenLayers(layers: any[]): any[] {
 function readLayers(): LayerInfo[] {
   const doc = app.activeDocument;
   if (!doc) return [];
-  return flattenLayers(doc.layers)
-    .filter((l: any) => l.kind === "pixel" || l.kind === "smartObject" || l.kind === undefined)
-    .map((l: any) => ({ id: l.id, name: l.name }));
+  return walkLayers(doc.layers)
+    .filter(({ layer: l }) => l.kind === "pixel" || l.kind === "smartObject" || l.kind === undefined)
+    .map(({ layer: l, path }) => ({
+      id: l.id,
+      name: path.length > 0 ? `${path.join(" / ")} / ${l.name}` : l.name,
+    }));
 }
 
 function sameLayers(a: LayerInfo[], b: LayerInfo[]): boolean {
@@ -45,7 +49,7 @@ function sameLayers(a: LayerInfo[], b: LayerInfo[]): boolean {
   return true;
 }
 
-export function useLayers(): LayerInfo[] {
+export function useLayers(): { layers: LayerInfo[]; refresh: () => void } {
   const [layers, setLayers] = useState<LayerInfo[]>(() => readLayers());
 
   useEffect(() => {
@@ -66,13 +70,23 @@ export function useLayers(): LayerInfo[] {
       "select", "make", "delete", "set", "open", "close", "move",
       "duplicate", "copyToLayer", "copyMerged", "paste", "placeEvent",
       "rasterizeLayer", "groupLayer", "ungroupLayer", "mergeLayers", "mergeVisible",
+      "rename",
     ];
     action.addNotificationListener(events, refresh);
+    // Low-frequency poll as backup: catches changes made by other plugins that wrap many ops
+    // in one executeAsModal (e.g. LayerSquish's batch rename) — PS may coalesce/suppress the
+    // individual notifications so we never see them. 1.5s is light and indistinguishable from
+    // event-driven refresh in normal use.
+    const pollTimer = setInterval(tryRefresh, 1500);
     return () => {
       cancelled = true;
+      clearInterval(pollTimer);
       action.removeNotificationListener?.(events, refresh);
     };
   }, []);
 
-  return layers;
+  return {
+    layers,
+    refresh: () => setLayers(readLayers()),
+  };
 }
