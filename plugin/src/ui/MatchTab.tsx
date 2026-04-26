@@ -182,7 +182,8 @@ export function MatchTab() {
     readNow();
     const events = ["open", "close", "select", "make", "rename", "selectDocument"];
     psAction.addNotificationListener(events, refresh);
-    const pollTimer = setInterval(readNow, 1500);
+    // Slow poll for new docs opened/closed without firing a notification we caught.
+    const pollTimer = setInterval(readNow, 5000);
     return () => {
       cancelled = true;
       clearInterval(pollTimer);

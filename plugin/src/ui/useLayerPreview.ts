@@ -74,15 +74,15 @@ export function useLayerPreview(docId: number | null, layerId: number | null): {
 
   useEffect(() => {
     refresh();
+    // Event-driven only. The previous backup poll (1.5s) caused visible flicker because
+    // each refresh runs executeAsModal → fresh pixel read → new Uint8Array → new img.src.
+    // Now that we read from the panel-selected doc (not app.activeDocument), the doc-switch
+    // race that motivated the poll is gone. If pixels actually change, PS fires events and
+    // we refresh. The Refresh button on the source dropdown remains as the manual escape.
     const events = ["select", "make", "delete", "set", "open", "close", "rename", "historyStateChanged"];
     const handler = () => refresh();
     action.addNotificationListener(events, handler);
-    // Backup poll for batch ops PS may coalesce/suppress notifications for.
-    const pollTimer = setInterval(refresh, 1500);
-    return () => {
-      clearInterval(pollTimer);
-      action.removeNotificationListener?.(events, handler);
-    };
+    return () => { action.removeNotificationListener?.(events, handler); };
   }, [refresh]);
 
   return { snap, refresh, error };

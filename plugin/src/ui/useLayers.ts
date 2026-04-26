@@ -136,7 +136,11 @@ export function useLayers(docId: number | null): { layers: LayerInfo[]; refresh:
       "rename", "historyStateChanged", "selectDocument",
     ];
     action.addNotificationListener(events, refresh);
-    const pollTimer = setInterval(() => tryRefresh(false), 600);
+    // Slow backup poll: only here to catch other-plugin batch ops (LayerSquish-style)
+    // that PS coalesces into a single notification we may never see. Most updates flow
+    // through the event listeners above; this is just insurance. Manual ⟳ button covers
+    // the rest.
+    const pollTimer = setInterval(() => tryRefresh(false), 5000);
     return () => {
       cancelled = true;
       clearInterval(pollTimer);
