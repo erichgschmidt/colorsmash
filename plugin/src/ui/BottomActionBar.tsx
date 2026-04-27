@@ -33,25 +33,26 @@ export function BottomActionBar(props: BottomActionBarProps) {
   return (
     <div style={{ display: "flex", alignItems: "center", marginTop: 8, fontSize: 10, color: "#cccccc", height: 18, overflow: "hidden", gap: 3 }}>
       <input type="checkbox" checked={deselectOnApply} onChange={e => setDeselectOnApply(e.target.checked)} style={checkboxStyle}
-        title="Drop active marquee selection before creating the layer (so curves apply to the full target)." />
+        title="Deselect — drop the active marquee before creating the layer so curves apply to the full target." />
       <span style={{ ...textStyle, marginRight: 7 }}>Deselect</span>
       <input type="checkbox" checked={overwriteOnApply} onChange={e => setOverwriteOnApply(e.target.checked)} style={checkboxStyle}
-        title="On: replace the prior Match Curves layer. Off: keep prior layers (hidden) so you can stack alternatives." />
-      <span style={{ ...textStyle, marginRight: 7 }}>Overwrite</span>
+        title="Replace — on: overwrite the prior Match Curves layer. Off: keep prior layers (hidden) so you can stack alternatives." />
+      <span style={{ ...textStyle, marginRight: 7 }}>Replace</span>
       <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} style={checkboxStyle}
-        title="Persist all panel settings across reloads (sliders, zones, envelope, toggles)." />
-      <span style={{ ...textStyle, marginRight: 7 }}>Remember</span>
+        title="Save — persist all panel settings across reloads (sliders, zones, envelope, toggles)." />
+      <span style={{ ...textStyle, marginRight: 7 }}>Save</span>
       <button onClick={() => setColorSpace(c => c === "rgb" ? "lab" : "rgb")}
         title="Toggle color space — RGB matches per-channel histograms; Lab matches in perceptual space."
-        style={{ height: 16, padding: "0 3px", fontSize: 9, fontWeight: 600, lineHeight: "14px",
+        style={{ height: 16, padding: "0 1px", fontSize: 9, fontWeight: 600, lineHeight: "14px",
                  background: "transparent", color: "#dddddd",
                  border: "1px solid #888", borderRadius: 3, cursor: "pointer", boxSizing: "border-box", flexShrink: 0 }}>
         {colorSpace.toUpperCase()}
       </button>
       <button onClick={onRefreshAll} title="Refresh source + target previews"
         style={{ width: 16, height: 16, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
-                 background: "transparent", border: "1px solid #888", borderRadius: 3, cursor: "pointer", boxSizing: "border-box", flexShrink: 0 }}>
-        <span style={{ width: 8, height: 8, background: "#bbbbbb", borderRadius: 1 }} />
+                 background: "transparent", color: "#dddddd",
+                 border: "1px solid #888", borderRadius: 3, cursor: "pointer", boxSizing: "border-box", flexShrink: 0, fontSize: 11 }}>
+        <span style={{ marginTop: -1, lineHeight: 1 }}>⟳</span>
       </button>
     </div>
   );
