@@ -1,6 +1,6 @@
 {
   "manifestVersion": 5,
-  "id": "com.colorsmash.plugin",
+  "id": "44bb5649",
   "name": "Color Smash",
   "version": "1.0.0",
   "description": "Per-channel histogram color match into a single editable Curves adjustment layer.",
