@@ -12,12 +12,13 @@ export interface BottomActionBarProps {
   colorSpace: "rgb" | "lab";
   setColorSpace: (updater: (c: "rgb" | "lab") => "rgb" | "lab") => void;
   onRefreshAll: () => void;
+  onResetAll: () => void;
 }
 
 export function BottomActionBar(props: BottomActionBarProps) {
   const { deselectOnApply, setDeselectOnApply, overwriteOnApply, setOverwriteOnApply,
           remember, setRemember,
-          colorSpace, setColorSpace, onRefreshAll } = props;
+          colorSpace, setColorSpace, onRefreshAll, onResetAll } = props;
 
   // Single left-aligned row: [☐ Deselect] [☐ Overwrite] [☐ Remember] [RGB] [⟳]
   //
@@ -41,6 +42,13 @@ export function BottomActionBar(props: BottomActionBarProps) {
       <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} style={checkboxStyle}
         title="Save — persist all panel settings across reloads (sliders, zones, envelope, toggles)." />
       <span style={{ ...textStyle, marginRight: 7 }}>Save</span>
+      <button onClick={() => { if (confirm("Reset all panel settings to defaults and clear saved settings?")) onResetAll(); }}
+        title="Reset all settings to defaults and clear the saved settings file"
+        style={{ width: 16, height: 16, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
+                 background: "transparent", color: "#e66666", fontWeight: 700, fontSize: 12, lineHeight: 1,
+                 border: "1px solid #e66666", borderRadius: 3, cursor: "pointer", boxSizing: "border-box", flexShrink: 0 }}>
+        <span style={{ marginTop: -1 }}>✕</span>
+      </button>
       <button onClick={() => setColorSpace(c => c === "rgb" ? "lab" : "rgb")}
         title="Toggle color space — RGB matches per-channel histograms; Lab matches in perceptual space."
         style={{ height: 16, padding: "0 1px", fontSize: 9, fontWeight: 600, lineHeight: "14px",
@@ -52,7 +60,7 @@ export function BottomActionBar(props: BottomActionBarProps) {
         style={{ width: 16, height: 16, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
                  background: "transparent", color: "#dddddd",
                  border: "1px solid #888", borderRadius: 3, cursor: "pointer", boxSizing: "border-box", flexShrink: 0, fontSize: 11 }}>
-        <span style={{ marginTop: -1, lineHeight: 1 }}>⟳</span>
+        <span style={{ marginTop: -2, lineHeight: 1 }}>⟳</span>
       </button>
     </div>
   );

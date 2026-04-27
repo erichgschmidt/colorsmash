@@ -62,6 +62,17 @@ export async function loadSettings(): Promise<PersistedSettings | null> {
   return readSettingsFile();
 }
 
+// Delete the persisted settings file (used by the ✕ "reset to defaults" button).
+export async function clearSettings(): Promise<void> {
+  try {
+    const { storage } = require("uxp");
+    const folder = await storage.localFileSystem.getDataFolder();
+    const entries = await folder.getEntries();
+    const file = entries.find((e: any) => e.name === FILE_NAME);
+    if (file && file.delete) await file.delete();
+  } catch { /* swallow */ }
+}
+
 // Debounced save factory. Returns a function you call on every state change; the actual write
 // happens at most every `delayMs` and only if `remember` is true. The first arg becomes the
 // new full state to persist (caller provides current snapshot each call).

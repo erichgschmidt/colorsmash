@@ -21,7 +21,7 @@ import {
   EnvelopePoint, DEFAULT_ENVELOPE,
 } from "../core/histogramMatch";
 import { EnvelopeEditor } from "./EnvelopeEditor";
-import { loadSettings, makeDebouncedSaver, PersistedSettings } from "./persistence";
+import { loadSettings, makeDebouncedSaver, clearSettings, PersistedSettings } from "./persistence";
 import { applyMatch } from "../app/applyMatch";
 import {
   app, action as psAction, readLayerPixels, executeAsModal, getActiveDoc, getSelectionBounds,
@@ -436,6 +436,28 @@ export function MatchTab() {
   const sel = matchStyles.sel;
   const tinyBtn = matchStyles.tinyBtn;
 
+  // Full reset: every persisted setting back to its default + delete the saved file.
+  // Triggered by the red ✕ in the bottom bar.
+  const onResetAll = () => {
+    amountRef.current = 100; setAmountLabel(100);
+    smoothRef.current = 0;   setSmoothLabel(0);
+    stretchRef.current = 8;  setStretchLabel(8);
+    setAnchorStretchToHist(false);
+    setChromaOnly(false);
+    setColorSpace(() => "rgb");
+    setDeselectOnApply(true);
+    setOverwriteOnApply(true);
+    setOpenSection(null);
+    zonesRef.current = { ...DEFAULT_ZONES }; setZonesLabel({ ...DEFAULT_ZONES });
+    setLockZoneTotal(false);
+    dimsRef.current = { ...DEFAULT_DIMENSIONS }; setDimsLabel({ ...DEFAULT_DIMENSIONS });
+    envelopeRef.current = [...DEFAULT_ENVELOPE]; setEnvelopeLabel([...DEFAULT_ENVELOPE]);
+    setRemember(false);
+    void clearSettings();
+    scheduleRedraw();
+    setStatus("Settings reset to defaults.");
+  };
+
   const onRefreshAll = async () => {
     refreshSrcLayers();
     refreshTgtLayers();
@@ -474,7 +496,7 @@ export function MatchTab() {
               </select>
               <div onClick={refreshTgtAll} title="Refresh document + target layer list"
                 style={{ width: 22, height: 22, marginTop: -1, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", border: "1px solid #888", borderRadius: 2, color: "#ddd", fontSize: 12, userSelect: "none", boxSizing: "border-box", flexShrink: 0 }}>
-                <span style={{ marginTop: -1, lineHeight: 1 }}>⟳</span>
+                <span style={{ marginTop: -2, lineHeight: 1 }}>⟳</span>
               </div>
             </div>
             <div style={{ height: 26 }}>
@@ -626,6 +648,7 @@ export function MatchTab() {
         remember={remember} setRemember={setRemember}
         colorSpace={colorSpace} setColorSpace={setColorSpace}
         onRefreshAll={onRefreshAll}
+        onResetAll={onResetAll}
       />
 
       {/* @ts-ignore Spectrum web component */}
