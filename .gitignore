@@ -1,2 +1,7 @@
 ﻿
 .claude/
+
+# Distribution / packaging artifacts (not tracked in git)
+*.ccx
+plugin-test.zip
+
