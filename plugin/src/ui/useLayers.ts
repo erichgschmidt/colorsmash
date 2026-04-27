@@ -98,7 +98,11 @@ function sameLayers(a: LayerInfo[], b: LayerInfo[]): boolean {
 // Layers for the panel-selected document — NOT app.activeDocument. The panel is the source
 // of truth: even if the user clicks another doc tab in PS chrome, this hook keeps reading
 // from the doc they picked in the panel dropdown.
-export function useLayers(docId: number | null): { layers: LayerInfo[]; refresh: () => void } {
+//
+// `live` (default true): when false, the hook does an initial fetch on mount/docId-change
+// and then sits inert. No poll, no notification listener. Refresh is opt-in via the
+// returned `refresh()` (typically wired to the bottom-bar ⟳ button).
+export function useLayers(docId: number | null, live = true): { layers: LayerInfo[]; refresh: () => void } {
   const [layers, setLayers] = useState<LayerInfo[]>([]);
   const refreshFnRef = useRef<() => Promise<void>>(async () => {});
   const docIdRef = useRef(docId);
@@ -129,6 +133,10 @@ export function useLayers(docId: number | null): { layers: LayerInfo[]; refresh:
       setTimeout(() => tryRefresh(false), 120);
     };
     refresh();
+    if (!live) {
+      // Manual mode: just the initial fetch above; no poll, no listener.
+      return () => { cancelled = true; };
+    }
     const events = [
       "select", "make", "delete", "set", "open", "close", "move",
       "duplicate", "copyToLayer", "copyMerged", "paste", "placeEvent",
@@ -137,16 +145,14 @@ export function useLayers(docId: number | null): { layers: LayerInfo[]; refresh:
     ];
     action.addNotificationListener(events, refresh);
     // Slow backup poll: only here to catch other-plugin batch ops (LayerSquish-style)
-    // that PS coalesces into a single notification we may never see. Most updates flow
-    // through the event listeners above; this is just insurance. Manual ⟳ button covers
-    // the rest.
+    // that PS coalesces into a single notification we may never see.
     const pollTimer = setInterval(() => tryRefresh(false), 5000);
     return () => {
       cancelled = true;
       clearInterval(pollTimer);
       action.removeNotificationListener?.(events, refresh);
     };
-  }, [docId]);
+  }, [docId, live]);
 
   return {
     layers,

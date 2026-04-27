@@ -29,7 +29,7 @@ export interface LayerSnapshot {
   layerId: number;
 }
 
-export function useLayerPreview(docId: number | null, layerId: number | null): { snap: LayerSnapshot | null; refresh: () => void; error: string | null } {
+export function useLayerPreview(docId: number | null, layerId: number | null, live = true): { snap: LayerSnapshot | null; refresh: () => void; error: string | null } {
   const [snap, setSnap] = useState<LayerSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -74,16 +74,14 @@ export function useLayerPreview(docId: number | null, layerId: number | null): {
 
   useEffect(() => {
     refresh();
-    // Event-driven only. The previous backup poll (1.5s) caused visible flicker because
-    // each refresh runs executeAsModal → fresh pixel read → new Uint8Array → new img.src.
-    // Now that we read from the panel-selected doc (not app.activeDocument), the doc-switch
-    // race that motivated the poll is gone. If pixels actually change, PS fires events and
-    // we refresh. The Refresh button on the source dropdown remains as the manual escape.
+    if (!live) return;
+    // Event-driven only (no poll — see prior comments). When live=false, even this listener
+    // is skipped; user-initiated refresh is the only way the snap updates.
     const events = ["select", "make", "delete", "set", "open", "close", "rename", "historyStateChanged"];
     const handler = () => refresh();
     action.addNotificationListener(events, handler);
     return () => { action.removeNotificationListener?.(events, handler); };
-  }, [refresh]);
+  }, [refresh, live]);
 
   return { snap, refresh, error };
 }

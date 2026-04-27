@@ -15,12 +15,16 @@ export interface BottomActionBarProps {
   setColorSpace: (updater: (c: "rgb" | "lab") => "rgb" | "lab") => void;
   onRefreshAll: () => void;
   onResetAll: () => void;
+  liveUpdates: boolean;
+  setLiveUpdates: (b: boolean) => void;
+  stale: boolean;
 }
 
 export function BottomActionBar(props: BottomActionBarProps) {
   const { deselectOnApply, setDeselectOnApply, overwriteOnApply, setOverwriteOnApply,
           remember, setRemember,
-          colorSpace, setColorSpace, onRefreshAll, onResetAll } = props;
+          colorSpace, setColorSpace, onRefreshAll, onResetAll,
+          liveUpdates, setLiveUpdates, stale } = props;
 
   // Single-click destructive reset. Opens a UXP modal dialog (window.confirm doesn't
   // exist in UXP — see uxpConfirm.ts for the dialog implementation).
@@ -65,12 +69,33 @@ export function BottomActionBar(props: BottomActionBarProps) {
                  border: "1px solid #888", borderRadius: 3, cursor: "pointer", boxSizing: "border-box", flexShrink: 0, userSelect: "none" }}>
         <span style={{ marginTop: -1, lineHeight: 1 }}>{colorSpace.toUpperCase()}</span>
       </div>
-      <button onClick={onRefreshAll} title="Refresh source + target previews"
-        style={{ width: 16, height: 16, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
-                 background: "transparent", color: "#dddddd",
-                 border: "1px solid #888", borderRadius: 3, cursor: "pointer", boxSizing: "border-box", flexShrink: 0, fontSize: 11 }}>
+      {/* Three-in-one: refresh button + live-updates toggle + stale indicator.
+          Left click: refresh now (clears stale).
+          Right-click or double-click: toggle live updates on/off.
+          Background color encodes state at a glance:
+            • blue (filled) = live updates ON
+            • gray = live updates OFF, in sync
+            • amber = live updates OFF, stale (PS state changed since last refresh) */}
+      <div
+        onClick={onRefreshAll}
+        onDoubleClick={(e) => { e.preventDefault(); setLiveUpdates(!liveUpdates); }}
+        onContextMenu={(e) => { e.preventDefault(); setLiveUpdates(!liveUpdates); }}
+        title={
+          liveUpdates
+            ? "Live updates ON — auto-syncs to PS changes. Click to refresh now. Right-click or double-click to switch to manual."
+            : (stale
+                ? "Manual mode — Photoshop changed since last refresh. Click to refresh. Right-click or double-click to enable live updates."
+                : "Manual mode — in sync. Click to refresh. Right-click or double-click to enable live updates.")
+        }
+        style={{
+          width: 16, height: 16, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
+          background: liveUpdates ? "#3a7fc1" : (stale ? "#c19a3a" : "transparent"),
+          color: liveUpdates || stale ? "#fff" : "#aaa",
+          border: liveUpdates ? "1px solid #3a7fc1" : (stale ? "1px solid #c19a3a" : "1px solid #888"),
+          borderRadius: 3, cursor: "pointer", boxSizing: "border-box", flexShrink: 0, fontSize: 11, userSelect: "none",
+        }}>
         <span style={{ marginTop: -2, lineHeight: 1 }}>⟳</span>
-      </button>
+      </div>
     </div>
   );
 }

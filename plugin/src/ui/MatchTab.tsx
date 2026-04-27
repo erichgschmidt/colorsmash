@@ -34,12 +34,15 @@ type SrcMode = "layer" | "selection" | "folder";
 interface SourceSnap { width: number; height: number; data: Uint8Array; name: string; }
 
 export function MatchTab() {
+  // Live updates toggle declared up front so the hooks below can read it.
+  const [liveUpdates, setLiveUpdates] = useState(true);
+  const [stale, setStale] = useState(false);
   // Source and target each have their own doc — fully independent. Source can come from
   // doc A while target lives in doc B. Both default to PS's active doc on first mount.
   const [srcDocId, setSrcDocId] = useState<number | null>(null);
   const [tgtDocId, setTgtDocId] = useState<number | null>(null);
-  const { layers: srcLayers, refresh: refreshSrcLayers } = useLayers(srcDocId);
-  const { layers: tgtLayers, refresh: refreshTgtLayers } = useLayers(tgtDocId);
+  const { layers: srcLayers, refresh: refreshSrcLayers } = useLayers(srcDocId, liveUpdates);
+  const { layers: tgtLayers, refresh: refreshTgtLayers } = useLayers(tgtDocId, liveUpdates);
   const [sourceId, setSourceId] = useState<number | null>(null);
   const [targetId, setTargetId] = useState<number | null>(null);
   const amountRef = useRef(100);
@@ -104,6 +107,7 @@ export function MatchTab() {
   const [deselectOnApply, setDeselectOnApply] = useState(true);
   const [overwriteOnApply, setOverwriteOnApply] = useState(true);
   const [remember, setRemember] = useState(false);
+  // (liveUpdates and stale state declared above, before the hooks that consume them.)
 
   const [openSection, setOpenSection] = useState<"basic" | "dims" | "zones" | "envelope" | null>(null);
   const toggleSection = (s: "basic" | "dims" | "zones" | "envelope") => setOpenSection(o => o === s ? null : s);
@@ -125,6 +129,7 @@ export function MatchTab() {
         if (s.smooth != null) { smoothRef.current = s.smooth; setSmoothLabel(s.smooth); }
         if (s.stretch != null) { stretchRef.current = s.stretch; setStretchLabel(s.stretch); }
         if (s.anchorStretchToHist != null) setAnchorStretchToHist(s.anchorStretchToHist);
+        if (s.liveUpdates != null) setLiveUpdates(s.liveUpdates);
         if (s.chromaOnly != null) setChromaOnly(s.chromaOnly);
         if (s.colorSpace) setColorSpace(s.colorSpace);
         if (s.deselectOnApply != null) setDeselectOnApply(s.deselectOnApply);
@@ -149,7 +154,7 @@ export function MatchTab() {
     const snapshot: PersistedSettings = {
       remember,
       amount: amountLabel, smooth: smoothLabel, stretch: stretchLabel,
-      anchorStretchToHist, chromaOnly, colorSpace,
+      anchorStretchToHist, chromaOnly, colorSpace, liveUpdates,
       deselectOnApply, overwriteOnApply,
       openSection,
       zones: zonesLabel, lockZoneTotal,
@@ -157,7 +162,7 @@ export function MatchTab() {
       envelope: envelopeLabel,
     };
     saveDebouncedRef.current!(snapshot);
-  }, [remember, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
+  }, [remember, liveUpdates, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
       colorSpace, deselectOnApply, overwriteOnApply, openSection,
       zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel]);
 
@@ -186,6 +191,7 @@ export function MatchTab() {
     // defer so we read after the tree settles. Two passes for fast vs late settle.
     const refresh = () => { setTimeout(readNow, 0); setTimeout(readNow, 120); };
     readNow();
+    if (!liveUpdates) return () => { cancelled = true; };
     const events = ["open", "close", "select", "make", "rename", "selectDocument"];
     psAction.addNotificationListener(events, refresh);
     // Slow poll for new docs opened/closed without firing a notification we caught.
@@ -195,7 +201,22 @@ export function MatchTab() {
       clearInterval(pollTimer);
       psAction.removeNotificationListener?.(events, refresh);
     };
-  }, []);
+  }, [liveUpdates]);
+
+  // Stale detector: only active when live updates are off. Listens for PS events that would
+  // normally trigger an auto-refresh and just flips `stale` true so the ⟳ button can warn the
+  // user. Cleared whenever any refresh runs.
+  useEffect(() => {
+    if (liveUpdates) { setStale(false); return; }
+    const events = [
+      "select", "make", "delete", "set", "open", "close", "move",
+      "duplicate", "paste", "rasterizeLayer", "groupLayer", "ungroupLayer",
+      "mergeLayers", "mergeVisible", "rename", "historyStateChanged", "selectDocument",
+    ];
+    const onEvt = () => setStale(true);
+    psAction.addNotificationListener(events, onEvt);
+    return () => { psAction.removeNotificationListener?.(events, onEvt); };
+  }, [liveUpdates]);
 
   // Combined refresh: docs list + bounce the per-side docId to fully remount useLayers.
   // Bouncing the id drops every cached layer reference (DOM-side and our own state), then
@@ -243,8 +264,8 @@ export function MatchTab() {
     }
   }, [tgtLayers]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const src = useLayerPreview(srcDocId, srcMode === "layer" ? sourceId : null);
-  const tgt = useLayerPreview(tgtDocId, targetId);
+  const src = useLayerPreview(srcDocId, srcMode === "layer" ? sourceId : null, liveUpdates);
+  const tgt = useLayerPreview(tgtDocId, targetId, liveUpdates);
   const srcSnap = srcOverride ?? src.snap;
 
   // ─── Selection mode: snapshot from active marquee on active layer ───────
@@ -459,6 +480,7 @@ export function MatchTab() {
   };
 
   const onRefreshAll = async () => {
+    setStale(false);
     refreshSrcLayers();
     refreshTgtLayers();
     src.refresh();
@@ -652,6 +674,8 @@ export function MatchTab() {
         colorSpace={colorSpace} setColorSpace={setColorSpace}
         onRefreshAll={onRefreshAll}
         onResetAll={onResetAll}
+        liveUpdates={liveUpdates} setLiveUpdates={setLiveUpdates}
+        stale={stale}
       />
 
       {/* @ts-ignore Spectrum web component */}
