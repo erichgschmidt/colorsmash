@@ -496,7 +496,7 @@ export function MatchTab() {
               </select>
               <div onClick={refreshTgtAll} title="Refresh document + target layer list"
                 style={{ width: 22, height: 22, marginTop: -1, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", border: "1px solid #888", borderRadius: 2, color: "#ddd", fontSize: 12, userSelect: "none", boxSizing: "border-box", flexShrink: 0 }}>
-                <span style={{ marginTop: -2, lineHeight: 1 }}>⟳</span>
+                <span style={{ marginTop: -3, marginLeft: 1, lineHeight: 1 }}>⟳</span>
               </div>
             </div>
             <div style={{ height: 26 }}>
