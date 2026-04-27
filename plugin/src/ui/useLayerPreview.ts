@@ -2,7 +2,7 @@
 // layerId instead of always using the active layer. Returns null until a layer is selected.
 
 import { useCallback, useEffect, useState } from "react";
-import { app, action, readLayerPixels, executeAsModal } from "../services/photoshop";
+import { app, readLayerPixels, executeAsModal } from "../services/photoshop";
 import { downsampleToMaxEdge } from "../core/downsample";
 import { MERGED_LAYER_ID } from "../core/histogramMatch";
 
@@ -29,7 +29,7 @@ export interface LayerSnapshot {
   layerId: number;
 }
 
-export function useLayerPreview(docId: number | null, layerId: number | null, live = true): { snap: LayerSnapshot | null; refresh: () => void; error: string | null } {
+export function useLayerPreview(docId: number | null, layerId: number | null): { snap: LayerSnapshot | null; refresh: () => void; error: string | null } {
   const [snap, setSnap] = useState<LayerSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -74,14 +74,9 @@ export function useLayerPreview(docId: number | null, layerId: number | null, li
 
   useEffect(() => {
     refresh();
-    if (!live) return;
-    // Event-driven only (no poll — see prior comments). When live=false, even this listener
-    // is skipped; user-initiated refresh is the only way the snap updates.
-    const events = ["select", "make", "delete", "set", "open", "close", "rename", "historyStateChanged"];
-    const handler = () => refresh();
-    action.addNotificationListener(events, handler);
-    return () => { action.removeNotificationListener?.(events, handler); };
-  }, [refresh, live]);
+    // Manual mode: snap updates only on docId/layerId change or explicit refresh().
+    // No PS notification listeners. Parent's stale detector hints when state changed.
+  }, [refresh]);
 
   return { snap, refresh, error };
 }

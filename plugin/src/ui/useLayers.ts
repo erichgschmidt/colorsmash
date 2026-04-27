@@ -99,10 +99,10 @@ function sameLayers(a: LayerInfo[], b: LayerInfo[]): boolean {
 // of truth: even if the user clicks another doc tab in PS chrome, this hook keeps reading
 // from the doc they picked in the panel dropdown.
 //
-// `live` (default true): when false, the hook does an initial fetch on mount/docId-change
-// and then sits inert. No poll, no notification listener. Refresh is opt-in via the
-// returned `refresh()` (typically wired to the bottom-bar ⟳ button).
-export function useLayers(docId: number | null, live = true): { layers: LayerInfo[]; refresh: () => void } {
+// Manual mode only: fetches on mount and on docId change. Otherwise sits inert until the
+// user clicks a refresh button (which calls the returned refresh()). No polling, no PS
+// notification listeners — the parent's stale detector handles the "things changed" hint.
+export function useLayers(docId: number | null): { layers: LayerInfo[]; refresh: () => void } {
   const [layers, setLayers] = useState<LayerInfo[]>([]);
   const refreshFnRef = useRef<() => Promise<void>>(async () => {});
   const docIdRef = useRef(docId);
@@ -133,26 +133,8 @@ export function useLayers(docId: number | null, live = true): { layers: LayerInf
       setTimeout(() => tryRefresh(false), 120);
     };
     refresh();
-    if (!live) {
-      // Manual mode: just the initial fetch above; no poll, no listener.
-      return () => { cancelled = true; };
-    }
-    const events = [
-      "select", "make", "delete", "set", "open", "close", "move",
-      "duplicate", "copyToLayer", "copyMerged", "paste", "placeEvent",
-      "rasterizeLayer", "groupLayer", "ungroupLayer", "mergeLayers", "mergeVisible",
-      "rename", "historyStateChanged", "selectDocument",
-    ];
-    action.addNotificationListener(events, refresh);
-    // Slow backup poll: only here to catch other-plugin batch ops (LayerSquish-style)
-    // that PS coalesces into a single notification we may never see.
-    const pollTimer = setInterval(() => tryRefresh(false), 5000);
-    return () => {
-      cancelled = true;
-      clearInterval(pollTimer);
-      action.removeNotificationListener?.(events, refresh);
-    };
-  }, [docId, live]);
+    return () => { cancelled = true; };
+  }, [docId]);
 
   return {
     layers,

@@ -21,8 +21,6 @@ export interface PersistedSettings {
   // Apply behavior
   deselectOnApply?: boolean;
   overwriteOnApply?: boolean;
-  // Live updates toggle
-  liveUpdates?: boolean;
   // Sections
   openSection?: "basic" | "dims" | "zones" | "envelope" | null;
   // Zone targeting
