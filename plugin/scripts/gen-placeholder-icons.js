@@ -76,14 +76,24 @@ function ringIcon(size, gray) {
 const outDir = path.join(__dirname, "..", "icons");
 fs.mkdirSync(outDir, { recursive: true });
 
-// Light theme = dark glyph; dark theme = light glyph.
-const variants = [
+// Panel icons: light theme = dark glyph; dark theme = light glyph.
+const panelVariants = [
   { name: "icon-light.png",     size: 23, gray: 0x1a },
   { name: "icon-light@2x.png",  size: 46, gray: 0x1a },
   { name: "icon-dark.png",      size: 23, gray: 0xdd },
   { name: "icon-dark@2x.png",   size: 46, gray: 0xdd },
 ];
-for (const v of variants) {
+
+// Marketplace listing icons: required at 48, 96, 192. Adobe shows these against a
+// neutral background so a mid-gray glyph reads on either light or dark. Using the
+// dark-theme luminance (#dd) so it pops on Adobe's typical dark listing chrome.
+const marketVariants = [
+  { name: "marketplace-48.png",  size: 48,  gray: 0xdd },
+  { name: "marketplace-96.png",  size: 96,  gray: 0xdd },
+  { name: "marketplace-192.png", size: 192, gray: 0xdd },
+];
+
+for (const v of [...panelVariants, ...marketVariants]) {
   const png = ringIcon(v.size, v.gray);
   fs.writeFileSync(path.join(outDir, v.name), png);
   console.log(`wrote icons/${v.name} (${png.length} bytes)`);
