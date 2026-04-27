@@ -58,13 +58,13 @@ export function BottomActionBar(props: BottomActionBarProps) {
                  border: "none", borderRadius: 3, cursor: "pointer", boxSizing: "border-box", flexShrink: 0 }}>
         <span style={{ marginTop: -1 }}>✕</span>
       </button>
-      <button onClick={() => setColorSpace(c => c === "rgb" ? "lab" : "rgb")}
+      <div onClick={() => setColorSpace(c => c === "rgb" ? "lab" : "rgb")}
         title="Toggle color space — RGB matches per-channel histograms; Lab matches in perceptual space."
-        style={{ height: 16, padding: "0 1px", fontSize: 9, fontWeight: 600, lineHeight: "14px",
-                 background: "transparent", color: "#dddddd",
-                 border: "1px solid #888", borderRadius: 3, cursor: "pointer", boxSizing: "border-box", flexShrink: 0 }}>
-        {colorSpace.toUpperCase()}
-      </button>
+        style={{ height: 16, padding: "0 2px", display: "inline-flex", alignItems: "center", justifyContent: "center",
+                 fontSize: 9, fontWeight: 600, color: "#dddddd",
+                 border: "1px solid #888", borderRadius: 3, cursor: "pointer", boxSizing: "border-box", flexShrink: 0, userSelect: "none" }}>
+        <span style={{ marginTop: -1, lineHeight: 1 }}>{colorSpace.toUpperCase()}</span>
+      </div>
       <button onClick={onRefreshAll} title="Refresh source + target previews"
         style={{ width: 16, height: 16, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
                  background: "transparent", color: "#dddddd",
