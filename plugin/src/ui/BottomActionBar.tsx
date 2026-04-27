@@ -19,41 +19,40 @@ export function BottomActionBar(props: BottomActionBarProps) {
           remember, setRemember,
           colorSpace, setColorSpace, onRefreshAll } = props;
 
-  // Layout: labels left-anchored in reading order (Deselect, Overwrite, Remember); RGB +
-  // refresh right-anchored with solid panel-gray bg + higher z-index. As the panel narrows,
-  // the right group's bg covers the rightmost label text first — words slide UNDER the
-  // buttons/toggles instead of ellipsizing or wrapping. Every checkbox + button stays
-  // clickable since none of them ever get covered.
+  // Single left-aligned row: [☐ Deselect] [☐ Overwrite] [☐ Remember] [RGB] [⟳]
+  //
+  // The 5 interactive elements (3 checkboxes + 2 buttons) are flex-shrink:0 → never compress,
+  // always visible & clickable. The 3 label text spans are flex-shrink:1 with min-width:0
+  // and overflow:hidden but NO ellipsis — so as the panel narrows the words clip silently
+  // (looks like they're sliding under the next toggle), then disappear entirely once their
+  // span is squeezed to 0. Words are sacrificed; interactive controls always survive.
+  const textStyle: React.CSSProperties = {
+    overflow: "hidden", whiteSpace: "nowrap", minWidth: 0, flexShrink: 1,
+  };
+  const checkboxStyle: React.CSSProperties = { margin: 0, flexShrink: 0 };
   return (
-    <div style={{ position: "relative", height: 18, marginTop: 8, fontSize: 10, color: "#cccccc", overflow: "hidden" }}>
-      <div style={{ position: "absolute", left: 0, top: 0, height: 18, display: "flex", alignItems: "center", gap: 10, whiteSpace: "nowrap", zIndex: 1 }}>
-        <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: "pointer" }} title="Drop active marquee selection before creating the layer (so curves apply to the full target).">
-          <input type="checkbox" checked={deselectOnApply} onChange={e => setDeselectOnApply(e.target.checked)} style={{ margin: 0, verticalAlign: "middle" }} />
-          Deselect
-        </label>
-        <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: "pointer" }} title="On: replace the prior Match Curves layer. Off: keep prior layers (hidden) so you can stack alternatives.">
-          <input type="checkbox" checked={overwriteOnApply} onChange={e => setOverwriteOnApply(e.target.checked)} style={{ margin: 0, verticalAlign: "middle" }} />
-          Overwrite
-        </label>
-        <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: "pointer" }} title="Persist all panel settings across reloads (sliders, zones, envelope, toggles).">
-          <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} style={{ margin: 0, verticalAlign: "middle" }} />
-          Remember
-        </label>
-      </div>
-      <div style={{ position: "absolute", right: 0, top: 0, height: 18, display: "flex", alignItems: "center", gap: 4, background: "#535353", paddingLeft: 6, zIndex: 2 }}>
-        <button onClick={() => setColorSpace(c => c === "rgb" ? "lab" : "rgb")}
-          title="Toggle color space — RGB matches per-channel histograms; Lab matches in perceptual space."
-          style={{ height: 16, padding: "0 3px", fontSize: 9, fontWeight: 600, lineHeight: "14px",
-                   background: "transparent", color: "#dddddd",
-                   border: "1px solid #888", borderRadius: 3, cursor: "pointer", boxSizing: "border-box" }}>
-          {colorSpace.toUpperCase()}
-        </button>
-        <button onClick={onRefreshAll} title="Refresh source + target previews"
-          style={{ width: 16, height: 16, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
-                   background: "transparent", border: "1px solid #888", borderRadius: 3, cursor: "pointer", boxSizing: "border-box" }}>
-          <span style={{ width: 8, height: 8, background: "#bbbbbb", borderRadius: 1 }} />
-        </button>
-      </div>
+    <div style={{ display: "flex", alignItems: "center", marginTop: 8, fontSize: 10, color: "#cccccc", height: 18, overflow: "hidden", gap: 3 }}>
+      <input type="checkbox" checked={deselectOnApply} onChange={e => setDeselectOnApply(e.target.checked)} style={checkboxStyle}
+        title="Drop active marquee selection before creating the layer (so curves apply to the full target)." />
+      <span style={{ ...textStyle, marginRight: 7 }}>Deselect</span>
+      <input type="checkbox" checked={overwriteOnApply} onChange={e => setOverwriteOnApply(e.target.checked)} style={checkboxStyle}
+        title="On: replace the prior Match Curves layer. Off: keep prior layers (hidden) so you can stack alternatives." />
+      <span style={{ ...textStyle, marginRight: 7 }}>Overwrite</span>
+      <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} style={checkboxStyle}
+        title="Persist all panel settings across reloads (sliders, zones, envelope, toggles)." />
+      <span style={{ ...textStyle, marginRight: 7 }}>Remember</span>
+      <button onClick={() => setColorSpace(c => c === "rgb" ? "lab" : "rgb")}
+        title="Toggle color space — RGB matches per-channel histograms; Lab matches in perceptual space."
+        style={{ height: 16, padding: "0 3px", fontSize: 9, fontWeight: 600, lineHeight: "14px",
+                 background: "transparent", color: "#dddddd",
+                 border: "1px solid #888", borderRadius: 3, cursor: "pointer", boxSizing: "border-box", flexShrink: 0 }}>
+        {colorSpace.toUpperCase()}
+      </button>
+      <button onClick={onRefreshAll} title="Refresh source + target previews"
+        style={{ width: 16, height: 16, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
+                 background: "transparent", border: "1px solid #888", borderRadius: 3, cursor: "pointer", boxSizing: "border-box", flexShrink: 0 }}>
+        <span style={{ width: 8, height: 8, background: "#bbbbbb", borderRadius: 1 }} />
+      </button>
     </div>
   );
 }
