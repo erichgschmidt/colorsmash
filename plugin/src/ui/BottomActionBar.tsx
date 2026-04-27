@@ -64,7 +64,7 @@ export function BottomActionBar(props: BottomActionBarProps) {
       </button>
       <div onClick={() => setColorSpace(c => c === "rgb" ? "lab" : "rgb")}
         title="Toggle color space — RGB matches per-channel histograms; Lab matches in perceptual space."
-        style={{ height: 16, padding: "0 2px", display: "inline-flex", alignItems: "center", justifyContent: "center",
+        style={{ height: 16, padding: "0 2px", marginLeft: 4, display: "inline-flex", alignItems: "center", justifyContent: "center",
                  fontSize: 9, fontWeight: 600, color: "#dddddd",
                  border: "1px solid #888", borderRadius: 3, cursor: "pointer", boxSizing: "border-box", flexShrink: 0, userSelect: "none" }}>
         <span style={{ marginTop: -1, lineHeight: 1 }}>{colorSpace.toUpperCase()}</span>
@@ -88,7 +88,7 @@ export function BottomActionBar(props: BottomActionBarProps) {
                 : "Manual mode — in sync. Click to refresh. Right-click or double-click to enable live updates.")
         }
         style={{
-          width: 16, height: 16, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
+          width: 16, height: 16, padding: 0, marginLeft: 5, display: "inline-flex", alignItems: "center", justifyContent: "center",
           background: liveUpdates ? "#3a7fc1" : (stale ? "#c19a3a" : "transparent"),
           color: liveUpdates || stale ? "#fff" : "#aaa",
           border: liveUpdates ? "1px solid #3a7fc1" : (stale ? "1px solid #c19a3a" : "1px solid #888"),
