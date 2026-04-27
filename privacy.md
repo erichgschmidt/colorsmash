@@ -1,3 +1,8 @@
+---
+title: Privacy Policy — Color Smash
+permalink: /privacy
+---
+
 # Privacy Policy — Color Smash
 
 _Last updated: 2026-04-26_

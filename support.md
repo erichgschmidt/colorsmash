@@ -1,3 +1,8 @@
+---
+title: Color Smash Support
+permalink: /support
+---
+
 # Color Smash Support
 
 ## Quick help
