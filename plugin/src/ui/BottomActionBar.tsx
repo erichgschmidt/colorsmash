@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { uxpConfirm } from "./uxpConfirm";
 
 // Bottom action bar for MatchTab:
 //   left:  Deselect | Overwrite labels (left-anchored, may be visually occluded)
@@ -22,21 +22,11 @@ export function BottomActionBar(props: BottomActionBarProps) {
           remember, setRemember,
           colorSpace, setColorSpace, onRefreshAll, onResetAll } = props;
 
-  // Two-click confirm for the destructive ✕ reset (UXP has no window.confirm).
-  // First click arms the button (turns solid red); second click within 3s actually resets.
-  const [armed, setArmed] = useState(false);
-  const disarmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => { if (disarmTimerRef.current) clearTimeout(disarmTimerRef.current); }, []);
-  const handleResetClick = () => {
-    if (armed) {
-      if (disarmTimerRef.current) { clearTimeout(disarmTimerRef.current); disarmTimerRef.current = null; }
-      setArmed(false);
-      onResetAll();
-    } else {
-      setArmed(true);
-      if (disarmTimerRef.current) clearTimeout(disarmTimerRef.current);
-      disarmTimerRef.current = setTimeout(() => setArmed(false), 3000);
-    }
+  // Single-click destructive reset. Opens a UXP modal dialog (window.confirm doesn't
+  // exist in UXP — see uxpConfirm.ts for the dialog implementation).
+  const handleResetClick = async () => {
+    const ok = await uxpConfirm("Reset all panel settings to defaults and clear the saved file?", "Reset");
+    if (ok) onResetAll();
   };
 
   // Single left-aligned row: [☐ Deselect] [☐ Overwrite] [☐ Remember] [RGB] [⟳]
@@ -62,10 +52,10 @@ export function BottomActionBar(props: BottomActionBarProps) {
         title="Save — persist all panel settings across reloads (sliders, zones, envelope, toggles)." />
       <span style={{ ...textStyle, marginRight: 7 }}>Save</span>
       <button onClick={handleResetClick}
-        title={armed ? "Click again to confirm — resets all settings + clears saved file" : "Reset all settings to defaults and clear the saved file (click twice to confirm)"}
+        title="Reset all settings to defaults and clear the saved file"
         style={{ width: 16, height: 16, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
-                 background: armed ? "#e66666" : "transparent", color: armed ? "#fff" : "#e66666", fontWeight: 700, fontSize: 12, lineHeight: 1,
-                 border: "1px solid #e66666", borderRadius: 3, cursor: "pointer", boxSizing: "border-box", flexShrink: 0 }}>
+                 background: "#e66666", color: "#fff", fontWeight: 700, fontSize: 12, lineHeight: 1,
+                 border: "none", borderRadius: 3, cursor: "pointer", boxSizing: "border-box", flexShrink: 0 }}>
         <span style={{ marginTop: -1 }}>✕</span>
       </button>
       <button onClick={() => setColorSpace(c => c === "rgb" ? "lab" : "rgb")}
