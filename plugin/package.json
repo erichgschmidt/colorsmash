@@ -1,6 +1,6 @@
 {
   "name": "color-smash",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Photoshop UXP plugin: per-channel histogram color match into a single editable Curves adjustment layer.",
   "scripts": {

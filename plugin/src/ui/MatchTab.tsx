@@ -197,10 +197,28 @@ export function MatchTab() {
     };
   }, []);
 
-  // Combined refresh: docs list + the per-side layer list. Wired into the ⟳ button next
-  // to each doc dropdown so a single click picks up newly opened docs AND silent renames.
-  const refreshSrcAll = () => { refreshDocsRef.current(); refreshSrcLayers(); };
-  const refreshTgtAll = () => { refreshDocsRef.current(); refreshTgtLayers(); };
+  // Combined refresh: docs list + bounce the per-side docId to fully remount useLayers.
+  // Bouncing the id drops every cached layer reference (DOM-side and our own state), then
+  // re-fetches via batchPlay on remount. This is the nuclear option that works even when
+  // PS's internal descriptor cache holds stale names from another plugin's silent batch ops.
+  const refreshSrcAll = () => {
+    refreshDocsRef.current();
+    refreshSrcLayers();
+    const id = srcDocId;
+    if (id != null) {
+      setSrcDocId(null);
+      setTimeout(() => setSrcDocId(id), 50);
+    }
+  };
+  const refreshTgtAll = () => {
+    refreshDocsRef.current();
+    refreshTgtLayers();
+    const id = tgtDocId;
+    if (id != null) {
+      setTgtDocId(null);
+      setTimeout(() => setTgtDocId(id), 50);
+    }
+  };
 
   // Picking a doc in our dropdown is panel-only — we do NOT change PS's active document.
   // Source and target each have their own setter so they can point to different docs.

@@ -2,7 +2,12 @@
   "manifestVersion": 5,
   "id": "com.colorsmash.plugin",
   "name": "Color Smash",
-  "version": "0.1.0",
+  "version": "1.0.0",
+  "description": "Per-channel histogram color match into a single editable Curves adjustment layer.",
+  "author": {
+    "name": "Erich Schmidt",
+    "email": "erichgschmidt@gmail.com"
+  },
   "main": "index.html",
   "host": [
     {
