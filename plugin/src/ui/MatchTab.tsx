@@ -473,7 +473,7 @@ export function MatchTab() {
                 {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
               </select>
               <div onClick={refreshTgtAll} title="Refresh document + target layer list"
-                style={{ width: 22, height: 22, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", border: "1px solid #888", borderRadius: 2, color: "#ddd", fontSize: 12, userSelect: "none", boxSizing: "border-box", flexShrink: 0 }}>
+                style={{ width: 22, height: 22, marginTop: -1, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", border: "1px solid #888", borderRadius: 2, color: "#ddd", fontSize: 12, userSelect: "none", boxSizing: "border-box", flexShrink: 0 }}>
                 <span style={{ marginTop: -1, lineHeight: 1 }}>⟳</span>
               </div>
             </div>
@@ -496,7 +496,7 @@ export function MatchTab() {
       {/* Accordion controls */}
       <div style={{ borderTop: "1px solid #444", margin: "6px 0 0" }} />
       <div onClick={() => toggleSection("basic")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#dddddd", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
-        <span><Icon name={openSection === "basic" ? "chevronDown" : "chevronRight"} size={11} /> Match controls</span>
+        <span><Icon name={openSection === "basic" ? "chevronDown" : "chevronRight"} size={11} /> Color</span>
       </div>
       {openSection === "basic" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: 0 }}>
@@ -518,7 +518,7 @@ export function MatchTab() {
 
       <div style={{ borderTop: "1px solid #444" }} />
       <div onClick={() => toggleSection("dims")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#dddddd", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
-        <span><Icon name={openSection === "dims" ? "chevronDown" : "chevronRight"} size={11} /> Dimension warps</span>
+        <span><Icon name={openSection === "dims" ? "chevronDown" : "chevronRight"} size={11} /> Tone</span>
         {openSection === "dims" && <span onClick={(e: any) => { e.stopPropagation(); dimsRef.current = { ...DEFAULT_DIMENSIONS }; setDimsLabel({ ...DEFAULT_DIMENSIONS }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>}
       </div>
       {openSection === "dims" && (
@@ -539,7 +539,7 @@ export function MatchTab() {
 
       <div style={{ borderTop: "1px solid #444" }} />
       <div onClick={() => toggleSection("zones")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#dddddd", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
-        <span><Icon name={openSection === "zones" ? "chevronDown" : "chevronRight"} size={11} /> Zone targeting</span>
+        <span><Icon name={openSection === "zones" ? "chevronDown" : "chevronRight"} size={11} /> Zones</span>
         {openSection === "zones" && (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
             <label onClick={(e: any) => e.stopPropagation()} title="Lock total: when one amount changes, the other two rebalance proportionally to preserve the sum"
