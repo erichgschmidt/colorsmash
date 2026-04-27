@@ -43,7 +43,8 @@ export function SourceSelector(props: SourceSelectorProps) {
   } = props;
 
   const sourceModeContent = srcMode === "layer" ? (
-    <select style={selStyle} value={sourceId ?? ""} onChange={e => setSourceId(Number(e.target.value))}>
+    <select style={selStyle} value={sourceId ?? ""} onChange={e => setSourceId(Number(e.target.value))}
+      title="Source layer — pixels read for the histogram fit. Pick 'Merged' to read the whole document composite.">
       {layers.length === 0 && <option value="">— none —</option>}
       {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
       <option value={MERGED_LAYER_ID}>🔀 Merged</option>
@@ -71,6 +72,7 @@ export function SourceSelector(props: SourceSelectorProps) {
     <>
       <div style={{ height: 26, display: "flex", alignItems: "center", gap: 4 }}>
         <select style={{ ...selStyle, flex: 1 }}
+          title="Source — an open document, the active selection (with auto/merge/lock toggles), or an image file from disk."
           value={
             srcMode === "folder" ? "__file__" :
             srcMode === "selection" ? "__selection__" : (activeDocId ?? "")

@@ -9,9 +9,9 @@ Pick a **source** (a layer in any open doc, an active marquee selection, or an i
 Beyond the basic fit:
 
 - **RGB or LAB matching** — toggle between per-channel RGB histogram specification and a perceptual L*a*b*-domain match. Curves are sampled back to per-channel R/G/B so the output stays a standard Curves layer.
-- **Match controls** — overall amount, smoothing (anti-banding), max stretch (slope cap), optional anchor of the slope cap to the target's actual histogram range, and a Hue-only mode that preserves target saturation and luminance.
-- **Dimension warps** — value, chroma, hue shift, contrast, neutralize, separation. Each is identity at default, deviating only when you move the slider.
-- **Zone targeting** — independent shadows / mids / highlights bands with amount, bias, anchor, and falloff. Optional locked total to keep the three amounts summing to a fixed value. Band swatch colors are sampled from the target image.
+- **Color** — overall amount, smoothing (anti-banding), max stretch (slope cap), optional anchor of the slope cap to the target's actual histogram range, and a Hue-only mode that preserves target saturation and luminance.
+- **Tone** — value, chroma, hue shift, contrast, neutralize, separation. Each is identity at default, deviating only when you move the slider.
+- **Zones** — independent shadows / mids / highlights bands with amount, bias, anchor, and falloff. Optional locked total to keep the three amounts summing to a fixed value. Band swatch colors are sampled from the target image.
 - **Envelope** — arbitrary-N piecewise weight curve over input 0..255 that further modulates the match per tonal value, composed multiplicatively with zones.
 - **Live matched preview** with zoom buttons, drag-to-pan, keyboard shortcuts, and a background-color toggle.
 - **Selection mode** with Auto, Merge, and Lock toggles — the active marquee re-samples on its own when bounds or pixels change; Merge samples the visible composite; Lock freezes the current sample.
@@ -47,14 +47,19 @@ The plugin requests `localFileSystem` permission so the **Browse Image…** sour
    - **Any open document name** — switches to that doc and uses Layer mode; pick the source layer in the dropdown below.
    - **Use Selection** — samples the active marquee. Below the dropdown: **Auto** (re-sample on selection or pixel changes), **Merge** (sample the visible composite instead of just the active layer), **Lock** (freeze the current sample).
    - **Browse Image…** — opens a file picker; the chosen image is loaded as the source. The filename appears as a sticky entry in the dropdown for quick re-selection.
-4. In the **Doc** dropdown (top-right), pick the target document; pick the **Target** layer below it. The **MERGED** option uses the document composite as the target.
-5. Watch the matched preview update live. Zoom with the −/+/1:1 buttons or `+` / `-` / `0` keys when the preview is hovered; drag inside the preview to pan; click the swatch to flip the preview background between dark and panel-gray.
-6. Toggle **RGB / LAB** in the matched preview header to switch color-space; click the small refresh button to re-read both source and target previews from Photoshop.
-7. Tweak any of the accordion sections: **Match controls**, **Dimension warps**, **Zone targeting**, **Envelope**.
-8. In the bottom bar, set **Deselect** (drop the active marquee before applying so curves apply to the full target) and **Overwrite** (replace the topmost / selected `Match Curves` layer, vs. hiding the prior one so alternatives stack).
-9. Click **Apply Curves** — a single Curves adjustment layer appears in `[Color Smash]` group, clipped to the target (or at the top of the stack if MERGED).
+4. In the **Doc** dropdown (top-right), pick the target document; pick the **Target** layer below it. The **MERGED** option uses the document composite as the target. Source and target docs are independent — each has its own dropdown plus a ⟳ refresh button (forces a hook-level reload to bypass any DOM cache, useful after silent batch renames).
+5. Layer dropdowns show the full group hierarchy as `Group / Subgroup / LayerName` so nested layers are unambiguous. The plugin's own `[Color Smash]` group is skipped automatically.
+6. Watch the matched preview update live. Zoom with the −/+/1:1 buttons or `+` / `-` / `0` keys when the preview is hovered; drag inside the preview to pan; click the swatch to flip the preview background between dark and panel-gray.
+7. Toggle **RGB / LAB** in the matched preview header to switch color-space; click the small refresh button to re-read both source and target previews from Photoshop.
+8. Tweak any of the accordion sections: **Color**, **Tone**, **Zones**, **Envelope**.
+9. In the bottom bar: **Deselect** (drop the active marquee before applying), **Replace** (overwrite the topmost / selected `Match Curves` layer instead of stacking), **Save** (persist all panel settings to disk, debounced ~500ms, including the Save toggle itself so it survives reloads), **✕** (red, opens a confirm modal: "Reset all panel settings to defaults and clear the saved file?" — wipes settings and deletes the persisted file), **RGB/LAB**, **⟳** (refresh previews).
+10. Click **Apply Curves** — a single Curves adjustment layer appears in `[Color Smash]` group, clipped to the target (or at the top of the stack if MERGED). When source and target live in different documents, the layer is placed in the target's document.
 
-## Match controls
+### Cross-document
+
+Source and target dropdowns are fully independent. Pick a layer in document A as source and a layer in document B as target — Apply writes the Curves layer into document B. Use the ⟳ refresh button next to either dropdown if Photoshop's notification stream gets out of sync (e.g. after a batch rename).
+
+## Color
 
 - **Amount** — global blend toward the matched curves (0 = identity).
 - **Smooth** — Gaussian smoothing on the per-channel CDFs to reduce banding from sparse histograms.
@@ -62,7 +67,7 @@ The plugin requests `localFileSystem` permission so the **Browse Image…** sour
 - **Anchor stretch to histogram range** — when on, the slope cap walks from where the target's data actually starts/ends (≥0.5% of peak count) instead of from 0/255. Keeps Stretch behavior consistent across bright vs. dark sources.
 - **Hue only (preserve target saturation + luminance)** — applies a Hue-blend Curves layer. Preview takes H from the mapped pixel, S from the original, then re-imposes Rec.709 luma — matches Photoshop's HSY-style Hue blend and avoids the saturation inflation per-channel curves naturally produce.
 
-## Zone targeting
+## Zones
 
 Three bands (shadows / mids / highlights), each with:
 
@@ -91,7 +96,7 @@ Editor controls:
 
 Background overlay shows the target luma histogram as filled gray bars and the source luma histogram as an orange polyline.
 
-## Dimension warps
+## Tone
 
 Identity at default. Each slider deviates the fitted curves along one axis:
 
@@ -104,8 +109,14 @@ Identity at default. Each slider deviates the fitted curves along one axis:
 
 ## Bottom bar
 
-- **Deselect on apply** — drops the active marquee before applying so the Curves layer affects the full target.
-- **Overwrite prior** — replaces the topmost / selected `Match Curves` layer instead of stacking a new one beside it.
+Layout: `[☐ Deselect] [☐ Replace] [☐ Save] [✕] [RGB/LAB] [⟳]` above the Apply button.
+
+- **Deselect** — drops the active marquee before applying so the Curves layer affects the full target.
+- **Replace** — overwrites the topmost / selected `Match Curves` layer instead of stacking a new one beside it.
+- **Save** — persists all panel settings (including this toggle's own state) to a JSON file in the plugin's data folder, debounced ~500ms. Restored on next panel load.
+- **✕** — solid red. Opens a UXP confirm modal: "Reset all panel settings to defaults and clear the saved file?" Confirm wipes all panel settings to defaults and deletes the persisted settings file.
+- **RGB/LAB** — color-space toggle (tight, hugs the letters).
+- **⟳** — re-reads source and target previews from Photoshop.
 - **Apply Curves** — writes the result.
 
 ## Development

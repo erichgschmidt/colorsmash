@@ -22,17 +22,26 @@ submission to match your final branding/pricing.
 >
 > • Live preview of the match as you tweak — no Apply round-trips
 >
-> • Cross-document workflow: source from one open document, target in
->   another. Curves land in the target.
+> • Cross-document workflow: source and target each have independent
+>   document dropdowns. Pick a source layer in one open document and
+>   a target layer in another — the Curves layer lands in the
+>   target's document. Per-dropdown refresh forces a hook-level
+>   reload to catch silent batch renames.
+>
+> • Layer dropdowns show full group hierarchy
+>   (Group / Subgroup / LayerName) and skip the plugin's own
+>   [Color Smash] group automatically.
 >
 > • Source from a layer, the active marquee selection, or any image
 >   file from disk
 >
 > • Target a layer, a group, or the merged document composite
 >
-> • Zone targeting with shadows / midtones / highlights, each with
->   independent amount, anchor, falloff, and competitive bias. Lock
->   the total to redistribute weight without changing strength.
+> • Three-section control surface — Color (match strength, smoothing,
+>   stretch, hue-only), Tone (value, chroma, hue, contrast,
+>   neutralize, separation), Zones (shadows / midtones / highlights
+>   with independent amount, anchor, falloff, and competitive bias;
+>   lock the total to redistribute weight without changing strength).
 >
 > • Envelope editor for arbitrary-N per-tone weight curves with mix
 >   of smooth (monotone-cubic) and corner (linear) interpolation
@@ -44,7 +53,11 @@ submission to match your final branding/pricing.
 > • Anchor stretch slope cap to the actual histogram range so the
 >   slider behaves consistently across bright vs dark sources
 >
-> • Persist all settings across panel reloads with one toggle
+> • Persist all settings across panel reloads with the Save toggle in
+>   the bottom action bar (debounced write to a JSON file in the
+>   plugin's data folder; the toggle's own state is included). The
+>   adjacent red ✕ button resets every control to defaults and
+>   deletes the saved file after a confirm prompt.
 >
 > WORKFLOW
 >
@@ -94,8 +107,9 @@ before submitting):
       3. Envelope editor with a few smooth + corner points placed
       4. Before/after split of an applied color match
       5. The generated Curves layer opened in PS's native dialog
-- [ ] **Product icon**: 256×256 PNG with transparent background.
-      Larger version of the panel glyph in `plugin/icons/`.
+- [x] **Product icon**: 256×256 PNG with transparent background.
+      Placeholder ready in `plugin/icons/` (icon-light/dark + @2x);
+      replace with final art before submission.
 
 ## Submission flow
 

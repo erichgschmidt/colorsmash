@@ -491,7 +491,8 @@ export function MatchTab() {
           </div>
           <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
             <div style={{ height: 26, display: "flex", alignItems: "center", gap: 4 }}>
-              <select style={{ ...sel, flex: 1 }} value={tgtDocId ?? ""} onChange={e => onSwitchTgtDoc(Number(e.target.value))}>
+              <select style={{ ...sel, flex: 1 }} value={tgtDocId ?? ""} onChange={e => onSwitchTgtDoc(Number(e.target.value))}
+                title="Target document — where the new Curves layer will land. Independent of the source doc; can differ from PS's currently active doc.">
                 {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
               </select>
               <div onClick={refreshTgtAll} title="Refresh document + target layer list"
@@ -500,7 +501,8 @@ export function MatchTab() {
               </div>
             </div>
             <div style={{ height: 26 }}>
-              <select style={sel} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}>
+              <select style={sel} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}
+                title="Target layer — what the matched Curves will be clipped to. Pick 'Merged' to apply at top-of-stack with no clipping.">
                 {tgtLayers.length === 0 && <option value="">— none —</option>}
                 {tgtLayers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
                 <option value={MERGED_LAYER_ID}>🔀 Merged</option>
@@ -531,7 +533,8 @@ export function MatchTab() {
             Anchor stretch to histogram range
           </label>
           {/* @ts-ignore Spectrum web component */}
-          <sp-checkbox checked={chromaOnly || undefined} onInput={(e: any) => setChromaOnly(e.target.checked)} style={{ marginTop: 4, fontSize: 11 }}>
+          <sp-checkbox checked={chromaOnly || undefined} onInput={(e: any) => setChromaOnly(e.target.checked)} style={{ marginTop: 4, fontSize: 11 }}
+            title="Apply only the hue shift; preserve target's saturation and luminance. Uses PS Hue blend mode — sidesteps the saturation inflation that per-channel curves cause.">
             Hue only (preserve target saturation + luminance)
           {/* @ts-ignore */}
           </sp-checkbox>
@@ -652,7 +655,8 @@ export function MatchTab() {
       />
 
       {/* @ts-ignore Spectrum web component */}
-      <sp-button variant="secondary" onClick={onApply} style={{ marginTop: 10, width: "100%" }}>Apply Curves</sp-button>
+      <sp-button variant="secondary" onClick={onApply} style={{ marginTop: 10, width: "100%" }}
+        title="Create a new Curves adjustment layer in the target document, clipped to the target layer. Honors Replace and Deselect toggles below.">Apply Curves</sp-button>
 
       {/* Curves graph below Apply */}
       <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7 }}>Fitted curves (R G B)</div>
