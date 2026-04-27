@@ -1,3 +1,5 @@
+import { useEffect, useRef, useState } from "react";
+
 // Bottom action bar for MatchTab:
 //   left:  Deselect | Overwrite labels (left-anchored, may be visually occluded)
 //   right: RGB/LAB toggle + refresh icon button (right-anchored over panel BG)
@@ -19,6 +21,23 @@ export function BottomActionBar(props: BottomActionBarProps) {
   const { deselectOnApply, setDeselectOnApply, overwriteOnApply, setOverwriteOnApply,
           remember, setRemember,
           colorSpace, setColorSpace, onRefreshAll, onResetAll } = props;
+
+  // Two-click confirm for the destructive ✕ reset (UXP has no window.confirm).
+  // First click arms the button (turns solid red); second click within 3s actually resets.
+  const [armed, setArmed] = useState(false);
+  const disarmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (disarmTimerRef.current) clearTimeout(disarmTimerRef.current); }, []);
+  const handleResetClick = () => {
+    if (armed) {
+      if (disarmTimerRef.current) { clearTimeout(disarmTimerRef.current); disarmTimerRef.current = null; }
+      setArmed(false);
+      onResetAll();
+    } else {
+      setArmed(true);
+      if (disarmTimerRef.current) clearTimeout(disarmTimerRef.current);
+      disarmTimerRef.current = setTimeout(() => setArmed(false), 3000);
+    }
+  };
 
   // Single left-aligned row: [☐ Deselect] [☐ Overwrite] [☐ Remember] [RGB] [⟳]
   //
@@ -42,10 +61,10 @@ export function BottomActionBar(props: BottomActionBarProps) {
       <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} style={checkboxStyle}
         title="Save — persist all panel settings across reloads (sliders, zones, envelope, toggles)." />
       <span style={{ ...textStyle, marginRight: 7 }}>Save</span>
-      <button onClick={() => { if (confirm("Reset all panel settings to defaults and clear saved settings?")) onResetAll(); }}
-        title="Reset all settings to defaults and clear the saved settings file"
+      <button onClick={handleResetClick}
+        title={armed ? "Click again to confirm — resets all settings + clears saved file" : "Reset all settings to defaults and clear the saved file (click twice to confirm)"}
         style={{ width: 16, height: 16, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
-                 background: "transparent", color: "#e66666", fontWeight: 700, fontSize: 12, lineHeight: 1,
+                 background: armed ? "#e66666" : "transparent", color: armed ? "#fff" : "#e66666", fontWeight: 700, fontSize: 12, lineHeight: 1,
                  border: "1px solid #e66666", borderRadius: 3, cursor: "pointer", boxSizing: "border-box", flexShrink: 0 }}>
         <span style={{ marginTop: -1 }}>✕</span>
       </button>
