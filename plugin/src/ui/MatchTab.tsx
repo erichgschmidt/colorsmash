@@ -162,6 +162,7 @@ export function MatchTab() {
       zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel]);
 
   const [docs, setDocs] = useState<{ id: number; name: string }[]>([]);
+  const refreshDocsRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     let cancelled = false;
@@ -180,6 +181,7 @@ export function MatchTab() {
         setTgtDocId(pickFallback);
       } catch { /* */ }
     };
+    refreshDocsRef.current = readNow;
     // PS fires events during modal scope before doc.documents reflects the mutation;
     // defer so we read after the tree settles. Two passes for fast vs late settle.
     const refresh = () => { setTimeout(readNow, 0); setTimeout(readNow, 120); };
@@ -194,6 +196,11 @@ export function MatchTab() {
       psAction.removeNotificationListener?.(events, refresh);
     };
   }, []);
+
+  // Combined refresh: docs list + the per-side layer list. Wired into the ⟳ button next
+  // to each doc dropdown so a single click picks up newly opened docs AND silent renames.
+  const refreshSrcAll = () => { refreshDocsRef.current(); refreshSrcLayers(); };
+  const refreshTgtAll = () => { refreshDocsRef.current(); refreshTgtLayers(); };
 
   // Picking a doc in our dropdown is panel-only — we do NOT change PS's active document.
   // Source and target each have their own setter so they can point to different docs.
@@ -436,28 +443,28 @@ export function MatchTab() {
               sampleMerged={sampleMerged} setSampleMerged={setSampleMerged}
               sampleLock={sampleLock} setSampleLock={setSampleLock}
               selStyle={sel}
-              onRefreshLayers={refreshSrcLayers}
+              onRefreshLayers={refreshSrcAll}
             />
             <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}}
               snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}
               hideSelector fitAspect maxHeight={120} />
           </div>
           <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-            <div style={{ height: 26 }}>
-              <select style={sel} value={tgtDocId ?? ""} onChange={e => onSwitchTgtDoc(Number(e.target.value))}>
+            <div style={{ height: 26, display: "flex", alignItems: "center", gap: 4 }}>
+              <select style={{ ...sel, flex: 1 }} value={tgtDocId ?? ""} onChange={e => onSwitchTgtDoc(Number(e.target.value))}>
                 {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
               </select>
+              <div onClick={refreshTgtAll} title="Refresh document + target layer list"
+                style={{ width: 22, height: 22, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", border: "1px solid #888", borderRadius: 2, color: "#ddd", fontSize: 12, userSelect: "none", boxSizing: "border-box", flexShrink: 0 }}>
+                <span style={{ marginTop: -1, lineHeight: 1 }}>⟳</span>
+              </div>
             </div>
-            <div style={{ height: 26, display: "flex", alignItems: "center", gap: 4 }}>
-              <select style={{ ...sel, flex: 1 }} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}>
+            <div style={{ height: 26 }}>
+              <select style={sel} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}>
                 {tgtLayers.length === 0 && <option value="">— none —</option>}
                 {tgtLayers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
                 <option value={MERGED_LAYER_ID}>🔀 Merged</option>
               </select>
-              <div onClick={refreshTgtLayers} title="Force-refresh target layer list"
-                style={{ width: 22, height: 22, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", border: "1px solid #888", borderRadius: 2, color: "#ddd", fontSize: 12, userSelect: "none", boxSizing: "border-box", flexShrink: 0 }}>
-                <span style={{ marginTop: -1, lineHeight: 1 }}>⟳</span>
-              </div>
             </div>
             <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap}
               hideSelector fitAspect maxHeight={120} />

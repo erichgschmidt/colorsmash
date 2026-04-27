@@ -43,19 +43,11 @@ export function SourceSelector(props: SourceSelectorProps) {
   } = props;
 
   const sourceModeContent = srcMode === "layer" ? (
-    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-      <select style={{ ...selStyle, flex: 1 }} value={sourceId ?? ""} onChange={e => setSourceId(Number(e.target.value))}>
-        {layers.length === 0 && <option value="">— none —</option>}
-        {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-        <option value={MERGED_LAYER_ID}>🔀 Merged</option>
-      </select>
-      {props.onRefreshLayers && (
-        <div onClick={props.onRefreshLayers} title="Force-refresh layer list (use if names look stale after another plugin renamed/regrouped)"
-          style={{ width: 22, height: 22, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", border: "1px solid #888", borderRadius: 2, color: "#ddd", fontSize: 12, userSelect: "none", boxSizing: "border-box", flexShrink: 0 }}>
-          <span style={{ marginTop: -1, lineHeight: 1 }}>⟳</span>
-        </div>
-      )}
-    </div>
+    <select style={selStyle} value={sourceId ?? ""} onChange={e => setSourceId(Number(e.target.value))}>
+      {layers.length === 0 && <option value="">— none —</option>}
+      {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+      <option value={MERGED_LAYER_ID}>🔀 Merged</option>
+    </select>
   ) : srcMode === "folder" ? (
     <span style={{ fontSize: 10, opacity: 0.7 }}>{browsedFile ? `📁 ${browsedFile}` : ""}</span>
   ) : (
@@ -77,8 +69,8 @@ export function SourceSelector(props: SourceSelectorProps) {
 
   return (
     <>
-      <div style={{ height: 26 }}>
-        <select style={selStyle}
+      <div style={{ height: 26, display: "flex", alignItems: "center", gap: 4 }}>
+        <select style={{ ...selStyle, flex: 1 }}
           value={
             srcMode === "folder" ? "__file__" :
             srcMode === "selection" ? "__selection__" : (activeDocId ?? "")
@@ -95,6 +87,12 @@ export function SourceSelector(props: SourceSelectorProps) {
           <option value="__browse__">📁 Browse Image…</option>
           {browsedFile && <option value="__file__">📁 {browsedFile}</option>}
         </select>
+        {props.onRefreshLayers && (
+          <div onClick={props.onRefreshLayers} title="Refresh document + layer list (use if a doc was just opened/closed or another plugin renamed layers)"
+            style={{ width: 22, height: 22, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", border: "1px solid #888", borderRadius: 2, color: "#ddd", fontSize: 12, userSelect: "none", boxSizing: "border-box", flexShrink: 0 }}>
+            <span style={{ marginTop: -1, lineHeight: 1 }}>⟳</span>
+          </div>
+        )}
       </div>
       <div style={{ height: 26 }}>{sourceModeContent}</div>
     </>
