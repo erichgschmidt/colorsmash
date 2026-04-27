@@ -78,9 +78,9 @@ submission to match your final branding/pricing.
 
 ## URLs
 
-- **Support**: https://github.com/erichgschmidt/coloursmash/issues
-- **Privacy Policy**: https://erichgschmidt.github.io/coloursmash/privacy.html
-- **Website / Documentation**: https://github.com/erichgschmidt/coloursmash
+- **Support**: https://github.com/erichgschmidt/colorsmash/issues
+- **Privacy Policy**: https://erichgschmidt.github.io/colorsmash/privacy.html
+- **Website / Documentation**: https://github.com/erichgschmidt/colorsmash
 
 (GitHub Pages must be enabled on the repo with `docs/` as the source
 for the privacy URL above to resolve. Settings → Pages → Source:

@@ -16,7 +16,7 @@
 
 Open an issue with as much detail as you can:
 
-**https://github.com/erichgschmidt/coloursmash/issues**
+**https://github.com/erichgschmidt/colorsmash/issues**
 
 Helpful things to include:
 - Photoshop version (`Help > System Info`)
