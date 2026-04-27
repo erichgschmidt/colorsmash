@@ -35,7 +35,9 @@ interface SourceSnap { width: number; height: number; data: Uint8Array; name: st
 
 export function MatchTab() {
   // Live updates toggle declared up front so the hooks below can read it.
-  const [liveUpdates, setLiveUpdates] = useState(true);
+  // Default OFF — the panel is inert until the user explicitly clicks ⟳ or right-clicks
+  // it to enable auto. Reduces background work and PS pinging out of the box.
+  const [liveUpdates, setLiveUpdates] = useState(false);
   const [stale, setStale] = useState(false);
   // Source and target each have their own doc — fully independent. Source can come from
   // doc A while target lives in doc B. Both default to PS's active doc on first mount.
@@ -474,6 +476,7 @@ export function MatchTab() {
     dimsRef.current = { ...DEFAULT_DIMENSIONS }; setDimsLabel({ ...DEFAULT_DIMENSIONS });
     envelopeRef.current = [...DEFAULT_ENVELOPE]; setEnvelopeLabel([...DEFAULT_ENVELOPE]);
     setRemember(false);
+    setLiveUpdates(false);
     void clearSettings();
     scheduleRedraw();
     setStatus("Settings reset to defaults.");
