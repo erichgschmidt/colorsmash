@@ -550,7 +550,6 @@ export function MatchTab() {
             style={{ width: 10, height: 10, borderRadius: "50%", flexShrink: 0,
                      background: enColor ? "#5fd16a" : "#555",
                      border: enColor ? "1px solid #2d8a36" : "1px solid #333",
-                     boxShadow: enColor ? "0 0 4px #5fd16a88" : "none",
                      cursor: "pointer" }} />
           <Icon name={openSection === "basic" ? "chevronDown" : "chevronRight"} size={11} /> Color
         </span>
@@ -582,7 +581,6 @@ export function MatchTab() {
             style={{ width: 10, height: 10, borderRadius: "50%", flexShrink: 0,
                      background: enTone ? "#5fd16a" : "#555",
                      border: enTone ? "1px solid #2d8a36" : "1px solid #333",
-                     boxShadow: enTone ? "0 0 4px #5fd16a88" : "none",
                      cursor: "pointer" }} />
           <Icon name={openSection === "dims" ? "chevronDown" : "chevronRight"} size={11} /> Tone
         </span>
@@ -612,7 +610,6 @@ export function MatchTab() {
             style={{ width: 10, height: 10, borderRadius: "50%", flexShrink: 0,
                      background: enZones ? "#5fd16a" : "#555",
                      border: enZones ? "1px solid #2d8a36" : "1px solid #333",
-                     boxShadow: enZones ? "0 0 4px #5fd16a88" : "none",
                      cursor: "pointer" }} />
           <Icon name={openSection === "zones" ? "chevronDown" : "chevronRight"} size={11} /> Zones
           <span onClick={(e: any) => { e.stopPropagation(); void uxpInfo("Zones — what each control does", [
@@ -704,7 +701,6 @@ export function MatchTab() {
             style={{ width: 10, height: 10, borderRadius: "50%", flexShrink: 0,
                      background: enEnvelope ? "#5fd16a" : "#555",
                      border: enEnvelope ? "1px solid #2d8a36" : "1px solid #333",
-                     boxShadow: enEnvelope ? "0 0 4px #5fd16a88" : "none",
                      cursor: "pointer" }} />
           <Icon name={openSection === "envelope" ? "chevronDown" : "chevronRight"} size={11} /> Envelope{envelopeLabel.length > 0 && <span style={{ fontSize: 9, fontWeight: 400, opacity: 0.7, marginLeft: 6 }}>· {envelopeLabel.length} pt{envelopeLabel.length === 1 ? "" : "s"}</span>}
         </span>
