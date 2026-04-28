@@ -204,25 +204,37 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
 
       const { imaging } = require("photoshop");
 
-      // Read full-res document composite for mask computation.
-      const compResult = await imaging.getPixels({ documentID: doc.id, componentSize: 8, applyAlpha: false, colorSpace: "RGB" });
+      // Read full-res document composite for mask computation. Request 4-component output
+      // so we get alpha — needed to zero out mask values in transparent areas (otherwise
+      // the highlight mask reads outside-image pixels as full-white luma and ends up white
+      // in the border, applying the highlight Curves to nothing visible but polluting the
+      // mask thumbnail).
+      const compResult = await imaging.getPixels({ documentID: doc.id, componentSize: 8, applyAlpha: false });
       const compId = compResult.imageData;
       const compRaw = await compId.getData();
       const compSrc = compRaw instanceof Uint8Array ? compRaw : new Uint8Array(compRaw);
       const compW = compId.width, compH = compId.height;
       const compComps = compId.components ?? (compSrc.length / (compW * compH));
+      const hasAlpha = compComps === 4;
 
-      // Triangular band-weight masks (one byte per pixel = weight × 255).
+      // Triangular band-weight masks (one byte per pixel = weight × 255). Multiplied by
+      // alpha when present so transparent pixels get mask value 0 across all bands.
       const pxCount = compW * compH;
       const shadowMask = new Uint8Array(pxCount);
       const midMask = new Uint8Array(pxCount);
       const highlightMask = new Uint8Array(pxCount);
       for (let i = 0, j = 0; i < pxCount; i++, j += compComps) {
+        const a = hasAlpha ? compSrc[j + 3] / 255 : 1;
+        if (a < 1 / 255) {
+          // Fully transparent — all band masks = 0 (no application of any band there).
+          shadowMask[i] = 0; midMask[i] = 0; highlightMask[i] = 0;
+          continue;
+        }
         const r = compSrc[j], g = compSrc[j + 1], b = compSrc[j + 2];
         const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        shadowMask[i]    = Math.max(0, Math.min(255, Math.round((1 - luma / 128) * 255)));
-        midMask[i]       = Math.max(0, Math.min(255, Math.round((1 - Math.abs(luma - 128) / 128) * 255)));
-        highlightMask[i] = Math.max(0, Math.min(255, Math.round(((luma - 128) / 128) * 255)));
+        shadowMask[i]    = Math.max(0, Math.min(255, Math.round(a * (1 - luma / 128) * 255)));
+        midMask[i]       = Math.max(0, Math.min(255, Math.round(a * (1 - Math.abs(luma - 128) / 128) * 255)));
+        highlightMask[i] = Math.max(0, Math.min(255, Math.round(a * ((luma - 128) / 128) * 255)));
       }
       if (compId.dispose) compId.dispose();
 
@@ -249,7 +261,9 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
           { channel: "green", points: sampleControlPoints(c.g, CONTROL_POINTS) },
           { channel: "blue",  points: sampleControlPoints(c.b, CONTROL_POINTS) },
         ]);
-        if (target) { try { await setClippingMask(layer, true); } catch { /* ignore */ } }
+        // No clipping mask in multi-zone — the per-band luminosity mask (or Blend If) is
+        // already doing the spatial limiting. Clipping would redundantly bind each layer
+        // to the target layer below, defeating the point of band-based application.
         if (params.chromaOnly) { try { layer.blendMode = "hue"; } catch { /* ignore */ } }
         try { await layer.move(group, "placeInside"); } catch { /* ignore */ }
 
