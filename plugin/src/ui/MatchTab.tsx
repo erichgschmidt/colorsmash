@@ -22,6 +22,7 @@ import {
 } from "../core/histogramMatch";
 import { EnvelopeEditor } from "./EnvelopeEditor";
 import { loadSettings, makeDebouncedSaver, clearSettings, PersistedSettings } from "./persistence";
+import { uxpInfo } from "./uxpInfo";
 import { applyMatch } from "../app/applyMatch";
 import {
   app, action as psAction, readLayerPixels, executeAsModal, getActiveDoc, getSelectionBounds,
@@ -574,7 +575,31 @@ export function MatchTab() {
 
       <div style={{ borderTop: "1px solid #444" }} />
       <div onClick={() => toggleSection("zones")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#dddddd", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
-        <span><Icon name={openSection === "zones" ? "chevronDown" : "chevronRight"} size={11} /> Zones</span>
+        <span>
+          <Icon name={openSection === "zones" ? "chevronDown" : "chevronRight"} size={11} /> Zones
+          <span onClick={(e: any) => { e.stopPropagation(); void uxpInfo("Zones — what each control does", [
+            { heading: "What zones do",
+              body: "Modulate how strongly the histogram match applies across input tones. Each zone (shadows / midtones / highlights) is a Gaussian bump centered on its anchor; the per-input weight blends the matched curve with identity. With all amounts at 100% and biases at 0, weights sum to 1.0 everywhere — the match runs full-strength and zones have no effect." },
+            { heading: "Track (the gradient slider)",
+              body: "Visualizes the zone's footprint over the 0–255 input range. The colored band is where the zone is active. The center thumb is the anchor; the two edge thumbs control falloff." },
+            { heading: "Anchor",
+              body: "Where the zone is centered along the input axis (0 = pure black, 255 = pure white). Drag the center thumb to move the zone toward shadows or highlights." },
+            { heading: "Falloff",
+              body: "How wide the zone extends from its anchor. Drag either edge thumb in for a narrower, sharper zone or out for a broader one. Falloff is symmetric around the anchor." },
+            { heading: "Amount",
+              body: "Strength of the zone's contribution. 100% = standard. 0% = the zone fully suppresses the match in that range. 200% = doubles the local pull. Slider is the wide one to the right of the track." },
+            { heading: "Bias",
+              body: "Competitive pressure against neighboring zones at overlap regions. Positive bias makes this zone dominate the partition where it overlaps another zone — like Photoshop's Color Range 'grow this range' feel. 0 = neutral. Implemented as exp(bias/50) inside the partition-of-unity normalization, so default 0 is bit-identical to no bias at all." },
+            { heading: "Lock total (header checkbox)",
+              body: "When on, dragging one zone's amount slider proportionally redistributes the other two amounts to preserve their sum. Useful for shifting weight between shadows/mids/highlights without changing total match strength. Off (default) = each zone amount is independent." },
+            { heading: "Sampled swatch colors",
+              body: "The colored band on each track is sampled from the target image's actual pixels in that zone's input range — so the swatch reflects the colors the zone is acting on. As you move anchors and falloff, swatches update in real time." },
+            { heading: "Reset (header)",
+              body: "Restores all zone settings (amounts, anchors, falloffs, biases) to defaults. Lock total stays as-is." },
+          ]); }}
+            title="What this section does — full explanation"
+            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", marginLeft: 6, width: 14, height: 14, borderRadius: "50%", border: "1px solid #888", color: "#aaa", fontSize: 10, fontWeight: 700, cursor: "pointer", verticalAlign: "middle" }}>i</span>
+        </span>
         {openSection === "zones" && (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
             <label onClick={(e: any) => e.stopPropagation()} title="Lock total: when one amount changes, the other two rebalance proportionally to preserve the sum"
