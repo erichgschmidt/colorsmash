@@ -261,11 +261,15 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
           { channel: "green", points: sampleControlPoints(c.g, CONTROL_POINTS) },
           { channel: "blue",  points: sampleControlPoints(c.b, CONTROL_POINTS) },
         ]);
-        // No clipping mask in multi-zone — the per-band luminosity mask (or Blend If) is
-        // already doing the spatial limiting. Clipping would redundantly bind each layer
-        // to the target layer below, defeating the point of band-based application.
+        // Clipping mask: when target is a specific layer, clip each band layer to it so
+        // the Curves only affect the target — not the layers below. Without this, the
+        // multi-zone curves apply to everything underneath in the stack.
+        // When target is Merged (target == null), no clipping — the layers sit at top
+        // of the stack and affect the whole document composite (per Merged semantics).
+        if (target) { try { await setClippingMask(layer, true); } catch { /* ignore */ } }
         if (params.chromaOnly) { try { layer.blendMode = "hue"; } catch { /* ignore */ } }
-        try { await layer.move(group, "placeInside"); } catch { /* ignore */ }
+        // NOTE: Blend If attempts run BEFORE moving into the group — per audit feedback,
+        // layer descriptor readback can get weird when the layer is nested in a group.
 
         // Try the user-preferred limiting method(s). 'mask' uses putLayerMask only (clean
         // single approach). 'blendIf' uses batchPlay-set descriptor only. 'both' applies
@@ -299,41 +303,60 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
           // Try multiple Blend If descriptor formats, verifying each by reading back the
           // layer's blendRange property. The set call doesn't throw on bad descriptors —
           // it accepts and silently ignores. Without readback, we can't know it worked.
-          const blendRangeData = [{
+          // Per UXP-forum example, the channel descriptor needs `_ref: "channel"` AND
+          // a `desaturate` field is included in working examples. This is a more faithful
+          // mirror of the Action Manager descriptor than my previous attempts.
+          const buildBlendRange = () => [{
             _obj: "blendRange",
-            channel: { _enum: "channel", _value: "gray" },
+            channel: { _ref: "channel", _enum: "channel", _value: "gray" },
             srcBlackMin: 0, srcBlackMax: 0, srcWhiteMin: 255, srcWhiteMax: 255,
             destBlackMin: band.destBlackMin, destBlackMax: band.destBlackMax,
             destWhiteMin: band.destWhiteMin, destWhiteMax: band.destWhiteMax,
+            desaturate: 255,
           }];
 
-          // Variants to try, in order of likelihood. Each attempts a different descriptor
-          // shape. After each, we readback and verify the dest values stuck.
-          const variants: Array<{ name: string; desc: any }> = [
-            // 1. Direct blendRange on layer descriptor (current best guess).
-            { name: "layer.blendRange",
-              desc: { _obj: "layer", blendRange: blendRangeData } },
-            // 2. Wrapped in blendingOptions (per audit suggestion).
+          // Variants to try in order. Each performs a `set`, then reads back the
+          // layer's blendRange property to verify the values actually stuck (PS often
+          // accepts an ill-shaped descriptor without throwing, then ignores it).
+          const variants: Array<{ name: string; cmds: () => any[] }> = [
+            // 1. Forum-style descriptor with _ref:"channel" + desaturate + _isCommand.
+            //    Targets active layer via targetEnum (forum example pattern).
+            { name: "forum-shape (select+targetEnum, _ref channel, desaturate)",
+              cmds: () => [
+                { _obj: "select", _target: [{ _ref: "layer", _id: layer.id }], makeVisible: false },
+                {
+                  _obj: "set",
+                  _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }],
+                  to: { _obj: "layer", blendRange: buildBlendRange() },
+                  _isCommand: true,
+                } as any,
+              ],
+            },
+            // 2. Same shape but targeting layer by id directly.
+            { name: "by-id, _ref channel, desaturate",
+              cmds: () => [{
+                _obj: "set",
+                _target: [{ _ref: "layer", _id: layer.id }],
+                to: { _obj: "layer", blendRange: buildBlendRange() },
+                _isCommand: true,
+              } as any],
+            },
+            // 3. Wrapped in blendingOptions (per audit suggestion #2).
             { name: "layer.blendingOptions.blendRange",
-              desc: { _obj: "layer", blendingOptions: { _obj: "blendingOptions", blendRange: blendRangeData } } },
-            // 3. Selecting the layer first, then setting via targetEnum.
-            { name: "select+targetEnum",
-              desc: { _obj: "layer", blendRange: blendRangeData },
-              selectFirst: true } as any,
+              cmds: () => [{
+                _obj: "set",
+                _target: [{ _ref: "layer", _id: layer.id }],
+                to: { _obj: "layer", blendingOptions: { _obj: "blendingOptions", blendRange: buildBlendRange() } },
+                _isCommand: true,
+              } as any],
+            },
           ];
 
           for (const variant of variants) {
             try {
-              const cmds: any[] = [];
-              if ((variant as any).selectFirst) {
-                cmds.push({ _obj: "select", _target: [{ _ref: "layer", _id: layer.id }], makeVisible: false });
-                cmds.push({ _obj: "set", _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }], to: variant.desc });
-              } else {
-                cmds.push({ _obj: "set", _target: [{ _ref: "layer", _id: layer.id }], to: variant.desc });
-              }
-              await action.batchPlay(cmds, {});
+              await action.batchPlay(variant.cmds(), {});
 
-              // Readback verification — get blendRange back from the layer and compare.
+              // Readback verification — get blendRange and compare.
               const readResult = await action.batchPlay([{
                 _obj: "get",
                 _target: [
@@ -348,8 +371,7 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
                 blendIfOk = true;
                 break;
               }
-              // Set succeeded but readback shows different values → silently ignored.
-              blendIfErr = new Error(`Variant '${variant.name}' set accepted but readback shows defaults — descriptor format not recognized by this PS version`);
+              blendIfErr = new Error(`Variant '${variant.name}' set accepted but readback shows defaults`);
             } catch (e: any) {
               blendIfErr = new Error(`Variant '${variant.name}' threw: ${e?.message ?? e}`);
             }
@@ -362,6 +384,9 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
           if (blendIfErr) reasons.push(`blendIf: ${blendIfErr?.message ?? blendIfErr}`);
           failures.push(`${band.suffix} (${reasons.join("; ")})`);
         }
+        // Move into [Color Smash] group AFTER mask/blend if attempts so layer descriptor
+        // readback isn't confused by group nesting (per audit suggestion #1).
+        try { await layer.move(group, "placeInside"); } catch { /* ignore */ }
       }
 
       const tags = [`multi-zone (${bands.length} layers)`];
