@@ -918,7 +918,7 @@ export function MatchTab() {
         const subTxt: React.CSSProperties = { ...txt, opacity: subDisabled ? 0.5 : 1 };
         const cell: React.CSSProperties = { display: "flex", alignItems: "center", gap: 3, overflow: "hidden", minWidth: 0 };
         return (
-          <div style={{ display: "grid", gridTemplateColumns: "70px 65px 65px 1fr", alignItems: "center", marginTop: 8, fontSize: 11, color: multiZone ? "#dddddd" : "#aaaaaa", height: 18, overflow: "hidden" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 70px) minmax(0, 65px) minmax(0, 65px) auto", alignItems: "center", marginTop: 8, fontSize: 11, color: multiZone ? "#dddddd" : "#aaaaaa", height: 18, overflow: "hidden" }}>
             <label style={{ ...cell, cursor: "pointer" }}
               title="Multi: emit 3 stacked Curves layers (shadows / mids / highlights), each limited to its luminance band. Adapts spatially across mixed-lighting scenes.">
               <input type="checkbox" checked={multiZone} onChange={e => setMultiZone(e.target.checked)} style={cbMain} />
