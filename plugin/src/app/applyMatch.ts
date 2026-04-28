@@ -191,24 +191,43 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       catch { /* ignore */ }
     }
 
-    // ─── Multi-zone branch: emit 3 stacked Curves layers + Blend If sliders ──────
+    // ─── Multi-zone branch: emit 3 stacked Curves layers + luminosity masks ──────
     if (multiZoneFit) {
-      // Each band gets its own Curves layer with Blend If limiting it to its luma band.
-      // Bands defined by triangular weights at luma 0/128/255 → Blend If split-slider math
-      // matches the preview simulator exactly.
-      const bands: Array<{
-        key: "shadow" | "mid" | "highlight"; suffix: string;
-        // dest range: Blend If "underlying" sliders, two split positions per side.
-        destBlackMin: number; destBlackMax: number;
-        destWhiteMin: number; destWhiteMax: number;
-      }> = [
-        { key: "shadow",    suffix: "Shadows",    destBlackMin: 0,   destBlackMax: 0,   destWhiteMin: 0,   destWhiteMax: 128 },
-        { key: "mid",       suffix: "Mids",       destBlackMin: 0,   destBlackMax: 128, destWhiteMin: 128, destWhiteMax: 255 },
-        { key: "highlight", suffix: "Highlights", destBlackMin: 128, destBlackMax: 255, destWhiteMin: 255, destWhiteMax: 255 },
+      // Strategy: read the document composite once at full resolution, compute three mask
+      // arrays (per pixel, 0..255 mask value = triangular band weight at that pixel's luma),
+      // then write them to each layer's mask channel via imaging.putPixels. Triangular
+      // weights match the preview simulator exactly — what you see is what you get.
+      const { imaging } = require("photoshop");
+
+      // Read full-resolution document composite for mask computation.
+      const compResult = await imaging.getPixels({ documentID: doc.id, componentSize: 8, applyAlpha: false, colorSpace: "RGB" });
+      const compId = compResult.imageData;
+      const compRaw = await compId.getData();
+      const compSrc = compRaw instanceof Uint8Array ? compRaw : new Uint8Array(compRaw);
+      const compW = compId.width, compH = compId.height;
+      const compComps = compId.components ?? (compSrc.length / (compW * compH));
+
+      // Compute the three mask arrays. Triangular weights centered at 0/128/255 →
+      // mask value 0..255 = weight × 255. Sum across the three masks = 255 at every pixel.
+      const pxCount = compW * compH;
+      const shadowMask = new Uint8Array(pxCount);
+      const midMask = new Uint8Array(pxCount);
+      const highlightMask = new Uint8Array(pxCount);
+      for (let i = 0, j = 0; i < pxCount; i++, j += compComps) {
+        const r = compSrc[j], g = compSrc[j + 1], b = compSrc[j + 2];
+        const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        shadowMask[i] = Math.max(0, Math.min(255, Math.round((1 - luma / 128) * 255)));
+        midMask[i] = Math.max(0, Math.min(255, Math.round((1 - Math.abs(luma - 128) / 128) * 255)));
+        highlightMask[i] = Math.max(0, Math.min(255, Math.round(((luma - 128) / 128) * 255)));
+      }
+      if (compId.dispose) compId.dispose();
+
+      const bands: Array<{ key: "shadow" | "mid" | "highlight"; suffix: string; mask: Uint8Array }> = [
+        { key: "shadow",    suffix: "Shadows",    mask: shadowMask },
+        { key: "mid",       suffix: "Mids",       mask: midMask },
+        { key: "highlight", suffix: "Highlights", mask: highlightMask },
       ];
-      // Names ALL prefixed with RESULT_LAYER_NAME so the existing find-children-by-prefix
-      // cleanup logic catches them on subsequent overwrite=true applies.
-      const created: any[] = [];
+
       for (const band of bands) {
         const baseName = `${RESULT_LAYER_NAME} [${band.suffix}]`;
         const layerName = overwrite ? baseName
@@ -222,24 +241,26 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
         if (target) { try { await setClippingMask(layer, true); } catch { /* ignore */ } }
         if (params.chromaOnly) { try { layer.blendMode = "hue"; } catch { /* ignore */ } }
         try { await layer.move(group, "placeInside"); } catch { /* ignore */ }
-        // Blend If sliders for the underlying composite — limits this layer to its band.
+
+        // Write the luminosity mask. Adjustment layers come with a default revealAll mask;
+        // we overwrite its pixels via imaging.putPixels with the band's mask data.
         try {
-          await action.batchPlay([{
-            _obj: "set",
-            _target: [{ _ref: "layer", _id: layer.id }],
-            to: {
-              _obj: "layer",
-              underlyingMaskBlendingRanges: [{
-                _obj: "blendRange",
-                channel: { _enum: "channel", _value: "gray" },
-                srcBlackMin: 0, srcBlackMax: 0, srcWhiteMin: 255, srcWhiteMax: 255,
-                destBlackMin: band.destBlackMin, destBlackMax: band.destBlackMax,
-                destWhiteMin: band.destWhiteMin, destWhiteMax: band.destWhiteMax,
-              }],
-            },
-          }], {});
-        } catch { /* if Blend If descriptor isn't accepted, layer still applies fully — user can fix manually */ }
-        created.push(layer);
+          const maskImageData = await imaging.createImageDataFromBuffer(band.mask, {
+            width: compW, height: compH, components: 1, chunky: true, colorProfile: "Gray Gamma 2.2", colorSpace: "Grayscale",
+          });
+          await imaging.putPixels({
+            documentID: doc.id,
+            layerID: layer.id,
+            imageData: maskImageData,
+            targetBounds: { left: 0, top: 0, right: compW, bottom: compH },
+            replace: true,
+          });
+          if (maskImageData.dispose) maskImageData.dispose();
+        } catch (e: any) {
+          // If putPixels-to-mask isn't supported or fails, the layer applies fully.
+          // Log via the tags so the user knows.
+          console?.warn?.(`Multi-zone mask write failed for ${band.suffix}: ${e?.message ?? e}`);
+        }
       }
       const tags = [`multi-zone (${bands.length} layers)`];
       if (params.amount && params.amount < 1) tags.push(`amt ${Math.round(params.amount * 100)}%`);
