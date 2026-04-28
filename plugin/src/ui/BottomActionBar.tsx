@@ -41,7 +41,7 @@ export function BottomActionBar(props: BottomActionBarProps) {
     display: "flex", alignItems: "center", gap: 3, overflow: "hidden", minWidth: 0,
   };
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 70px) minmax(0, 65px) minmax(0, 65px) auto", alignItems: "center", marginTop: 8, fontSize: 10, color: "#cccccc", height: 18, overflow: "hidden" }}>
+    <div style={{ display: "grid", gridTemplateColumns: "70px 65px 65px 1fr", alignItems: "center", marginTop: 8, fontSize: 10, color: "#cccccc", height: 18, overflow: "hidden" }}>
       <label style={{ ...cell, cursor: "pointer" }} title="Deselect — drop the active marquee before creating the layer so curves apply to the full target.">
         <input type="checkbox" checked={deselectOnApply} onChange={e => setDeselectOnApply(e.target.checked)} style={{ margin: 0, flexShrink: 0 }} />
         <span style={labelTxt}>Deselect</span>
