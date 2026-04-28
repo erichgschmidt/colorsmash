@@ -23,6 +23,8 @@ export interface PersistedSettings {
   overwriteOnApply?: boolean;
   // Sections
   openSection?: "basic" | "dims" | "zones" | "envelope" | null;
+  // Match algorithm
+  matchMode?: "full" | "mean" | "median" | "percentile";
   // Zone targeting
   zones?: any;
   lockZoneTotal?: boolean;

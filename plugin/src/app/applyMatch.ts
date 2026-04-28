@@ -7,10 +7,11 @@ import {
 } from "../services/photoshop";
 import { downsampleToMaxEdge } from "../core/downsample";
 import {
-  fitHistogramCurves, fitHistogramCurvesLab, sampleControlPoints, processChannelCurves, applyDimensions,
+  sampleControlPoints, processChannelCurves, applyDimensions,
   applyZoneAndEnvelopeToChannels, MERGED_LAYER_ID,
   ChannelCurves, DimensionOpts, DEFAULT_DIMENSIONS, ZoneOpts, DEFAULT_ZONES,
   EnvelopePoint, DEFAULT_ENVELOPE,
+  fitByMode, MatchMode,
 } from "../core/histogramMatch";
 
 const STATS_MAX_EDGE = 512;
@@ -48,6 +49,7 @@ export interface ApplyMatchParams {
   dimensions?: DimensionOpts;
   zones?: ZoneOpts;
   envelope?: EnvelopePoint[];
+  matchMode?: MatchMode;       // full / mean / median / percentile (default full)
   sourcePixelsOverride?: Uint8Array; // if set, use these RGBA pixels instead of reading source layer
   sourceLabel?: string; // optional name shown in result message
   colorSpace?: "rgb" | "lab";
@@ -66,10 +68,11 @@ export async function fitMatchCurves(params: ApplyMatchParams): Promise<ChannelC
       readLayerPixels(source, statsRectForLayer(source), srcDoc.id),
       readLayerPixels(target, statsRectForLayer(target), tgtDoc.id),
     ]);
-    const fit = params.colorSpace === "lab" ? fitHistogramCurvesLab : fitHistogramCurves;
-    const raw = fit(
+    const raw = fitByMode(
+      params.matchMode ?? "full",
       downsampleToMaxEdge(s, STATS_MAX_EDGE).data,
       downsampleToMaxEdge(t, STATS_MAX_EDGE).data,
+      params.colorSpace ?? "rgb",
     );
     const processed = processChannelCurves(raw, {
       amount: params.amount,
@@ -124,10 +127,11 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       srcPixels = downsampleToMaxEdge(s, STATS_MAX_EDGE).data;
     }
     const t = targetIsMerged ? await readMergedPixelsOf(tgtDoc) : await readLayerPixels(target, statsRectForLayer(target), tgtDoc.id);
-    const fit2 = params.colorSpace === "lab" ? fitHistogramCurvesLab : fitHistogramCurves;
-    const raw = fit2(
+    const raw = fitByMode(
+      params.matchMode ?? "full",
       srcPixels,
       downsampleToMaxEdge(t, STATS_MAX_EDGE).data,
+      params.colorSpace ?? "rgb",
     );
     const processed = processChannelCurves(raw, {
       amount: params.amount,

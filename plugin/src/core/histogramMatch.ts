@@ -51,6 +51,100 @@ export function fitHistogramCurves(srcRgba: Uint8Array, tgtRgba: Uint8Array): Ch
   return out as ChannelCurves;
 }
 
+// ─── Lighter-touch match modes ───────────────────────────────────────────
+// Alternatives to full-histogram matching for users who want subtler color
+// transfer. All three return ChannelCurves so they slot into the same
+// processing pipeline (smoothing, stretch, dimensions, zones, envelope).
+
+// Mean-shift: match per-channel arithmetic mean. Curves are linear shifts —
+// gentle "mood transfer" that nudges the color cast without restructuring tones.
+export function fitMatchMeanShift(srcRgba: Uint8Array, tgtRgba: Uint8Array): ChannelCurves {
+  const out: any = {};
+  for (const [name, off] of [["r", 0], ["g", 1], ["b", 2]] as const) {
+    let sSum = 0, sN = 0, tSum = 0, tN = 0;
+    for (let i = 0; i < srcRgba.length; i += 4) { if (srcRgba[i + 3] < 128) continue; sSum += srcRgba[i + off]; sN++; }
+    for (let i = 0; i < tgtRgba.length; i += 4) { if (tgtRgba[i + 3] < 128) continue; tSum += tgtRgba[i + off]; tN++; }
+    const shift = (sN > 0 && tN > 0) ? (sSum / sN - tSum / tN) : 0;
+    const arr = new Uint8Array(256);
+    for (let v = 0; v < 256; v++) arr[v] = Math.max(0, Math.min(255, Math.round(v + shift)));
+    out[name] = arr;
+  }
+  return out as ChannelCurves;
+}
+
+// Median-shift: match per-channel median (50th percentile). Robust to outliers
+// (a few extreme pixels won't skew the shift). Otherwise identical in effect to mean-shift.
+export function fitMatchMedianShift(srcRgba: Uint8Array, tgtRgba: Uint8Array): ChannelCurves {
+  const out: any = {};
+  for (const [name, off] of [["r", 0], ["g", 1], ["b", 2]] as const) {
+    const sH = buildHistogram(srcRgba, off);
+    const tH = buildHistogram(tgtRgba, off);
+    const sMed = histogramPercentile(sH, 0.5);
+    const tMed = histogramPercentile(tH, 0.5);
+    const shift = sMed - tMed;
+    const arr = new Uint8Array(256);
+    for (let v = 0; v < 256; v++) arr[v] = Math.max(0, Math.min(255, Math.round(v + shift)));
+    out[name] = arr;
+  }
+  return out as ChannelCurves;
+}
+
+// Percentile match: anchor a few percentile points (10/25/50/75/90) and linearly
+// interpolate between. Captures more of the distribution shape than mean/median
+// alone but less aggressive than full-histogram matching. Sweet spot for "a bit
+// more than mood transfer, less than full distribution match."
+export function fitMatchPercentiles(srcRgba: Uint8Array, tgtRgba: Uint8Array): ChannelCurves {
+  const ps = [0.05, 0.25, 0.5, 0.75, 0.95];
+  const out: any = {};
+  for (const [name, off] of [["r", 0], ["g", 1], ["b", 2]] as const) {
+    const sH = buildHistogram(srcRgba, off);
+    const tH = buildHistogram(tgtRgba, off);
+    const sV = ps.map(p => histogramPercentile(sH, p));
+    const tV = ps.map(p => histogramPercentile(tH, p));
+    // Build piecewise-linear curve: target percentile values map to source values.
+    // Anchored at 0→0 and 255→255 so endpoints are stable.
+    const anchorsX = [0, ...tV, 255];
+    const anchorsY = [0, ...sV, 255];
+    const arr = new Uint8Array(256);
+    let i = 0;
+    for (let v = 0; v < 256; v++) {
+      while (i < anchorsX.length - 2 && v > anchorsX[i + 1]) i++;
+      const xa = anchorsX[i], xb = anchorsX[i + 1];
+      const ya = anchorsY[i], yb = anchorsY[i + 1];
+      const span = (xb - xa) || 1;
+      const t = (v - xa) / span;
+      arr[v] = Math.max(0, Math.min(255, Math.round(ya + (yb - ya) * t)));
+    }
+    out[name] = arr;
+  }
+  return out as ChannelCurves;
+}
+
+// Helper: percentile lookup against a histogram bin count array.
+function histogramPercentile(h: Float64Array, p: number): number {
+  let total = 0;
+  for (let i = 0; i < 256; i++) total += h[i];
+  if (total <= 0) return 128;
+  const target = total * p;
+  let acc = 0;
+  for (let i = 0; i < 256; i++) {
+    acc += h[i];
+    if (acc >= target) return i;
+  }
+  return 255;
+}
+
+export type MatchMode = "full" | "mean" | "median" | "percentile";
+
+// Dispatcher — picks the right fit function based on mode. Used by MatchTab so the
+// UI can switch modes without the call site needing to know the algorithms.
+export function fitByMode(mode: MatchMode, srcRgba: Uint8Array, tgtRgba: Uint8Array, colorSpace: "rgb" | "lab" = "rgb"): ChannelCurves {
+  if (mode === "mean") return fitMatchMeanShift(srcRgba, tgtRgba);
+  if (mode === "median") return fitMatchMedianShift(srcRgba, tgtRgba);
+  if (mode === "percentile") return fitMatchPercentiles(srcRgba, tgtRgba);
+  return colorSpace === "lab" ? fitHistogramCurvesLab(srcRgba, tgtRgba) : fitHistogramCurves(srcRgba, tgtRgba);
+}
+
 // ─── Lab-domain histogram match ────────────────────────────────────────
 // Matches in perceptual L*a*b* (more natural than RGB for cross-cast cases),
 // then samples per-channel R/G/B curves that approximate the resulting

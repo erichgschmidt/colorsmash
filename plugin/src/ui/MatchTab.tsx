@@ -14,11 +14,12 @@ import { BottomActionBar } from "./BottomActionBar";
 import { BasicSlider, DimSlider, matchStyles } from "./MatchSliders";
 import { ChannelCurves } from "../core/histogramMatch";
 import {
-  fitHistogramCurves, fitHistogramCurvesLab, processChannelCurves, applyChannelCurvesToRgba, applyChromaOnly,
+  processChannelCurves, applyChannelCurvesToRgba, applyChromaOnly,
   applyDimensions, applyZoneAndEnvelopeToChannels, MERGED_LAYER_ID,
   DimensionOpts, DEFAULT_DIMENSIONS, ZoneOpts, DEFAULT_ZONES,
   computeLumaBins, bandMeanColor, lumaRange,
   EnvelopePoint, DEFAULT_ENVELOPE,
+  fitByMode, MatchMode,
 } from "../core/histogramMatch";
 import { EnvelopeEditor } from "./EnvelopeEditor";
 import { HistogramOverlay } from "./HistogramOverlay";
@@ -52,6 +53,9 @@ export function MatchTab() {
   const stretchRef = useRef(8);
   const [chromaOnly, setChromaOnly] = useState(false);
   const [anchorStretchToHist, setAnchorStretchToHist] = useState(false);
+  // Match mode: full-distribution (default), mean shift, median shift, or percentile-anchored.
+  // Lighter modes are gentler — useful when full-histogram match feels over-aggressive.
+  const [matchMode, setMatchMode] = useState<MatchMode>("full");
   const [amountLabel, setAmountLabel] = useState(100);
   const [smoothLabel, setSmoothLabel] = useState(0);
   const [stretchLabel, setStretchLabel] = useState(8);
@@ -137,6 +141,7 @@ export function MatchTab() {
         if (s.smooth != null) { smoothRef.current = s.smooth; setSmoothLabel(s.smooth); }
         if (s.stretch != null) { stretchRef.current = s.stretch; setStretchLabel(s.stretch); }
         if (s.anchorStretchToHist != null) setAnchorStretchToHist(s.anchorStretchToHist);
+        if (s.matchMode) setMatchMode(s.matchMode as MatchMode);
         if (s.chromaOnly != null) setChromaOnly(s.chromaOnly);
         if (s.colorSpace) setColorSpace(s.colorSpace);
         if (s.deselectOnApply != null) setDeselectOnApply(s.deselectOnApply);
@@ -161,7 +166,7 @@ export function MatchTab() {
     const snapshot: PersistedSettings = {
       remember,
       amount: amountLabel, smooth: smoothLabel, stretch: stretchLabel,
-      anchorStretchToHist, chromaOnly, colorSpace,
+      anchorStretchToHist, chromaOnly, colorSpace, matchMode,
       deselectOnApply, overwriteOnApply,
       openSection,
       zones: zonesLabel, lockZoneTotal,
@@ -169,7 +174,7 @@ export function MatchTab() {
       envelope: envelopeLabel,
     };
     saveDebouncedRef.current!(snapshot);
-  }, [remember, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
+  }, [remember, matchMode, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
       colorSpace, deselectOnApply, overwriteOnApply, openSection,
       zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel]);
 
@@ -365,9 +370,8 @@ export function MatchTab() {
 
   const fittedRaw = useMemo(() => {
     if (!srcSnap || !tgt.snap) return null;
-    const fit = colorSpace === "lab" ? fitHistogramCurvesLab : fitHistogramCurves;
-    return fit(srcSnap.data, tgt.snap.data);
-  }, [srcSnap, tgt.snap, colorSpace]);
+    return fitByMode(matchMode, srcSnap.data, tgt.snap.data, colorSpace);
+  }, [srcSnap, tgt.snap, colorSpace, matchMode]);
 
   // Luma-binned color stats from target pixels — used to color the zone band swatches with the
   // actual mean color of pixels at each luminance level. Recomputed only when target pixels change.
@@ -453,6 +457,7 @@ export function MatchTab() {
         srcDocId, tgtDocId,
         sourceLayerId: sourceId ?? -1,
         targetLayerId: targetId,
+        matchMode,
         // Section-enable mirror — disabled sections apply with default params.
         amount: enColor ? amountRef.current / 100 : 1,
         smoothRadius: enColor ? smoothRef.current : 0,
@@ -482,6 +487,7 @@ export function MatchTab() {
     stretchRef.current = 8;  setStretchLabel(8);
     setAnchorStretchToHist(false);
     setChromaOnly(false);
+    setMatchMode("full");
     setColorSpace(() => "rgb");
     setDeselectOnApply(true);
     setOverwriteOnApply(true);
@@ -594,6 +600,17 @@ export function MatchTab() {
       </div>
       {openSection === "basic" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11 }}>
+            <span style={{ opacity: 0.75, flexShrink: 0 }}>Mode</span>
+            <select value={matchMode} onChange={e => { setMatchMode(e.target.value as MatchMode); scheduleRedraw(); }}
+              title="Match algorithm. Full = match the whole histogram (default, most aggressive). Mean/Median = just shift color cast (subtle). Percentile = anchor a few percentile points (middle ground)."
+              style={{ ...sel, flex: 1, height: 22 }}>
+              <option value="full">Full distribution</option>
+              <option value="percentile">Percentile anchors</option>
+              <option value="median">Median shift</option>
+              <option value="mean">Mean shift</option>
+            </select>
+          </div>
           <BasicSlider label="Amount"  refObj={amountRef}  value={amountLabel}  setValue={setAmountLabel}  min={0} max={100} suffix="%" defaultVal={100} scheduleRedraw={scheduleRedraw} />
           <BasicSlider label="Smooth"  refObj={smoothRef}  value={smoothLabel}  setValue={setSmoothLabel}  min={0} max={32}  defaultVal={0}   scheduleRedraw={scheduleRedraw} />
           <BasicSlider label="Stretch" refObj={stretchRef} value={stretchLabel} setValue={setStretchLabel} min={1} max={15}  defaultVal={8}   scheduleRedraw={scheduleRedraw} step={0.1} />
