@@ -251,12 +251,75 @@ export function fitMultiZone(
   peaks: { shadow: number; mid: number; highlight: number } = { shadow: 0, mid: 128, highlight: 255 },
   extents: { min: number; max: number } = { min: 0, max: 255 },
 ): MultiZoneFit {
+  return fitMultiZoneByMode("full", srcRgba, tgtRgba, peaks, extents);
+}
+
+// Mode-aware multi-zone fit. For each band, builds a luma-weighted histogram and applies
+// the same shift/spec strategy as the single-curve `fitByMode` — so the matchMode dropdown
+// (full / mean / median / percentile) actually affects the multi-zone Apply output too.
+export function fitMultiZoneByMode(
+  mode: MatchMode,
+  srcRgba: Uint8Array, tgtRgba: Uint8Array,
+  peaks: { shadow: number; mid: number; highlight: number } = { shadow: 0, mid: 128, highlight: 255 },
+  extents: { min: number; max: number } = { min: 0, max: 255 },
+): MultiZoneFit {
   const wAt = (l: number) => multiZoneWeights(l, peaks, extents);
   return {
-    shadow:    fitOneBand(srcRgba, tgtRgba, l => wAt(l).shadow),
-    mid:       fitOneBand(srcRgba, tgtRgba, l => wAt(l).mid),
-    highlight: fitOneBand(srcRgba, tgtRgba, l => wAt(l).highlight),
+    shadow:    fitOneBandByMode(mode, srcRgba, tgtRgba, l => wAt(l).shadow),
+    mid:       fitOneBandByMode(mode, srcRgba, tgtRgba, l => wAt(l).mid),
+    highlight: fitOneBandByMode(mode, srcRgba, tgtRgba, l => wAt(l).highlight),
   };
+}
+
+// Per-band, per-mode fitter. Builds weighted histograms for src+tgt limited to the band,
+// then derives a Curves array per channel using the requested matchMode strategy.
+function fitOneBandByMode(
+  mode: MatchMode,
+  srcRgba: Uint8Array, tgtRgba: Uint8Array,
+  weightFn: (l: number) => number,
+): ChannelCurves {
+  if (mode === "full") return fitOneBand(srcRgba, tgtRgba, weightFn);
+  const out: any = {};
+  for (const [name, off] of [["r", 0], ["g", 1], ["b", 2]] as const) {
+    const sH = buildHistogramByLuma(srcRgba, off, weightFn);
+    const tH = buildHistogramByLuma(tgtRgba, off, weightFn);
+    let arr: Uint8Array;
+    if (mode === "mean") {
+      const shift = histMean(sH) - histMean(tH);
+      arr = new Uint8Array(256);
+      for (let v = 0; v < 256; v++) arr[v] = Math.max(0, Math.min(255, Math.round(v + shift)));
+    } else if (mode === "median") {
+      const shift = histogramPercentile(sH, 0.5) - histogramPercentile(tH, 0.5);
+      arr = new Uint8Array(256);
+      for (let v = 0; v < 256; v++) arr[v] = Math.max(0, Math.min(255, Math.round(v + shift)));
+    } else {
+      // percentile: anchored piecewise-linear over [0.05, 0.25, 0.5, 0.75, 0.95].
+      const ps = [0.05, 0.25, 0.5, 0.75, 0.95];
+      const sV = ps.map(p => histogramPercentile(sH, p));
+      const tV = ps.map(p => histogramPercentile(tH, p));
+      const anchorsX = [0, ...tV, 255];
+      const anchorsY = [0, ...sV, 255];
+      arr = new Uint8Array(256);
+      let i = 0;
+      for (let v = 0; v < 256; v++) {
+        while (i < anchorsX.length - 2 && v > anchorsX[i + 1]) i++;
+        const xa = anchorsX[i], xb = anchorsX[i + 1];
+        const ya = anchorsY[i], yb = anchorsY[i + 1];
+        const span = (xb - xa) || 1;
+        const t = (v - xa) / span;
+        arr[v] = Math.max(0, Math.min(255, Math.round(ya + (yb - ya) * t)));
+      }
+    }
+    out[name] = arr;
+  }
+  return out as ChannelCurves;
+}
+
+// Weighted-histogram mean. Returns 128 for empty histograms (graceful identity).
+function histMean(h: Float64Array): number {
+  let sum = 0, total = 0;
+  for (let i = 0; i < 256; i++) { sum += i * h[i]; total += h[i]; }
+  return total > 0 ? sum / total : 128;
 }
 
 // Simulate the multi-zone composite for the preview. Uses the same parameterized weights

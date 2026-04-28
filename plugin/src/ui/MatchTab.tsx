@@ -20,7 +20,7 @@ import {
   computeLumaBins, bandMeanColor, lumaRange,
   EnvelopePoint, DEFAULT_ENVELOPE,
   fitByMode, MatchMode,
-  fitMultiZone, applyMultiZoneToRgba, processMultiZoneFit, MultiZoneFit, adaptiveBandPeaks,
+  fitMultiZoneByMode, applyMultiZoneToRgba, processMultiZoneFit, MultiZoneFit, adaptiveBandPeaks,
 } from "../core/histogramMatch";
 import { EnvelopeEditor } from "./EnvelopeEditor";
 import { HistogramOverlay } from "./HistogramOverlay";
@@ -153,6 +153,10 @@ export function MatchTab() {
         if (s.stretch != null) { stretchRef.current = s.stretch; setStretchLabel(s.stretch); }
         if (s.anchorStretchToHist != null) setAnchorStretchToHist(s.anchorStretchToHist);
         if (s.matchMode) setMatchMode(s.matchMode as MatchMode);
+        // Normalize legacy "both" persisted state to "blendIf" — Mask is now implicit
+        // (used whenever Blend If is off), so "both" no longer makes sense in the UI.
+        if (s.multiZoneLimit === "both" || s.multiZoneLimit === "blendIf") setMultiZoneLimit("blendIf");
+        else if (s.multiZoneLimit === "mask") setMultiZoneLimit("mask");
         if (s.multiZone != null) setMultiZone(s.multiZone);
         if (s.multiZoneLimit) setMultiZoneLimit(s.multiZoneLimit);
         if (s.adaptiveBands != null) setAdaptiveBands(s.adaptiveBands);
@@ -418,8 +422,8 @@ export function MatchTab() {
   // is on (otherwise null).
   const fittedMulti = useMemo<MultiZoneFit | null>(() => {
     if (!multiZone || !srcSnap || !tgt.snap) return null;
-    return fitMultiZone(srcSnap.data, tgt.snap.data, multiZonePeaks, multiZoneExtents);
-  }, [multiZone, srcSnap, tgt.snap, multiZonePeaks, multiZoneExtents]);
+    return fitMultiZoneByMode(matchMode, srcSnap.data, tgt.snap.data, multiZonePeaks, multiZoneExtents);
+  }, [multiZone, srcSnap, tgt.snap, multiZonePeaks, multiZoneExtents, matchMode]);
 
   // Matched preview is rendered by <MatchedPreview/>; we drive it imperatively via a handle.
   const matchedHandleRef = useRef<MatchedPreviewHandle | null>(null);
@@ -930,33 +934,16 @@ export function MatchTab() {
                 style={{ margin: 0, flexShrink: 0, cursor: "pointer" }} />
               <span style={txt}>Multi</span>
             </label>
+            {/* Spacer cell where the old "Mask" checkbox lived. Kept so the remaining
+                cells stay aligned with the bottom action bar's column positions. Mask
+                export is the default (used whenever Blend If is OFF) — no separate
+                toggle needed. */}
+            <span style={cell(65)} aria-hidden="true" />
             <label style={{ ...cell(65), cursor: subDisabled ? "default" : "pointer" }}
-              title="Mask: limit each band layer with a paintable luminosity layer mask (visible thumbnail). Recommended.">
+              title="Blend If: limit each band layer with the underlying-luma sliders (Layer Style → Blending Options) instead of a luminosity mask. When OFF, a paintable mask is exported instead. May not work in all PS versions.">
               <input type="checkbox" disabled={subDisabled}
-                checked={multiZoneLimit === "mask" || multiZoneLimit === "both"}
-                onChange={e => {
-                  const wantMask = e.target.checked;
-                  const haveBlendIf = multiZoneLimit === "blendIf" || multiZoneLimit === "both";
-                  if (wantMask && haveBlendIf) setMultiZoneLimit("both");
-                  else if (wantMask) setMultiZoneLimit("mask");
-                  else if (haveBlendIf) setMultiZoneLimit("blendIf");
-                  else setMultiZoneLimit("mask");
-                }}
-                style={cbStyle} />
-              <span style={subTxt}>Mask</span>
-            </label>
-            <label style={{ ...cell(65), cursor: subDisabled ? "default" : "pointer" }}
-              title="Blend If: limit each band layer with the underlying-luma sliders in Layer Style → Blending Options. May not work in all PS versions.">
-              <input type="checkbox" disabled={subDisabled}
-                checked={multiZoneLimit === "blendIf" || multiZoneLimit === "both"}
-                onChange={e => {
-                  const wantBlendIf = e.target.checked;
-                  const haveMask = multiZoneLimit === "mask" || multiZoneLimit === "both";
-                  if (wantBlendIf && haveMask) setMultiZoneLimit("both");
-                  else if (wantBlendIf) setMultiZoneLimit("blendIf");
-                  else if (haveMask) setMultiZoneLimit("mask");
-                  else setMultiZoneLimit("mask");
-                }}
+                checked={multiZoneLimit === "blendIf"}
+                onChange={e => setMultiZoneLimit(e.target.checked ? "blendIf" : "mask")}
                 style={cbStyle} />
               <span style={subTxt}>Blend If</span>
             </label>
@@ -970,10 +957,10 @@ export function MatchTab() {
               <span onClick={(e: any) => { e.stopPropagation(); e.preventDefault(); void uxpInfo("Multi-zone Curves — what each toggle does", [
                 { heading: "Multi",
                   body: "Apply emits three stacked Curves layers (Shadows, Mids, Highlights) instead of one. Each curve is fitted from ONLY the pixels whose luma falls in its band. The three layers land in the [Color Smash] group, clipped to the target, and stay independently editable in Photoshop afterwards. Useful for mixed-lighting scenes where a single global curve over- or under-corrects." },
-                { heading: "Mask",
-                  body: "Limit each band layer with a paintable luminosity layer mask (visible thumbnail in the Layers panel). The mask is the cleanest spatial separation and is fully editable: paint to localize the effect, blur to feather. Recommended." },
-                { heading: "Blend If",
-                  body: "Limit each band layer with the underlying-luma sliders in Layer Style → Blending Options. Lighter than a mask (no mask data) and editable from the Blending Options dialog. Mask + Blend If can be on at once for the sharpest band separation." },
+                { heading: "Band limiting (default = Mask)",
+                  body: "By default each band layer gets a paintable luminosity layer mask — visible thumbnail in the Layers panel, fully editable (paint to localize, blur to feather). This is the cleanest separation and what you want most of the time." },
+                { heading: "Blend If toggle",
+                  body: "Turn ON to use the underlying-luma sliders (Layer Style → Blending Options) instead of a mask. Lighter than a mask (no mask data) and editable from the Blending Options dialog. Mutually exclusive with the mask — turning Blend If on disables mask export. May not work reliably in all Photoshop versions." },
                 { heading: "Adaptive",
                   body: "When ON, the band peaks shift to the target histogram's P10 / P50 / P90 luma percentiles, and the outer extents follow the histogram's actual min/max — so each band gets a meaningful pixel sample even on low-key or high-key images. When OFF, peaks are fixed at 0 / 128 / 255. Default ON; turn off only when you want a strict 0/128/255 partition for a specific look." },
                 { heading: "Replace",

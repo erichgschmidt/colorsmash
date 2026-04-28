@@ -12,7 +12,7 @@ import {
   ChannelCurves, DimensionOpts, DEFAULT_DIMENSIONS, ZoneOpts, DEFAULT_ZONES,
   EnvelopePoint, DEFAULT_ENVELOPE,
   fitByMode, MatchMode,
-  fitMultiZone, processMultiZoneFit,
+  fitMultiZoneByMode, processMultiZoneFit,
 } from "../core/histogramMatch";
 
 const STATS_MAX_EDGE = 512;
@@ -152,7 +152,7 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     // Multi-zone path needs its own per-band fit (the global `raw` above is for single-curve).
     // We refit because the band weights are luma-conditional; single-curve fitter doesn't bin by luma.
     const multiZoneFit = params.multiZone
-      ? processMultiZoneFit(fitMultiZone(srcPixels, downsampleToMaxEdge(t, STATS_MAX_EDGE).data, params.multiZonePeaks, params.multiZoneExtents), curveOpts, dimOpts)
+      ? processMultiZoneFit(fitMultiZoneByMode(params.matchMode ?? "full", srcPixels, downsampleToMaxEdge(t, STATS_MAX_EDGE).data, params.multiZonePeaks, params.multiZoneExtents), curveOpts, dimOpts)
       : null;
 
     // Reuse existing [Color Smash] group. Prior Match Curves layers are either deleted
