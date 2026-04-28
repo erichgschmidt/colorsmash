@@ -8,6 +8,7 @@ Pick a **source** (a layer in any open doc, an active marquee selection, or an i
 
 Beyond the basic fit:
 
+- **Multi-zone Curves output (v1.1)** — when the **Multi** toggle is on, Apply emits three stacked Curves layers (Shadows / Mids / Highlights) instead of one, each fitted from only the pixels in its luma band. Limit each band spatially with a paintable **Mask**, with **Blend If** sliders, or **Both**. Turn on **Adaptive** to shift the band peaks to the target's P10/P50/P90 luma percentiles (with outer extents matching the actual histogram bounds), so each band gets a meaningful pixel sample on low-key or high-key scenes. Every layer remains independently editable in PS afterward.
 - **RGB or LAB matching** — toggle between per-channel RGB histogram specification and a perceptual L*a*b*-domain match. Curves are sampled back to per-channel R/G/B so the output stays a standard Curves layer.
 - **Color** — overall amount, smoothing (anti-banding), max stretch (slope cap), optional anchor of the slope cap to the target's actual histogram range, and a Hue-only mode that preserves target saturation and luminance.
 - **Tone** — value, chroma, hue shift, contrast, neutralize, separation. Each is identity at default, deviating only when you move the slider.
@@ -54,6 +55,17 @@ The plugin requests `localFileSystem` permission so the **Browse Image…** sour
 8. Tweak any of the accordion sections: **Color**, **Tone**, **Zones**, **Envelope**.
 9. In the bottom bar: **Deselect** (drop the active marquee before applying), **Replace** (overwrite the topmost / selected `Match Curves` layer instead of stacking), **Save** (persist all panel settings to disk, debounced ~500ms, including the Save toggle itself so it survives reloads), **✕** (red, opens a confirm modal: "Reset all panel settings to defaults and clear the saved file?" — wipes settings and deletes the persisted file), **RGB/LAB**, **⟳** (refresh previews).
 10. Click **Apply Curves** — a single Curves adjustment layer appears in `[Color Smash]` group, clipped to the target (or at the top of the stack if MERGED). When source and target live in different documents, the layer is placed in the target's document.
+
+### Multi-zone Curves
+
+Above the bottom action bar there is a row: `[☐ Multi] [☐ Mask] [☐ Blend If] [☐ Adaptive]`.
+
+- **Multi** — turn on to emit three stacked Curves layers (Shadows / Mids / Highlights) instead of one. The Apply button label switches to **Apply Multi Curves**. Each band's curves are fitted from only the pixels whose luma falls inside that band, so a single grade can lift shadows, neutralize mids, and cool highlights independently — useful for mixed-lighting scenes where one global curve over- or under-corrects.
+- **Mask** — limit each band layer with a paintable luminosity layer mask. The mask thumbnail is editable in PS afterwards (paint to localize, blur to feather). Recommended.
+- **Blend If** — limit each band layer with the underlying-luma sliders in Layer Style → Blending Options. Lighter than a mask (no mask data) and editable via the Blending Options dialog. Both options can be on at once for the sharpest band separation.
+- **Adaptive** — when on, the band peaks shift to the target's P10 / P50 / P90 luma percentiles, and the outer extents (the leftmost shadow point and the rightmost highlight point) follow the histogram's actual min / max. When off, peaks are fixed at 0 / 128 / 255. Adaptive is on by default and is what you want for most images; turn off only when you want a strict 0/128/255 partition for a specific look.
+
+The three layers land in the `[Color Smash]` group named `Match — Shadows`, `Match — Mids`, `Match — Highlights`, all clipped to the target. **Replace** still works — re-applying overwrites the prior multi-zone trio.
 
 ### Cross-document
 

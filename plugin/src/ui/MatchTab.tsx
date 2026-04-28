@@ -967,6 +967,23 @@ export function MatchTab() {
                 onChange={e => setAdaptiveBands(e.target.checked)}
                 style={cbStyle} />
               <span style={subTxt}>Adaptive</span>
+              <span onClick={(e: any) => { e.stopPropagation(); e.preventDefault(); void uxpInfo("Multi-zone Curves — what each toggle does", [
+                { heading: "Multi",
+                  body: "Apply emits three stacked Curves layers (Shadows, Mids, Highlights) instead of one. Each curve is fitted from ONLY the pixels whose luma falls in its band. The three layers land in the [Color Smash] group, clipped to the target, and stay independently editable in Photoshop afterwards. Useful for mixed-lighting scenes where a single global curve over- or under-corrects." },
+                { heading: "Mask",
+                  body: "Limit each band layer with a paintable luminosity layer mask (visible thumbnail in the Layers panel). The mask is the cleanest spatial separation and is fully editable: paint to localize the effect, blur to feather. Recommended." },
+                { heading: "Blend If",
+                  body: "Limit each band layer with the underlying-luma sliders in Layer Style → Blending Options. Lighter than a mask (no mask data) and editable from the Blending Options dialog. Mask + Blend If can be on at once for the sharpest band separation." },
+                { heading: "Adaptive",
+                  body: "When ON, the band peaks shift to the target histogram's P10 / P50 / P90 luma percentiles, and the outer extents follow the histogram's actual min/max — so each band gets a meaningful pixel sample even on low-key or high-key images. When OFF, peaks are fixed at 0 / 128 / 255. Default ON; turn off only when you want a strict 0/128/255 partition for a specific look." },
+                { heading: "Replace",
+                  body: "When Replace is on, re-applying overwrites the prior multi-zone trio rather than stacking another set on top." },
+              ]); }}
+                title="What does Multi do? Click for details."
+                style={{ marginLeft: 6, cursor: "help", fontSize: 10, opacity: 0.7, flexShrink: 0,
+                         border: "1px solid #888", borderRadius: 8, width: 12, height: 12,
+                         display: "inline-flex", alignItems: "center", justifyContent: "center",
+                         lineHeight: 1, userSelect: "none" }}>?</span>
             </label>
           </div>
         );

@@ -68,6 +68,14 @@ See [zone-editor-spec.md](zone-editor-spec.md) for full design. May supersede or
 
 **Exit criteria:** objective wins on ≥ 3 of 9 test categories; no regressions.
 
+## v1.1 — Multi-zone Curves (shipped, 2026-04)
+**Goal:** Spatially-aware grading that adapts across mixed-lighting scenes.
+
+- Apply emits 3 stacked Curves layers (Shadows / Mids / Highlights), each fitted from only the pixels in its luma band
+- Band limiting via paintable luminosity layer **Mask**, **Blend If** (Layer Style → Blending Options), or **Both**
+- **Adaptive bands**: peaks shift to the target's P10/P50/P90 luma percentiles and outer extents follow the histogram's actual min/max, so each band gets a meaningful pixel sample on low-key / high-key scenes
+- Each output layer is independently editable in PS afterward (mask paintable, curve tweakable, Blend If draggable)
+
 ## Phase 5 — Ship
 **Goal:** Marketplace submission.
 

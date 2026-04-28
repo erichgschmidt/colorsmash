@@ -18,6 +18,15 @@ submission to match your final branding/pricing.
 >
 > KEY FEATURES
 >
+> • Multi-zone Curves output (v1.1): one click emits three stacked
+>   Curves layers (Shadows / Mids / Highlights) instead of one, each
+>   fitted from only the pixels in its luminance band. Limit each band
+>   spatially with a paintable luminosity Mask, with Blend If sliders,
+>   or both. Adaptive bands shift the peaks to the target's P10/P50/P90
+>   percentiles so even low-key or high-key images get a meaningful
+>   sample per band. Every layer is independently editable in
+>   Photoshop afterward.
+>
 > • Per-channel histogram matching in RGB or perceptual Lab space
 >
 > • Live preview of the match as you tweak — no Apply round-trips
@@ -74,7 +83,8 @@ submission to match your final branding/pricing.
 ## Tags (5-10)
 
 > histogram match, color grading, curves, color correction,
-> color match, color reference, lab color, photo retouching
+> color match, color reference, lab color, photo retouching,
+> multi-zone, blend if, luminosity mask
 
 ## URLs
 
