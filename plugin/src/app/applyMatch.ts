@@ -191,23 +191,51 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       catch { /* ignore */ }
     }
 
-    // ─── Multi-zone branch: emit 3 stacked Curves layers + Blend If sliders ──────
+    // ─── Multi-zone branch: emit 3 stacked Curves layers + luminosity masks ──────
     if (multiZoneFit) {
-      // Strategy: each band gets a Curves layer with its underlying-layer Blend If sliders
-      // set so the layer only applies within its luma band. Implemented via the layer
-      // descriptor's `blendRange` property (the property name the PS Action Listener actually
-      // records when you drag Blend If sliders manually). Triangular partition-of-unity
-      // weights match the preview simulator's math exactly.
+      // Use imaging.putLayerMask (the proper API for writing layer masks; imaging.putPixels
+      // targets pixel layers, not adjustment-layer masks). Compute the three triangular
+      // band-weight masks in JS from the document composite, then write each as a layer
+      // mask. If putLayerMask fails for any band, we fall back to a Blend If batchPlay
+      // descriptor on that layer. If BOTH approaches fail, we report it in the return tag
+      // so the user knows the result wasn't band-limited (and the Layers panel will show
+      // 3 unrestricted Curves layers — visible enough that the user can fix manually).
+
+      const { imaging } = require("photoshop");
+
+      // Read full-res document composite for mask computation.
+      const compResult = await imaging.getPixels({ documentID: doc.id, componentSize: 8, applyAlpha: false, colorSpace: "RGB" });
+      const compId = compResult.imageData;
+      const compRaw = await compId.getData();
+      const compSrc = compRaw instanceof Uint8Array ? compRaw : new Uint8Array(compRaw);
+      const compW = compId.width, compH = compId.height;
+      const compComps = compId.components ?? (compSrc.length / (compW * compH));
+
+      // Triangular band-weight masks (one byte per pixel = weight × 255).
+      const pxCount = compW * compH;
+      const shadowMask = new Uint8Array(pxCount);
+      const midMask = new Uint8Array(pxCount);
+      const highlightMask = new Uint8Array(pxCount);
+      for (let i = 0, j = 0; i < pxCount; i++, j += compComps) {
+        const r = compSrc[j], g = compSrc[j + 1], b = compSrc[j + 2];
+        const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        shadowMask[i]    = Math.max(0, Math.min(255, Math.round((1 - luma / 128) * 255)));
+        midMask[i]       = Math.max(0, Math.min(255, Math.round((1 - Math.abs(luma - 128) / 128) * 255)));
+        highlightMask[i] = Math.max(0, Math.min(255, Math.round(((luma - 128) / 128) * 255)));
+      }
+      if (compId.dispose) compId.dispose();
+
       const bands: Array<{
-        key: "shadow" | "mid" | "highlight"; suffix: string;
-        // dest range: Blend If "underlying" sliders, two split positions per side.
-        destBlackMin: number; destBlackMax: number;
-        destWhiteMin: number; destWhiteMax: number;
+        key: "shadow" | "mid" | "highlight"; suffix: string; mask: Uint8Array;
+        // Blend-If fallback ranges (used if putLayerMask fails).
+        destBlackMin: number; destBlackMax: number; destWhiteMin: number; destWhiteMax: number;
       }> = [
-        { key: "shadow",    suffix: "Shadows",    destBlackMin: 0,   destBlackMax: 0,   destWhiteMin: 0,   destWhiteMax: 128 },
-        { key: "mid",       suffix: "Mids",       destBlackMin: 0,   destBlackMax: 128, destWhiteMin: 128, destWhiteMax: 255 },
-        { key: "highlight", suffix: "Highlights", destBlackMin: 128, destBlackMax: 255, destWhiteMin: 255, destWhiteMax: 255 },
+        { key: "shadow",    suffix: "Shadows",    mask: shadowMask,    destBlackMin: 0,   destBlackMax: 0,   destWhiteMin: 0,   destWhiteMax: 128 },
+        { key: "mid",       suffix: "Mids",       mask: midMask,       destBlackMin: 0,   destBlackMax: 128, destWhiteMin: 128, destWhiteMax: 255 },
+        { key: "highlight", suffix: "Highlights", mask: highlightMask, destBlackMin: 128, destBlackMax: 255, destWhiteMin: 255, destWhiteMax: 255 },
       ];
+
+      const failures: string[] = [];
 
       for (const band of bands) {
         const baseName = `${RESULT_LAYER_NAME} [${band.suffix}]`;
@@ -223,35 +251,57 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
         if (params.chromaOnly) { try { layer.blendMode = "hue"; } catch { /* ignore */ } }
         try { await layer.move(group, "placeInside"); } catch { /* ignore */ }
 
-        // Set Blend If sliders via batchPlay. Property name is `blendRange` (singular per
-        // entry) inside the layer descriptor, with one entry per affected channel. We only
-        // need the gray (composite luma) channel — full triangular partition of unity.
+        // Try putLayerMask first (proper API for mask data).
+        let limited = false;
         try {
-          await action.batchPlay([{
-            _obj: "set",
-            _target: [{ _ref: "layer", _id: layer.id }],
-            to: {
-              _obj: "layer",
-              blendInteriorElements: false,
-              knockout: { _enum: "knockout", _value: "none" },
-              layerMaskAsGlobalMask: false,
-              blendRange: [{
-                _obj: "blendRange",
-                channel: { _enum: "channel", _value: "gray" },
-                srcBlackMin: 0, srcBlackMax: 0, srcWhiteMin: 255, srcWhiteMax: 255,
-                destBlackMin: band.destBlackMin, destBlackMax: band.destBlackMax,
-                destWhiteMin: band.destWhiteMin, destWhiteMax: band.destWhiteMax,
-              }],
-            },
-          }], {});
-        } catch (e: any) {
-          console?.warn?.(`Multi-zone Blend If failed for ${band.suffix}: ${e?.message ?? e}`);
+          const maskImageData = await imaging.createImageDataFromBuffer(band.mask, {
+            width: compW, height: compH, components: 1, chunky: true, colorProfile: "Gray Gamma 2.2", colorSpace: "Grayscale",
+          });
+          await imaging.putLayerMask({
+            documentID: doc.id,
+            layerID: layer.id,
+            imageData: maskImageData,
+            targetBounds: { left: 0, top: 0, right: compW, bottom: compH },
+            replace: true,
+          });
+          if (maskImageData.dispose) maskImageData.dispose();
+          limited = true;
+        } catch (e1: any) {
+          // Fall back to Blend If sliders via batchPlay.
+          try {
+            await action.batchPlay([{
+              _obj: "set",
+              _target: [{ _ref: "layer", _id: layer.id }],
+              to: {
+                _obj: "layer",
+                blendInteriorElements: false,
+                knockout: { _enum: "knockout", _value: "none" },
+                layerMaskAsGlobalMask: false,
+                blendRange: [{
+                  _obj: "blendRange",
+                  channel: { _enum: "channel", _value: "gray" },
+                  srcBlackMin: 0, srcBlackMax: 0, srcWhiteMin: 255, srcWhiteMax: 255,
+                  destBlackMin: band.destBlackMin, destBlackMax: band.destBlackMax,
+                  destWhiteMin: band.destWhiteMin, destWhiteMax: band.destWhiteMax,
+                }],
+              },
+            }], {});
+            limited = true;
+          } catch (e2: any) {
+            failures.push(`${band.suffix}: ${e1?.message ?? e1} (Blend If fallback also failed: ${e2?.message ?? e2})`);
+          }
         }
+        if (!limited) failures.push(`${band.suffix}: layer applied unrestricted`);
       }
+
       const tags = [`multi-zone (${bands.length} layers)`];
       if (params.amount && params.amount < 1) tags.push(`amt ${Math.round(params.amount * 100)}%`);
       if (params.chromaOnly) tags.push("hue-only");
       if (params.sourceLabel) tags.unshift(`src "${params.sourceLabel}"`);
+      if (failures.length > 0) {
+        // Surface the failure to the user instead of silently returning success.
+        return `Matched (PARTIAL) · ${tags.join(" · ")} · ⚠ ${failures.length}/${bands.length} band(s) lack mask: ${failures.join("; ")}`;
+      }
       return `Matched · ${tags.join(" · ")}`;
     }
 
