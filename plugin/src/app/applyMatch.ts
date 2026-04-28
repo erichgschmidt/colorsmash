@@ -193,39 +193,27 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
 
     // ─── Multi-zone branch: emit 3 stacked Curves layers + luminosity masks ──────
     if (multiZoneFit) {
-      // Strategy: read the document composite once at full resolution, compute three mask
-      // arrays (per pixel, 0..255 mask value = triangular band weight at that pixel's luma),
-      // then write them to each layer's mask channel via imaging.putPixels. Triangular
-      // weights match the preview simulator exactly — what you see is what you get.
-      const { imaging } = require("photoshop");
+      // Strategy: for each band, create a Curves layer, then build a luminosity mask in
+      // two batchPlay steps:
+      //   1. Apply Image to fill the layer's mask channel from the doc's composite gray
+      //      (giving us per-pixel underlying luminance directly in the mask, full resolution)
+      //   2. Apply a Curves remap to that mask to shape it into the band's triangular weight
+      //      (input luma → output mask alpha = band weight × 255)
+      // Triangular weights match the preview simulator exactly. PS handles all resolution
+      // and alignment. The masks are user-paintable for fine refinement.
 
-      // Read full-resolution document composite for mask computation.
-      const compResult = await imaging.getPixels({ documentID: doc.id, componentSize: 8, applyAlpha: false, colorSpace: "RGB" });
-      const compId = compResult.imageData;
-      const compRaw = await compId.getData();
-      const compSrc = compRaw instanceof Uint8Array ? compRaw : new Uint8Array(compRaw);
-      const compW = compId.width, compH = compId.height;
-      const compComps = compId.components ?? (compSrc.length / (compW * compH));
+      // Curves descriptors that remap a gray-scale mask (input luma → output band weight × 255).
+      // Each is a 3-point curve that produces the triangular partition-of-unity weights.
+      const bandCurves: Record<"shadow" | "mid" | "highlight", { horizontal: number; vertical: number }[]> = {
+        shadow:    [{ horizontal: 0, vertical: 255 }, { horizontal: 128, vertical: 0   }, { horizontal: 255, vertical: 0   }],
+        mid:       [{ horizontal: 0, vertical: 0   }, { horizontal: 128, vertical: 255 }, { horizontal: 255, vertical: 0   }],
+        highlight: [{ horizontal: 0, vertical: 0   }, { horizontal: 128, vertical: 0   }, { horizontal: 255, vertical: 255 }],
+      };
 
-      // Compute the three mask arrays. Triangular weights centered at 0/128/255 →
-      // mask value 0..255 = weight × 255. Sum across the three masks = 255 at every pixel.
-      const pxCount = compW * compH;
-      const shadowMask = new Uint8Array(pxCount);
-      const midMask = new Uint8Array(pxCount);
-      const highlightMask = new Uint8Array(pxCount);
-      for (let i = 0, j = 0; i < pxCount; i++, j += compComps) {
-        const r = compSrc[j], g = compSrc[j + 1], b = compSrc[j + 2];
-        const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        shadowMask[i] = Math.max(0, Math.min(255, Math.round((1 - luma / 128) * 255)));
-        midMask[i] = Math.max(0, Math.min(255, Math.round((1 - Math.abs(luma - 128) / 128) * 255)));
-        highlightMask[i] = Math.max(0, Math.min(255, Math.round(((luma - 128) / 128) * 255)));
-      }
-      if (compId.dispose) compId.dispose();
-
-      const bands: Array<{ key: "shadow" | "mid" | "highlight"; suffix: string; mask: Uint8Array }> = [
-        { key: "shadow",    suffix: "Shadows",    mask: shadowMask },
-        { key: "mid",       suffix: "Mids",       mask: midMask },
-        { key: "highlight", suffix: "Highlights", mask: highlightMask },
+      const bands: Array<{ key: "shadow" | "mid" | "highlight"; suffix: string }> = [
+        { key: "shadow",    suffix: "Shadows"    },
+        { key: "mid",       suffix: "Mids"       },
+        { key: "highlight", suffix: "Highlights" },
       ];
 
       for (const band of bands) {
@@ -242,24 +230,48 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
         if (params.chromaOnly) { try { layer.blendMode = "hue"; } catch { /* ignore */ } }
         try { await layer.move(group, "placeInside"); } catch { /* ignore */ }
 
-        // Write the luminosity mask. Adjustment layers come with a default revealAll mask;
-        // we overwrite its pixels via imaging.putPixels with the band's mask data.
         try {
-          const maskImageData = await imaging.createImageDataFromBuffer(band.mask, {
-            width: compW, height: compH, components: 1, chunky: true, colorProfile: "Gray Gamma 2.2", colorSpace: "Grayscale",
-          });
-          await imaging.putPixels({
-            documentID: doc.id,
-            layerID: layer.id,
-            imageData: maskImageData,
-            targetBounds: { left: 0, top: 0, right: compW, bottom: compH },
-            replace: true,
-          });
-          if (maskImageData.dispose) maskImageData.dispose();
+          // Select this layer + its mask channel. Subsequent edits target the mask.
+          await action.batchPlay([
+            { _obj: "select", _target: [{ _ref: "layer", _id: layer.id }], makeVisible: false },
+            { _obj: "select", _target: [{ _ref: "channel", _enum: "channel", _value: "mask" }] },
+          ], {});
+
+          // Fill the mask from the document composite (gray channel = perceptual luminance).
+          // After this, the mask = composite luminance per pixel.
+          await action.batchPlay([{
+            _obj: "applyImageEvent",
+            with: {
+              _obj: "calculation",
+              to: {
+                _ref: [
+                  { _ref: "channel", _enum: "channel", _value: "gray" },
+                  { _ref: "document", _enum: "ordinal", _value: "targetEnum" },
+                ],
+              },
+              calculation: { _enum: "calculationType", _value: "normal" },
+            },
+          }], {});
+
+          // Remap the mask via a 3-point Curves into the band's triangular weight curve.
+          await action.batchPlay([{
+            _obj: "curves",
+            presetKind: { _enum: "presetKindType", _value: "presetKindCustom" },
+            adjustment: [{
+              _obj: "curvesAdjustment",
+              channel: { _ref: "channel", _enum: "channel", _value: "composite" },
+              curve: bandCurves[band.key].map(p => ({ _obj: "paint", ...p })),
+            }],
+          }], {});
+
+          // Re-select the RGB composite so we leave the layer in a normal editing state.
+          await action.batchPlay([{
+            _obj: "select", _target: [{ _ref: "channel", _enum: "channel", _value: "RGB" }],
+          }], {});
         } catch (e: any) {
-          // If putPixels-to-mask isn't supported or fails, the layer applies fully.
-          // Log via the tags so the user knows.
-          console?.warn?.(`Multi-zone mask write failed for ${band.suffix}: ${e?.message ?? e}`);
+          // If any of these fail, the layer still applies as a global Curves — user can
+          // add their own mask manually. Continue with the other bands.
+          console?.warn?.(`Multi-zone mask build failed for ${band.suffix}: ${e?.message ?? e}`);
         }
       }
       const tags = [`multi-zone (${bands.length} layers)`];
