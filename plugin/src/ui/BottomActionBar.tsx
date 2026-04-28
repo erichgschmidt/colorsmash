@@ -30,28 +30,36 @@ export function BottomActionBar(props: BottomActionBarProps) {
     if (ok) onResetAll();
   };
 
-  // Single left-aligned row: [☐ Deselect] [☐ Overwrite] [☐ Remember] [RGB] [⟳]
+  // Single left-aligned row: [☐ Deselect] [☐ Replace] [☐ Save] [✕] [RGB] [⟳]
   //
-  // The 5 interactive elements (3 checkboxes + 2 buttons) are flex-shrink:0 → never compress,
-  // always visible & clickable. The 3 label text spans are flex-shrink:1 with min-width:0
-  // and overflow:hidden but NO ellipsis — so as the panel narrows the words clip silently
-  // (looks like they're sliding under the next toggle), then disappear entirely once their
-  // span is squeezed to 0. Words are sacrificed; interactive controls always survive.
-  const textStyle: React.CSSProperties = {
-    overflow: "hidden", whiteSpace: "nowrap", minWidth: 0, flexShrink: 1,
-  };
+  // Each [checkbox+label] cell is a flex container with `flex: 0 1 Npx` — basis fixed
+  // at the design width so checkbox positions align with the Multi row above (which
+  // uses the same bases), but cells can shrink to 0 when the panel narrows. Inside
+  // each cell the checkbox is flex-shrink:0 (stays visible); the label clips silently.
+  // The 3 buttons at the end (✕/RGB/⟳) are flex-shrink:0 too, so they're never hidden.
+  const cell = (basis: number): React.CSSProperties => ({
+    display: "inline-flex", alignItems: "center", gap: 3,
+    flex: `0 1 ${basis}px`, minWidth: 0, overflow: "hidden",
+  });
+  const labelTxt: React.CSSProperties = { overflow: "hidden", whiteSpace: "nowrap", minWidth: 0 };
   const checkboxStyle: React.CSSProperties = { margin: 0, flexShrink: 0 };
   return (
-    <div style={{ display: "flex", alignItems: "center", marginTop: 8, fontSize: 10, color: "#cccccc", height: 18, overflow: "hidden", gap: 3 }}>
-      <input type="checkbox" checked={deselectOnApply} onChange={e => setDeselectOnApply(e.target.checked)} style={checkboxStyle}
-        title="Deselect — drop the active marquee before creating the layer so curves apply to the full target." />
-      <span style={{ ...textStyle, marginRight: 7 }}>Deselect</span>
-      <input type="checkbox" checked={overwriteOnApply} onChange={e => setOverwriteOnApply(e.target.checked)} style={checkboxStyle}
-        title="Replace — on: overwrite the prior Match Curves layer. Off: keep prior layers (hidden) so you can stack alternatives." />
-      <span style={{ ...textStyle, marginRight: 7 }}>Replace</span>
-      <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} style={checkboxStyle}
-        title="Save — persist all panel settings across reloads (sliders, zones, envelope, toggles)." />
-      <span style={{ ...textStyle, marginRight: 7 }}>Save</span>
+    <div style={{ display: "flex", alignItems: "center", marginTop: 8, fontSize: 10, color: "#cccccc", height: 18, overflow: "hidden", gap: 0 }}>
+      <label style={{ ...cell(70), cursor: "pointer" }}
+        title="Deselect — drop the active marquee before creating the layer so curves apply to the full target.">
+        <input type="checkbox" checked={deselectOnApply} onChange={e => setDeselectOnApply(e.target.checked)} style={checkboxStyle} />
+        <span style={labelTxt}>Deselect</span>
+      </label>
+      <label style={{ ...cell(65), cursor: "pointer" }}
+        title="Replace — on: overwrite the prior Match Curves layer. Off: keep prior layers (hidden) so you can stack alternatives.">
+        <input type="checkbox" checked={overwriteOnApply} onChange={e => setOverwriteOnApply(e.target.checked)} style={checkboxStyle} />
+        <span style={labelTxt}>Replace</span>
+      </label>
+      <label style={{ ...cell(65), cursor: "pointer" }}
+        title="Save — persist all panel settings across reloads (sliders, zones, envelope, toggles).">
+        <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} style={checkboxStyle} />
+        <span style={labelTxt}>Save</span>
+      </label>
       <button onClick={handleResetClick}
         title="Reset all settings to defaults and clear the saved file"
         style={{ width: 16, height: 16, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
@@ -61,7 +69,7 @@ export function BottomActionBar(props: BottomActionBarProps) {
       </button>
       <div onClick={() => setColorSpace(c => c === "rgb" ? "lab" : "rgb")}
         title="Toggle color space — RGB matches per-channel histograms; Lab matches in perceptual space."
-        style={{ height: 16, padding: "0 2px", marginLeft: 4, display: "inline-flex", alignItems: "center", justifyContent: "center",
+        style={{ height: 16, padding: "0 2px", marginLeft: 3, display: "inline-flex", alignItems: "center", justifyContent: "center",
                  fontSize: 9, fontWeight: 600, color: "#dddddd",
                  border: "1px solid #888", borderRadius: 3, cursor: "pointer", boxSizing: "border-box", flexShrink: 0, userSelect: "none" }}>
         <span style={{ marginTop: 0, lineHeight: 1 }}>{colorSpace.toUpperCase()}</span>
