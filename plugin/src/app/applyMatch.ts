@@ -54,6 +54,7 @@ export interface ApplyMatchParams {
   multiZone?: boolean;         // emit 3 stacked Curves layers w/ band limiting instead of one
   multiZoneLimit?: "mask" | "blendIf" | "both"; // how to limit each band layer (default mask)
   multiZonePeaks?: { shadow: number; mid: number; highlight: number }; // band peak luma positions
+  multiZoneExtents?: { min: number; max: number }; // outer histogram bounds for the bands
   sourcePixelsOverride?: Uint8Array; // if set, use these RGBA pixels instead of reading source layer
   sourceLabel?: string; // optional name shown in result message
   colorSpace?: "rgb" | "lab";
@@ -151,7 +152,7 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     // Multi-zone path needs its own per-band fit (the global `raw` above is for single-curve).
     // We refit because the band weights are luma-conditional; single-curve fitter doesn't bin by luma.
     const multiZoneFit = params.multiZone
-      ? processMultiZoneFit(fitMultiZone(srcPixels, downsampleToMaxEdge(t, STATS_MAX_EDGE).data, params.multiZonePeaks), curveOpts, dimOpts)
+      ? processMultiZoneFit(fitMultiZone(srcPixels, downsampleToMaxEdge(t, STATS_MAX_EDGE).data, params.multiZonePeaks, params.multiZoneExtents), curveOpts, dimOpts)
       : null;
 
     // Reuse existing [Color Smash] group. Prior Match Curves layers are either deleted
@@ -218,15 +219,19 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       const compComps = compId.components ?? (compSrc.length / (compW * compH));
       const hasAlpha = compComps === 4;
 
-      // Band peak luma positions — adaptive (P10/P50/P90 of target) when caller passes them,
-      // fixed at 0/128/255 otherwise. Bands are linear ramps anchored at these peaks.
+      // Band peak luma positions + outer extents. Adaptive (from target histogram) when
+      // caller passes them, fixed at 0/128/255 + 0/255 otherwise.
       const peaks = params.multiZonePeaks ?? { shadow: 0, mid: 128, highlight: 255 };
+      const extents = params.multiZoneExtents ?? { min: 0, max: 255 };
       const sP = Math.max(0, Math.min(253, peaks.shadow));
       const mP = Math.max(sP + 1, Math.min(254, peaks.mid));
       const hP = Math.max(mP + 1, Math.min(255, peaks.highlight));
+      const eMin = Math.max(0, Math.min(sP, extents.min));
+      const eMax = Math.max(hP, Math.min(255, extents.max));
 
       // Triangular band-weight masks (one byte per pixel = weight × 255). Multiplied by
       // alpha when present so transparent pixels get mask value 0 across all bands.
+      // Pixels outside [eMin, eMax] get zero across all bands → identity passthrough.
       const pxCount = compW * compH;
       const shadowMask = new Uint8Array(pxCount);
       const midMask = new Uint8Array(pxCount);
@@ -239,29 +244,36 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
         }
         const r = compSrc[j], g = compSrc[j + 1], b = compSrc[j + 2];
         const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        // Linear ramps based on the (possibly adaptive) peak positions.
-        const sw = luma <= sP ? 1 : (luma <= mP ? (mP - luma) / (mP - sP) : 0);
+        if (luma < eMin || luma > eMax) {
+          shadowMask[i] = 0; midMask[i] = 0; highlightMask[i] = 0;
+          continue;
+        }
+        // Linear ramps anchored at peaks AND extents (shadow ramps up from eMin to sP,
+        // highlight ramps down from hP to eMax — matches the visual histogram bounds).
+        const sw = luma <= sP ? (sP === eMin ? 1 : (luma - eMin) / (sP - eMin))
+                              : (luma <= mP ? (mP - luma) / (mP - sP) : 0);
         const mw = luma <= sP ? 0 : (luma <= mP ? (luma - sP) / (mP - sP) : (luma <= hP ? (hP - luma) / (hP - mP) : 0));
-        const hw = luma <= mP ? 0 : (luma <= hP ? (luma - mP) / (hP - mP) : 1);
+        const hw = luma <= mP ? 0 : (luma <= hP ? (luma - mP) / (hP - mP)
+                                                 : (eMax === hP ? 1 : (eMax - luma) / (eMax - hP)));
         shadowMask[i]    = Math.max(0, Math.min(255, Math.round(a * sw * 255)));
         midMask[i]       = Math.max(0, Math.min(255, Math.round(a * mw * 255)));
         highlightMask[i] = Math.max(0, Math.min(255, Math.round(a * hw * 255)));
       }
       if (compId.dispose) compId.dispose();
 
-      // Blend If fallback ranges — derived from peak positions so they match the masks.
-      // dest sliders define the underlying-layer luma ranges where the layer is visible.
+      // Blend If fallback ranges — outer slider positions match the histogram extents
+      // (eMin / eMax) instead of always 0 / 255, so the slider visualization is honest.
       const bands: Array<{
         key: "shadow" | "mid" | "highlight"; suffix: string; mask: Uint8Array;
         destBlackMin: number; destBlackMax: number; destWhiteMin: number; destWhiteMax: number;
       }> = [
-        // Blend If sliders matching the triangular weights at peaks (sP, mP, hP):
-        //   Shadow:    full 0..sP, fade sP→mP, off mP+
-        //   Mid:       off 0..sP, fade in sP→mP, full at mP, fade out mP→hP, off hP+
-        //   Highlight: off 0..mP, fade in mP→hP, full hP..255
-        { key: "shadow",    suffix: "Shadows",    mask: shadowMask,    destBlackMin: 0,   destBlackMax: 0,   destWhiteMin: sP,  destWhiteMax: mP  },
-        { key: "mid",       suffix: "Mids",       mask: midMask,       destBlackMin: sP,  destBlackMax: mP,  destWhiteMin: mP,  destWhiteMax: hP  },
-        { key: "highlight", suffix: "Highlights", mask: highlightMask, destBlackMin: mP,  destBlackMax: hP,  destWhiteMin: 255, destWhiteMax: 255 },
+        // Sliders mirror the triangular weights anchored at peaks + extents:
+        //   Shadow:    fade in eMin→sP, full sP, fade out sP→mP, off mP+
+        //   Mid:       off 0..sP, fade in sP→mP, full mP, fade out mP→hP, off hP+
+        //   Highlight: off 0..mP, fade in mP→hP, full hP, fade out hP→eMax, off eMax+
+        { key: "shadow",    suffix: "Shadows",    mask: shadowMask,    destBlackMin: eMin, destBlackMax: sP,  destWhiteMin: sP,  destWhiteMax: mP  },
+        { key: "mid",       suffix: "Mids",       mask: midMask,       destBlackMin: sP,   destBlackMax: mP,  destWhiteMin: mP,  destWhiteMax: hP  },
+        { key: "highlight", suffix: "Highlights", mask: highlightMask, destBlackMin: mP,   destBlackMax: hP,  destWhiteMin: hP,  destWhiteMax: eMax },
       ];
 
       const failures: string[] = [];

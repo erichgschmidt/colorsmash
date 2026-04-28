@@ -404,13 +404,22 @@ export function MatchTab() {
     return adaptiveBandPeaks(lumaBins);
   }, [adaptiveBands, lumaBins]);
 
+  // Outer extents for multi-zone bands. When adaptive, derived from the target's actual
+  // luma range (lumaRange) — pixels outside this range get zero band application and pass
+  // through unchanged. Slider positions in PS Blend If panel match these extents so the
+  // visualization is honest about where the bands actually have effect.
+  const multiZoneExtents = useMemo(() => {
+    if (!adaptiveBands || !lumaBins) return { min: 0, max: 255 };
+    const r = lumaRange(lumaBins);
+    return { min: r.start, max: r.end };
+  }, [adaptiveBands, lumaBins]);
+
   // Multi-zone fit: 3 separate per-band curves. Computed only when the multi-zone toggle
-  // is on (otherwise null). Always uses full-distribution match per band — match modes
-  // are global and don't compose meaningfully with per-band fitting.
+  // is on (otherwise null).
   const fittedMulti = useMemo<MultiZoneFit | null>(() => {
     if (!multiZone || !srcSnap || !tgt.snap) return null;
-    return fitMultiZone(srcSnap.data, tgt.snap.data, multiZonePeaks);
-  }, [multiZone, srcSnap, tgt.snap, multiZonePeaks]);
+    return fitMultiZone(srcSnap.data, tgt.snap.data, multiZonePeaks, multiZoneExtents);
+  }, [multiZone, srcSnap, tgt.snap, multiZonePeaks, multiZoneExtents]);
 
   // Matched preview is rendered by <MatchedPreview/>; we drive it imperatively via a handle.
   const matchedHandleRef = useRef<MatchedPreviewHandle | null>(null);
@@ -450,7 +459,7 @@ export function MatchTab() {
       // 3-curve composite via triangular blend (matches what PS will produce on apply).
       // Skip Zones + Envelope — they're zone-modulators that would double-apply over the bands.
       const procFit = processMultiZoneFit(fittedMulti, curveOpts, dimOpts);
-      out = applyMultiZoneToRgba(tgt.snap.data, procFit, multiZonePeaks);
+      out = applyMultiZoneToRgba(tgt.snap.data, procFit, multiZonePeaks, multiZoneExtents);
       // Curves graph shows the mid-band curve as representative (graph doesn't render 3 sets).
       curvesForGraph = procFit.mid;
     } else {
@@ -496,7 +505,7 @@ export function MatchTab() {
     // this redraw — fixes "preview blank until I wiggle a slider" on first mount.
     rafPendingRef.current = false;
     scheduleRedraw();
-  }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, multiZoneExtents, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onApply = async () => {
     if (targetId == null) { setStatus("Pick target layer."); return; }
@@ -513,6 +522,7 @@ export function MatchTab() {
         multiZone,
         multiZoneLimit,
         multiZonePeaks,
+        multiZoneExtents,
         // Section-enable mirror — disabled sections apply with default params.
         amount: enColor ? amountRef.current / 100 : 1,
         smoothRadius: enColor ? smoothRef.current : 0,

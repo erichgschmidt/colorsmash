@@ -155,30 +155,42 @@ export interface MultiZoneFit {
 }
 
 // Triangular partition-of-unity weights at a given luma, parameterized by three peak
-// positions (shadow, mid, highlight) on the 0..255 axis. Default fixed peaks 0/128/255 give
-// uniform coverage; passing histogram-derived peaks (e.g. P10/P50/P90) adapts the bands to
-// where the image's tones actually live, so each band gets a meaningful sample for fitting.
-export function multiZoneWeights(luma: number, peaks: { shadow: number; mid: number; highlight: number } = { shadow: 0, mid: 128, highlight: 255 }): { shadow: number; mid: number; highlight: number } {
-  // Clamp peaks to ensure shadow ≤ mid ≤ highlight and at least 1 unit between consecutive.
+// positions and outer extents. With `extents` matching the histogram bounds (e.g. lumaMin/
+// lumaMax from lumaRange), pixels outside that range get zero band weight everywhere — they
+// pass through unchanged in the composite, so the multi-zone curves only act on actual
+// image data. Without `extents` (or fixed 0/255), bands cover the full luma range.
+export function multiZoneWeights(
+  luma: number,
+  peaks: { shadow: number; mid: number; highlight: number } = { shadow: 0, mid: 128, highlight: 255 },
+  extents: { min: number; max: number } = { min: 0, max: 255 },
+): { shadow: number; mid: number; highlight: number } {
   const sP = Math.max(0, Math.min(253, peaks.shadow));
   const mP = Math.max(sP + 1, Math.min(254, peaks.mid));
   const hP = Math.max(mP + 1, Math.min(255, peaks.highlight));
-  // Linear ramps: each band weight is 1 at its peak, falling linearly to 0 at the next peak.
+  const eMin = Math.max(0, Math.min(sP, extents.min));
+  const eMax = Math.max(hP, Math.min(255, extents.max));
+
+  // Outside extents → all weights zero, no band application.
+  if (luma < eMin || luma > eMax) return { shadow: 0, mid: 0, highlight: 0 };
+
   let shadow = 0, mid = 0, highlight = 0;
-  if (luma <= sP) shadow = 1;
+  // Shadow: ramp up from 0 at eMin to 1 at sP, then ramp down to 0 at mP.
+  if (luma <= sP) shadow = sP === eMin ? 1 : (luma - eMin) / (sP - eMin);
   else if (luma <= mP) shadow = (mP - luma) / (mP - sP);
 
   if (luma <= sP) mid = 0;
   else if (luma <= mP) mid = (luma - sP) / (mP - sP);
   else if (luma <= hP) mid = (hP - luma) / (hP - mP);
-  else mid = 0;
 
+  // Highlight: ramp up 0 at mP → 1 at hP, then ramp down 1 at hP → 0 at eMax.
   if (luma <= mP) highlight = 0;
   else if (luma <= hP) highlight = (luma - mP) / (hP - mP);
-  else highlight = 1;
+  else highlight = eMax === hP ? 1 : (eMax - luma) / (eMax - hP);
 
-  const sum = shadow + mid + highlight || 1;
-  return { shadow: shadow / sum, mid: mid / sum, highlight: highlight / sum };
+  // Don't normalize — sum can be < 1 inside extents near the edges (where shadow ramps up
+  // from eMin and highlight ramps down toward eMax). The (1 - sum) portion passes through
+  // unchanged in the composite, matching what Blend If does in PS.
+  return { shadow: Math.max(0, shadow), mid: Math.max(0, mid), highlight: Math.max(0, highlight) };
 }
 
 // Compute histogram-adaptive band peaks for a target's luma distribution. Returns the
@@ -232,39 +244,38 @@ function fitOneBand(srcRgba: Uint8Array, tgtRgba: Uint8Array, weightFn: (l: numb
   return out as ChannelCurves;
 }
 
-// Fit all three zone curves with peaks at the given luma positions. Each band uses pixels
-// weighted by its triangular bump (peak weight at the band's peak luma, falling to 0 at
-// adjacent peaks). When peaks are histogram-adaptive (P10/P50/P90), each band gets a
-// similar pixel-count sample → all three curves fit reliably. When peaks are fixed
-// (0/128/255), bands at extremes may have very few pixels → noisier fits.
+// Fit all three zone curves with peaks + extents. Pixels outside extents contribute zero
+// to each band's histogram, so the curves are fit only on data within the histogram range.
 export function fitMultiZone(
   srcRgba: Uint8Array, tgtRgba: Uint8Array,
   peaks: { shadow: number; mid: number; highlight: number } = { shadow: 0, mid: 128, highlight: 255 },
+  extents: { min: number; max: number } = { min: 0, max: 255 },
 ): MultiZoneFit {
-  const sP = Math.max(0, Math.min(253, peaks.shadow));
-  const mP = Math.max(sP + 1, Math.min(254, peaks.mid));
-  const hP = Math.max(mP + 1, Math.min(255, peaks.highlight));
+  const wAt = (l: number) => multiZoneWeights(l, peaks, extents);
   return {
-    shadow:    fitOneBand(srcRgba, tgtRgba, l => l <= sP ? 1 : (l <= mP ? (mP - l) / (mP - sP) : 0)),
-    mid:       fitOneBand(srcRgba, tgtRgba, l => l <= sP ? 0 : (l <= mP ? (l - sP) / (mP - sP) : (l <= hP ? (hP - l) / (hP - mP) : 0))),
-    highlight: fitOneBand(srcRgba, tgtRgba, l => l <= mP ? 0 : (l <= hP ? (l - mP) / (hP - mP) : 1)),
+    shadow:    fitOneBand(srcRgba, tgtRgba, l => wAt(l).shadow),
+    mid:       fitOneBand(srcRgba, tgtRgba, l => wAt(l).mid),
+    highlight: fitOneBand(srcRgba, tgtRgba, l => wAt(l).highlight),
   };
 }
 
 // Simulate the multi-zone composite for the preview. Uses the same parameterized weights
-// as fitMultiZone so preview = applied output even with adaptive peaks.
+// as fitMultiZone so preview = applied output. Non-normalized weights mean the remainder
+// (1 - sum) passes through as identity — matches what Blend If / masks do in PS.
 export function applyMultiZoneToRgba(
   tgtRgba: Uint8Array, fit: MultiZoneFit,
   peaks: { shadow: number; mid: number; highlight: number } = { shadow: 0, mid: 128, highlight: 255 },
+  extents: { min: number; max: number } = { min: 0, max: 255 },
 ): Uint8Array {
   const out = new Uint8Array(tgtRgba.length);
   for (let i = 0; i < tgtRgba.length; i += 4) {
     const r = tgtRgba[i], g = tgtRgba[i + 1], b = tgtRgba[i + 2];
     const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    const w = multiZoneWeights(luma, peaks);
-    out[i]     = Math.max(0, Math.min(255, Math.round(w.shadow * fit.shadow.r[r] + w.mid * fit.mid.r[r] + w.highlight * fit.highlight.r[r])));
-    out[i + 1] = Math.max(0, Math.min(255, Math.round(w.shadow * fit.shadow.g[g] + w.mid * fit.mid.g[g] + w.highlight * fit.highlight.g[g])));
-    out[i + 2] = Math.max(0, Math.min(255, Math.round(w.shadow * fit.shadow.b[b] + w.mid * fit.mid.b[b] + w.highlight * fit.highlight.b[b])));
+    const w = multiZoneWeights(luma, peaks, extents);
+    const passthrough = Math.max(0, 1 - (w.shadow + w.mid + w.highlight));
+    out[i]     = Math.max(0, Math.min(255, Math.round(w.shadow * fit.shadow.r[r] + w.mid * fit.mid.r[r] + w.highlight * fit.highlight.r[r] + passthrough * r)));
+    out[i + 1] = Math.max(0, Math.min(255, Math.round(w.shadow * fit.shadow.g[g] + w.mid * fit.mid.g[g] + w.highlight * fit.highlight.g[g] + passthrough * g)));
+    out[i + 2] = Math.max(0, Math.min(255, Math.round(w.shadow * fit.shadow.b[b] + w.mid * fit.mid.b[b] + w.highlight * fit.highlight.b[b] + passthrough * b)));
     out[i + 3] = tgtRgba[i + 3];
   }
   return out;
