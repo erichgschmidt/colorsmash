@@ -332,14 +332,30 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
           // Per UXP-forum example, the channel descriptor needs `_ref: "channel"` AND
           // a `desaturate` field is included in working examples. This is a more faithful
           // mirror of the Action Manager descriptor than my previous attempts.
-          const buildBlendRange = () => [{
+          const grayEntry = {
             _obj: "blendRange",
             channel: { _ref: "channel", _enum: "channel", _value: "gray" },
             srcBlackMin: 0, srcBlackMax: 0, srcWhiteMin: 255, srcWhiteMax: 255,
             destBlackMin: band.destBlackMin, destBlackMax: band.destBlackMax,
             destWhiteMin: band.destWhiteMin, destWhiteMax: band.destWhiteMax,
             desaturate: 255,
-          }];
+          };
+          const buildBlendRange = () => [grayEntry];
+          // Per audit suggestion #5 — include defaults for R/G/B channels so PS doesn't
+          // treat the descriptor as incomplete and silently fall back to defaults for
+          // unspecified channels.
+          const buildAllChannelsBlendRange = () => [
+            grayEntry,
+            { _obj: "blendRange", channel: { _ref: "channel", _enum: "channel", _value: "red" },
+              srcBlackMin: 0, srcBlackMax: 0, srcWhiteMin: 255, srcWhiteMax: 255,
+              destBlackMin: 0, destBlackMax: 0, destWhiteMin: 255, destWhiteMax: 255, desaturate: 255 },
+            { _obj: "blendRange", channel: { _ref: "channel", _enum: "channel", _value: "green" },
+              srcBlackMin: 0, srcBlackMax: 0, srcWhiteMin: 255, srcWhiteMax: 255,
+              destBlackMin: 0, destBlackMax: 0, destWhiteMin: 255, destWhiteMax: 255, desaturate: 255 },
+            { _obj: "blendRange", channel: { _ref: "channel", _enum: "channel", _value: "blue" },
+              srcBlackMin: 0, srcBlackMax: 0, srcWhiteMin: 255, srcWhiteMax: 255,
+              destBlackMin: 0, destBlackMax: 0, destWhiteMin: 255, destWhiteMax: 255, desaturate: 255 },
+          ];
 
           // Variants to try in order. Each performs a `set`, then reads back the layer's
           // blendRange to verify all four dest values actually stuck.
@@ -387,6 +403,14 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
                 to: { _obj: "layer", blendingOptions: { _obj: "blendingOptions", blendRange: buildBlendRange() } },
               }],
             },
+            // 5. All four channels (gray + R + G + B). PS may require the full descriptor.
+            { name: "all-channels by-id",
+              cmds: () => [{
+                _obj: "set",
+                _target: [{ _ref: "layer", _id: layer.id }],
+                to: { _obj: "layer", blendRange: buildAllChannelsBlendRange() },
+              }],
+            },
           ];
 
           for (const variant of variants) {
@@ -401,14 +425,16 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
                   { _ref: "layer", _id: layer.id },
                 ],
               }], { synchronousExecution: false });
-              const got = readResult?.[0]?.blendRange?.[0];
+              const allRanges = readResult?.[0]?.blendRange ?? [];
+              // Find the gray channel entry (or fall back to first entry).
+              const got = allRanges.find((e: any) => e?.channel?._value === "gray") ?? allRanges[0];
               if (got &&
                   got.destBlackMin === band.destBlackMin && got.destBlackMax === band.destBlackMax &&
                   got.destWhiteMin === band.destWhiteMin && got.destWhiteMax === band.destWhiteMax) {
                 blendIfOk = true;
                 break;
               }
-              blendIfErr = new Error(`'${variant.name}' wanted dest=${band.destBlackMin}/${band.destBlackMax}/${band.destWhiteMin}/${band.destWhiteMax} but readback got ${got?.destBlackMin}/${got?.destBlackMax}/${got?.destWhiteMin}/${got?.destWhiteMax}`);
+              blendIfErr = new Error(`'${variant.name}' wanted dest=${band.destBlackMin}/${band.destBlackMax}/${band.destWhiteMin}/${band.destWhiteMax} got ${got?.destBlackMin}/${got?.destBlackMax}/${got?.destWhiteMin}/${got?.destWhiteMax} (${allRanges.length} entries)`);
             } catch (e: any) {
               blendIfErr = new Error(`Variant '${variant.name}' threw: ${e?.message ?? e}`);
             }
