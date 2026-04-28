@@ -185,26 +185,35 @@ export function enforceMonotonic(curve: Uint8Array): Uint8Array {
   return out;
 }
 
-// Clamp local slope so |Δoutput / Δinput| ≤ maxRatio. Walks both directions and anchors at
-// either the endpoints (default) or the histogram-data range (when `range` is provided).
+// Soft slope cap via tanh saturation. Walks both directions and anchors at endpoints
+// (default) or the histogram-data range (when `range` is provided).
 //
-// Default behavior anchors at 0 and 255, which means dark-source images (data near 0) get
-// the cap engaged earlier than bright-source images — making the slider feel uneven across
-// material. Passing `range` from the target's actual luminance bounds keeps the cap's
-// influence consistent regardless of where the data lives.
+// Why soft instead of hard: a hard cap (`if slope > cap, clamp`) makes the Stretch slider
+// feel jumpy because each integer slider value either engages or doesn't engage at every
+// input position. Soft saturation via `cap * tanh(slope / cap)` produces a continuous
+// modulation: slopes well below cap pass through nearly unchanged (tanh ≈ identity for
+// small inputs), at-the-cap slopes settle to ~76% of cap, and large slopes asymptote to
+// cap without ever exceeding it. Net result: every slider increment continuously affects
+// every input — no popping, no on/off transitions.
+//
+// Range parameter: when provided, the cap walks from the target's actual luma bounds
+// rather than 0/255. Keeps the cap's influence consistent across bright vs dark sources.
 export function capStretch(curve: Uint8Array, maxRatio: number, range?: { start: number; end: number }): Uint8Array {
   if (maxRatio <= 0) return curve;
   const out = new Uint8Array(curve);
   const start = Math.max(0, Math.min(254, range?.start ?? 0));
   const end = Math.max(start + 1, Math.min(255, range?.end ?? 255));
-  const maxJump = Math.max(1, Math.round(maxRatio));
-  // Forward pass anchored at `start`.
+  // Forward pass anchored at `start` — soft-cap rises and drops symmetrically (tanh is odd).
   for (let v = start + 1; v <= end; v++) {
-    if (out[v] > out[v - 1] + maxJump) out[v] = out[v - 1] + maxJump;
+    const delta = out[v] - out[v - 1];
+    const softDelta = maxRatio * Math.tanh(delta / maxRatio);
+    out[v] = Math.max(0, Math.min(255, Math.round(out[v - 1] + softDelta)));
   }
-  // Reverse pass anchored at `end`.
+  // Reverse pass anchored at `end` — handles compressive extremes the forward pass missed.
   for (let v = end - 1; v >= start; v--) {
-    if (out[v] < out[v + 1] - maxJump) out[v] = out[v + 1] - maxJump;
+    const delta = out[v] - out[v + 1];
+    const softDelta = maxRatio * Math.tanh(delta / maxRatio);
+    out[v] = Math.max(0, Math.min(255, Math.round(out[v + 1] + softDelta)));
   }
   return out;
 }
