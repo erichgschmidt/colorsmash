@@ -267,10 +267,10 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
         key: "shadow" | "mid" | "highlight"; suffix: string; mask: Uint8Array;
         destBlackMin: number; destBlackMax: number; destWhiteMin: number; destWhiteMax: number;
       }> = [
-        // Sliders mirror the triangular weights anchored at peaks + extents:
+        // Sliders mirror the partition-of-unity triangular weights (peaks at sP/mP/hP):
         //   Shadow:    fade in eMin→sP, full sP, fade out sP→mP, off mP+
-        //   Mid:       off 0..sP, fade in sP→mP, full mP, fade out mP→hP, off hP+
-        //   Highlight: off 0..mP, fade in mP→hP, full hP, fade out hP→eMax, off eMax+
+        //   Mid:       off below sP, fade in sP→mP, full mP, fade out mP→hP, off hP+
+        //   Highlight: off below mP, fade in mP→hP, full hP, fade out hP→eMax, off eMax+
         { key: "shadow",    suffix: "Shadows",    mask: shadowMask,    destBlackMin: eMin, destBlackMax: sP,  destWhiteMin: sP,  destWhiteMax: mP  },
         { key: "mid",       suffix: "Mids",       mask: midMask,       destBlackMin: sP,   destBlackMax: mP,  destWhiteMin: mP,  destWhiteMax: hP  },
         { key: "highlight", suffix: "Highlights", mask: highlightMask, destBlackMin: mP,   destBlackMax: hP,  destWhiteMin: hP,  destWhiteMax: eMax },
@@ -415,7 +415,8 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
         try { await layer.move(group, "placeInside"); } catch { /* ignore */ }
       }
 
-      const tags = [`multi-zone (${bands.length} layers)`];
+      const adaptive = (eMin > 0 || eMax < 255 || sP > 0 || hP < 255);
+      const tags = [`multi-zone (${bands.length} layers, ${adaptive ? "adaptive" : "fixed"} ${eMin}-${sP}-${mP}-${hP}-${eMax})`];
       if (params.amount && params.amount < 1) tags.push(`amt ${Math.round(params.amount * 100)}%`);
       if (params.chromaOnly) tags.push("hue-only");
       if (params.sourceLabel) tags.unshift(`src "${params.sourceLabel}"`);
