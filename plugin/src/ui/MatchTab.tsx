@@ -552,23 +552,23 @@ export function MatchTab() {
                      border: enColor ? "1px solid #2d8a36" : "1px solid #333",
                      cursor: "pointer" }} />
           <Icon name={openSection === "basic" ? "chevronDown" : "chevronRight"} size={11} /> Color
-          <span onClick={(e: any) => { e.stopPropagation(); void uxpInfo("Color — what each control does", [
-            { heading: "Section purpose",
-              body: "Shapes the per-channel R/G/B match curves before they're combined and output. These controls operate on the raw fitted curves: blending strength, smoothing, slope cap, and the Hue-only blend mode for the final layer." },
-            { heading: "Amount",
-              body: "Strength of the histogram match, 0–100%. Blends the matched curve with identity. 100% = full match. 50% = half-strength match (curves pulled halfway toward identity). 0% = no match (identity curves)." },
-            { heading: "Smooth",
-              body: "Box-filter smoothing radius applied to the curves after blending, 0–32. Higher values average over a wider window — useful when the source histogram is sparse or noisy and produces zig-zaggy curves. 0 = no smoothing. Mild values (4–8) typically clean things up without losing tonal detail." },
-            { heading: "Stretch",
-              body: "Local slope cap. Limits how steep adjacent curve points can rise or fall. 1 = hard cap (slope ≤ 1 per step) — heavily flattens any aggressive contrast. 15 = essentially uncapped (most fitted curves don't exceed this slope naturally). The cap engages only when curve slopes exceed the value, so changes are most visible in the 1–8 range." },
-            { heading: "Anchor stretch to histogram range",
-              body: "Toggle. When on, the slope cap walks from where the target image's data actually starts/ends (≥0.5% of peak count) instead of always 0–255. Makes Stretch behave consistently across bright vs dark sources — without it, dark-source images get the cap engaged earlier than bright ones." },
-            { heading: "Hue only",
-              body: "Toggle. Sets the output Curves layer to Photoshop's Hue blend mode (instead of Normal). Result: only the hue shifts toward the source; target's saturation and luminance are preserved. Sidesteps the saturation inflation that per-channel curves naturally produce. Use when you want the color tint without disturbing tonal balance." },
-          ]); }}
-            title="What this section does — full explanation"
-            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", marginLeft: 7, width: 14, height: 14, borderRadius: "50%", border: "1px solid #888", color: "#aaa", fontSize: 10, fontWeight: 700, cursor: "pointer", verticalAlign: "middle" }}>i</span>
         </span>
+        <span onClick={(e: any) => { e.stopPropagation(); void uxpInfo("Color — what each control does", [
+          { heading: "Section purpose",
+            body: "Shapes the per-channel R/G/B match curves before they're combined and output. These controls operate on the raw fitted curves: blending strength, smoothing, slope cap, and the Hue-only blend mode for the final layer." },
+          { heading: "Amount",
+            body: "Strength of the histogram match, 0–100%. Blends the matched curve with identity. 100% = full match. 50% = half-strength match. 0% = no match (identity curves)." },
+          { heading: "Smooth",
+            body: "Box-filter smoothing radius applied to the curves after blending, 0–32. Higher values average over a wider window — useful when the source histogram is sparse or noisy. 0 = no smoothing. Mild values (4–8) typically clean things up without losing tonal detail." },
+          { heading: "Stretch",
+            body: "Local slope cap. Limits how steep adjacent curve points can rise or fall. 1 = hard cap (slope ≤ 1 per step) — heavily flattens any aggressive contrast. 15 = essentially uncapped. Most visible changes happen in the 1–8 range." },
+          { heading: "Anchor stretch to histogram range",
+            body: "Toggle. When on, the slope cap walks from where the target image's data actually starts/ends (≥0.5% of peak count) instead of always 0–255. Makes Stretch behave consistently across bright vs dark sources." },
+          { heading: "Hue only",
+            body: "Toggle. Sets the output Curves layer to Photoshop's Hue blend mode (instead of Normal). Result: only the hue shifts toward the source; target's saturation and luminance are preserved. Sidesteps the saturation inflation that per-channel curves naturally produce." },
+        ]); }}
+          title="What this section does — full explanation"
+          style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 14, height: 14, borderRadius: "50%", border: "1px solid #888", color: "#aaa", fontSize: 10, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>i</span>
       </div>
       {openSection === "basic" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: 0 }}>
@@ -599,28 +599,30 @@ export function MatchTab() {
                      border: enTone ? "1px solid #2d8a36" : "1px solid #333",
                      cursor: "pointer" }} />
           <Icon name={openSection === "dims" ? "chevronDown" : "chevronRight"} size={11} /> Tone
+        </span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          {openSection === "dims" && <span onClick={(e: any) => { e.stopPropagation(); dimsRef.current = { ...DEFAULT_DIMENSIONS }; setDimsLabel({ ...DEFAULT_DIMENSIONS }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>}
           <span onClick={(e: any) => { e.stopPropagation(); void uxpInfo("Tone — what each control does", [
             { heading: "Section purpose",
-              body: "Reshapes the matched curves along perceptual axes after they're fit. Lets you scale luminance, push or pull saturation, rotate hue, adjust contrast, neutralize color casts, and separate the per-channel response — all without re-fitting. Each slider acts as a multiplier or offset on the raw match." },
+              body: "Reshapes the matched curves along perceptual axes after they're fit. Lets you scale luminance, push or pull saturation, rotate hue, adjust contrast, neutralize color casts, and separate the per-channel response — all without re-fitting." },
             { heading: "Value",
-              body: "Scales the overall luminance contribution of the match, 0–200%. 100% = pass-through. <100% reduces tonal change. >100% amplifies it. Useful when the match is shifting brightness in a direction you don't want." },
+              body: "Scales overall luminance contribution of the match, 0–200%. 100% = pass-through. <100% reduces tonal change. >100% amplifies it." },
             { heading: "Chroma",
-              body: "Scales the chroma (saturation) contribution of the match, 0–200%. 100% = pass-through. 0% removes saturation changes (luminance/hue match still applies). 200% doubles the saturation pull toward source." },
+              body: "Scales chroma (saturation) contribution, 0–200%. 100% = pass-through. 0% removes saturation changes. 200% doubles the saturation pull toward source." },
             { heading: "Hue",
-              body: "Rotates the hue of the match output, -180 to +180 degrees. 0 = no rotation. ±180 = full hue inversion. Useful for shifting the matched color toward a complementary or shifted palette without re-fitting." },
+              body: "Rotates hue of the match output, -180 to +180 degrees. 0 = no rotation. Useful for shifting matched color toward a complementary palette without re-fitting." },
             { heading: "Contrast",
-              body: "Scales contrast in the matched output, 0–200%. 100% = pass-through. <100% flattens contrast (matched curves pulled toward middle gray). >100% pushes contrast harder." },
+              body: "Scales contrast, 0–200%. 100% = pass-through. <100% flattens. >100% pushes harder." },
             { heading: "Neutralize",
-              body: "Pulls the match toward neutral gray on a per-pixel basis, 0–100%. 0% = no neutralization. 100% = fully gray (no match). Useful for taming an over-aggressive color cast while keeping the tonal shaping." },
+              body: "Pulls the match toward neutral gray, 0–100%. 0% = no neutralization. 100% = fully gray. Useful for taming an over-aggressive color cast while keeping the tonal shaping." },
             { heading: "Separation",
-              body: "Controls how independently the R/G/B channels respond to the match, 0–200%. 100% = pass-through (full per-channel independence). <100% blends channels together (more neutral, less colorful). >100% exaggerates differences between channels." },
+              body: "How independently R/G/B channels respond, 0–200%. 100% = pass-through. <100% blends channels (more neutral). >100% exaggerates differences between channels." },
             { heading: "Reset (header)",
-              body: "Restores all six Tone sliders to defaults (100% across the board, hue 0°). Section enable/disable state stays as-is." },
+              body: "Restores all six Tone sliders to defaults. Section enable/disable state stays as-is." },
           ]); }}
             title="What this section does — full explanation"
-            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", marginLeft: 7, width: 14, height: 14, borderRadius: "50%", border: "1px solid #888", color: "#aaa", fontSize: 10, fontWeight: 700, cursor: "pointer", verticalAlign: "middle" }}>i</span>
+            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 14, height: 14, borderRadius: "50%", border: "1px solid #888", color: "#aaa", fontSize: 10, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>i</span>
         </span>
-        {openSection === "dims" && <span onClick={(e: any) => { e.stopPropagation(); dimsRef.current = { ...DEFAULT_DIMENSIONS }; setDimsLabel({ ...DEFAULT_DIMENSIONS }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>}
       </div>
       {openSection === "dims" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: 0 }}>
@@ -648,40 +650,42 @@ export function MatchTab() {
                      border: enZones ? "1px solid #2d8a36" : "1px solid #333",
                      cursor: "pointer" }} />
           <Icon name={openSection === "zones" ? "chevronDown" : "chevronRight"} size={11} /> Zones
+        </span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          {openSection === "zones" && (
+            <>
+              <label onClick={(e: any) => e.stopPropagation()} title="Lock total: when one amount changes, the other two rebalance proportionally to preserve the sum"
+                style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 10, fontWeight: 400, opacity: 0.85, cursor: "pointer" }}>
+                <input type="checkbox" checked={lockZoneTotal} onChange={e => setLockZoneTotal(e.target.checked)}
+                  style={{ cursor: "pointer", margin: 0 }} />
+                Lock total
+              </label>
+              <span onClick={(e: any) => { e.stopPropagation(); zonesRef.current = { ...DEFAULT_ZONES }; setZonesLabel({ ...DEFAULT_ZONES }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>
+            </>
+          )}
           <span onClick={(e: any) => { e.stopPropagation(); void uxpInfo("Zones — what each control does", [
             { heading: "What zones do",
-              body: "Modulate how strongly the histogram match applies across input tones. Each zone (shadows / midtones / highlights) is a Gaussian bump centered on its anchor; the per-input weight blends the matched curve with identity. With all amounts at 100% and biases at 0, weights sum to 1.0 everywhere — the match runs full-strength and zones have no effect." },
+              body: "Modulate how strongly the histogram match applies across input tones. Each zone (shadows / midtones / highlights) is a Gaussian bump centered on its anchor. With all amounts at 100% and biases at 0, the match runs full-strength and zones have no effect." },
             { heading: "Track (the gradient slider)",
-              body: "Visualizes the zone's footprint over the 0–255 input range. The colored band is where the zone is active. The center thumb is the anchor; the two edge thumbs control falloff." },
+              body: "Visualizes the zone's footprint over the 0–255 input range. The colored band is where the zone is active. Center thumb = anchor; edge thumbs = falloff." },
             { heading: "Anchor",
-              body: "Where the zone is centered along the input axis (0 = pure black, 255 = pure white). Drag the center thumb to move the zone toward shadows or highlights." },
+              body: "Where the zone is centered along the input axis (0 = pure black, 255 = pure white). Drag the center thumb." },
             { heading: "Falloff",
-              body: "How wide the zone extends from its anchor. Drag either edge thumb in for a narrower, sharper zone or out for a broader one. Falloff is symmetric around the anchor." },
+              body: "How wide the zone extends from its anchor. Drag either edge thumb in/out for a narrower/broader zone. Symmetric around the anchor." },
             { heading: "Amount",
-              body: "Strength of the zone's contribution. 100% = standard. 0% = the zone fully suppresses the match in that range. 200% = doubles the local pull. Slider is the wide one to the right of the track." },
+              body: "Strength of the zone's contribution, 0–200%. 100% = standard. 0% = fully suppress the match in that range. 200% = doubles local pull. The wide slider to the right of the track." },
             { heading: "Bias",
-              body: "Competitive pressure against neighboring zones at overlap regions. Positive bias makes this zone dominate the partition where it overlaps another zone — like Photoshop's Color Range 'grow this range' feel. 0 = neutral. Implemented as exp(bias/50) inside the partition-of-unity normalization, so default 0 is bit-identical to no bias at all." },
-            { heading: "Lock total (header checkbox)",
-              body: "When on, dragging one zone's amount slider proportionally redistributes the other two amounts to preserve their sum. Useful for shifting weight between shadows/mids/highlights without changing total match strength. Off (default) = each zone amount is independent." },
+              body: "Competitive pressure against neighboring zones at overlap regions. Positive bias makes this zone dominate the partition where it overlaps another — like 'grow this range' in Color Range. 0 = neutral, default 0 is identical to no bias." },
+            { heading: "Lock total (header)",
+              body: "When on, dragging one zone's amount slider proportionally rebalances the other two to preserve their sum. Shifts weight between shadows/mids/highlights without changing total match strength." },
             { heading: "Sampled swatch colors",
-              body: "The colored band on each track is sampled from the target image's actual pixels in that zone's input range — so the swatch reflects the colors the zone is acting on. As you move anchors and falloff, swatches update in real time." },
+              body: "The colored band on each track is sampled from the target image's actual pixels in that zone's input range. Updates in real time as you move anchors and falloff." },
             { heading: "Reset (header)",
               body: "Restores all zone settings (amounts, anchors, falloffs, biases) to defaults. Lock total stays as-is." },
           ]); }}
             title="What this section does — full explanation"
-            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", marginLeft: 7, width: 14, height: 14, borderRadius: "50%", border: "1px solid #888", color: "#aaa", fontSize: 10, fontWeight: 700, cursor: "pointer", verticalAlign: "middle" }}>i</span>
+            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 14, height: 14, borderRadius: "50%", border: "1px solid #888", color: "#aaa", fontSize: 10, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>i</span>
         </span>
-        {openSection === "zones" && (
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <label onClick={(e: any) => e.stopPropagation()} title="Lock total: when one amount changes, the other two rebalance proportionally to preserve the sum"
-              style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 10, fontWeight: 400, opacity: 0.85, cursor: "pointer" }}>
-              <input type="checkbox" checked={lockZoneTotal} onChange={e => setLockZoneTotal(e.target.checked)}
-                style={{ cursor: "pointer", margin: 0 }} />
-              Lock total
-            </label>
-            <span onClick={(e: any) => { e.stopPropagation(); zonesRef.current = { ...DEFAULT_ZONES }; setZonesLabel({ ...DEFAULT_ZONES }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>
-          </span>
-        )}
       </div>
       {openSection === "zones" && (["shadows", "mids", "highlights"] as const).map(zone => {
         const fallback: Record<string, string> = { shadows: "#4a7fc1", mids: "#bbb", highlights: "#e0b85a" };
@@ -739,28 +743,30 @@ export function MatchTab() {
                      border: enEnvelope ? "1px solid #2d8a36" : "1px solid #333",
                      cursor: "pointer" }} />
           <Icon name={openSection === "envelope" ? "chevronDown" : "chevronRight"} size={11} /> Envelope{envelopeLabel.length > 0 && <span style={{ fontSize: 9, fontWeight: 400, opacity: 0.7, marginLeft: 6 }}>· {envelopeLabel.length} pt{envelopeLabel.length === 1 ? "" : "s"}</span>}
+        </span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          {openSection === "envelope" && (
+            <span onClick={(e: any) => { e.stopPropagation(); const def = [...DEFAULT_ENVELOPE]; envelopeRef.current = def; setEnvelopeLabel(def); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>
+          )}
           <span onClick={(e: any) => { e.stopPropagation(); void uxpInfo("Envelope — what each control does", [
             { heading: "What the envelope does",
-              body: "Arbitrary-N piecewise weight curve over the input range (0–255). Modulates how strongly the histogram match applies at each tonal value. Composes multiplicatively with Zones, so the envelope acts as a fine-grained per-tone weight on top of the broader zone shaping. Default is three identity-weight points (1.0 across) — bit-identical no-op until you move a handle." },
+              body: "Arbitrary-N piecewise weight curve over input range 0–255. Modulates how strongly the match applies at each tonal value. Composes multiplicatively with Zones — fine-grained per-tone weight on top of the broader zone shaping. Default = three identity-weight points (no-op until moved)." },
             { heading: "Track + reference line",
-              body: "Horizontal axis = input tone (0 left, 255 right). Vertical axis = weight 0 (bottom, suppress match) to 2 (top, double match). Background bars show the target's luma histogram (where pixel mass actually lives). Source histogram overlays as a colored polyline so you can see the gap the match is closing. Mid-line at weight=1 = identity (no modulation)." },
+              body: "X = input tone (0 left, 255 right). Y = weight 0 (bottom, suppress match) to 2 (top, double match). Gray bars = target luma histogram. Colored polyline = source histogram (gap the match is closing). Mid-line at weight=1 = identity." },
             { heading: "Adding a point",
-              body: "Click any empty area of the track. A new smooth point appears at the click coords and immediately enters drag mode — drop it where you want." },
+              body: "Click any empty area of the track. A new smooth point appears and immediately enters drag mode — drop it where you want." },
             { heading: "Moving a point",
-              body: "Drag any handle. Hold Shift to lock horizontal (vertical-only — change weight without moving position). Hold Ctrl/Cmd to lock vertical (horizontal-only — change position without moving weight)." },
+              body: "Drag any handle. Shift = lock horizontal (vertical-only). Ctrl/Cmd = lock vertical (horizontal-only)." },
             { heading: "Smooth vs corner points",
-              body: "Alt-click a handle to toggle. Smooth handles render as filled circles (●); corner handles render as squares (■). Smooth segments use monotone cubic Hermite interpolation (Fritsch-Carlson — no overshoot). Corner segments are linear. Mix freely: e.g. a sharp shadow rolloff into smooth midtones into a hard highlight cap." },
+              body: "Alt-click a handle to toggle. Smooth = filled circle (●), uses monotone cubic Hermite (no overshoot). Corner = square (■), uses linear interpolation. Mix freely: sharp shadow rolloff + smooth midtones + hard highlight cap." },
             { heading: "Removing a point",
-              body: "Three ways: double-click the handle, right-click the handle, or click to select then press Delete or Backspace. Selected handles render in cyan with a white border. Press Escape to clear selection without removing." },
+              body: "Double-click, right-click, OR click-to-select then press Delete/Backspace. Selected handles render cyan with white border. Escape clears selection." },
             { heading: "Reset (header)",
               body: "Restores the three default identity-weight points (positions 0, 127, 255 all at weight 1.0)." },
           ]); }}
             title="What this section does — full explanation"
-            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", marginLeft: 7, width: 14, height: 14, borderRadius: "50%", border: "1px solid #888", color: "#aaa", fontSize: 10, fontWeight: 700, cursor: "pointer", verticalAlign: "middle" }}>i</span>
+            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 14, height: 14, borderRadius: "50%", border: "1px solid #888", color: "#aaa", fontSize: 10, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>i</span>
         </span>
-        {openSection === "envelope" && (
-          <span onClick={(e: any) => { e.stopPropagation(); const def = [...DEFAULT_ENVELOPE]; envelopeRef.current = def; setEnvelopeLabel(def); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>
-        )}
       </div>
       {openSection === "envelope" && (
         <div style={{ padding: "2px 0" }}>
