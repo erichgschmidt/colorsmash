@@ -261,12 +261,10 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
           { channel: "green", points: sampleControlPoints(c.g, CONTROL_POINTS) },
           { channel: "blue",  points: sampleControlPoints(c.b, CONTROL_POINTS) },
         ]);
-        // Clipping mask: when target is a specific layer, clip each band layer to it so
-        // the Curves only affect the target — not the layers below. Without this, the
-        // multi-zone curves apply to everything underneath in the stack.
-        // When target is Merged (target == null), no clipping — the layers sit at top
-        // of the stack and affect the whole document composite (per Merged semantics).
-        if (target) { try { await setClippingMask(layer, true); } catch { /* ignore */ } }
+        // No clipping mask in multi-zone — the per-band luminosity mask (or Blend If) is
+        // the spatial limiter. Each band layer applies wherever its mask is non-zero,
+        // independent of which underlying layer is below. User can manually clip if they
+        // want to restrict to a specific underlying layer.
         if (params.chromaOnly) { try { layer.blendMode = "hue"; } catch { /* ignore */ } }
         // NOTE: Blend If attempts run BEFORE moving into the group — per audit feedback,
         // layer descriptor readback can get weird when the layer is nested in a group.
