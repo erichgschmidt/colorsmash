@@ -51,7 +51,8 @@ export interface ApplyMatchParams {
   zones?: ZoneOpts;
   envelope?: EnvelopePoint[];
   matchMode?: MatchMode;       // full / mean / median / percentile (default full)
-  multiZone?: boolean;         // emit 3 stacked Curves layers w/ Blend If instead of one
+  multiZone?: boolean;         // emit 3 stacked Curves layers w/ band limiting instead of one
+  multiZoneLimit?: "mask" | "blendIf" | "both"; // how to limit each band layer (default mask)
   sourcePixelsOverride?: Uint8Array; // if set, use these RGBA pixels instead of reading source layer
   sourceLabel?: string; // optional name shown in result message
   colorSpace?: "rgb" | "lab";
@@ -236,6 +237,7 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       ];
 
       const failures: string[] = [];
+      const limitMode = params.multiZoneLimit ?? "mask"; // 'mask' | 'blendIf' | 'both'
 
       for (const band of bands) {
         const baseName = `${RESULT_LAYER_NAME} [${band.suffix}]`;
@@ -251,23 +253,36 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
         if (params.chromaOnly) { try { layer.blendMode = "hue"; } catch { /* ignore */ } }
         try { await layer.move(group, "placeInside"); } catch { /* ignore */ }
 
-        // Try putLayerMask first (proper API for mask data).
-        let limited = false;
-        try {
-          const maskImageData = await imaging.createImageDataFromBuffer(band.mask, {
-            width: compW, height: compH, components: 1, chunky: true, colorProfile: "Gray Gamma 2.2", colorSpace: "Grayscale",
-          });
-          await imaging.putLayerMask({
-            documentID: doc.id,
-            layerID: layer.id,
-            imageData: maskImageData,
-            targetBounds: { left: 0, top: 0, right: compW, bottom: compH },
-            replace: true,
-          });
-          if (maskImageData.dispose) maskImageData.dispose();
-          limited = true;
-        } catch (e1: any) {
-          // Fall back to Blend If sliders via batchPlay.
+        // Try the user-preferred limiting method(s). 'mask' uses putLayerMask only (clean
+        // single approach). 'blendIf' uses batchPlay-set descriptor only. 'both' applies
+        // BOTH for maximum reliability — the layer ends up double-limited (mask × blendIf)
+        // which is fine because both encode the same triangular weights, so the product
+        // is just a slightly squarer version of the same band.
+        let maskOk = false, blendIfOk = false;
+        const wantMask = limitMode === "mask" || limitMode === "both";
+        const wantBlendIf = limitMode === "blendIf" || limitMode === "both";
+
+        let maskErr: any = null;
+        if (wantMask) {
+          try {
+            const maskImageData = await imaging.createImageDataFromBuffer(band.mask, {
+              width: compW, height: compH, components: 1, chunky: true, colorProfile: "Gray Gamma 2.2", colorSpace: "Grayscale",
+            });
+            await imaging.putLayerMask({
+              documentID: doc.id,
+              layerID: layer.id,
+              imageData: maskImageData,
+              targetBounds: { left: 0, top: 0, right: compW, bottom: compH },
+              replace: true,
+            });
+            if (maskImageData.dispose) maskImageData.dispose();
+            maskOk = true;
+          } catch (e: any) { maskErr = e; }
+        }
+
+        let blendIfErr: any = null;
+        if (wantBlendIf || (limitMode === "mask" && !maskOk)) {
+          // Always try Blend If as a fallback when mask was requested but failed.
           try {
             await action.batchPlay([{
               _obj: "set",
@@ -286,12 +301,16 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
                 }],
               },
             }], {});
-            limited = true;
-          } catch (e2: any) {
-            failures.push(`${band.suffix}: ${e1?.message ?? e1} (Blend If fallback also failed: ${e2?.message ?? e2})`);
-          }
+            blendIfOk = true;
+          } catch (e: any) { blendIfErr = e; }
         }
-        if (!limited) failures.push(`${band.suffix}: layer applied unrestricted`);
+
+        if (!maskOk && !blendIfOk) {
+          const reasons: string[] = [];
+          if (maskErr) reasons.push(`mask: ${maskErr?.message ?? maskErr}`);
+          if (blendIfErr) reasons.push(`blendIf: ${blendIfErr?.message ?? blendIfErr}`);
+          failures.push(`${band.suffix} (${reasons.join("; ")})`);
+        }
       }
 
       const tags = [`multi-zone (${bands.length} layers)`];

@@ -27,6 +27,7 @@ export interface PersistedSettings {
   matchMode?: "full" | "mean" | "median" | "percentile";
   // Multi-zone output (beta)
   multiZone?: boolean;
+  multiZoneLimit?: "mask" | "blendIf" | "both";
   // Documents picker collapse
   showDocs?: boolean;
   // Zone targeting

@@ -57,10 +57,10 @@ export function MatchTab() {
   // Match mode: full-distribution (default), mean shift, median shift, or percentile-anchored.
   // Lighter modes are gentler — useful when full-histogram match feels over-aggressive.
   const [matchMode, setMatchMode] = useState<MatchMode>("full");
-  // Multi-zone output (beta): emit 3 stacked Curves layers (shadow/mid/highlight) with
-  // Blend If sliders limiting each to its luminance band, instead of a single global curve.
-  // Lets the match adapt spatially to mixed-lighting scenes. Default off so v1.0 behavior is unchanged.
+  // Multi-zone output (beta): emit 3 stacked Curves layers (shadow/mid/highlight) limiting
+  // each to its luminance band via mask, Blend If, or both. Default off so v1.0 behavior unchanged.
   const [multiZone, setMultiZone] = useState(false);
+  const [multiZoneLimit, setMultiZoneLimit] = useState<"mask" | "blendIf" | "both">("mask");
   const [amountLabel, setAmountLabel] = useState(100);
   const [smoothLabel, setSmoothLabel] = useState(0);
   const [stretchLabel, setStretchLabel] = useState(8);
@@ -151,6 +151,7 @@ export function MatchTab() {
         if (s.anchorStretchToHist != null) setAnchorStretchToHist(s.anchorStretchToHist);
         if (s.matchMode) setMatchMode(s.matchMode as MatchMode);
         if (s.multiZone != null) setMultiZone(s.multiZone);
+        if (s.multiZoneLimit) setMultiZoneLimit(s.multiZoneLimit);
         if (s.showDocs != null) setShowDocs(s.showDocs);
         if (s.chromaOnly != null) setChromaOnly(s.chromaOnly);
         if (s.colorSpace) setColorSpace(s.colorSpace);
@@ -176,7 +177,7 @@ export function MatchTab() {
     const snapshot: PersistedSettings = {
       remember,
       amount: amountLabel, smooth: smoothLabel, stretch: stretchLabel,
-      anchorStretchToHist, chromaOnly, colorSpace, matchMode, multiZone,
+      anchorStretchToHist, chromaOnly, colorSpace, matchMode, multiZone, multiZoneLimit,
       showDocs,
       deselectOnApply, overwriteOnApply,
       openSection,
@@ -185,7 +186,7 @@ export function MatchTab() {
       envelope: envelopeLabel,
     };
     saveDebouncedRef.current!(snapshot);
-  }, [remember, matchMode, multiZone, showDocs, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
+  }, [remember, matchMode, multiZone, multiZoneLimit, showDocs, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
       colorSpace, deselectOnApply, overwriteOnApply, openSection,
       zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel]);
 
@@ -496,6 +497,7 @@ export function MatchTab() {
         targetLayerId: targetId,
         matchMode,
         multiZone,
+        multiZoneLimit,
         // Section-enable mirror — disabled sections apply with default params.
         amount: enColor ? amountRef.current / 100 : 1,
         smoothRadius: enColor ? smoothRef.current : 0,
@@ -527,6 +529,7 @@ export function MatchTab() {
     setChromaOnly(false);
     setMatchMode("full");
     setMultiZone(false);
+    setMultiZoneLimit("mask");
     setColorSpace(() => "rgb");
     setDeselectOnApply(true);
     setOverwriteOnApply(true);
@@ -877,12 +880,23 @@ export function MatchTab() {
         stale={stale}
       />
 
-      <label style={{ display: "inline-flex", alignItems: "center", gap: 4, marginTop: 8, fontSize: 11, color: multiZone ? "#dddddd" : "#aaaaaa", cursor: "pointer" }}
-        title="When ON, Apply emits 3 stacked Curves layers (shadows / mids / highlights) with Blend If sliders limiting each to its luminance band. Lets the match adapt spatially across the image — useful for mixed-lighting scenes (sunsets, portraits, scenes with skin + background needing different treatment). When OFF (default), single Curves layer as before. Beta — preview shows what the output will look like.">
-        <input type="checkbox" checked={multiZone} onChange={e => setMultiZone(e.target.checked)}
-          style={{ margin: 0, cursor: "pointer" }} />
-        Multi-zone output <span style={{ fontSize: 9, opacity: 0.6 }}>(beta — 3 layers w/ Blend If)</span>
-      </label>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: 11, color: multiZone ? "#dddddd" : "#aaaaaa" }}>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 4, cursor: "pointer", flex: 1, minWidth: 0 }}
+          title="When ON, Apply emits 3 stacked Curves layers (shadows / mids / highlights), each limited to its luminance band by mask, Blend If, or both. Lets the match adapt spatially across the image — useful for mixed-lighting scenes. When OFF (default), single Curves layer.">
+          <input type="checkbox" checked={multiZone} onChange={e => setMultiZone(e.target.checked)}
+            style={{ margin: 0, cursor: "pointer" }} />
+          Multi-zone output <span style={{ fontSize: 9, opacity: 0.6 }}>(beta)</span>
+        </label>
+        {multiZone && (
+          <select value={multiZoneLimit} onChange={e => setMultiZoneLimit(e.target.value as any)}
+            title="How each band layer is limited to its luma band. 'Mask' creates a paintable luminosity layer mask (visible thumbnail in Layers panel — most photographer-friendly). 'Blend If' uses the layer's underlying-luma sliders (no visible mask, but editable in Blending Options). 'Both' applies a mask AND Blend If for redundancy + extra-tight band edges."
+            style={{ ...sel, height: 22, flexShrink: 0, fontSize: 10 }}>
+            <option value="mask">Limit: Mask</option>
+            <option value="blendIf">Limit: Blend If</option>
+            <option value="both">Limit: Both</option>
+          </select>
+        )}
+      </div>
       {/* @ts-ignore Spectrum web component */}
       <sp-button variant="secondary" onClick={onApply} style={{ marginTop: 6, width: "100%" }}
         title={multiZone
