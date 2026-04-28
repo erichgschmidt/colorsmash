@@ -25,6 +25,8 @@ export interface PersistedSettings {
   openSection?: "basic" | "dims" | "zones" | "envelope" | null;
   // Match algorithm
   matchMode?: "full" | "mean" | "median" | "percentile";
+  // Multi-zone output (beta)
+  multiZone?: boolean;
   // Zone targeting
   zones?: any;
   lockZoneTotal?: boolean;

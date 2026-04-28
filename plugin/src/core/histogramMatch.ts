@@ -136,6 +136,106 @@ function histogramPercentile(h: Float64Array, p: number): number {
 
 export type MatchMode = "full" | "mean" | "median" | "percentile";
 
+// ─── Multi-zone (multi-curves) output ───────────────────────────────────
+// Instead of one global Curves layer, fit three separate curves — shadows, mids,
+// highlights — each computed using only the target/source pixels in that luminance
+// band. The on-PS output emits three Curves adjustment layers in the [Color Smash]
+// group, each with Blend If sliders limiting it to its band so they composite into
+// a single visually-coherent result. Major distinguishing feature vs other plugins.
+//
+// Band weights are triangular over [0, 128, 255] forming a partition of unity at
+// every input luma — they sum to 1.0, so the composite output equals a weighted
+// average of the three curves' outputs. Linear (not gaussian) so they exactly match
+// PS Blend If's split-slider math, ensuring preview = applied output.
+
+export interface MultiZoneFit {
+  shadow: ChannelCurves;
+  mid: ChannelCurves;
+  highlight: ChannelCurves;
+}
+
+// Triangular partition-of-unity weights at a given luma. Always sums to 1.
+export function multiZoneWeights(luma: number): { shadow: number; mid: number; highlight: number } {
+  const shadow = Math.max(0, 1 - luma / 128);
+  const mid = Math.max(0, 1 - Math.abs(luma - 128) / 128);
+  const highlight = Math.max(0, (luma - 128) / 128);
+  // Sum is mathematically 1 for these triangular bumps, but normalize defensively.
+  const sum = shadow + mid + highlight || 1;
+  return { shadow: shadow / sum, mid: mid / sum, highlight: highlight / sum };
+}
+
+// Build a per-channel histogram weighted by a luma-dependent function. Pixels
+// contribute to the histogram in proportion to their band weight — so e.g. the
+// shadow band's histogram is dominated by genuinely shadow pixels.
+function buildHistogramByLuma(rgba: Uint8Array, channelOffset: 0 | 1 | 2, weightFn: (luma: number) => number): Float64Array {
+  const h = new Float64Array(256);
+  for (let i = 0; i < rgba.length; i += 4) {
+    if (rgba[i + 3] < 128) continue;
+    const r = rgba[i], g = rgba[i + 1], b = rgba[i + 2];
+    const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    const w = weightFn(luma);
+    if (w <= 0) continue;
+    h[rgba[i + channelOffset]] += w;
+  }
+  return h;
+}
+
+function fitOneBand(srcRgba: Uint8Array, tgtRgba: Uint8Array, weightFn: (l: number) => number): ChannelCurves {
+  const out: any = {};
+  for (const [name, off] of [["r", 0], ["g", 1], ["b", 2]] as const) {
+    const sH = buildHistogramByLuma(srcRgba, off, weightFn);
+    const tH = buildHistogramByLuma(tgtRgba, off, weightFn);
+    out[name] = specifyChannel(cumulative(sH), cumulative(tH));
+  }
+  return out as ChannelCurves;
+}
+
+// Fit all three zone curves. Each band uses only pixels in its luma range (per the
+// triangular weights), so e.g. a snowy mountain at sunset gets a shadow curve fitted
+// to source's shadows + a highlight curve fitted to source's highlights — different
+// pixels of the target then receive different effective mappings via Blend If.
+export function fitMultiZone(srcRgba: Uint8Array, tgtRgba: Uint8Array): MultiZoneFit {
+  return {
+    shadow: fitOneBand(srcRgba, tgtRgba, l => Math.max(0, 1 - l / 128)),
+    mid: fitOneBand(srcRgba, tgtRgba, l => Math.max(0, 1 - Math.abs(l - 128) / 128)),
+    highlight: fitOneBand(srcRgba, tgtRgba, l => Math.max(0, (l - 128) / 128)),
+  };
+}
+
+// Simulate the multi-zone composite for the preview. Math intentionally matches what
+// PS will produce on apply (3 Curves layers + Blend If with the same triangular
+// weights), so preview = applied output.
+export function applyMultiZoneToRgba(tgtRgba: Uint8Array, fit: MultiZoneFit): Uint8Array {
+  const out = new Uint8Array(tgtRgba.length);
+  for (let i = 0; i < tgtRgba.length; i += 4) {
+    const r = tgtRgba[i], g = tgtRgba[i + 1], b = tgtRgba[i + 2];
+    const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    const sw = Math.max(0, 1 - luma / 128);
+    const mw = Math.max(0, 1 - Math.abs(luma - 128) / 128);
+    const hw = Math.max(0, (luma - 128) / 128);
+    out[i]     = Math.max(0, Math.min(255, Math.round(sw * fit.shadow.r[r] + mw * fit.mid.r[r] + hw * fit.highlight.r[r])));
+    out[i + 1] = Math.max(0, Math.min(255, Math.round(sw * fit.shadow.g[g] + mw * fit.mid.g[g] + hw * fit.highlight.g[g])));
+    out[i + 2] = Math.max(0, Math.min(255, Math.round(sw * fit.shadow.b[b] + mw * fit.mid.b[b] + hw * fit.highlight.b[b])));
+    out[i + 3] = tgtRgba[i + 3];
+  }
+  return out;
+}
+
+// Apply the same downstream pipeline (Color/Tone processing) to each of the three
+// band curves in a MultiZoneFit. Zones and Envelope are skipped because they are
+// themselves zone-based modulations and would double-apply over the multi-zone bands.
+export function processMultiZoneFit(
+  fit: MultiZoneFit,
+  curveOpts: CurveProcessOpts,
+  dimOpts: DimensionOpts,
+): MultiZoneFit {
+  const proc = (c: ChannelCurves): ChannelCurves => {
+    const p = processChannelCurves(c, curveOpts);
+    return applyDimensions(p, dimOpts);
+  };
+  return { shadow: proc(fit.shadow), mid: proc(fit.mid), highlight: proc(fit.highlight) };
+}
+
 // Dispatcher — picks the right fit function based on mode. Used by MatchTab so the
 // UI can switch modes without the call site needing to know the algorithms.
 export function fitByMode(mode: MatchMode, srcRgba: Uint8Array, tgtRgba: Uint8Array, colorSpace: "rgb" | "lab" = "rgb"): ChannelCurves {

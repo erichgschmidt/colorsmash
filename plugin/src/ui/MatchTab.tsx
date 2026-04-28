@@ -20,6 +20,7 @@ import {
   computeLumaBins, bandMeanColor, lumaRange,
   EnvelopePoint, DEFAULT_ENVELOPE,
   fitByMode, MatchMode,
+  fitMultiZone, applyMultiZoneToRgba, processMultiZoneFit, MultiZoneFit,
 } from "../core/histogramMatch";
 import { EnvelopeEditor } from "./EnvelopeEditor";
 import { HistogramOverlay } from "./HistogramOverlay";
@@ -56,6 +57,10 @@ export function MatchTab() {
   // Match mode: full-distribution (default), mean shift, median shift, or percentile-anchored.
   // Lighter modes are gentler — useful when full-histogram match feels over-aggressive.
   const [matchMode, setMatchMode] = useState<MatchMode>("full");
+  // Multi-zone output (beta): emit 3 stacked Curves layers (shadow/mid/highlight) with
+  // Blend If sliders limiting each to its luminance band, instead of a single global curve.
+  // Lets the match adapt spatially to mixed-lighting scenes. Default off so v1.0 behavior is unchanged.
+  const [multiZone, setMultiZone] = useState(false);
   const [amountLabel, setAmountLabel] = useState(100);
   const [smoothLabel, setSmoothLabel] = useState(0);
   const [stretchLabel, setStretchLabel] = useState(8);
@@ -142,6 +147,7 @@ export function MatchTab() {
         if (s.stretch != null) { stretchRef.current = s.stretch; setStretchLabel(s.stretch); }
         if (s.anchorStretchToHist != null) setAnchorStretchToHist(s.anchorStretchToHist);
         if (s.matchMode) setMatchMode(s.matchMode as MatchMode);
+        if (s.multiZone != null) setMultiZone(s.multiZone);
         if (s.chromaOnly != null) setChromaOnly(s.chromaOnly);
         if (s.colorSpace) setColorSpace(s.colorSpace);
         if (s.deselectOnApply != null) setDeselectOnApply(s.deselectOnApply);
@@ -166,7 +172,7 @@ export function MatchTab() {
     const snapshot: PersistedSettings = {
       remember,
       amount: amountLabel, smooth: smoothLabel, stretch: stretchLabel,
-      anchorStretchToHist, chromaOnly, colorSpace, matchMode,
+      anchorStretchToHist, chromaOnly, colorSpace, matchMode, multiZone,
       deselectOnApply, overwriteOnApply,
       openSection,
       zones: zonesLabel, lockZoneTotal,
@@ -174,7 +180,7 @@ export function MatchTab() {
       envelope: envelopeLabel,
     };
     saveDebouncedRef.current!(snapshot);
-  }, [remember, matchMode, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
+  }, [remember, matchMode, multiZone, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
       colorSpace, deselectOnApply, overwriteOnApply, openSection,
       zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel]);
 
@@ -373,6 +379,14 @@ export function MatchTab() {
     return fitByMode(matchMode, srcSnap.data, tgt.snap.data, colorSpace);
   }, [srcSnap, tgt.snap, colorSpace, matchMode]);
 
+  // Multi-zone fit: 3 separate per-band curves. Computed only when the multi-zone toggle
+  // is on (otherwise null). Always uses full-distribution match per band — match modes
+  // are global and don't compose meaningfully with per-band fitting.
+  const fittedMulti = useMemo<MultiZoneFit | null>(() => {
+    if (!multiZone || !srcSnap || !tgt.snap) return null;
+    return fitMultiZone(srcSnap.data, tgt.snap.data);
+  }, [multiZone, srcSnap, tgt.snap]);
+
   // Luma-binned color stats from target pixels — used to color the zone band swatches with the
   // actual mean color of pixels at each luminance level. Recomputed only when target pixels change.
   const lumaBins = useMemo(() => tgt.snap ? computeLumaBins(tgt.snap.data) : null, [tgt.snap]);
@@ -400,26 +414,44 @@ export function MatchTab() {
     // Section-enable: when a section is disabled, its params revert to defaults so the
     // user can see what the match would look like without that section's contribution.
     const stretchRange = enColor && anchorStretchToHist && lumaBins ? lumaRange(lumaBins) : undefined;
-    const processed = processChannelCurves(fittedRaw, enColor ? {
+    const curveOpts = enColor ? {
       amount: amountRef.current / 100,
       smoothRadius: smoothRef.current,
       maxStretch: stretchRef.current,
       stretchRange,
-    } : { amount: 1, smoothRadius: 0, maxStretch: 999 });
-    const dim = applyDimensions(processed, enTone ? dimsRef.current : DEFAULT_DIMENSIONS);
-    const c = applyZoneAndEnvelopeToChannels(
-      dim,
-      enZones ? zonesRef.current : DEFAULT_ZONES,
-      enEnvelope ? envelopeRef.current : DEFAULT_ENVELOPE,
-    );
-    curvesPendingRef.current = c;
+    } : { amount: 1, smoothRadius: 0, maxStretch: 999 };
+    const dimOpts = enTone ? dimsRef.current : DEFAULT_DIMENSIONS;
+
+    let out: Uint8Array;
+    let curvesForGraph: ChannelCurves;
+
+    if (multiZone && fittedMulti) {
+      // Multi-zone path: process each band's curves through Color + Tone, simulate the
+      // 3-curve composite via triangular blend (matches what PS will produce on apply).
+      // Skip Zones + Envelope — they're zone-modulators that would double-apply over the bands.
+      const procFit = processMultiZoneFit(fittedMulti, curveOpts, dimOpts);
+      out = applyMultiZoneToRgba(tgt.snap.data, procFit);
+      // Curves graph shows the mid-band curve as representative (graph doesn't render 3 sets).
+      curvesForGraph = procFit.mid;
+    } else {
+      // Single-curve path (default).
+      const processed = processChannelCurves(fittedRaw, curveOpts);
+      const dim = applyDimensions(processed, dimOpts);
+      curvesForGraph = applyZoneAndEnvelopeToChannels(
+        dim,
+        enZones ? zonesRef.current : DEFAULT_ZONES,
+        enEnvelope ? envelopeRef.current : DEFAULT_ENVELOPE,
+      );
+      out = applyChannelCurvesToRgba(tgt.snap.data, curvesForGraph);
+    }
+
+    curvesPendingRef.current = curvesForGraph;
     if (!curvesTimeoutRef.current) {
       curvesTimeoutRef.current = setTimeout(() => {
         curvesTimeoutRef.current = null;
         if (curvesPendingRef.current) setRenderedCurves(curvesPendingRef.current);
       }, 100);
     }
-    let out = applyChannelCurvesToRgba(tgt.snap.data, c);
     if (enColor && chromaOnly) out = applyChromaOnly(tgt.snap.data, out);
     matchedHandleRef.current.setPixels(out, tgt.snap.width, tgt.snap.height);
     // Throttle result-pixel state updates so the diagnostic histogram doesn't re-render
@@ -444,7 +476,7 @@ export function MatchTab() {
     // this redraw — fixes "preview blank until I wiggle a slider" on first mount.
     rafPendingRef.current = false;
     scheduleRedraw();
-  }, [fittedRaw, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fittedRaw, fittedMulti, multiZone, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onApply = async () => {
     if (targetId == null) { setStatus("Pick target layer."); return; }
@@ -488,6 +520,7 @@ export function MatchTab() {
     setAnchorStretchToHist(false);
     setChromaOnly(false);
     setMatchMode("full");
+    setMultiZone(false);
     setColorSpace(() => "rgb");
     setDeselectOnApply(true);
     setOverwriteOnApply(true);
@@ -832,9 +865,17 @@ export function MatchTab() {
         stale={stale}
       />
 
+      <label style={{ display: "inline-flex", alignItems: "center", gap: 4, marginTop: 8, fontSize: 11, color: multiZone ? "#dddddd" : "#aaaaaa", cursor: "pointer" }}
+        title="When ON, Apply emits 3 stacked Curves layers (shadows / mids / highlights) with Blend If sliders limiting each to its luminance band. Lets the match adapt spatially across the image — useful for mixed-lighting scenes (sunsets, portraits, scenes with skin + background needing different treatment). When OFF (default), single Curves layer as before. Beta — preview shows what the output will look like.">
+        <input type="checkbox" checked={multiZone} onChange={e => setMultiZone(e.target.checked)}
+          style={{ margin: 0, cursor: "pointer" }} />
+        Multi-zone output <span style={{ fontSize: 9, opacity: 0.6 }}>(beta — 3 layers w/ Blend If)</span>
+      </label>
       {/* @ts-ignore Spectrum web component */}
-      <sp-button variant="secondary" onClick={onApply} style={{ marginTop: 10, width: "100%" }}
-        title="Create a new Curves adjustment layer in the target document, clipped to the target layer. Honors Replace and Deselect toggles below.">Apply Curves</sp-button>
+      <sp-button variant="secondary" onClick={onApply} style={{ marginTop: 6, width: "100%" }}
+        title={multiZone
+          ? "Multi-zone output: creates 3 stacked Curves layers (shadow/mid/highlight) with Blend If sliders. Each editable independently in PS."
+          : "Create a new Curves adjustment layer in the target document, clipped to the target layer. Honors Replace and Deselect toggles below."}>{multiZone ? "Apply Multi-zone Curves" : "Apply Curves"}</sp-button>
 
       {/* Curves graph below Apply */}
       <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7 }}>Fitted curves (R G B)</div>
