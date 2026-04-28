@@ -28,6 +28,7 @@ export interface PersistedSettings {
   // Multi-zone output (beta)
   multiZone?: boolean;
   multiZoneLimit?: "mask" | "blendIf" | "both";
+  adaptiveBands?: boolean;
   // Documents picker collapse
   showDocs?: boolean;
   // Zone targeting

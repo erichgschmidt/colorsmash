@@ -53,6 +53,7 @@ export interface ApplyMatchParams {
   matchMode?: MatchMode;       // full / mean / median / percentile (default full)
   multiZone?: boolean;         // emit 3 stacked Curves layers w/ band limiting instead of one
   multiZoneLimit?: "mask" | "blendIf" | "both"; // how to limit each band layer (default mask)
+  multiZonePeaks?: { shadow: number; mid: number; highlight: number }; // band peak luma positions
   sourcePixelsOverride?: Uint8Array; // if set, use these RGBA pixels instead of reading source layer
   sourceLabel?: string; // optional name shown in result message
   colorSpace?: "rgb" | "lab";
@@ -150,7 +151,7 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     // Multi-zone path needs its own per-band fit (the global `raw` above is for single-curve).
     // We refit because the band weights are luma-conditional; single-curve fitter doesn't bin by luma.
     const multiZoneFit = params.multiZone
-      ? processMultiZoneFit(fitMultiZone(srcPixels, downsampleToMaxEdge(t, STATS_MAX_EDGE).data), curveOpts, dimOpts)
+      ? processMultiZoneFit(fitMultiZone(srcPixels, downsampleToMaxEdge(t, STATS_MAX_EDGE).data, params.multiZonePeaks), curveOpts, dimOpts)
       : null;
 
     // Reuse existing [Color Smash] group. Prior Match Curves layers are either deleted
@@ -217,6 +218,13 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       const compComps = compId.components ?? (compSrc.length / (compW * compH));
       const hasAlpha = compComps === 4;
 
+      // Band peak luma positions — adaptive (P10/P50/P90 of target) when caller passes them,
+      // fixed at 0/128/255 otherwise. Bands are linear ramps anchored at these peaks.
+      const peaks = params.multiZonePeaks ?? { shadow: 0, mid: 128, highlight: 255 };
+      const sP = Math.max(0, Math.min(253, peaks.shadow));
+      const mP = Math.max(sP + 1, Math.min(254, peaks.mid));
+      const hP = Math.max(mP + 1, Math.min(255, peaks.highlight));
+
       // Triangular band-weight masks (one byte per pixel = weight × 255). Multiplied by
       // alpha when present so transparent pixels get mask value 0 across all bands.
       const pxCount = compW * compH;
@@ -226,26 +234,34 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       for (let i = 0, j = 0; i < pxCount; i++, j += compComps) {
         const a = hasAlpha ? compSrc[j + 3] / 255 : 1;
         if (a < 1 / 255) {
-          // Fully transparent — all band masks = 0 (no application of any band there).
           shadowMask[i] = 0; midMask[i] = 0; highlightMask[i] = 0;
           continue;
         }
         const r = compSrc[j], g = compSrc[j + 1], b = compSrc[j + 2];
         const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        shadowMask[i]    = Math.max(0, Math.min(255, Math.round(a * (1 - luma / 128) * 255)));
-        midMask[i]       = Math.max(0, Math.min(255, Math.round(a * (1 - Math.abs(luma - 128) / 128) * 255)));
-        highlightMask[i] = Math.max(0, Math.min(255, Math.round(a * ((luma - 128) / 128) * 255)));
+        // Linear ramps based on the (possibly adaptive) peak positions.
+        const sw = luma <= sP ? 1 : (luma <= mP ? (mP - luma) / (mP - sP) : 0);
+        const mw = luma <= sP ? 0 : (luma <= mP ? (luma - sP) / (mP - sP) : (luma <= hP ? (hP - luma) / (hP - mP) : 0));
+        const hw = luma <= mP ? 0 : (luma <= hP ? (luma - mP) / (hP - mP) : 1);
+        shadowMask[i]    = Math.max(0, Math.min(255, Math.round(a * sw * 255)));
+        midMask[i]       = Math.max(0, Math.min(255, Math.round(a * mw * 255)));
+        highlightMask[i] = Math.max(0, Math.min(255, Math.round(a * hw * 255)));
       }
       if (compId.dispose) compId.dispose();
 
+      // Blend If fallback ranges — derived from peak positions so they match the masks.
+      // dest sliders define the underlying-layer luma ranges where the layer is visible.
       const bands: Array<{
         key: "shadow" | "mid" | "highlight"; suffix: string; mask: Uint8Array;
-        // Blend-If fallback ranges (used if putLayerMask fails).
         destBlackMin: number; destBlackMax: number; destWhiteMin: number; destWhiteMax: number;
       }> = [
-        { key: "shadow",    suffix: "Shadows",    mask: shadowMask,    destBlackMin: 0,   destBlackMax: 0,   destWhiteMin: 0,   destWhiteMax: 128 },
-        { key: "mid",       suffix: "Mids",       mask: midMask,       destBlackMin: 0,   destBlackMax: 128, destWhiteMin: 128, destWhiteMax: 255 },
-        { key: "highlight", suffix: "Highlights", mask: highlightMask, destBlackMin: 128, destBlackMax: 255, destWhiteMin: 255, destWhiteMax: 255 },
+        // Blend If sliders matching the triangular weights at peaks (sP, mP, hP):
+        //   Shadow:    full 0..sP, fade sP→mP, off mP+
+        //   Mid:       off 0..sP, fade in sP→mP, full at mP, fade out mP→hP, off hP+
+        //   Highlight: off 0..mP, fade in mP→hP, full hP..255
+        { key: "shadow",    suffix: "Shadows",    mask: shadowMask,    destBlackMin: 0,   destBlackMax: 0,   destWhiteMin: sP,  destWhiteMax: mP  },
+        { key: "mid",       suffix: "Mids",       mask: midMask,       destBlackMin: sP,  destBlackMax: mP,  destWhiteMin: mP,  destWhiteMax: hP  },
+        { key: "highlight", suffix: "Highlights", mask: highlightMask, destBlackMin: mP,  destBlackMax: hP,  destWhiteMin: 255, destWhiteMax: 255 },
       ];
 
       const failures: string[] = [];

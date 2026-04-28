@@ -20,7 +20,7 @@ import {
   computeLumaBins, bandMeanColor, lumaRange,
   EnvelopePoint, DEFAULT_ENVELOPE,
   fitByMode, MatchMode,
-  fitMultiZone, applyMultiZoneToRgba, processMultiZoneFit, MultiZoneFit,
+  fitMultiZone, applyMultiZoneToRgba, processMultiZoneFit, MultiZoneFit, adaptiveBandPeaks,
 } from "../core/histogramMatch";
 import { EnvelopeEditor } from "./EnvelopeEditor";
 import { HistogramOverlay } from "./HistogramOverlay";
@@ -61,6 +61,9 @@ export function MatchTab() {
   // each to its luminance band via mask, Blend If, or both. Default off so v1.0 behavior unchanged.
   const [multiZone, setMultiZone] = useState(false);
   const [multiZoneLimit, setMultiZoneLimit] = useState<"mask" | "blendIf" | "both">("mask");
+  // Adaptive bands: when on, band peaks shift to target's P10/P50/P90 luma percentiles
+  // so each band gets a meaningful pixel sample. When off, fixed peaks at 0/128/255.
+  const [adaptiveBands, setAdaptiveBands] = useState(true);
   const [amountLabel, setAmountLabel] = useState(100);
   const [smoothLabel, setSmoothLabel] = useState(0);
   const [stretchLabel, setStretchLabel] = useState(8);
@@ -152,6 +155,7 @@ export function MatchTab() {
         if (s.matchMode) setMatchMode(s.matchMode as MatchMode);
         if (s.multiZone != null) setMultiZone(s.multiZone);
         if (s.multiZoneLimit) setMultiZoneLimit(s.multiZoneLimit);
+        if (s.adaptiveBands != null) setAdaptiveBands(s.adaptiveBands);
         if (s.showDocs != null) setShowDocs(s.showDocs);
         if (s.chromaOnly != null) setChromaOnly(s.chromaOnly);
         if (s.colorSpace) setColorSpace(s.colorSpace);
@@ -177,7 +181,7 @@ export function MatchTab() {
     const snapshot: PersistedSettings = {
       remember,
       amount: amountLabel, smooth: smoothLabel, stretch: stretchLabel,
-      anchorStretchToHist, chromaOnly, colorSpace, matchMode, multiZone, multiZoneLimit,
+      anchorStretchToHist, chromaOnly, colorSpace, matchMode, multiZone, multiZoneLimit, adaptiveBands,
       showDocs,
       deselectOnApply, overwriteOnApply,
       openSection,
@@ -186,7 +190,7 @@ export function MatchTab() {
       envelope: envelopeLabel,
     };
     saveDebouncedRef.current!(snapshot);
-  }, [remember, matchMode, multiZone, multiZoneLimit, showDocs, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
+  }, [remember, matchMode, multiZone, multiZoneLimit, adaptiveBands, showDocs, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
       colorSpace, deselectOnApply, overwriteOnApply, openSection,
       zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel]);
 
@@ -385,18 +389,28 @@ export function MatchTab() {
     return fitByMode(matchMode, srcSnap.data, tgt.snap.data, colorSpace);
   }, [srcSnap, tgt.snap, colorSpace, matchMode]);
 
-  // Multi-zone fit: 3 separate per-band curves. Computed only when the multi-zone toggle
-  // is on (otherwise null). Always uses full-distribution match per band — match modes
-  // are global and don't compose meaningfully with per-band fitting.
-  const fittedMulti = useMemo<MultiZoneFit | null>(() => {
-    if (!multiZone || !srcSnap || !tgt.snap) return null;
-    return fitMultiZone(srcSnap.data, tgt.snap.data);
-  }, [multiZone, srcSnap, tgt.snap]);
+  // Multi-zone band peaks. Adaptive (P10/P50/P90 of target luma) when toggle is on,
+  // fixed at 0/128/255 otherwise. Adaptive peaks make each band fit on a similar
+  // pixel-count sample, producing more reliable shadow + highlight curves on images
+  // with concentrated histograms.
 
   // Luma-binned color stats from target pixels — used to color the zone band swatches with the
   // actual mean color of pixels at each luminance level. Recomputed only when target pixels change.
   const lumaBins = useMemo(() => tgt.snap ? computeLumaBins(tgt.snap.data) : null, [tgt.snap]);
   const sourceLumaBins = useMemo(() => srcSnap ? computeLumaBins(srcSnap.data) : null, [srcSnap]);
+
+  const multiZonePeaks = useMemo(() => {
+    if (!adaptiveBands || !lumaBins) return { shadow: 0, mid: 128, highlight: 255 };
+    return adaptiveBandPeaks(lumaBins);
+  }, [adaptiveBands, lumaBins]);
+
+  // Multi-zone fit: 3 separate per-band curves. Computed only when the multi-zone toggle
+  // is on (otherwise null). Always uses full-distribution match per band — match modes
+  // are global and don't compose meaningfully with per-band fitting.
+  const fittedMulti = useMemo<MultiZoneFit | null>(() => {
+    if (!multiZone || !srcSnap || !tgt.snap) return null;
+    return fitMultiZone(srcSnap.data, tgt.snap.data, multiZonePeaks);
+  }, [multiZone, srcSnap, tgt.snap, multiZonePeaks]);
 
   // Matched preview is rendered by <MatchedPreview/>; we drive it imperatively via a handle.
   const matchedHandleRef = useRef<MatchedPreviewHandle | null>(null);
@@ -436,7 +450,7 @@ export function MatchTab() {
       // 3-curve composite via triangular blend (matches what PS will produce on apply).
       // Skip Zones + Envelope — they're zone-modulators that would double-apply over the bands.
       const procFit = processMultiZoneFit(fittedMulti, curveOpts, dimOpts);
-      out = applyMultiZoneToRgba(tgt.snap.data, procFit);
+      out = applyMultiZoneToRgba(tgt.snap.data, procFit, multiZonePeaks);
       // Curves graph shows the mid-band curve as representative (graph doesn't render 3 sets).
       curvesForGraph = procFit.mid;
     } else {
@@ -482,7 +496,7 @@ export function MatchTab() {
     // this redraw — fixes "preview blank until I wiggle a slider" on first mount.
     rafPendingRef.current = false;
     scheduleRedraw();
-  }, [fittedRaw, fittedMulti, multiZone, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onApply = async () => {
     if (targetId == null) { setStatus("Pick target layer."); return; }
@@ -498,6 +512,7 @@ export function MatchTab() {
         matchMode,
         multiZone,
         multiZoneLimit,
+        multiZonePeaks,
         // Section-enable mirror — disabled sections apply with default params.
         amount: enColor ? amountRef.current / 100 : 1,
         smoothRadius: enColor ? smoothRef.current : 0,
@@ -530,6 +545,7 @@ export function MatchTab() {
     setMatchMode("full");
     setMultiZone(false);
     setMultiZoneLimit("mask");
+    setAdaptiveBands(true);
     setColorSpace(() => "rgb");
     setDeselectOnApply(true);
     setOverwriteOnApply(true);
@@ -915,6 +931,13 @@ export function MatchTab() {
             }}
             style={{ margin: 0, cursor: multiZone ? "pointer" : "default" }} />
           Blend If <span style={{ fontSize: 8, opacity: 0.6 }}>(exp)</span>
+        </label>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: multiZone ? "pointer" : "default", opacity: multiZone ? 1 : 0.5, fontSize: 10 }}
+          title={`Adaptive bands: shift the band peaks to the target's actual luma percentiles (P10/P50/P90) instead of fixed 0/128/255. Each band gets a similar pixel-count sample, so shadow + highlight curves fit reliably even on images with concentrated histograms. ${multiZone && lumaBins ? `Current peaks: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}.` : ""}`}>
+          <input type="checkbox" disabled={!multiZone} checked={adaptiveBands}
+            onChange={e => setAdaptiveBands(e.target.checked)}
+            style={{ margin: 0, cursor: multiZone ? "pointer" : "default" }} />
+          Adaptive
         </label>
       </div>
       {/* @ts-ignore Spectrum web component */}
