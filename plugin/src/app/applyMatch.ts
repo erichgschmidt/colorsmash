@@ -191,29 +191,22 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       catch { /* ignore */ }
     }
 
-    // ─── Multi-zone branch: emit 3 stacked Curves layers + luminosity masks ──────
+    // ─── Multi-zone branch: emit 3 stacked Curves layers + Blend If sliders ──────
     if (multiZoneFit) {
-      // Strategy: for each band, create a Curves layer, then build a luminosity mask in
-      // two batchPlay steps:
-      //   1. Apply Image to fill the layer's mask channel from the doc's composite gray
-      //      (giving us per-pixel underlying luminance directly in the mask, full resolution)
-      //   2. Apply a Curves remap to that mask to shape it into the band's triangular weight
-      //      (input luma → output mask alpha = band weight × 255)
-      // Triangular weights match the preview simulator exactly. PS handles all resolution
-      // and alignment. The masks are user-paintable for fine refinement.
-
-      // Curves descriptors that remap a gray-scale mask (input luma → output band weight × 255).
-      // Each is a 3-point curve that produces the triangular partition-of-unity weights.
-      const bandCurves: Record<"shadow" | "mid" | "highlight", { horizontal: number; vertical: number }[]> = {
-        shadow:    [{ horizontal: 0, vertical: 255 }, { horizontal: 128, vertical: 0   }, { horizontal: 255, vertical: 0   }],
-        mid:       [{ horizontal: 0, vertical: 0   }, { horizontal: 128, vertical: 255 }, { horizontal: 255, vertical: 0   }],
-        highlight: [{ horizontal: 0, vertical: 0   }, { horizontal: 128, vertical: 0   }, { horizontal: 255, vertical: 255 }],
-      };
-
-      const bands: Array<{ key: "shadow" | "mid" | "highlight"; suffix: string }> = [
-        { key: "shadow",    suffix: "Shadows"    },
-        { key: "mid",       suffix: "Mids"       },
-        { key: "highlight", suffix: "Highlights" },
+      // Strategy: each band gets a Curves layer with its underlying-layer Blend If sliders
+      // set so the layer only applies within its luma band. Implemented via the layer
+      // descriptor's `blendRange` property (the property name the PS Action Listener actually
+      // records when you drag Blend If sliders manually). Triangular partition-of-unity
+      // weights match the preview simulator's math exactly.
+      const bands: Array<{
+        key: "shadow" | "mid" | "highlight"; suffix: string;
+        // dest range: Blend If "underlying" sliders, two split positions per side.
+        destBlackMin: number; destBlackMax: number;
+        destWhiteMin: number; destWhiteMax: number;
+      }> = [
+        { key: "shadow",    suffix: "Shadows",    destBlackMin: 0,   destBlackMax: 0,   destWhiteMin: 0,   destWhiteMax: 128 },
+        { key: "mid",       suffix: "Mids",       destBlackMin: 0,   destBlackMax: 128, destWhiteMin: 128, destWhiteMax: 255 },
+        { key: "highlight", suffix: "Highlights", destBlackMin: 128, destBlackMax: 255, destWhiteMin: 255, destWhiteMax: 255 },
       ];
 
       for (const band of bands) {
@@ -230,48 +223,29 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
         if (params.chromaOnly) { try { layer.blendMode = "hue"; } catch { /* ignore */ } }
         try { await layer.move(group, "placeInside"); } catch { /* ignore */ }
 
+        // Set Blend If sliders via batchPlay. Property name is `blendRange` (singular per
+        // entry) inside the layer descriptor, with one entry per affected channel. We only
+        // need the gray (composite luma) channel — full triangular partition of unity.
         try {
-          // Select this layer + its mask channel. Subsequent edits target the mask.
-          await action.batchPlay([
-            { _obj: "select", _target: [{ _ref: "layer", _id: layer.id }], makeVisible: false },
-            { _obj: "select", _target: [{ _ref: "channel", _enum: "channel", _value: "mask" }] },
-          ], {});
-
-          // Fill the mask from the document composite (gray channel = perceptual luminance).
-          // After this, the mask = composite luminance per pixel.
           await action.batchPlay([{
-            _obj: "applyImageEvent",
-            with: {
-              _obj: "calculation",
-              to: {
-                _ref: [
-                  { _ref: "channel", _enum: "channel", _value: "gray" },
-                  { _ref: "document", _enum: "ordinal", _value: "targetEnum" },
-                ],
-              },
-              calculation: { _enum: "calculationType", _value: "normal" },
+            _obj: "set",
+            _target: [{ _ref: "layer", _id: layer.id }],
+            to: {
+              _obj: "layer",
+              blendInteriorElements: false,
+              knockout: { _enum: "knockout", _value: "none" },
+              layerMaskAsGlobalMask: false,
+              blendRange: [{
+                _obj: "blendRange",
+                channel: { _enum: "channel", _value: "gray" },
+                srcBlackMin: 0, srcBlackMax: 0, srcWhiteMin: 255, srcWhiteMax: 255,
+                destBlackMin: band.destBlackMin, destBlackMax: band.destBlackMax,
+                destWhiteMin: band.destWhiteMin, destWhiteMax: band.destWhiteMax,
+              }],
             },
           }], {});
-
-          // Remap the mask via a 3-point Curves into the band's triangular weight curve.
-          await action.batchPlay([{
-            _obj: "curves",
-            presetKind: { _enum: "presetKindType", _value: "presetKindCustom" },
-            adjustment: [{
-              _obj: "curvesAdjustment",
-              channel: { _ref: "channel", _enum: "channel", _value: "composite" },
-              curve: bandCurves[band.key].map(p => ({ _obj: "paint", ...p })),
-            }],
-          }], {});
-
-          // Re-select the RGB composite so we leave the layer in a normal editing state.
-          await action.batchPlay([{
-            _obj: "select", _target: [{ _ref: "channel", _enum: "channel", _value: "RGB" }],
-          }], {});
         } catch (e: any) {
-          // If any of these fail, the layer still applies as a global Curves — user can
-          // add their own mask manually. Continue with the other bands.
-          console?.warn?.(`Multi-zone mask build failed for ${band.suffix}: ${e?.message ?? e}`);
+          console?.warn?.(`Multi-zone Blend If failed for ${band.suffix}: ${e?.message ?? e}`);
         }
       }
       const tags = [`multi-zone (${bands.length} layers)`];
