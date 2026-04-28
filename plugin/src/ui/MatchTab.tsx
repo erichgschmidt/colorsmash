@@ -552,13 +552,29 @@ export function MatchTab() {
                      border: enColor ? "1px solid #2d8a36" : "1px solid #333",
                      cursor: "pointer" }} />
           <Icon name={openSection === "basic" ? "chevronDown" : "chevronRight"} size={11} /> Color
+          <span onClick={(e: any) => { e.stopPropagation(); void uxpInfo("Color — what each control does", [
+            { heading: "Section purpose",
+              body: "Shapes the per-channel R/G/B match curves before they're combined and output. These controls operate on the raw fitted curves: blending strength, smoothing, slope cap, and the Hue-only blend mode for the final layer." },
+            { heading: "Amount",
+              body: "Strength of the histogram match, 0–100%. Blends the matched curve with identity. 100% = full match. 50% = half-strength match (curves pulled halfway toward identity). 0% = no match (identity curves)." },
+            { heading: "Smooth",
+              body: "Box-filter smoothing radius applied to the curves after blending, 0–32. Higher values average over a wider window — useful when the source histogram is sparse or noisy and produces zig-zaggy curves. 0 = no smoothing. Mild values (4–8) typically clean things up without losing tonal detail." },
+            { heading: "Stretch",
+              body: "Local slope cap. Limits how steep adjacent curve points can rise or fall. 1 = hard cap (slope ≤ 1 per step) — heavily flattens any aggressive contrast. 15 = essentially uncapped (most fitted curves don't exceed this slope naturally). The cap engages only when curve slopes exceed the value, so changes are most visible in the 1–8 range." },
+            { heading: "Anchor stretch to histogram range",
+              body: "Toggle. When on, the slope cap walks from where the target image's data actually starts/ends (≥0.5% of peak count) instead of always 0–255. Makes Stretch behave consistently across bright vs dark sources — without it, dark-source images get the cap engaged earlier than bright ones." },
+            { heading: "Hue only",
+              body: "Toggle. Sets the output Curves layer to Photoshop's Hue blend mode (instead of Normal). Result: only the hue shifts toward the source; target's saturation and luminance are preserved. Sidesteps the saturation inflation that per-channel curves naturally produce. Use when you want the color tint without disturbing tonal balance." },
+          ]); }}
+            title="What this section does — full explanation"
+            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", marginLeft: 7, width: 14, height: 14, borderRadius: "50%", border: "1px solid #888", color: "#aaa", fontSize: 10, fontWeight: 700, cursor: "pointer", verticalAlign: "middle" }}>i</span>
         </span>
       </div>
       {openSection === "basic" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: 0 }}>
           <BasicSlider label="Amount"  refObj={amountRef}  value={amountLabel}  setValue={setAmountLabel}  min={0} max={100} suffix="%" defaultVal={100} scheduleRedraw={scheduleRedraw} />
           <BasicSlider label="Smooth"  refObj={smoothRef}  value={smoothLabel}  setValue={setSmoothLabel}  min={0} max={32}  defaultVal={0}   scheduleRedraw={scheduleRedraw} />
-          <BasicSlider label="Stretch" refObj={stretchRef} value={stretchLabel} setValue={setStretchLabel} min={1} max={32}  defaultVal={8}   scheduleRedraw={scheduleRedraw} />
+          <BasicSlider label="Stretch" refObj={stretchRef} value={stretchLabel} setValue={setStretchLabel} min={1} max={15}  defaultVal={8}   scheduleRedraw={scheduleRedraw} />
           <label title="Anchor the slope cap at the target's actual histogram bounds instead of 0/255 — makes Stretch behave consistently regardless of whether the source is bright or dark"
             style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, opacity: 0.85, cursor: "pointer", marginLeft: 4 }}>
             <input type="checkbox" checked={anchorStretchToHist} onChange={e => { setAnchorStretchToHist(e.target.checked); scheduleRedraw(); }} style={{ cursor: "pointer", margin: 0 }} />
@@ -583,6 +599,26 @@ export function MatchTab() {
                      border: enTone ? "1px solid #2d8a36" : "1px solid #333",
                      cursor: "pointer" }} />
           <Icon name={openSection === "dims" ? "chevronDown" : "chevronRight"} size={11} /> Tone
+          <span onClick={(e: any) => { e.stopPropagation(); void uxpInfo("Tone — what each control does", [
+            { heading: "Section purpose",
+              body: "Reshapes the matched curves along perceptual axes after they're fit. Lets you scale luminance, push or pull saturation, rotate hue, adjust contrast, neutralize color casts, and separate the per-channel response — all without re-fitting. Each slider acts as a multiplier or offset on the raw match." },
+            { heading: "Value",
+              body: "Scales the overall luminance contribution of the match, 0–200%. 100% = pass-through. <100% reduces tonal change. >100% amplifies it. Useful when the match is shifting brightness in a direction you don't want." },
+            { heading: "Chroma",
+              body: "Scales the chroma (saturation) contribution of the match, 0–200%. 100% = pass-through. 0% removes saturation changes (luminance/hue match still applies). 200% doubles the saturation pull toward source." },
+            { heading: "Hue",
+              body: "Rotates the hue of the match output, -180 to +180 degrees. 0 = no rotation. ±180 = full hue inversion. Useful for shifting the matched color toward a complementary or shifted palette without re-fitting." },
+            { heading: "Contrast",
+              body: "Scales contrast in the matched output, 0–200%. 100% = pass-through. <100% flattens contrast (matched curves pulled toward middle gray). >100% pushes contrast harder." },
+            { heading: "Neutralize",
+              body: "Pulls the match toward neutral gray on a per-pixel basis, 0–100%. 0% = no neutralization. 100% = fully gray (no match). Useful for taming an over-aggressive color cast while keeping the tonal shaping." },
+            { heading: "Separation",
+              body: "Controls how independently the R/G/B channels respond to the match, 0–200%. 100% = pass-through (full per-channel independence). <100% blends channels together (more neutral, less colorful). >100% exaggerates differences between channels." },
+            { heading: "Reset (header)",
+              body: "Restores all six Tone sliders to defaults (100% across the board, hue 0°). Section enable/disable state stays as-is." },
+          ]); }}
+            title="What this section does — full explanation"
+            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", marginLeft: 7, width: 14, height: 14, borderRadius: "50%", border: "1px solid #888", color: "#aaa", fontSize: 10, fontWeight: 700, cursor: "pointer", verticalAlign: "middle" }}>i</span>
         </span>
         {openSection === "dims" && <span onClick={(e: any) => { e.stopPropagation(); dimsRef.current = { ...DEFAULT_DIMENSIONS }; setDimsLabel({ ...DEFAULT_DIMENSIONS }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>}
       </div>
@@ -703,6 +739,24 @@ export function MatchTab() {
                      border: enEnvelope ? "1px solid #2d8a36" : "1px solid #333",
                      cursor: "pointer" }} />
           <Icon name={openSection === "envelope" ? "chevronDown" : "chevronRight"} size={11} /> Envelope{envelopeLabel.length > 0 && <span style={{ fontSize: 9, fontWeight: 400, opacity: 0.7, marginLeft: 6 }}>· {envelopeLabel.length} pt{envelopeLabel.length === 1 ? "" : "s"}</span>}
+          <span onClick={(e: any) => { e.stopPropagation(); void uxpInfo("Envelope — what each control does", [
+            { heading: "What the envelope does",
+              body: "Arbitrary-N piecewise weight curve over the input range (0–255). Modulates how strongly the histogram match applies at each tonal value. Composes multiplicatively with Zones, so the envelope acts as a fine-grained per-tone weight on top of the broader zone shaping. Default is three identity-weight points (1.0 across) — bit-identical no-op until you move a handle." },
+            { heading: "Track + reference line",
+              body: "Horizontal axis = input tone (0 left, 255 right). Vertical axis = weight 0 (bottom, suppress match) to 2 (top, double match). Background bars show the target's luma histogram (where pixel mass actually lives). Source histogram overlays as a colored polyline so you can see the gap the match is closing. Mid-line at weight=1 = identity (no modulation)." },
+            { heading: "Adding a point",
+              body: "Click any empty area of the track. A new smooth point appears at the click coords and immediately enters drag mode — drop it where you want." },
+            { heading: "Moving a point",
+              body: "Drag any handle. Hold Shift to lock horizontal (vertical-only — change weight without moving position). Hold Ctrl/Cmd to lock vertical (horizontal-only — change position without moving weight)." },
+            { heading: "Smooth vs corner points",
+              body: "Alt-click a handle to toggle. Smooth handles render as filled circles (●); corner handles render as squares (■). Smooth segments use monotone cubic Hermite interpolation (Fritsch-Carlson — no overshoot). Corner segments are linear. Mix freely: e.g. a sharp shadow rolloff into smooth midtones into a hard highlight cap." },
+            { heading: "Removing a point",
+              body: "Three ways: double-click the handle, right-click the handle, or click to select then press Delete or Backspace. Selected handles render in cyan with a white border. Press Escape to clear selection without removing." },
+            { heading: "Reset (header)",
+              body: "Restores the three default identity-weight points (positions 0, 127, 255 all at weight 1.0)." },
+          ]); }}
+            title="What this section does — full explanation"
+            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", marginLeft: 7, width: 14, height: 14, borderRadius: "50%", border: "1px solid #888", color: "#aaa", fontSize: 10, fontWeight: 700, cursor: "pointer", verticalAlign: "middle" }}>i</span>
         </span>
         {openSection === "envelope" && (
           <span onClick={(e: any) => { e.stopPropagation(); const def = [...DEFAULT_ENVELOPE]; envelopeRef.current = def; setEnvelopeLabel(def); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>
