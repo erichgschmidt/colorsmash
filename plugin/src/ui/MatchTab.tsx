@@ -111,6 +111,12 @@ export function MatchTab() {
   // (liveUpdates and stale state declared above, before the hooks that consume them.)
 
   const [openSection, setOpenSection] = useState<"basic" | "dims" | "zones" | "envelope" | null>(null);
+  // Per-section enable toggles: when off, that section's params revert to defaults at apply
+  // time, letting the user A/B-test the contribution of each section without losing settings.
+  const [enColor, setEnColor] = useState(true);
+  const [enTone, setEnTone] = useState(true);
+  const [enZones, setEnZones] = useState(true);
+  const [enEnvelope, setEnEnvelope] = useState(true);
   const toggleSection = (s: "basic" | "dims" | "zones" | "envelope") => setOpenSection(o => o === s ? null : s);
 
   // ─── Persistence ───────────────────────────────────────────────────────────
@@ -381,15 +387,21 @@ export function MatchTab() {
       setTimeout(() => redrawMatched(), 100);
       return;
     }
-    const stretchRange = anchorStretchToHist && lumaBins ? lumaRange(lumaBins) : undefined;
-    const processed = processChannelCurves(fittedRaw, {
+    // Section-enable: when a section is disabled, its params revert to defaults so the
+    // user can see what the match would look like without that section's contribution.
+    const stretchRange = enColor && anchorStretchToHist && lumaBins ? lumaRange(lumaBins) : undefined;
+    const processed = processChannelCurves(fittedRaw, enColor ? {
       amount: amountRef.current / 100,
       smoothRadius: smoothRef.current,
       maxStretch: stretchRef.current,
       stretchRange,
-    });
-    const dim = applyDimensions(processed, dimsRef.current);
-    const c = applyZoneAndEnvelopeToChannels(dim, zonesRef.current, envelopeRef.current);
+    } : { amount: 1, smoothRadius: 0, maxStretch: 999 });
+    const dim = applyDimensions(processed, enTone ? dimsRef.current : DEFAULT_DIMENSIONS);
+    const c = applyZoneAndEnvelopeToChannels(
+      dim,
+      enZones ? zonesRef.current : DEFAULT_ZONES,
+      enEnvelope ? envelopeRef.current : DEFAULT_ENVELOPE,
+    );
     curvesPendingRef.current = c;
     if (!curvesTimeoutRef.current) {
       curvesTimeoutRef.current = setTimeout(() => {
@@ -398,7 +410,7 @@ export function MatchTab() {
       }, 100);
     }
     let out = applyChannelCurvesToRgba(tgt.snap.data, c);
-    if (chromaOnly) out = applyChromaOnly(tgt.snap.data, out);
+    if (enColor && chromaOnly) out = applyChromaOnly(tgt.snap.data, out);
     matchedHandleRef.current.setPixels(out, tgt.snap.width, tgt.snap.height);
   };
 
@@ -413,7 +425,7 @@ export function MatchTab() {
     // this redraw — fixes "preview blank until I wiggle a slider" on first mount.
     rafPendingRef.current = false;
     scheduleRedraw();
-  }, [fittedRaw, tgt.snap, chromaOnly, anchorStretchToHist]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fittedRaw, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onApply = async () => {
     if (targetId == null) { setStatus("Pick target layer."); return; }
@@ -426,14 +438,15 @@ export function MatchTab() {
         srcDocId, tgtDocId,
         sourceLayerId: sourceId ?? -1,
         targetLayerId: targetId,
-        amount: amountRef.current / 100,
-        smoothRadius: smoothRef.current,
-        maxStretch: stretchRef.current,
-        stretchRange: anchorStretchToHist && lumaBins ? lumaRange(lumaBins) : undefined,
-        chromaOnly,
-        dimensions: dimsRef.current,
-        zones: zonesRef.current,
-        envelope: envelopeRef.current,
+        // Section-enable mirror — disabled sections apply with default params.
+        amount: enColor ? amountRef.current / 100 : 1,
+        smoothRadius: enColor ? smoothRef.current : 0,
+        maxStretch: enColor ? stretchRef.current : 999,
+        stretchRange: enColor && anchorStretchToHist && lumaBins ? lumaRange(lumaBins) : undefined,
+        chromaOnly: enColor && chromaOnly,
+        dimensions: enTone ? dimsRef.current : DEFAULT_DIMENSIONS,
+        zones: enZones ? zonesRef.current : DEFAULT_ZONES,
+        envelope: enEnvelope ? envelopeRef.current : DEFAULT_ENVELOPE,
         sourcePixelsOverride: srcOverride?.data,
         sourceLabel: srcOverride?.name,
         colorSpace,
@@ -530,8 +543,17 @@ export function MatchTab() {
 
       {/* Accordion controls */}
       <div style={{ borderTop: "1px solid #444", margin: "6px 0 0" }} />
-      <div onClick={() => toggleSection("basic")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#dddddd", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
-        <span><Icon name={openSection === "basic" ? "chevronDown" : "chevronRight"} size={11} /> Color</span>
+      <div onClick={() => toggleSection("basic")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", cursor: "pointer", fontSize: 12, fontWeight: 700, color: enColor ? "#dddddd" : "#888", fontStyle: enColor ? "normal" : "italic" }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <span onClick={(e: any) => { e.stopPropagation(); setEnColor(!enColor); }}
+            title={enColor ? "Color section ENABLED — click to disable (revert all Color params to defaults)" : "Color section DISABLED — click to enable"}
+            style={{ width: 10, height: 10, borderRadius: "50%", flexShrink: 0,
+                     background: enColor ? "#5fd16a" : "#555",
+                     border: enColor ? "1px solid #2d8a36" : "1px solid #333",
+                     boxShadow: enColor ? "0 0 4px #5fd16a88" : "none",
+                     cursor: "pointer" }} />
+          <Icon name={openSection === "basic" ? "chevronDown" : "chevronRight"} size={11} /> Color
+        </span>
       </div>
       {openSection === "basic" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: 0 }}>
@@ -553,8 +575,17 @@ export function MatchTab() {
       )}
 
       <div style={{ borderTop: "1px solid #444" }} />
-      <div onClick={() => toggleSection("dims")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#dddddd", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
-        <span><Icon name={openSection === "dims" ? "chevronDown" : "chevronRight"} size={11} /> Tone</span>
+      <div onClick={() => toggleSection("dims")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", cursor: "pointer", fontSize: 12, fontWeight: 700, color: enTone ? "#dddddd" : "#888", fontStyle: enTone ? "normal" : "italic" }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <span onClick={(e: any) => { e.stopPropagation(); setEnTone(!enTone); }}
+            title={enTone ? "Tone section ENABLED — click to disable" : "Tone section DISABLED — click to enable"}
+            style={{ width: 10, height: 10, borderRadius: "50%", flexShrink: 0,
+                     background: enTone ? "#5fd16a" : "#555",
+                     border: enTone ? "1px solid #2d8a36" : "1px solid #333",
+                     boxShadow: enTone ? "0 0 4px #5fd16a88" : "none",
+                     cursor: "pointer" }} />
+          <Icon name={openSection === "dims" ? "chevronDown" : "chevronRight"} size={11} /> Tone
+        </span>
         {openSection === "dims" && <span onClick={(e: any) => { e.stopPropagation(); dimsRef.current = { ...DEFAULT_DIMENSIONS }; setDimsLabel({ ...DEFAULT_DIMENSIONS }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>}
       </div>
       {openSection === "dims" && (
@@ -574,8 +605,15 @@ export function MatchTab() {
       )}
 
       <div style={{ borderTop: "1px solid #444" }} />
-      <div onClick={() => toggleSection("zones")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#dddddd", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
-        <span>
+      <div onClick={() => toggleSection("zones")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", cursor: "pointer", fontSize: 12, fontWeight: 700, color: enZones ? "#dddddd" : "#888", fontStyle: enZones ? "normal" : "italic" }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <span onClick={(e: any) => { e.stopPropagation(); setEnZones(!enZones); }}
+            title={enZones ? "Zones section ENABLED — click to disable" : "Zones section DISABLED — click to enable"}
+            style={{ width: 10, height: 10, borderRadius: "50%", flexShrink: 0,
+                     background: enZones ? "#5fd16a" : "#555",
+                     border: enZones ? "1px solid #2d8a36" : "1px solid #333",
+                     boxShadow: enZones ? "0 0 4px #5fd16a88" : "none",
+                     cursor: "pointer" }} />
           <Icon name={openSection === "zones" ? "chevronDown" : "chevronRight"} size={11} /> Zones
           <span onClick={(e: any) => { e.stopPropagation(); void uxpInfo("Zones — what each control does", [
             { heading: "What zones do",
@@ -659,8 +697,17 @@ export function MatchTab() {
       })}
 
       <div style={{ borderTop: "1px solid #444" }} />
-      <div onClick={() => toggleSection("envelope")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#dddddd", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
-        <span><Icon name={openSection === "envelope" ? "chevronDown" : "chevronRight"} size={11} /> Envelope{envelopeLabel.length > 0 && <span style={{ fontSize: 9, fontWeight: 400, opacity: 0.7, marginLeft: 6 }}>· {envelopeLabel.length} pt{envelopeLabel.length === 1 ? "" : "s"}</span>}</span>
+      <div onClick={() => toggleSection("envelope")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", cursor: "pointer", fontSize: 12, fontWeight: 700, color: enEnvelope ? "#dddddd" : "#888", fontStyle: enEnvelope ? "normal" : "italic" }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <span onClick={(e: any) => { e.stopPropagation(); setEnEnvelope(!enEnvelope); }}
+            title={enEnvelope ? "Envelope section ENABLED — click to disable" : "Envelope section DISABLED — click to enable"}
+            style={{ width: 10, height: 10, borderRadius: "50%", flexShrink: 0,
+                     background: enEnvelope ? "#5fd16a" : "#555",
+                     border: enEnvelope ? "1px solid #2d8a36" : "1px solid #333",
+                     boxShadow: enEnvelope ? "0 0 4px #5fd16a88" : "none",
+                     cursor: "pointer" }} />
+          <Icon name={openSection === "envelope" ? "chevronDown" : "chevronRight"} size={11} /> Envelope{envelopeLabel.length > 0 && <span style={{ fontSize: 9, fontWeight: 400, opacity: 0.7, marginLeft: 6 }}>· {envelopeLabel.length} pt{envelopeLabel.length === 1 ? "" : "s"}</span>}
+        </span>
         {openSection === "envelope" && (
           <span onClick={(e: any) => { e.stopPropagation(); const def = [...DEFAULT_ENVELOPE]; envelopeRef.current = def; setEnvelopeLabel(def); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>
         )}
