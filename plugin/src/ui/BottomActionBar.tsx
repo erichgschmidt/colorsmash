@@ -78,7 +78,7 @@ export function BottomActionBar(props: BottomActionBarProps) {
           background: stale ? "#c19a3a" : "transparent",
           color: stale ? "#fff" : "#aaa",
           border: stale ? "1px solid #c19a3a" : "1px solid #888",
-          borderRadius: 3, cursor: "pointer", boxSizing: "border-box", flexShrink: 0, fontSize: 11, userSelect: "none",
+          borderRadius: 3, cursor: "pointer", boxSizing: "border-box", flexShrink: 0, fontSize: 14, userSelect: "none",
         }}>
         <span style={{ marginTop: -2, lineHeight: 1 }}>⟳</span>
       </div>

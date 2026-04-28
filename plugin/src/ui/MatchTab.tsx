@@ -520,7 +520,7 @@ export function MatchTab() {
                 {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
               </select>
               <div onClick={refreshTgtAll} title="Refresh document + target layer list"
-                style={{ width: 22, height: 22, marginTop: -1, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", border: "1px solid #888", borderRadius: 2, color: "#ddd", fontSize: 12, userSelect: "none", boxSizing: "border-box", flexShrink: 0 }}>
+                style={{ width: 22, height: 22, marginTop: -1, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", border: "1px solid #888", borderRadius: 2, color: "#ddd", fontSize: 16, userSelect: "none", boxSizing: "border-box", flexShrink: 0 }}>
                 <span style={{ marginTop: -3, marginLeft: 1, lineHeight: 1 }}>⟳</span>
               </div>
             </div>
@@ -633,7 +633,7 @@ export function MatchTab() {
               body: "Restores all zone settings (amounts, anchors, falloffs, biases) to defaults. Lock total stays as-is." },
           ]); }}
             title="What this section does — full explanation"
-            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", marginLeft: 6, width: 14, height: 14, borderRadius: "50%", border: "1px solid #888", color: "#aaa", fontSize: 10, fontWeight: 700, cursor: "pointer", verticalAlign: "middle" }}>i</span>
+            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", marginLeft: 7, width: 14, height: 14, borderRadius: "50%", border: "1px solid #888", color: "#aaa", fontSize: 10, fontWeight: 700, cursor: "pointer", verticalAlign: "middle" }}>i</span>
         </span>
         {openSection === "zones" && (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
