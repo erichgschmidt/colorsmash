@@ -880,22 +880,42 @@ export function MatchTab() {
         stale={stale}
       />
 
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: 11, color: multiZone ? "#dddddd" : "#aaaaaa" }}>
-        <label style={{ display: "inline-flex", alignItems: "center", gap: 4, cursor: "pointer", flex: 1, minWidth: 0 }}
-          title="When ON, Apply emits 3 stacked Curves layers (shadows / mids / highlights), each limited to its luminance band by mask, Blend If, or both. Lets the match adapt spatially across the image — useful for mixed-lighting scenes. When OFF (default), single Curves layer.">
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8, fontSize: 11, color: multiZone ? "#dddddd" : "#aaaaaa" }}>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 4, cursor: "pointer", flexShrink: 0 }}
+          title="When ON, Apply emits 3 stacked Curves layers (shadows / mids / highlights), each limited to its luminance band. Lets the match adapt spatially across the image — useful for mixed-lighting scenes. When OFF (default), single Curves layer.">
           <input type="checkbox" checked={multiZone} onChange={e => setMultiZone(e.target.checked)}
             style={{ margin: 0, cursor: "pointer" }} />
-          Multi-zone output <span style={{ fontSize: 9, opacity: 0.6 }}>(beta)</span>
+          Multi-zone <span style={{ fontSize: 9, opacity: 0.6 }}>(beta)</span>
         </label>
-        {multiZone && (
-          <select value={multiZoneLimit} onChange={e => setMultiZoneLimit(e.target.value as any)}
-            title="How each band layer is limited to its luma band. 'Mask' creates a paintable luminosity layer mask (visible thumbnail in Layers panel — most photographer-friendly). 'Blend If' uses the layer's underlying-luma sliders (no visible mask, but editable in Blending Options). 'Both' applies a mask AND Blend If for redundancy + extra-tight band edges."
-            style={{ ...sel, height: 22, flexShrink: 0, fontSize: 10 }}>
-            <option value="mask">Limit: Mask</option>
-            <option value="blendIf">Limit: Blend If</option>
-            <option value="both">Limit: Both</option>
-          </select>
-        )}
+        {/* Sub-toggles: grayed out + non-interactive when multi-zone is off, active when on. */}
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: multiZone ? "pointer" : "default", opacity: multiZone ? 1 : 0.5, fontSize: 10 }}
+          title="Use a paintable luminosity layer mask to limit each band layer (visible thumbnail in Layers panel). Most photographer-friendly. Recommended.">
+          <input type="checkbox" disabled={!multiZone} checked={multiZoneLimit === "mask" || multiZoneLimit === "both"}
+            onChange={e => {
+              const wantMask = e.target.checked;
+              const haveBlendIf = multiZoneLimit === "blendIf" || multiZoneLimit === "both";
+              if (wantMask && haveBlendIf) setMultiZoneLimit("both");
+              else if (wantMask) setMultiZoneLimit("mask");
+              else if (haveBlendIf) setMultiZoneLimit("blendIf");
+              else setMultiZoneLimit("mask"); // never allow neither — fall back to mask
+            }}
+            style={{ margin: 0, cursor: multiZone ? "pointer" : "default" }} />
+          Mask
+        </label>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: multiZone ? "pointer" : "default", opacity: multiZone ? 1 : 0.5, fontSize: 10 }}
+          title="Use Blend If sliders (in Layer Style → Blending Options) to limit each band layer. No visible mask. May not work in all PS versions.">
+          <input type="checkbox" disabled={!multiZone} checked={multiZoneLimit === "blendIf" || multiZoneLimit === "both"}
+            onChange={e => {
+              const wantBlendIf = e.target.checked;
+              const haveMask = multiZoneLimit === "mask" || multiZoneLimit === "both";
+              if (wantBlendIf && haveMask) setMultiZoneLimit("both");
+              else if (wantBlendIf) setMultiZoneLimit("blendIf");
+              else if (haveMask) setMultiZoneLimit("mask");
+              else setMultiZoneLimit("mask"); // never allow neither
+            }}
+            style={{ margin: 0, cursor: multiZone ? "pointer" : "default" }} />
+          Blend If
+        </label>
       </div>
       {/* @ts-ignore Spectrum web component */}
       <sp-button variant="secondary" onClick={onApply} style={{ marginTop: 6, width: "100%" }}
