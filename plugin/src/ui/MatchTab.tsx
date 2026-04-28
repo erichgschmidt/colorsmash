@@ -557,7 +557,7 @@ export function MatchTab() {
       {/* Documents section — collapsible header matching the other section headers */}
       <div onClick={() => setShowDocs(s => !s)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#dddddd", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <Icon name={showDocs ? "chevronDown" : "chevronRight"} size={11} /> Source
+          <Icon name={showDocs ? "chevronDown" : "chevronRight"} size={11} /> Source &amp; Target
         </span>
       </div>
       {/* Top: source + target side-by-side mini panes (each: doc dropdown + layer picker + small preview) */}
