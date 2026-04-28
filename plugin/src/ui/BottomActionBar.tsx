@@ -64,7 +64,7 @@ export function BottomActionBar(props: BottomActionBarProps) {
         style={{ height: 16, padding: "0 2px", marginLeft: 4, display: "inline-flex", alignItems: "center", justifyContent: "center",
                  fontSize: 9, fontWeight: 600, color: "#dddddd",
                  border: "1px solid #888", borderRadius: 3, cursor: "pointer", boxSizing: "border-box", flexShrink: 0, userSelect: "none" }}>
-        <span style={{ marginTop: -1, lineHeight: 1 }}>{colorSpace.toUpperCase()}</span>
+        <span style={{ marginTop: 0, lineHeight: 1 }}>{colorSpace.toUpperCase()}</span>
       </div>
       {/* Refresh button + stale indicator. Always manual mode; click to refresh.
           Color: amber when PS state changed since last refresh, otherwise transparent. */}
