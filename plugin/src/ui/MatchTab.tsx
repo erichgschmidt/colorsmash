@@ -906,55 +906,64 @@ export function MatchTab() {
         stale={stale}
       />
 
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8, fontSize: 11, color: multiZone ? "#dddddd" : "#aaaaaa" }}>
-        <label style={{ display: "inline-flex", alignItems: "center", gap: 4, cursor: "pointer", flexShrink: 0 }}
-          title="When ON, Apply emits 3 stacked Curves layers (shadows / mids / highlights), each limited to its luminance band. Lets the match adapt spatially across the image — useful for mixed-lighting scenes. When OFF (default), single Curves layer.">
-          <input type="checkbox" checked={multiZone} onChange={e => setMultiZone(e.target.checked)}
-            style={{ margin: 0, cursor: "pointer" }} />
-          Multi-zone <span style={{ fontSize: 9, opacity: 0.6 }}>(beta)</span>
-        </label>
-        {/* Sub-toggles: grayed out + non-interactive when multi-zone is off, active when on. */}
-        <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: multiZone ? "pointer" : "default", opacity: multiZone ? 1 : 0.5, fontSize: 10 }}
-          title="Use a paintable luminosity layer mask to limit each band layer (visible thumbnail in Layers panel). Most photographer-friendly. Recommended.">
-          <input type="checkbox" disabled={!multiZone} checked={multiZoneLimit === "mask" || multiZoneLimit === "both"}
-            onChange={e => {
-              const wantMask = e.target.checked;
-              const haveBlendIf = multiZoneLimit === "blendIf" || multiZoneLimit === "both";
-              if (wantMask && haveBlendIf) setMultiZoneLimit("both");
-              else if (wantMask) setMultiZoneLimit("mask");
-              else if (haveBlendIf) setMultiZoneLimit("blendIf");
-              else setMultiZoneLimit("mask"); // never allow neither — fall back to mask
-            }}
-            style={{ margin: 0, cursor: multiZone ? "pointer" : "default" }} />
-          Mask
-        </label>
-        <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: multiZone ? "pointer" : "default", opacity: multiZone ? 1 : 0.5, fontSize: 10 }}
-          title="Experimental: use Blend If sliders to limit each band layer (no visible mask, edited via Layer Style → Blending Options). The descriptor format isn't reliably accepted across PS versions — apply will verify via readback and report failure honestly. Mask is recommended.">
-          <input type="checkbox" disabled={!multiZone} checked={multiZoneLimit === "blendIf" || multiZoneLimit === "both"}
-            onChange={e => {
-              const wantBlendIf = e.target.checked;
-              const haveMask = multiZoneLimit === "mask" || multiZoneLimit === "both";
-              if (wantBlendIf && haveMask) setMultiZoneLimit("both");
-              else if (wantBlendIf) setMultiZoneLimit("blendIf");
-              else if (haveMask) setMultiZoneLimit("mask");
-              else setMultiZoneLimit("mask"); // never allow neither
-            }}
-            style={{ margin: 0, cursor: multiZone ? "pointer" : "default" }} />
-          Blend If <span style={{ fontSize: 8, opacity: 0.6 }}>(exp)</span>
-        </label>
-        <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: multiZone ? "pointer" : "default", opacity: multiZone ? 1 : 0.5, fontSize: 10 }}
-          title={`Adaptive bands: shift the band peaks to the target's actual luma percentiles (P10/P50/P90) instead of fixed 0/128/255. Each band gets a similar pixel-count sample, so shadow + highlight curves fit reliably even on images with concentrated histograms. ${multiZone && lumaBins ? `Current peaks: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}.` : ""}`}>
-          <input type="checkbox" disabled={!multiZone} checked={adaptiveBands}
-            onChange={e => setAdaptiveBands(e.target.checked)}
-            style={{ margin: 0, cursor: multiZone ? "pointer" : "default" }} />
-          Adaptive
-        </label>
-      </div>
+      {/* Single row: [☐ Multi] [☐ Mask] [☐ Blend If] [☐ Adaptive]. Same pattern as the
+          bottom action bar — checkboxes flex-shrink:0 (always visible + clickable),
+          text spans flex-shrink:1 with overflow:hidden + no ellipsis (silently clip
+          under adjacent toggles when the panel narrows). Sub-toggles grayed when Multi
+          is off. */}
+      {(() => {
+        const subDisabled = !multiZone;
+        const cbStyle: React.CSSProperties = { margin: 0, flexShrink: 0, cursor: subDisabled ? "default" : "pointer" };
+        const txt: React.CSSProperties = { overflow: "hidden", whiteSpace: "nowrap", minWidth: 0, flexShrink: 1 };
+        const subTxt: React.CSSProperties = { ...txt, opacity: subDisabled ? 0.5 : 1 };
+        return (
+          <div style={{ display: "flex", alignItems: "center", marginTop: 8, fontSize: 11, color: multiZone ? "#dddddd" : "#aaaaaa", height: 18, overflow: "hidden", gap: 3 }}>
+            <input type="checkbox" checked={multiZone} onChange={e => setMultiZone(e.target.checked)}
+              title="Multi: emit 3 stacked Curves layers (shadows / mids / highlights), each limited to its luminance band. Adapts spatially across mixed-lighting scenes."
+              style={{ margin: 0, flexShrink: 0, cursor: "pointer" }} />
+            <span style={{ ...txt, marginRight: 7 }}>Multi</span>
+
+            <input type="checkbox" disabled={subDisabled}
+              checked={multiZoneLimit === "mask" || multiZoneLimit === "both"}
+              onChange={e => {
+                const wantMask = e.target.checked;
+                const haveBlendIf = multiZoneLimit === "blendIf" || multiZoneLimit === "both";
+                if (wantMask && haveBlendIf) setMultiZoneLimit("both");
+                else if (wantMask) setMultiZoneLimit("mask");
+                else if (haveBlendIf) setMultiZoneLimit("blendIf");
+                else setMultiZoneLimit("mask");
+              }}
+              title="Mask: limit each band layer with a paintable luminosity layer mask (visible thumbnail). Recommended."
+              style={cbStyle} />
+            <span style={{ ...subTxt, marginRight: 7 }}>Mask</span>
+
+            <input type="checkbox" disabled={subDisabled}
+              checked={multiZoneLimit === "blendIf" || multiZoneLimit === "both"}
+              onChange={e => {
+                const wantBlendIf = e.target.checked;
+                const haveMask = multiZoneLimit === "mask" || multiZoneLimit === "both";
+                if (wantBlendIf && haveMask) setMultiZoneLimit("both");
+                else if (wantBlendIf) setMultiZoneLimit("blendIf");
+                else if (haveMask) setMultiZoneLimit("mask");
+                else setMultiZoneLimit("mask");
+              }}
+              title="Blend If: limit each band layer with the underlying-luma sliders in Layer Style → Blending Options. May not work in all PS versions."
+              style={cbStyle} />
+            <span style={{ ...subTxt, marginRight: 7 }}>Blend If</span>
+
+            <input type="checkbox" disabled={subDisabled} checked={adaptiveBands}
+              onChange={e => setAdaptiveBands(e.target.checked)}
+              title={`Adaptive: shift band peaks + extents to the target histogram's percentiles (P10/P50/P90) instead of fixed 0/128/255. ${multiZone && lumaBins ? `Current peaks: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""}`}
+              style={cbStyle} />
+            <span style={subTxt}>Adaptive</span>
+          </div>
+        );
+      })()}
       {/* @ts-ignore Spectrum web component */}
       <sp-button variant="secondary" onClick={onApply} style={{ marginTop: 6, width: "100%" }}
         title={multiZone
-          ? "Multi-zone output: creates 3 stacked Curves layers (shadow/mid/highlight) with Blend If sliders. Each editable independently in PS."
-          : "Create a new Curves adjustment layer in the target document, clipped to the target layer. Honors Replace and Deselect toggles below."}>{multiZone ? "Apply Multi-zone Curves" : "Apply Curves"}</sp-button>
+          ? "Multi: creates 3 stacked Curves layers (shadow/mid/highlight) with band limiting via mask and/or Blend If. Each editable independently in PS."
+          : "Create a new Curves adjustment layer in the target document, clipped to the target layer. Honors Replace and Deselect toggles below."}>{multiZone ? "Apply Multi Curves" : "Apply Curves"}</sp-button>
 
       {/* Curves graph below Apply */}
       <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7 }}>Fitted curves (R G B)</div>
