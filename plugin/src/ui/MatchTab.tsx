@@ -21,6 +21,7 @@ import {
   EnvelopePoint, DEFAULT_ENVELOPE,
 } from "../core/histogramMatch";
 import { EnvelopeEditor } from "./EnvelopeEditor";
+import { HistogramOverlay } from "./HistogramOverlay";
 import { loadSettings, makeDebouncedSaver, clearSettings, PersistedSettings } from "./persistence";
 import { uxpInfo } from "./uxpInfo";
 import { applyMatch } from "../app/applyMatch";
@@ -377,6 +378,11 @@ export function MatchTab() {
   const matchedHandleRef = useRef<MatchedPreviewHandle | null>(null);
   const rafPendingRef = useRef(false);
   const [renderedCurves, setRenderedCurves] = useState<ChannelCurves | null>(null);
+  // Result pixels captured at the end of each redraw — feeds the diagnostic histogram overlay.
+  // Throttled (only commits to state every ~150ms) so we don't thrash React during slider drags.
+  const [resultPixels, setResultPixels] = useState<Uint8Array | null>(null);
+  const resultTimeoutRef = useRef<any>(null);
+  const resultPendingRef = useRef<Uint8Array | null>(null);
   const curvesPendingRef = useRef<ChannelCurves | null>(null);
   const curvesTimeoutRef = useRef<any>(null);
 
@@ -412,6 +418,15 @@ export function MatchTab() {
     let out = applyChannelCurvesToRgba(tgt.snap.data, c);
     if (enColor && chromaOnly) out = applyChromaOnly(tgt.snap.data, out);
     matchedHandleRef.current.setPixels(out, tgt.snap.width, tgt.snap.height);
+    // Throttle result-pixel state updates so the diagnostic histogram doesn't re-render
+    // on every slider tick — every ~150ms is plenty fast visually, and avoids React thrash.
+    resultPendingRef.current = out;
+    if (!resultTimeoutRef.current) {
+      resultTimeoutRef.current = setTimeout(() => {
+        resultTimeoutRef.current = null;
+        if (resultPendingRef.current) setResultPixels(resultPendingRef.current);
+      }, 150);
+    }
   };
 
   const scheduleRedraw = () => {
@@ -541,6 +556,13 @@ export function MatchTab() {
       {/* Matched preview (full-width, large) with zoom controls */}
       <MatchedPreview ref={matchedHandleRef} />
 
+      {/* Diagnostic histogram strip — overlays target / source / result luma distributions */}
+      <HistogramOverlay
+        targetData={tgt.snap?.data ?? null}
+        sourceData={srcSnap?.data ?? null}
+        resultData={resultPixels}
+      />
+
       {/* Accordion controls */}
       <div style={{ borderTop: "1px solid #444", margin: "6px 0 0" }} />
       <div onClick={() => toggleSection("basic")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", cursor: "pointer", fontSize: 12, fontWeight: 700, color: enColor ? "#dddddd" : "#888", fontStyle: enColor ? "normal" : "italic" }}>
@@ -574,7 +596,7 @@ export function MatchTab() {
         <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: 0 }}>
           <BasicSlider label="Amount"  refObj={amountRef}  value={amountLabel}  setValue={setAmountLabel}  min={0} max={100} suffix="%" defaultVal={100} scheduleRedraw={scheduleRedraw} />
           <BasicSlider label="Smooth"  refObj={smoothRef}  value={smoothLabel}  setValue={setSmoothLabel}  min={0} max={32}  defaultVal={0}   scheduleRedraw={scheduleRedraw} />
-          <BasicSlider label="Stretch" refObj={stretchRef} value={stretchLabel} setValue={setStretchLabel} min={1} max={15}  defaultVal={8}   scheduleRedraw={scheduleRedraw} />
+          <BasicSlider label="Stretch" refObj={stretchRef} value={stretchLabel} setValue={setStretchLabel} min={1} max={15}  defaultVal={8}   scheduleRedraw={scheduleRedraw} step={0.1} />
           <label title="Anchor the slope cap at the target's actual histogram bounds instead of 0/255 — makes Stretch behave consistently regardless of whether the source is bright or dark"
             style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, opacity: 0.85, cursor: "pointer", marginLeft: 4 }}>
             <input type="checkbox" checked={anchorStretchToHist} onChange={e => { setAnchorStretchToHist(e.target.checked); scheduleRedraw(); }} style={{ cursor: "pointer", margin: 0 }} />

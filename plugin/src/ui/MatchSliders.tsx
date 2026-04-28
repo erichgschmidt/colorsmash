@@ -42,11 +42,16 @@ export interface BasicSliderProps {
   suffix?: string;
   defaultVal?: number;
   scheduleRedraw: () => void;
+  step?: number;        // slider granularity. Default 1 (integer). Pass 0.1 for fine-grained.
 }
 
 export function BasicSlider(props: BasicSliderProps) {
-  const { label, refObj, value, setValue, min, max, suffix = "", defaultVal, scheduleRedraw } = props;
+  const { label, refObj, value, setValue, min, max, suffix = "", defaultVal, scheduleRedraw, step = 1 } = props;
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const isInt = step >= 1;
+  const fmt = (n: number) => isInt ? String(Math.round(n)) : (Math.round(n * 10) / 10).toFixed(1);
+  const clamp = (n: number) => isInt ? Math.round(Math.max(min, Math.min(max, n)))
+                                      : Math.round(Math.max(min, Math.min(max, n)) * 10) / 10;
   const reset = () => {
     if (defaultVal == null) return;
     refObj.current = defaultVal; setValue(defaultVal);
@@ -54,7 +59,7 @@ export function BasicSlider(props: BasicSliderProps) {
     scheduleRedraw();
   };
   const setFromTyped = (raw: string) => {
-    const v = Math.max(min, Math.min(max, Math.round(Number(raw) || 0)));
+    const v = clamp(Number(raw) || 0);
     refObj.current = v; setValue(v);
     if (inputRef.current) inputRef.current.value = String(v);
     scheduleRedraw();
@@ -64,16 +69,16 @@ export function BasicSlider(props: BasicSliderProps) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: 0 }}>
         <span style={{ opacity: 0.75 }}>{label}</span>
         <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
-          <input type="number" min={min} max={max} value={value}
+          <input type="number" min={min} max={max} step={step} value={fmt(value)}
             onChange={e => setFromTyped(e.target.value)}
             style={matchStyles.numInput} />
           {suffix && <span style={{ opacity: 0.7, fontSize: 10, marginLeft: 1 }}>{suffix}</span>}
           {defaultVal != null && <button onClick={reset} title={`Reset to ${defaultVal}${suffix}`} style={matchStyles.resetIconBtn}><Icon name="revert" size={11} /></button>}
         </div>
       </div>
-      <input type="range" min={min} max={max} defaultValue={value}
+      <input type="range" min={min} max={max} step={step} defaultValue={value}
         ref={el => { inputRef.current = el; }}
-        onInput={e => { const v = Math.round(Number((e.target as HTMLInputElement).value)); refObj.current = v; setValue(v); scheduleRedraw(); }}
+        onInput={e => { const v = clamp(Number((e.target as HTMLInputElement).value)); refObj.current = v; setValue(v); scheduleRedraw(); }}
         style={{ width: "calc(100% + 16px)", marginLeft: -8, marginTop: -2, marginBottom: -2 }} />
     </div>
   );
