@@ -12,6 +12,7 @@ import {
   ChannelCurves, DimensionOpts, DEFAULT_DIMENSIONS, ZoneOpts, DEFAULT_ZONES,
   EnvelopePoint, DEFAULT_ENVELOPE,
   fitByMode, MatchMode,
+  fitMultiZone, processMultiZoneFit,
 } from "../core/histogramMatch";
 
 const STATS_MAX_EDGE = 512;
@@ -50,6 +51,7 @@ export interface ApplyMatchParams {
   zones?: ZoneOpts;
   envelope?: EnvelopePoint[];
   matchMode?: MatchMode;       // full / mean / median / percentile (default full)
+  multiZone?: boolean;         // emit 3 stacked Curves layers w/ Blend If instead of one
   sourcePixelsOverride?: Uint8Array; // if set, use these RGBA pixels instead of reading source layer
   sourceLabel?: string; // optional name shown in result message
   colorSpace?: "rgb" | "lab";
@@ -133,14 +135,22 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       downsampleToMaxEdge(t, STATS_MAX_EDGE).data,
       params.colorSpace ?? "rgb",
     );
-    const processed = processChannelCurves(raw, {
+    const curveOpts = {
       amount: params.amount,
       smoothRadius: params.smoothRadius ?? 0,
       maxStretch: params.maxStretch ?? 999,
       stretchRange: params.stretchRange,
-    });
-    const dim = applyDimensions(processed, params.dimensions ?? DEFAULT_DIMENSIONS);
+    };
+    const dimOpts = params.dimensions ?? DEFAULT_DIMENSIONS;
+    const processed = processChannelCurves(raw, curveOpts);
+    const dim = applyDimensions(processed, dimOpts);
     const curves: ChannelCurves = applyZoneAndEnvelopeToChannels(dim, params.zones ?? DEFAULT_ZONES, params.envelope ?? DEFAULT_ENVELOPE);
+
+    // Multi-zone path needs its own per-band fit (the global `raw` above is for single-curve).
+    // We refit because the band weights are luma-conditional; single-curve fitter doesn't bin by luma.
+    const multiZoneFit = params.multiZone
+      ? processMultiZoneFit(fitMultiZone(srcPixels, downsampleToMaxEdge(t, STATS_MAX_EDGE).data), curveOpts, dimOpts)
+      : null;
 
     // Reuse existing [Color Smash] group. Prior Match Curves layers are either deleted
     // (overwritePrior=true, default) or just hidden (overwritePrior=false, so user can keep
@@ -153,13 +163,10 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       c.name === RESULT_LAYER_NAME || (typeof c.name === "string" && c.name.startsWith(RESULT_LAYER_NAME))
     );
     if (overwrite) {
-      // Overwrite ONLY the most recent (topmost) Match Curves layer; keep older ones intact.
-      // Prefer the user-selected one if it's a Match Curves layer; else top of group.
-      const selectedId = doc.activeLayers?.[0]?.id;
-      const selectedMatch = selectedId != null ? matchChildren.find((c: any) => c.id === selectedId) : undefined;
-      const target = selectedMatch ?? matchChildren[0];
-      if (target) {
-        try { await target.delete(); } catch { /* ignore */ }
+      // Delete every prior Match Curves layer in the group. Predictable and avoids the
+      // multi-zone footgun where deleting only the topmost would leave stale band-layers.
+      for (const child of matchChildren) {
+        try { await child.delete(); } catch { /* ignore */ }
       }
     } else {
       // Hide all prior matches so the new one doesn't compete.
@@ -184,6 +191,64 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       catch { /* ignore */ }
     }
 
+    // ─── Multi-zone branch: emit 3 stacked Curves layers + Blend If sliders ──────
+    if (multiZoneFit) {
+      // Each band gets its own Curves layer with Blend If limiting it to its luma band.
+      // Bands defined by triangular weights at luma 0/128/255 → Blend If split-slider math
+      // matches the preview simulator exactly.
+      const bands: Array<{
+        key: "shadow" | "mid" | "highlight"; suffix: string;
+        // dest range: Blend If "underlying" sliders, two split positions per side.
+        destBlackMin: number; destBlackMax: number;
+        destWhiteMin: number; destWhiteMax: number;
+      }> = [
+        { key: "shadow",    suffix: "Shadows",    destBlackMin: 0,   destBlackMax: 0,   destWhiteMin: 0,   destWhiteMax: 128 },
+        { key: "mid",       suffix: "Mids",       destBlackMin: 0,   destBlackMax: 128, destWhiteMin: 128, destWhiteMax: 255 },
+        { key: "highlight", suffix: "Highlights", destBlackMin: 128, destBlackMax: 255, destWhiteMin: 255, destWhiteMax: 255 },
+      ];
+      // Names ALL prefixed with RESULT_LAYER_NAME so the existing find-children-by-prefix
+      // cleanup logic catches them on subsequent overwrite=true applies.
+      const created: any[] = [];
+      for (const band of bands) {
+        const baseName = `${RESULT_LAYER_NAME} [${band.suffix}]`;
+        const layerName = overwrite ? baseName
+          : `${baseName} ${new Date().toTimeString().slice(0, 8)}`;
+        const c = multiZoneFit[band.key];
+        const layer = await makeCurvesLayer(layerName, [
+          { channel: "red",   points: sampleControlPoints(c.r, CONTROL_POINTS) },
+          { channel: "green", points: sampleControlPoints(c.g, CONTROL_POINTS) },
+          { channel: "blue",  points: sampleControlPoints(c.b, CONTROL_POINTS) },
+        ]);
+        if (target) { try { await setClippingMask(layer, true); } catch { /* ignore */ } }
+        if (params.chromaOnly) { try { layer.blendMode = "hue"; } catch { /* ignore */ } }
+        try { await layer.move(group, "placeInside"); } catch { /* ignore */ }
+        // Blend If sliders for the underlying composite — limits this layer to its band.
+        try {
+          await action.batchPlay([{
+            _obj: "set",
+            _target: [{ _ref: "layer", _id: layer.id }],
+            to: {
+              _obj: "layer",
+              underlyingMaskBlendingRanges: [{
+                _obj: "blendRange",
+                channel: { _enum: "channel", _value: "gray" },
+                srcBlackMin: 0, srcBlackMax: 0, srcWhiteMin: 255, srcWhiteMax: 255,
+                destBlackMin: band.destBlackMin, destBlackMax: band.destBlackMax,
+                destWhiteMin: band.destWhiteMin, destWhiteMax: band.destWhiteMax,
+              }],
+            },
+          }], {});
+        } catch { /* if Blend If descriptor isn't accepted, layer still applies fully — user can fix manually */ }
+        created.push(layer);
+      }
+      const tags = [`multi-zone (${bands.length} layers)`];
+      if (params.amount && params.amount < 1) tags.push(`amt ${Math.round(params.amount * 100)}%`);
+      if (params.chromaOnly) tags.push("hue-only");
+      if (params.sourceLabel) tags.unshift(`src "${params.sourceLabel}"`);
+      return `Matched · ${tags.join(" · ")}`;
+    }
+
+    // ─── Single-curve branch (default) ──────────────────────────────────────────
     // If keeping prior layers, give the new one a unique numbered suffix so they coexist.
     const layerName = overwrite ? RESULT_LAYER_NAME
       : `${RESULT_LAYER_NAME} ${new Date().toTimeString().slice(0, 8)}`;

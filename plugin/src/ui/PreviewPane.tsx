@@ -64,7 +64,7 @@ export function PreviewPane(props: PreviewPaneProps) {
       )}
       <div style={{
         background: "#111", border: "1px solid #555", borderRadius: 2,
-        display: "flex", alignItems: "center", justifyContent: props.centerImg ? "center" : "flex-start",
+        display: "flex", alignItems: "center", justifyContent: "center",
         ...aspectStyle, overflow: "hidden", position: "relative",
       }}>
         {props.snapshot

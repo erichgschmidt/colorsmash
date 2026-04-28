@@ -128,6 +128,9 @@ export function MatchTab() {
   const [enZones, setEnZones] = useState(true);
   const [enEnvelope, setEnEnvelope] = useState(true);
   const toggleSection = (s: "basic" | "dims" | "zones" | "envelope") => setOpenSection(o => o === s ? null : s);
+  // Source / target document picker — collapsible. Default open so it's visible on first
+  // launch; user can collapse to recover vertical space once docs are picked.
+  const [showDocs, setShowDocs] = useState(true);
 
   // ─── Persistence ───────────────────────────────────────────────────────────
   // Load once on mount. Always read the file so we know whether 'remember' was on
@@ -148,6 +151,7 @@ export function MatchTab() {
         if (s.anchorStretchToHist != null) setAnchorStretchToHist(s.anchorStretchToHist);
         if (s.matchMode) setMatchMode(s.matchMode as MatchMode);
         if (s.multiZone != null) setMultiZone(s.multiZone);
+        if (s.showDocs != null) setShowDocs(s.showDocs);
         if (s.chromaOnly != null) setChromaOnly(s.chromaOnly);
         if (s.colorSpace) setColorSpace(s.colorSpace);
         if (s.deselectOnApply != null) setDeselectOnApply(s.deselectOnApply);
@@ -173,6 +177,7 @@ export function MatchTab() {
       remember,
       amount: amountLabel, smooth: smoothLabel, stretch: stretchLabel,
       anchorStretchToHist, chromaOnly, colorSpace, matchMode, multiZone,
+      showDocs,
       deselectOnApply, overwriteOnApply,
       openSection,
       zones: zonesLabel, lockZoneTotal,
@@ -180,7 +185,7 @@ export function MatchTab() {
       envelope: envelopeLabel,
     };
     saveDebouncedRef.current!(snapshot);
-  }, [remember, matchMode, multiZone, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
+  }, [remember, matchMode, multiZone, showDocs, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
       colorSpace, deselectOnApply, overwriteOnApply, openSection,
       zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel]);
 
@@ -490,6 +495,7 @@ export function MatchTab() {
         sourceLayerId: sourceId ?? -1,
         targetLayerId: targetId,
         matchMode,
+        multiZone,
         // Section-enable mirror — disabled sections apply with default params.
         amount: enColor ? amountRef.current / 100 : 1,
         smoothRadius: enColor ? smoothRef.current : 0,
@@ -548,8 +554,14 @@ export function MatchTab() {
 
   return (
     <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+      {/* Documents section — collapsible header matching the other section headers */}
+      <div onClick={() => setShowDocs(s => !s)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#dddddd", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <Icon name={showDocs ? "chevronDown" : "chevronRight"} size={11} /> Documents
+        </span>
+      </div>
       {/* Top: source + target side-by-side mini panes (each: doc dropdown + layer picker + small preview) */}
-      {useMemo(() => (
+      {showDocs && (
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
           <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
             <SourceSelector
@@ -590,7 +602,7 @@ export function MatchTab() {
               hideSelector fitAspect maxHeight={120} />
           </div>
         </div>
-      ), [src.snap, tgt.snap, sourceId, targetId, srcLayers, tgtLayers, srcMode, srcOverride, autoUpdate, sampleMerged, sampleLock, browsedFile, docs, srcDocId, tgtDocId])}
+      )}
 
       {/* Matched preview (full-width, large) with zoom controls */}
       <MatchedPreview ref={matchedHandleRef} />
