@@ -290,12 +290,12 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
           { channel: "blue",  points: sampleControlPoints(c.b, CONTROL_POINTS) },
         ]);
         // No clipping mask in multi-zone — the per-band luminosity mask (or Blend If) is
-        // the spatial limiter. Each band layer applies wherever its mask is non-zero,
-        // independent of which underlying layer is below. User can manually clip if they
-        // want to restrict to a specific underlying layer.
+        // the spatial limiter. User can manually clip if they want layer-specific restriction.
         if (params.chromaOnly) { try { layer.blendMode = "hue"; } catch { /* ignore */ } }
-        // NOTE: Blend If attempts run BEFORE moving into the group — per audit feedback,
-        // layer descriptor readback can get weird when the layer is nested in a group.
+        // Move into the group BEFORE Blend If attempts — recent testing shows the layer.move
+        // call after a successful blendRange set may revert the destWhiteMax field back to
+        // default. Doing the move first means subsequent Blend If is the final state.
+        try { await layer.move(group, "placeInside"); } catch { /* ignore */ }
 
         // Try the user-preferred limiting method(s). 'mask' uses putLayerMask only (clean
         // single approach). 'blendIf' uses batchPlay-set descriptor only. 'both' applies
@@ -341,40 +341,51 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
             desaturate: 255,
           }];
 
-          // Variants to try in order. Each performs a `set`, then reads back the
-          // layer's blendRange property to verify the values actually stuck (PS often
-          // accepts an ill-shaped descriptor without throwing, then ignores it).
+          // Variants to try in order. Each performs a `set`, then reads back the layer's
+          // blendRange to verify all four dest values actually stuck.
           const variants: Array<{ name: string; cmds: () => any[] }> = [
-            // 1. Forum-style descriptor with _ref:"channel" + desaturate + _isCommand.
-            //    Targets active layer via targetEnum (forum example pattern).
-            { name: "forum-shape (select+targetEnum, _ref channel, desaturate)",
-              cmds: () => [
-                { _obj: "select", _target: [{ _ref: "layer", _id: layer.id }], makeVisible: false },
-                {
-                  _obj: "set",
-                  _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }],
-                  to: { _obj: "layer", blendRange: buildBlendRange() },
-                  _isCommand: true,
-                } as any,
-              ],
-            },
-            // 2. Same shape but targeting layer by id directly.
-            { name: "by-id, _ref channel, desaturate",
+            // 1. Minimal: bare layer wrapper with blendRange only. No _isCommand, no
+            //    knockout/blendInteriorElements/layerMaskAsGlobalMask fluff that might
+            //    be triggering PS's "partial update" behavior.
+            { name: "minimal by-id",
               cmds: () => [{
                 _obj: "set",
                 _target: [{ _ref: "layer", _id: layer.id }],
                 to: { _obj: "layer", blendRange: buildBlendRange() },
+              }],
+            },
+            // 2. Same minimal shape but via select+targetEnum.
+            { name: "minimal select+targetEnum",
+              cmds: () => [
+                { _obj: "select", _target: [{ _ref: "layer", _id: layer.id }], makeVisible: false },
+                { _obj: "set",
+                  _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }],
+                  to: { _obj: "layer", blendRange: buildBlendRange() },
+                },
+              ],
+            },
+            // 3. With wrapping fields (the previous default — kept as fallback).
+            { name: "with wrapping fields",
+              cmds: () => [{
+                _obj: "set",
+                _target: [{ _ref: "layer", _id: layer.id }],
+                to: {
+                  _obj: "layer",
+                  blendInteriorElements: false,
+                  knockout: { _enum: "knockout", _value: "none" },
+                  layerMaskAsGlobalMask: false,
+                  blendRange: buildBlendRange(),
+                },
                 _isCommand: true,
               } as any],
             },
-            // 3. Wrapped in blendingOptions (per audit suggestion #2).
-            { name: "layer.blendingOptions.blendRange",
+            // 4. blendingOptions wrapper (audit suggestion).
+            { name: "blendingOptions wrapper",
               cmds: () => [{
                 _obj: "set",
                 _target: [{ _ref: "layer", _id: layer.id }],
                 to: { _obj: "layer", blendingOptions: { _obj: "blendingOptions", blendRange: buildBlendRange() } },
-                _isCommand: true,
-              } as any],
+              }],
             },
           ];
 
@@ -397,7 +408,7 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
                 blendIfOk = true;
                 break;
               }
-              blendIfErr = new Error(`Variant '${variant.name}' set accepted but readback shows defaults`);
+              blendIfErr = new Error(`'${variant.name}' wanted dest=${band.destBlackMin}/${band.destBlackMax}/${band.destWhiteMin}/${band.destWhiteMax} but readback got ${got?.destBlackMin}/${got?.destBlackMax}/${got?.destWhiteMin}/${got?.destWhiteMax}`);
             } catch (e: any) {
               blendIfErr = new Error(`Variant '${variant.name}' threw: ${e?.message ?? e}`);
             }
