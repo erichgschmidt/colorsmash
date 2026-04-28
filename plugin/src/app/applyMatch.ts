@@ -296,27 +296,64 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
 
         let blendIfErr: any = null;
         if (wantBlendIf || (limitMode === "mask" && !maskOk)) {
-          // Always try Blend If as a fallback when mask was requested but failed.
-          try {
-            await action.batchPlay([{
-              _obj: "set",
-              _target: [{ _ref: "layer", _id: layer.id }],
-              to: {
-                _obj: "layer",
-                blendInteriorElements: false,
-                knockout: { _enum: "knockout", _value: "none" },
-                layerMaskAsGlobalMask: false,
-                blendRange: [{
-                  _obj: "blendRange",
-                  channel: { _enum: "channel", _value: "gray" },
-                  srcBlackMin: 0, srcBlackMax: 0, srcWhiteMin: 255, srcWhiteMax: 255,
-                  destBlackMin: band.destBlackMin, destBlackMax: band.destBlackMax,
-                  destWhiteMin: band.destWhiteMin, destWhiteMax: band.destWhiteMax,
-                }],
-              },
-            }], {});
-            blendIfOk = true;
-          } catch (e: any) { blendIfErr = e; }
+          // Try multiple Blend If descriptor formats, verifying each by reading back the
+          // layer's blendRange property. The set call doesn't throw on bad descriptors —
+          // it accepts and silently ignores. Without readback, we can't know it worked.
+          const blendRangeData = [{
+            _obj: "blendRange",
+            channel: { _enum: "channel", _value: "gray" },
+            srcBlackMin: 0, srcBlackMax: 0, srcWhiteMin: 255, srcWhiteMax: 255,
+            destBlackMin: band.destBlackMin, destBlackMax: band.destBlackMax,
+            destWhiteMin: band.destWhiteMin, destWhiteMax: band.destWhiteMax,
+          }];
+
+          // Variants to try, in order of likelihood. Each attempts a different descriptor
+          // shape. After each, we readback and verify the dest values stuck.
+          const variants: Array<{ name: string; desc: any }> = [
+            // 1. Direct blendRange on layer descriptor (current best guess).
+            { name: "layer.blendRange",
+              desc: { _obj: "layer", blendRange: blendRangeData } },
+            // 2. Wrapped in blendingOptions (per audit suggestion).
+            { name: "layer.blendingOptions.blendRange",
+              desc: { _obj: "layer", blendingOptions: { _obj: "blendingOptions", blendRange: blendRangeData } } },
+            // 3. Selecting the layer first, then setting via targetEnum.
+            { name: "select+targetEnum",
+              desc: { _obj: "layer", blendRange: blendRangeData },
+              selectFirst: true } as any,
+          ];
+
+          for (const variant of variants) {
+            try {
+              const cmds: any[] = [];
+              if ((variant as any).selectFirst) {
+                cmds.push({ _obj: "select", _target: [{ _ref: "layer", _id: layer.id }], makeVisible: false });
+                cmds.push({ _obj: "set", _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }], to: variant.desc });
+              } else {
+                cmds.push({ _obj: "set", _target: [{ _ref: "layer", _id: layer.id }], to: variant.desc });
+              }
+              await action.batchPlay(cmds, {});
+
+              // Readback verification — get blendRange back from the layer and compare.
+              const readResult = await action.batchPlay([{
+                _obj: "get",
+                _target: [
+                  { _ref: "property", _property: "blendRange" },
+                  { _ref: "layer", _id: layer.id },
+                ],
+              }], { synchronousExecution: false });
+              const got = readResult?.[0]?.blendRange?.[0];
+              if (got &&
+                  got.destBlackMin === band.destBlackMin && got.destBlackMax === band.destBlackMax &&
+                  got.destWhiteMin === band.destWhiteMin && got.destWhiteMax === band.destWhiteMax) {
+                blendIfOk = true;
+                break;
+              }
+              // Set succeeded but readback shows different values → silently ignored.
+              blendIfErr = new Error(`Variant '${variant.name}' set accepted but readback shows defaults — descriptor format not recognized by this PS version`);
+            } catch (e: any) {
+              blendIfErr = new Error(`Variant '${variant.name}' threw: ${e?.message ?? e}`);
+            }
+          }
         }
 
         if (!maskOk && !blendIfOk) {

@@ -903,7 +903,7 @@ export function MatchTab() {
           Mask
         </label>
         <label style={{ display: "inline-flex", alignItems: "center", gap: 3, cursor: multiZone ? "pointer" : "default", opacity: multiZone ? 1 : 0.5, fontSize: 10 }}
-          title="Use Blend If sliders (in Layer Style → Blending Options) to limit each band layer. No visible mask. May not work in all PS versions.">
+          title="Experimental: use Blend If sliders to limit each band layer (no visible mask, edited via Layer Style → Blending Options). The descriptor format isn't reliably accepted across PS versions — apply will verify via readback and report failure honestly. Mask is recommended.">
           <input type="checkbox" disabled={!multiZone} checked={multiZoneLimit === "blendIf" || multiZoneLimit === "both"}
             onChange={e => {
               const wantBlendIf = e.target.checked;
@@ -914,7 +914,7 @@ export function MatchTab() {
               else setMultiZoneLimit("mask"); // never allow neither
             }}
             style={{ margin: 0, cursor: multiZone ? "pointer" : "default" }} />
-          Blend If
+          Blend If <span style={{ fontSize: 8, opacity: 0.6 }}>(exp)</span>
         </label>
       </div>
       {/* @ts-ignore Spectrum web component */}
