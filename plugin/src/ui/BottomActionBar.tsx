@@ -39,12 +39,15 @@ export function BottomActionBar(props: BottomActionBarProps) {
   // The 3 buttons at the end (✕/RGB/⟳) are flex-shrink:0 too, so they're never hidden.
   const cell = (basis: number): React.CSSProperties => ({
     display: "inline-flex", alignItems: "center", gap: 3,
-    flex: `0 1 ${basis}px`, minWidth: 0, overflow: "hidden",
+    flex: `0 1 ${basis}px`, minWidth: 0, maxWidth: `${basis}px`,
+    overflow: "hidden", whiteSpace: "nowrap",
   });
   const labelTxt: React.CSSProperties = { overflow: "hidden", whiteSpace: "nowrap", minWidth: 0 };
   const checkboxStyle: React.CSSProperties = { margin: 0, flexShrink: 0 };
   return (
-    <div style={{ display: "flex", alignItems: "center", marginTop: 8, fontSize: 10, color: "#cccccc", height: 18, overflow: "hidden", gap: 0 }}>
+    // flexWrap: nowrap (default, set explicitly): in narrow panels labels clip behind
+    // the next checkbox/button instead of ever wrapping to a second row.
+    <div style={{ display: "flex", flexWrap: "nowrap", alignItems: "center", marginTop: 8, fontSize: 10, color: "#cccccc", height: 18, overflow: "hidden", gap: 0 }}>
       <label style={{ ...cell(70), cursor: "pointer" }}
         title="Deselect — drop the active marquee before creating the layer so curves apply to the full target.">
         <input type="checkbox" checked={deselectOnApply} onChange={e => setDeselectOnApply(e.target.checked)} style={checkboxStyle} />
