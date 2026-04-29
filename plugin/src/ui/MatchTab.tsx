@@ -10,13 +10,12 @@ import { ZoneCompoundSlider } from "./ZoneCompoundSlider";
 import { Icon } from "./Icon";
 import { MatchedPreview, MatchedPreviewHandle } from "./MatchedPreview";
 import { SourceSelector } from "./SourceSelector";
-import { TargetSelector } from "./TargetSelector";
 import { BottomActionBar } from "./BottomActionBar";
 import { BasicSlider, DimSlider, matchStyles } from "./MatchSliders";
 import { ChannelCurves } from "../core/histogramMatch";
 import {
   processChannelCurves, applyChannelCurvesToRgba, applyChromaOnly,
-  applyDimensions, applyZoneAndEnvelopeToChannels,
+  applyDimensions, applyZoneAndEnvelopeToChannels, MERGED_LAYER_ID,
   DimensionOpts, DEFAULT_DIMENSIONS, ZoneOpts, DEFAULT_ZONES,
   computeLumaBins, bandMeanColor, lumaRange,
   EnvelopePoint, DEFAULT_ENVELOPE,
@@ -594,45 +593,54 @@ export function MatchTab() {
       {/* Documents section — collapsible header matching the other section headers */}
       <div onClick={() => setShowDocs(s => !s)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#dddddd", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <Icon name={showDocs ? "chevronDown" : "chevronRight"} size={11} /> Source &amp; Target
+          <Icon name={showDocs ? "chevronDown" : "chevronRight"} size={11} /> Source
         </span>
       </div>
-      {/* Top: source + target side-by-side mini panes (each: doc dropdown + layer picker + small preview) */}
+      {/* Source picker — full width, doc dropdown + dense layer list + thumbnail right.
+          Target lives below (above the preview) and reuses the preview itself for its
+          visual feedback, so the target column no longer needs its own thumbnail. */}
       {showDocs && (
-        <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-            <SourceSelector
-              docs={docs} activeDocId={srcDocId} srcMode={srcMode} browsedFile={browsedFile}
-              onSwitchDoc={onSwitchSrcDoc} onSwitchSrcMode={switchSrcMode}
-              setBrowsedFile={setBrowsedFile} onBrowseImage={onBrowseImage}
-              layers={srcLayers} sourceId={sourceId} setSourceId={setSourceId}
-              autoUpdate={autoUpdate} setAutoUpdate={setAutoUpdate}
-              sampleMerged={sampleMerged} setSampleMerged={setSampleMerged}
-              sampleLock={sampleLock} setSampleLock={setSampleLock}
-              selStyle={sel}
-              onRefreshLayers={refreshSrcAll}
-              thumbnail={
-                <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}}
-                  snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}
-                  hideSelector fitAspect maxHeight={130} />
-              }
-            />
-          </div>
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-            <TargetSelector
-              docs={docs} activeDocId={tgtDocId} onSwitchDoc={onSwitchTgtDoc}
-              layers={tgtLayers} targetId={targetId} setTargetId={setTargetId}
-              selStyle={sel} onRefreshLayers={refreshTgtAll}
-              thumbnail={
-                <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap}
-                  hideSelector fitAspect maxHeight={130} />
-              }
-            />
-          </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+          <SourceSelector
+            docs={docs} activeDocId={srcDocId} srcMode={srcMode} browsedFile={browsedFile}
+            onSwitchDoc={onSwitchSrcDoc} onSwitchSrcMode={switchSrcMode}
+            setBrowsedFile={setBrowsedFile} onBrowseImage={onBrowseImage}
+            layers={srcLayers} sourceId={sourceId} setSourceId={setSourceId}
+            autoUpdate={autoUpdate} setAutoUpdate={setAutoUpdate}
+            sampleMerged={sampleMerged} setSampleMerged={setSampleMerged}
+            sampleLock={sampleLock} setSampleLock={setSampleLock}
+            selStyle={sel}
+            onRefreshLayers={refreshSrcAll}
+            thumbnail={
+              <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}}
+                snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}
+                hideSelector fitAspect maxHeight={130} />
+            }
+          />
         </div>
       )}
 
-      {/* Matched preview (full-width, large) with zoom controls */}
+      {/* Target selector — single horizontal row directly above the matched preview:
+          [doc dropdown] [layer dropdown] [refresh]. Kept compact (no list, no thumbnail)
+          because the preview pane itself shows the target via the Before/After badge. */}
+      <div style={{ marginTop: 6, display: "flex", gap: 4, alignItems: "center" }}>
+        <select style={{ ...sel, flex: 1, minWidth: 0 }} value={tgtDocId ?? ""} onChange={e => onSwitchTgtDoc(Number(e.target.value))}
+          title="Target document — where the new Curves layer will land. Independent of the source doc.">
+          {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+        </select>
+        <select style={{ ...sel, flex: 1, minWidth: 0 }} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}
+          title="Target layer — the layer the Curves adjustment will be clipped to.">
+          {tgtLayers.length === 0 && <option value="">— none —</option>}
+          {tgtLayers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+          <option value={MERGED_LAYER_ID}>Merged</option>
+        </select>
+        <div onClick={refreshTgtAll} title="Refresh target document + layer list"
+          style={{ width: 22, height: 22, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", border: "1px solid #888", borderRadius: 2, color: "#ddd", fontSize: 16, userSelect: "none", boxSizing: "border-box", flexShrink: 0 }}>
+          <span style={{ marginTop: -3, marginLeft: 1, lineHeight: 1 }}>⟳</span>
+        </div>
+      </div>
+
+      {/* Matched preview (full-width, large) with zoom controls + Before/After badge */}
       <MatchedPreview ref={matchedHandleRef} />
 
       {/* Diagnostic histogram strip — overlays target / source / result luma distributions */}
