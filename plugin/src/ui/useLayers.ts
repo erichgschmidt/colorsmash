@@ -13,7 +13,10 @@
 import { useEffect, useRef, useState } from "react";
 import { app, action } from "../services/photoshop";
 
-export interface LayerInfo { id: number; name: string; }
+// `kind` is whatever PS reports on layer.kind ("pixel" | "smartObject" | "group" | "text" |
+// "adjustment" | …). Surfaced so the new dense list UI can show a type tag per row without
+// re-querying. Optional because folded-down DOM entries occasionally lack it.
+export interface LayerInfo { id: number; name: string; kind?: string; }
 
 // Recursively walk the layer tree, returning {layer, path} pairs where path is the slash-
 // separated group hierarchy ("Group / Subgroup / LayerName"). doc.layers only contains
@@ -34,13 +37,13 @@ function walkLayers(layers: any[], parentPath: string[] = []): { layer: any; pat
   return out;
 }
 
-function readLayersFromDom(docId: number | null): { id: number; name: string; path: string[] }[] {
+function readLayersFromDom(docId: number | null): { id: number; name: string; kind?: string; path: string[] }[] {
   if (docId == null) return [];
   const doc = (app.documents ?? []).find((d: any) => d.id === docId);
   if (!doc) return [];
   return walkLayers(doc.layers)
     .filter(({ layer: l }) => l.kind === "pixel" || l.kind === "smartObject" || l.kind === undefined)
-    .map(({ layer: l, path }) => ({ id: l.id, name: l.name, path }));
+    .map(({ layer: l, path }) => ({ id: l.id, name: l.name, kind: l.kind, path }));
 }
 
 // Bypass the UXP DOM's name cache by querying each layer's current name via batchPlay.
@@ -78,8 +81,9 @@ async function readLayersFresh(docId: number | null): Promise<LayerInfo[]> {
   for (const { path } of dom) for (const segment of path) allPathIds.add(segment);
   // Path segments are by name not id, so a second pass would need group ids. Skip for now —
   // the leaf name is what users care about most.
-  return dom.map(({ id, name, path }) => ({
+  return dom.map(({ id, name, kind, path }) => ({
     id,
+    kind,
     name: (() => {
       const leafName = fresh.get(id) ?? name;
       return path.length > 0 ? `${path.join(" / ")} / ${leafName}` : leafName;

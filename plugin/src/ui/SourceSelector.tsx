@@ -1,8 +1,14 @@
 // Source-column controls for MatchTab:
 //   - Document/source dropdown (active doc list + "Use Selection" + "Browse Image…")
-//   - Mode-specific selector (layer dropdown / selection toggles / browsed-file label)
+//   - Mode-specific selector (dense layer list / selection toggles / browsed-file label)
+//   - Thumbnail preview rendered to the RIGHT of the list (caller passes it as a prop)
+//
+// The thumbnail is a slot rather than a baked-in render so the parent stays in control of
+// snapshot sourcing (srcOverride vs live snap) without us re-piping every prop.
 
+import { ReactNode } from "react";
 import { MERGED_LAYER_ID } from "../core/histogramMatch";
+import { LayerList } from "./LayerList";
 
 type SrcMode = "layer" | "selection" | "folder";
 
@@ -17,8 +23,8 @@ export interface SourceSelectorProps {
   setBrowsedFile: (s: string) => void;
   onBrowseImage: () => void;
 
-  // Layer dropdown (layer mode)
-  layers: { id: number; name: string }[];
+  // Layer list (layer mode)
+  layers: { id: number; name: string; kind?: string }[];
   sourceId: number | null;
   setSourceId: (id: number) => void;
 
@@ -32,6 +38,9 @@ export interface SourceSelectorProps {
 
   selStyle: React.CSSProperties;
   onRefreshLayers?: () => void;
+
+  // Optional thumbnail painted to the right of the list. Caller owns the snapshot logic.
+  thumbnail?: ReactNode;
 }
 
 export function SourceSelector(props: SourceSelectorProps) {
@@ -39,18 +48,24 @@ export function SourceSelector(props: SourceSelectorProps) {
     docs, activeDocId, srcMode, browsedFile, onSwitchDoc, onSwitchSrcMode, setBrowsedFile, onBrowseImage,
     layers, sourceId, setSourceId,
     autoUpdate, setAutoUpdate, sampleMerged, setSampleMerged, sampleLock, setSampleLock,
-    selStyle,
+    selStyle, thumbnail,
   } = props;
 
-  const sourceModeContent = srcMode === "layer" ? (
-    <select style={selStyle} value={sourceId ?? ""} onChange={e => setSourceId(Number(e.target.value))}
-      title="Source layer — pixels read for the histogram fit. Pick 'Merged' to read the whole document composite.">
-      {layers.length === 0 && <option value="">— none —</option>}
-      {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-      <option value={MERGED_LAYER_ID}>🔀 Merged</option>
-    </select>
+  // The center widget changes per mode. Only "layer" mode gets the dense list; the other
+  // two are unchanged from the old design (selection toggles, sticky file label).
+  const center = srcMode === "layer" ? (
+    <LayerList
+      items={layers}
+      selectedId={sourceId}
+      onSelect={setSourceId}
+      // "Merged" pseudo-layer pinned at the bottom — same affordance as the old <option>.
+      extras={[{ id: MERGED_LAYER_ID, name: "Merged", kind: "composite" }]}
+    />
   ) : srcMode === "folder" ? (
-    <span style={{ fontSize: 10, opacity: 0.7 }}>{browsedFile ? `📁 ${browsedFile}` : ""}</span>
+    <div style={{ height: 130, display: "flex", alignItems: "center", justifyContent: "center",
+      background: "#1f1f1f", border: "1px solid #555", borderRadius: 2, fontSize: 10, opacity: 0.7, padding: "0 8px", textAlign: "center" }}>
+      {browsedFile ? `📁 ${browsedFile}` : "no file"}
+    </div>
   ) : (
     <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, height: 26 }}>
       <input type="checkbox" checked={autoUpdate} onChange={e => setAutoUpdate(e.target.checked)}
@@ -96,7 +111,16 @@ export function SourceSelector(props: SourceSelectorProps) {
           </div>
         )}
       </div>
-      <div style={{ height: 26 }}>{sourceModeContent}</div>
+      {/* List on the left grows; fixed-width thumbnail on the right. minWidth:0 on the
+          left flex child is required so the truncating layer names actually truncate. */}
+      <div style={{ display: "flex", gap: 6, alignItems: "stretch" }}>
+        <div style={{ flex: 1, minWidth: 0 }}>{center}</div>
+        {thumbnail && (
+          <div style={{ width: 72, flexShrink: 0, display: "flex", alignItems: "flex-start" }}>
+            {thumbnail}
+          </div>
+        )}
+      </div>
     </>
   );
 }

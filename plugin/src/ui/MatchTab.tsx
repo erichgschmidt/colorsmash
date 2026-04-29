@@ -10,12 +10,13 @@ import { ZoneCompoundSlider } from "./ZoneCompoundSlider";
 import { Icon } from "./Icon";
 import { MatchedPreview, MatchedPreviewHandle } from "./MatchedPreview";
 import { SourceSelector } from "./SourceSelector";
+import { TargetSelector } from "./TargetSelector";
 import { BottomActionBar } from "./BottomActionBar";
 import { BasicSlider, DimSlider, matchStyles } from "./MatchSliders";
 import { ChannelCurves } from "../core/histogramMatch";
 import {
   processChannelCurves, applyChannelCurvesToRgba, applyChromaOnly,
-  applyDimensions, applyZoneAndEnvelopeToChannels, MERGED_LAYER_ID,
+  applyDimensions, applyZoneAndEnvelopeToChannels,
   DimensionOpts, DEFAULT_DIMENSIONS, ZoneOpts, DEFAULT_ZONES,
   computeLumaBins, bandMeanColor, lumaRange,
   EnvelopePoint, DEFAULT_ENVELOPE,
@@ -610,32 +611,23 @@ export function MatchTab() {
               sampleLock={sampleLock} setSampleLock={setSampleLock}
               selStyle={sel}
               onRefreshLayers={refreshSrcAll}
+              thumbnail={
+                <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}}
+                  snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}
+                  hideSelector fitAspect maxHeight={130} />
+              }
             />
-            <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}}
-              snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}
-              hideSelector fitAspect maxHeight={120} />
           </div>
           <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-            <div style={{ height: 26, display: "flex", alignItems: "center", gap: 4 }}>
-              <select style={{ ...sel, flex: 1 }} value={tgtDocId ?? ""} onChange={e => onSwitchTgtDoc(Number(e.target.value))}
-                title="Target document — where the new Curves layer will land. Independent of the source doc; can differ from PS's currently active doc.">
-                {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-              </select>
-              <div onClick={refreshTgtAll} title="Refresh document + target layer list"
-                style={{ width: 22, height: 22, marginTop: -1, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", border: "1px solid #888", borderRadius: 2, color: "#ddd", fontSize: 16, userSelect: "none", boxSizing: "border-box", flexShrink: 0 }}>
-                <span style={{ marginTop: -3, marginLeft: 1, lineHeight: 1 }}>⟳</span>
-              </div>
-            </div>
-            <div style={{ height: 26 }}>
-              <select style={sel} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}
-                title="Target layer — what the matched Curves will be clipped to. Pick 'Merged' to apply at top-of-stack with no clipping.">
-                {tgtLayers.length === 0 && <option value="">— none —</option>}
-                {tgtLayers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                <option value={MERGED_LAYER_ID}>🔀 Merged</option>
-              </select>
-            </div>
-            <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap}
-              hideSelector fitAspect maxHeight={120} />
+            <TargetSelector
+              docs={docs} activeDocId={tgtDocId} onSwitchDoc={onSwitchTgtDoc}
+              layers={tgtLayers} targetId={targetId} setTargetId={setTargetId}
+              selStyle={sel} onRefreshLayers={refreshTgtAll}
+              thumbnail={
+                <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}} snapshot={tgt.snap}
+                  hideSelector fitAspect maxHeight={130} />
+              }
+            />
           </div>
         </div>
       )}
