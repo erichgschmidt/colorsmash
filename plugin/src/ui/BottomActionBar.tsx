@@ -63,9 +63,12 @@ export function BottomActionBar(props: BottomActionBarProps) {
         <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} style={checkboxStyle} />
         <span style={labelTxt}>Save</span>
       </label>
+      {/* marginLeft:auto on the first button anchors the whole [✕][RGB][⟳] cluster
+          to the right edge. This way the buttons hold their position when checkbox
+          cells shrink in narrow panels — they don't follow the cells leftward. */}
       <button onClick={handleResetClick}
         title="Reset all settings to defaults and clear the saved file"
-        style={{ width: 16, height: 16, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
+        style={{ width: 16, height: 16, padding: 0, marginLeft: "auto", display: "inline-flex", alignItems: "center", justifyContent: "center",
                  background: "#e66666", color: "#fff", fontWeight: 700, fontSize: 12, lineHeight: 1,
                  border: "none", borderRadius: 3, cursor: "pointer", boxSizing: "border-box", flexShrink: 0 }}>
         <span style={{ marginTop: -1 }}>✕</span>

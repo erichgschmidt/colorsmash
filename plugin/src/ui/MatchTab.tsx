@@ -487,6 +487,9 @@ export function MatchTab() {
     }
     if (enColor && chromaOnly) out = applyChromaOnly(tgt.snap.data, out);
     matchedHandleRef.current.setPixels(out, tgt.snap.width, tgt.snap.height);
+    // Also push the unmodified target pixels so the preview's Before/After badge
+    // can swap to the original on click/hold without a round-trip to the parent.
+    matchedHandleRef.current.setBefore(tgt.snap.data, tgt.snap.width, tgt.snap.height);
     // Throttle result-pixel state updates so the diagnostic histogram doesn't re-render
     // on every slider tick — every ~150ms is plenty fast visually, and avoids React thrash.
     resultPendingRef.current = out;

@@ -1,12 +1,21 @@
 // Matched-preview block for MatchTab: header (zoom +/−/1:1), draggable container,
 // keyboard shortcut handling for +/-/0, and the inline <img> driven imperatively
-// by the parent via the exposed handle (setPixels).
+// by the parent via the exposed handle (setPixels for matched/after, setBefore
+// for the unmodified target).
+//
+// Before/After UX:
+//   • Small corner badge overlay shows the current view ("After" / "Before").
+//   • Mouse-down on the badge → temporarily show the OTHER view while held.
+//   • Click on the badge (no drag) → toggle the persistent default.
+// The two combine via XOR (`showBefore !== holding`) so e.g. you can persistent-flip
+// to "Before" and then peek at "After" by holding the badge.
 
 import { useEffect, useImperativeHandle, useRef, useState, forwardRef } from "react";
 import { rgbaToPngDataUrl } from "./encodePng";
 
 export interface MatchedPreviewHandle {
   setPixels: (rgba: Uint8Array, width: number, height: number) => void;
+  setBefore: (rgba: Uint8Array, width: number, height: number) => void;
 }
 
 export const MatchedPreview = forwardRef<MatchedPreviewHandle, {}>(function MatchedPreview(_props, ref) {
@@ -18,13 +27,38 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, {}>(function Matc
   const dragStartRef = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
   const mouseOverMatchedRef = useRef(false);
 
+  // Cached pixel buffers — parent sends both via the handle. We re-encode + swap the
+  // <img> src on demand when the displayed mode changes. Holds Uint8Arrays as-is so
+  // re-display is a single PNG encode (no copy from caller).
+  const afterRef = useRef<{ rgba: Uint8Array; w: number; h: number } | null>(null);
+  const beforeRef = useRef<{ rgba: Uint8Array; w: number; h: number } | null>(null);
+  // Persistent "show before by default" toggle (click on badge).
+  const [showBefore, setShowBefore] = useState(false);
+  // Momentary hold (mousedown→mouseup on badge). XOR with showBefore decides view.
+  const [holding, setHolding] = useState(false);
+  const displayBefore = showBefore !== holding;
+
+  // Render whichever buffer matches displayBefore. Called whenever buffers change OR
+  // the toggle/hold flips.
+  const renderCurrent = () => {
+    const img = matchedFrontRef.current;
+    if (!img) return;
+    const buf = displayBefore ? beforeRef.current : afterRef.current;
+    if (!buf) return;
+    try { img.src = rgbaToPngDataUrl(buf.rgba, buf.w, buf.h); } catch { /* ignore */ }
+  };
+  useEffect(renderCurrent, [showBefore, holding]); // re-render on mode flip
+
   useImperativeHandle(ref, () => ({
     setPixels: (rgba, w, h) => {
-      const img = matchedFrontRef.current;
-      if (!img) return;
-      try { img.src = rgbaToPngDataUrl(rgba, w, h); } catch { /* ignore encode errors during drag */ }
+      afterRef.current = { rgba, w, h };
+      if (!displayBefore) renderCurrent();
     },
-  }), []);
+    setBefore: (rgba, w, h) => {
+      beforeRef.current = { rgba, w, h };
+      if (displayBefore) renderCurrent();
+    },
+  }), [displayBefore]);
 
   const onZoomMouseDown = (e: React.MouseEvent) => {
     dragStartRef.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y };
@@ -53,6 +87,31 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, {}>(function Matc
     return () => { document.removeEventListener("keydown", onKey); };
   }, []);
 
+  // Badge interaction: distinguishes hold (≥150ms or mousemove) from a true click.
+  // - mousedown starts a "potential click" timer; if mouseup within window with no
+  //   move, it's a click → toggle persistent showBefore.
+  // - if held longer than threshold OR moved off, treat as hold → flip momentarily.
+  const badgeStateRef = useRef<{ downAt: number; movedOff: boolean } | null>(null);
+  const onBadgeMouseDown = (e: React.MouseEvent) => {
+    e.stopPropagation(); // don't start a drag-pan
+    badgeStateRef.current = { downAt: Date.now(), movedOff: false };
+    setHolding(true);
+    const onUp = () => {
+      window.removeEventListener("mouseup", onUp);
+      const s = badgeStateRef.current;
+      badgeStateRef.current = null;
+      setHolding(false);
+      // Quick tap with no drift = persistent toggle. Long hold or drift = just a hold.
+      if (s && Date.now() - s.downAt < 200 && !s.movedOff) {
+        setShowBefore(b => !b);
+      }
+    };
+    window.addEventListener("mouseup", onUp);
+  };
+
+  const badgeBg = displayBefore ? "rgba(193, 154, 58, 0.92)" : "rgba(40, 40, 40, 0.78)";
+  const badgeText = displayBefore ? "Before" : "After";
+
   return (
     <>
       <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -77,7 +136,7 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, {}>(function Matc
           </div>
         </div>
       </div>
-      <div ref={matchedContainerRef} style={{ height: 240, overflow: "hidden", cursor: "grab", background: bgMatchPanel ? "#535353" : "#111", border: "1px solid #555", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center" }}
+      <div ref={matchedContainerRef} style={{ position: "relative", height: 240, overflow: "hidden", cursor: "grab", background: bgMatchPanel ? "#535353" : "#111", border: "1px solid #555", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center" }}
         onMouseDown={onZoomMouseDown}
         onMouseEnter={() => { mouseOverMatchedRef.current = true; }}
         onMouseLeave={() => { mouseOverMatchedRef.current = false; }}>
@@ -88,6 +147,22 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, {}>(function Matc
             marginLeft: `${pan.x}px`, marginTop: `${pan.y}px`,
             flexShrink: 0,
           }} />
+        {/* Before/After badge — corner overlay. Click to toggle persistent view; click
+            and hold to peek at the other view momentarily. Outside the drag-pan zone
+            (stopPropagation in onMouseDown). */}
+        <div onMouseDown={onBadgeMouseDown}
+          title={`Currently showing ${badgeText.toLowerCase()}. Click to toggle, hold to peek the other.`}
+          style={{
+            position: "absolute", top: 6, right: 6,
+            padding: "2px 8px", fontSize: 10, fontWeight: 600,
+            color: displayBefore ? "#1a1a1a" : "#eee",
+            background: badgeBg,
+            border: "1px solid " + (displayBefore ? "#c19a3a" : "#888"),
+            borderRadius: 3, cursor: "pointer", userSelect: "none",
+            boxShadow: "0 1px 2px rgba(0,0,0,0.4)",
+          }}>
+          {badgeText}
+        </div>
       </div>
     </>
   );
