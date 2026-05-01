@@ -25,7 +25,6 @@ const SWATCH_ENCODE_EDGE = 80;
 const PRESETS: { key: Preset; label: string; tip: string }[] = [
   { key: "color",    label: "Color",    tip: "Full color match — transfers the source's per-channel tone + color." },
   { key: "hue",      label: "Hue",      tip: "Hue only — transfers the source's color, target keeps its own brightness + saturation." },
-  { key: "bw",       label: "B&W",      tip: "Black & white — uses the source's tonal contrast as a grayscale render." },
   { key: "contrast", label: "Contrast", tip: "Contrast / luma only — transfers the source's tonal curve, target keeps its own colors." },
 ];
 
@@ -55,7 +54,7 @@ export function PresetStrip(props: PresetStripProps) {
       { data: srcRgba, width: srcWidth, height: srcHeight, bounds: { left: 0, top: 0, right: srcWidth, bottom: srcHeight } },
       SWATCH_ENCODE_EDGE,
     );
-    const out: Record<Preset, string> = { color: "", hue: "", bw: "", contrast: "" };
+    const out: Record<Preset, string> = { color: "", hue: "", contrast: "" };
     for (const { key } of PRESETS) {
       try {
         const variant = sourceVariant(small.data, key);

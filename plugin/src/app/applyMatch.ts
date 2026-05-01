@@ -490,7 +490,6 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     // Blend mode per preset:
     //   hue       → Hue blend (chroma from curves, target keeps sat+luma) — same as chromaOnly
     //   contrast  → Luminosity blend (luma from curves, target keeps colors entirely)
-    //   bw        → Normal blend; we add a Hue/Sat -100 layer above to enforce grayscale
     //   color     → Normal (or Hue if user explicitly toggled chromaOnly)
     const presetBlend =
       preset === "hue" || params.chromaOnly ? "hue" :
@@ -498,30 +497,6 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       null;
     if (presetBlend) { try { curveLayer.blendMode = presetBlend; } catch { /* ignore */ } }
     try { await curveLayer.move(group, "placeInside"); } catch { /* ignore */ }
-
-    // B&W: add a Hue/Saturation -100 layer ON TOP of the curves layer inside the group.
-    // Together they: shape tones via averaged curves, then strip all chroma. Failure is
-    // soft — if the descriptor doesn't take in this PS version, the curves alone still
-    // produce a near-monochrome (averaged) output.
-    if (preset === "bw") {
-      try {
-        await action.batchPlay([
-          {
-            _obj: "make",
-            _target: [{ _ref: "adjustmentLayer" }],
-            using: { _obj: "adjustmentLayer", type: { _obj: "hueSaturation", colorize: false }, name: `${layerName} [BW]` },
-          },
-          {
-            _obj: "set",
-            _target: [{ _ref: "adjustmentLayer", _enum: "ordinal", _value: "targetEnum" }],
-            to: { _obj: "hueSaturation", colorize: false, adjustment: [{ _obj: "hueSatAdjustmentV2", hue: 0, saturation: -100, lightness: 0 }] },
-          },
-        ], { synchronousExecution: true });
-        // Move the new layer into the group too. activeLayers is the just-created HueSat.
-        const huesat = tgtDoc.activeLayers?.[0];
-        if (huesat) { try { await huesat.move(group, "placeInside"); } catch { /* ignore */ } }
-      } catch { /* swallow — curves alone is acceptable fallback */ }
-    }
 
     const tags = [`amt ${Math.round(params.amount * 100)}%`];
     if (params.smoothRadius) tags.push(`smooth ${params.smoothRadius}`);

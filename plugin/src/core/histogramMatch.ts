@@ -909,9 +909,8 @@ export function applyChannelCurvesToRgba(rgba: Uint8Array, c: ChannelCurves): Ui
 // project the source onto each preset's "characteristic visualization":
 //   color    : source unchanged
 //   hue      : source with luma flattened to mid-gray, chroma preserved (pure hue map)
-//   bw       : source converted to Rec.709 grayscale
 //   contrast : grayscale + linear stretch to fill 0..255 (shows tonal dynamic range)
-export function sourceVariant(rgba: Uint8Array, preset: "color" | "hue" | "bw" | "contrast"): Uint8Array {
+export function sourceVariant(rgba: Uint8Array, preset: "color" | "hue" | "contrast"): Uint8Array {
   if (preset === "color") return rgba;
   const out = new Uint8Array(rgba.length);
   if (preset === "hue") {
@@ -922,14 +921,6 @@ export function sourceVariant(rgba: Uint8Array, preset: "color" | "hue" | "bw" |
       out[i]     = Math.max(0, Math.min(255, Math.round(r + d)));
       out[i + 1] = Math.max(0, Math.min(255, Math.round(g + d)));
       out[i + 2] = Math.max(0, Math.min(255, Math.round(b + d)));
-      out[i + 3] = rgba[i + 3];
-    }
-    return out;
-  }
-  if (preset === "bw") {
-    for (let i = 0; i < rgba.length; i += 4) {
-      const v = Math.round(0.2126 * rgba[i] + 0.7152 * rgba[i + 1] + 0.0722 * rgba[i + 2]);
-      out[i] = out[i + 1] = out[i + 2] = Math.max(0, Math.min(255, v));
       out[i + 3] = rgba[i + 3];
     }
     return out;
@@ -952,15 +943,14 @@ export function sourceVariant(rgba: Uint8Array, preset: "color" | "hue" | "bw" |
   return out;
 }
 
-// Quick-select presets — 4 orthogonal "what aspect of source do I take" options.
+// Quick-select presets — 3 orthogonal "what aspect of source do I take" options.
 //   color    : full per-channel match (default)
 //   hue      : take chroma from match, keep target's luma + saturation
-//   bw       : grayscale output, value-matched to source
 //   contrast : take luma from match, keep target's chroma — opposite of hue
-export type Preset = "color" | "hue" | "bw" | "contrast";
+export type Preset = "color" | "hue" | "contrast";
 
-// Average R/G/B curves into one luma curve. bw + contrast both want a single tone-only
-// response, no per-channel color shift, so they collapse here.
+// Average R/G/B curves into one luma curve. Contrast wants a single tone-only response
+// with no per-channel color shift, so it collapses here.
 export function averageChannelCurves(c: ChannelCurves): ChannelCurves {
   const arr = new Uint8Array(256);
   for (let v = 0; v < 256; v++) arr[v] = Math.round((c.r[v] + c.g[v] + c.b[v]) / 3);
@@ -969,7 +959,7 @@ export function averageChannelCurves(c: ChannelCurves): ChannelCurves {
 
 // Per-preset curve transformation. Returns the curves to write into the Curves layer.
 export function transformCurvesForPreset(c: ChannelCurves, preset: Preset): ChannelCurves {
-  return preset === "bw" || preset === "contrast" ? averageChannelCurves(c) : c;
+  return preset === "contrast" ? averageChannelCurves(c) : c;
 }
 
 // JS-side post-processing for previews. PS Apply uses blend modes / extra layers to
@@ -977,16 +967,6 @@ export function transformCurvesForPreset(c: ChannelCurves, preset: Preset): Chan
 export function applyPresetPostprocess(original: Uint8Array, mapped: Uint8Array, preset: Preset): Uint8Array {
   if (preset === "color") return mapped;
   if (preset === "hue") return applyChromaOnly(original, mapped);
-  if (preset === "bw") {
-    // Force grayscale: R=G=B=Rec.709 luma of mapped output. Saturation pinned to 0.
-    const out = new Uint8Array(mapped.length);
-    for (let i = 0; i < mapped.length; i += 4) {
-      const luma = Math.round(0.2126 * mapped[i] + 0.7152 * mapped[i + 1] + 0.0722 * mapped[i + 2]);
-      const v = Math.max(0, Math.min(255, luma));
-      out[i] = v; out[i + 1] = v; out[i + 2] = v; out[i + 3] = mapped[i + 3];
-    }
-    return out;
-  }
   // contrast: shift original RGB by (mapped luma - original luma). Preserves chroma,
   // applies the luma-curve change. Equivalent to Curves layer at Luminosity blend.
   const out = new Uint8Array(original.length);
