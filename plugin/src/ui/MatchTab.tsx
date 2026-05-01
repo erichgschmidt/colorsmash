@@ -16,7 +16,7 @@ import { ChannelCurves } from "../core/histogramMatch";
 import {
   processChannelCurves, applyChannelCurvesToRgba, applyChromaOnly,
   applyDimensions, applyZoneAndEnvelopeToChannels, MERGED_LAYER_ID,
-  transformCurvesForPreset, applyPresetPostprocess,
+  transformCurvesForPreset, applyPresetPostprocess, generateLutCube,
   DimensionOpts, DEFAULT_DIMENSIONS, ZoneOpts, DEFAULT_ZONES,
   computeLumaBins, bandMeanColor, lumaRange,
   EnvelopePoint, DEFAULT_ENVELOPE,
@@ -528,6 +528,27 @@ export function MatchTab() {
     scheduleRedraw();
   }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, multiZoneExtents, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope, activePreset]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Export the staged preset as a 33-grid 3D LUT in .CUBE format. Sidesteps the
+  // unreliable PS Color Lookup API entirely — user picks a save location, we write
+  // the file, they load it manually wherever they want (PS Color Lookup layer,
+  // Premiere, Resolve, another tool). The LUT bakes the full preset behavior
+  // including Color/Luminosity blend emulation that a Curves layer alone can't
+  // express, so the file is a complete, portable representation of the look.
+  const onExportLut = async () => {
+    const curves = renderedCurves;
+    if (!curves) { setStatus("Compute a match first."); return; }
+    setStatus("Exporting LUT...");
+    try {
+      const uxp = require("uxp");
+      const presetLabel = activePreset === "color" ? "full" : activePreset === "hue" ? "color" : "contrast";
+      const file = await uxp.storage.localFileSystem.getFileForSaving(`color-smash-${presetLabel}.cube`, { types: ["cube"] });
+      if (!file) { setStatus("Export cancelled."); return; }
+      const cube = generateLutCube(curves, activePreset, 33, "Color Smash");
+      await file.write(cube, { format: uxp.storage.formats.utf8 });
+      setStatus(`Exported ${file.name} (33³ LUT, ${presetLabel}).`);
+    } catch (e: any) { setStatus(`LUT export error: ${e?.message ?? e}`); }
+  };
+
   const onApply = async () => {
     if (targetId == null) { setStatus("Pick target layer."); return; }
     if (srcMode === "layer" && sourceId == null) { setStatus("Pick source layer."); return; }
@@ -1007,11 +1028,20 @@ export function MatchTab() {
           </div>
         );
       })()}
-      {/* @ts-ignore Spectrum web component */}
-      <sp-button variant="secondary" onClick={onApply} style={{ marginTop: 6, width: "100%" }}
-        title={multiZone
-          ? "Multi: creates 3 stacked Curves layers (shadow/mid/highlight) with band limiting via mask and/or Blend If. Each editable independently in PS."
-          : "Create a new Curves adjustment layer in the target document, clipped to the target layer. Honors Replace and Deselect toggles below."}>{multiZone ? "Apply Multi Curves" : "Apply Curves"}</sp-button>
+      {/* Apply (writes Curves layer to PS) and Export LUT (writes .CUBE to disk).
+          Apply is the primary action so it gets ~70% of the row; Export is the
+          smaller secondary action — user clicks it when they want the staged preset
+          as a portable file instead of a PS layer. flex:N controls the split. */}
+      <div style={{ display: "flex", gap: 4, marginTop: 6 }}>
+        {/* @ts-ignore Spectrum web component */}
+        <sp-button variant="secondary" onClick={onApply} style={{ flex: "7 1 0", minWidth: 0 }}
+          title={multiZone
+            ? "Multi: creates 3 stacked Curves layers (shadow/mid/highlight) with band limiting via mask and/or Blend If. Each editable independently in PS."
+            : "Create a new Curves adjustment layer in the target document, clipped to the target layer. Honors Replace and Deselect toggles below."}>{multiZone ? "Apply Multi Curves" : "Apply Curves"}</sp-button>
+        {/* @ts-ignore Spectrum web component */}
+        <sp-button variant="secondary" onClick={onExportLut} style={{ flex: "3 1 0", minWidth: 0 }}
+          title="Export the staged preset as a portable 33³ .CUBE 3D LUT. Loadable in Photoshop (Color Lookup layer), Premiere, Resolve, etc. The LUT bakes the full preset including Color/Luminosity blend behavior that a plain Curves layer can't express.">Export LUT</sp-button>
+      </div>
 
       {/* Curves graph below Apply */}
       <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7 }}>Fitted curves (R G B)</div>

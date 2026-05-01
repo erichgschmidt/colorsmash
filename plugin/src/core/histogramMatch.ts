@@ -943,6 +943,57 @@ export function sourceVariant(rgba: Uint8Array, preset: "color" | "hue" | "contr
   return out;
 }
 
+// ─── 3D LUT export (.CUBE) ──────────────────────────────────────────────
+// Bake the staged preset (curves + blend-mode emulation) into a portable .CUBE LUT.
+// PS's Curves layer can't represent the non-separable transforms our "Color" and
+// "Contrast" presets use (those need per-pixel HSL math), but a 3D LUT can encode
+// any function f(R,G,B) → (R',G',B') exactly. Sampling on a 33-grid (35,937 points)
+// is enough fidelity for grading work and small enough to compute synchronously.
+//
+// Output is the standard Adobe / Resolve .CUBE text format. R varies fastest per
+// the spec. The user saves the file and loads it elsewhere (Premiere, Resolve,
+// another PS doc via Color Lookup → Load 3D LUT).
+export function generateLutCube(
+  curves: ChannelCurves,
+  preset: "color" | "hue" | "contrast",
+  size = 33,
+  title = "Color Smash",
+): string {
+  const finalCurves = preset === "contrast" ? averageChannelCurves(curves) : curves;
+  // Per-pixel transform mirroring applyPresetPostprocess but stripped to a single
+  // 4-byte buffer (allocating 35k tiny buffers is fine — total stays under ~50ms).
+  const orig = new Uint8Array(4);
+  const mapped = new Uint8Array(4);
+  orig[3] = 255; mapped[3] = 255;
+  const lines: string[] = [
+    `# Color Smash LUT — preset: ${preset === "color" ? "Full" : preset === "hue" ? "Color" : "Contrast"}`,
+    `TITLE "${title} ${preset}"`,
+    `LUT_3D_SIZE ${size}`,
+    `DOMAIN_MIN 0.0 0.0 0.0`,
+    `DOMAIN_MAX 1.0 1.0 1.0`,
+    "",
+  ];
+  // .CUBE convention: R is the fastest-varying dimension (innermost loop).
+  for (let bi = 0; bi < size; bi++) {
+    for (let gi = 0; gi < size; gi++) {
+      for (let ri = 0; ri < size; ri++) {
+        const r = Math.round((ri / (size - 1)) * 255);
+        const g = Math.round((gi / (size - 1)) * 255);
+        const b = Math.round((bi / (size - 1)) * 255);
+        orig[0] = r; orig[1] = g; orig[2] = b;
+        mapped[0] = finalCurves.r[r];
+        mapped[1] = finalCurves.g[g];
+        mapped[2] = finalCurves.b[b];
+        const out = applyPresetPostprocess(orig, mapped, preset);
+        // Six decimal places matches what most LUT exporters emit and stays well
+        // under the floating-point precision PS / Resolve actually consume.
+        lines.push(`${(out[0] / 255).toFixed(6)} ${(out[1] / 255).toFixed(6)} ${(out[2] / 255).toFixed(6)}`);
+      }
+    }
+  }
+  return lines.join("\n") + "\n";
+}
+
 // Quick-select presets — 3 orthogonal "what aspect of source do I take" options.
 //   color    : full per-channel match (default)
 //   hue      : take chroma from match, keep target's luma + saturation
