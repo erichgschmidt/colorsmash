@@ -113,22 +113,6 @@ export function PresetStrip(props: PresetStripProps) {
           );
         })}
       </div>
-      {/* Hover popover — enlarged source facet so the user can read the full image before
-          committing the click. Anchored to the bottom of the strip with top:100% so it
-          doesn't depend on the (now variable) swatch size. Pointer-events:none so it
-          never traps clicks. */}
-      {hovered && swatches?.[hovered] && (
-        <div style={{
-          position: "absolute", top: "100%", marginTop: 4, left: 0, zIndex: 10,
-          width: 200, height: 200,
-          background: "#111", border: "1px solid #c19a3a", borderRadius: 3,
-          padding: 4, boxShadow: "0 4px 12px rgba(0,0,0,0.6)",
-          pointerEvents: "none",
-        }}>
-          <img src={swatches[hovered]} alt=""
-            style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
-        </div>
-      )}
     </div>
   );
 }
