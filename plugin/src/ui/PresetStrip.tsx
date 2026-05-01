@@ -14,6 +14,13 @@
 import { useMemo, useState } from "react";
 import { rgbaToPngDataUrl } from "./encodePng";
 import { Preset, sourceVariant } from "../core/histogramMatch";
+import { downsampleToMaxEdge } from "../core/downsample";
+
+// Swatches render at 36px on screen; encode at 80px so the hover popover (160px)
+// still looks crisp without re-encoding. 80x80 = ~6400 px per variant — ~40x less
+// work than encoding at the source's native ~256px max edge. PNG encoding is the
+// dominant cost (pure JS), so this is what makes selecting source layers snappy.
+const SWATCH_ENCODE_EDGE = 80;
 
 const PRESETS: { key: Preset; label: string; tip: string }[] = [
   { key: "color",    label: "Color",    tip: "Full color match — transfers the source's per-channel tone + color." },
@@ -37,14 +44,22 @@ export function PresetStrip(props: PresetStripProps) {
   const { srcRgba, srcWidth, srcHeight, active, onSelect } = props;
   const [hovered, setHovered] = useState<Preset | null>(null);
 
-  // Source-facet PNGs — recompute only when the source snapshot changes.
+  // Source-facet PNGs — recompute only when the source snapshot changes. We downsample
+  // the source ONCE up front (cheap pixel pass), then run the 4 variant transforms +
+  // PNG encodes on the small buffer. Both the variant pass and the encoder are O(pixels),
+  // so dropping from 256x256 to 80x80 cuts cost ~10x. PNG encode is pure JS and is the
+  // dominant cost — without this, swapping source layers stalls the UI noticeably.
   const swatches = useMemo(() => {
     if (!srcRgba || !srcWidth || !srcHeight) return null;
+    const small = downsampleToMaxEdge(
+      { data: srcRgba, width: srcWidth, height: srcHeight, bounds: { left: 0, top: 0, right: srcWidth, bottom: srcHeight } },
+      SWATCH_ENCODE_EDGE,
+    );
     const out: Record<Preset, string> = { color: "", hue: "", bw: "", contrast: "" };
     for (const { key } of PRESETS) {
       try {
-        const variant = sourceVariant(srcRgba, key);
-        out[key] = rgbaToPngDataUrl(variant, srcWidth, srcHeight);
+        const variant = sourceVariant(small.data, key);
+        out[key] = rgbaToPngDataUrl(variant, small.width, small.height);
       } catch { out[key] = ""; }
     }
     return out;
