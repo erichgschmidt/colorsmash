@@ -157,11 +157,37 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       : null;
 
     // Reuse existing [Color Smash] group. Prior Match Curves layers are either deleted
-    // (overwritePrior=true, default) or just hidden (overwritePrior=false, so user can keep
-    // alternatives stacked).
-    const findGroup = () => doc.layers.find((l: any) => l.name === GROUP_NAME && l.layers);
-    let group = findGroup();
-    if (!group) group = await doc.createLayerGroup({ name: GROUP_NAME });
+    // (overwritePrior=true, default) or just hidden (overwritePrior=false).
+    //
+    // Search recursively because a previous run may have left a [Color Smash] nested
+    // inside another (the original bug: doc.createLayerGroup creates the new group
+    // INSIDE whatever container holds the active layer — if active was inside a prior
+    // [Color Smash], the new one stacked inside it). Recursive find means we always
+    // reuse the existing one even if it's mis-nested. We also prefer top-level matches
+    // so the canonical group lives at the doc root.
+    const isCSGroup = (l: any) => l && l.name === GROUP_NAME && (l.kind === "group" || Array.isArray(l.layers));
+    function findCSGroupRecursive(layers: any[]): any | null {
+      // Prefer top-level match
+      for (const l of layers) if (isCSGroup(l)) return l;
+      // Then descend into any sub-groups
+      for (const l of layers) {
+        if (l && Array.isArray(l.layers)) {
+          const found = findCSGroupRecursive(l.layers);
+          if (found) return found;
+        }
+      }
+      return null;
+    }
+    let group = findCSGroupRecursive(doc.layers);
+    if (!group) {
+      // No existing group anywhere. Ensure the new one is created at the DOC ROOT, not
+      // inside whatever group currently contains the active layer. selectNoLayers clears
+      // the insertion-point context so PS creates the group at the top level.
+      try {
+        await action.batchPlay([{ _obj: "selectNoLayers", _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }] }], {});
+      } catch { /* not critical */ }
+      group = await doc.createLayerGroup({ name: GROUP_NAME });
+    }
     const overwrite = params.overwritePrior !== false;
     const matchChildren = [...(group.layers ?? [])].filter((c: any) =>
       c.name === RESULT_LAYER_NAME || (typeof c.name === "string" && c.name.startsWith(RESULT_LAYER_NAME))
