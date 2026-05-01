@@ -30,45 +30,49 @@ export function BottomActionBar(props: BottomActionBarProps) {
     if (ok) onResetAll();
   };
 
-  // Single left-aligned row: [☐ Deselect] [☐ Replace] [☐ Save] [✕] [RGB] [⟳]
+  // Single row: [☐ Deselect] [☐ Replace] [☐ Save] [✕] [RGB] [⟳]
   //
-  // Each [checkbox+label] cell is a flex container with `flex: 0 1 Npx` — basis fixed
-  // at the design width so checkbox positions align with the Multi row above (which
-  // uses the same bases), but cells can shrink to 0 when the panel narrows. Inside
-  // each cell the checkbox is flex-shrink:0 (stays visible); the label clips silently.
-  // The 3 buttons at the end (✕/RGB/⟳) are flex-shrink:0 too, so they're never hidden.
-  const cell = (basis: number): React.CSSProperties => ({
+  // Switched from flex to CSS Grid because flex still wrapped in narrow UXP panels
+  // even with flexWrap:nowrap (the right-cluster's intrinsic min-content width pushed
+  // total beyond container, and UXP's Chromium occasionally still broke to a new line).
+  // Grid with minmax(0, basis) does NOT wrap — overflowing tracks just clip — and the
+  // checkbox label tracks shrink down to 0, freeing room for the rightmost auto track
+  // that holds the [✕][RGB][⟳] cluster. The cluster itself is flex-shrink:0 so buttons
+  // stay visible at any width; labels clip silently in their own track.
+  const cell: React.CSSProperties = {
     display: "inline-flex", alignItems: "center", gap: 3,
-    flex: `0 1 ${basis}px`, minWidth: 0, maxWidth: `${basis}px`,
-    overflow: "hidden", whiteSpace: "nowrap",
-  });
+    minWidth: 0, overflow: "hidden", whiteSpace: "nowrap",
+  };
   const labelTxt: React.CSSProperties = { overflow: "hidden", whiteSpace: "nowrap", minWidth: 0 };
   const checkboxStyle: React.CSSProperties = { margin: 0, flexShrink: 0 };
   return (
-    // flexWrap: nowrap (default, set explicitly): in narrow panels labels clip behind
-    // the next checkbox/button instead of ever wrapping to a second row.
-    <div style={{ display: "flex", flexWrap: "nowrap", alignItems: "center", marginTop: 8, fontSize: 10, color: "#cccccc", height: 18, overflow: "hidden", gap: 0 }}>
-      <label style={{ ...cell(70), cursor: "pointer" }}
+    <div style={{
+      display: "grid",
+      gridTemplateColumns: "minmax(0, 70px) minmax(0, 65px) minmax(0, 65px) auto",
+      alignItems: "center", marginTop: 8, fontSize: 10, color: "#cccccc",
+      height: 18, overflow: "hidden",
+    }}>
+      <label style={{ ...cell, cursor: "pointer" }}
         title="Deselect — drop the active marquee before creating the layer so curves apply to the full target.">
         <input type="checkbox" checked={deselectOnApply} onChange={e => setDeselectOnApply(e.target.checked)} style={checkboxStyle} />
         <span style={labelTxt}>Deselect</span>
       </label>
-      <label style={{ ...cell(65), cursor: "pointer" }}
+      <label style={{ ...cell, cursor: "pointer" }}
         title="Replace — on: overwrite the prior Match Curves layer. Off: keep prior layers (hidden) so you can stack alternatives.">
         <input type="checkbox" checked={overwriteOnApply} onChange={e => setOverwriteOnApply(e.target.checked)} style={checkboxStyle} />
         <span style={labelTxt}>Replace</span>
       </label>
-      <label style={{ ...cell(65), cursor: "pointer" }}
+      <label style={{ ...cell, cursor: "pointer" }}
         title="Save — persist all panel settings across reloads (sliders, zones, envelope, toggles).">
         <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} style={checkboxStyle} />
         <span style={labelTxt}>Save</span>
       </label>
-      {/* marginLeft:auto on the first button anchors the whole [✕][RGB][⟳] cluster
-          to the right edge. This way the buttons hold their position when checkbox
-          cells shrink in narrow panels — they don't follow the cells leftward. */}
+      {/* Right-cluster track — auto width, contents are inline-flex. Buttons here
+          have flex-shrink:0 so they always stay visible + clickable. */}
+      <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "flex-end", gap: 0, minWidth: 0 }}>
       <button onClick={handleResetClick}
         title="Reset all settings to defaults and clear the saved file"
-        style={{ width: 16, height: 16, padding: 0, marginLeft: "auto", display: "inline-flex", alignItems: "center", justifyContent: "center",
+        style={{ width: 16, height: 16, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
                  background: "#e66666", color: "#fff", fontWeight: 700, fontSize: 12, lineHeight: 1,
                  border: "none", borderRadius: 3, cursor: "pointer", boxSizing: "border-box", flexShrink: 0 }}>
         <span style={{ marginTop: -1 }}>✕</span>
@@ -95,6 +99,7 @@ export function BottomActionBar(props: BottomActionBarProps) {
           borderRadius: 3, cursor: "pointer", boxSizing: "border-box", flexShrink: 0, fontSize: 14, userSelect: "none",
         }}>
         <span style={{ marginTop: -2, lineHeight: 1 }}>⟳</span>
+      </div>
       </div>
     </div>
   );
