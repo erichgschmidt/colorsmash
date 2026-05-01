@@ -140,10 +140,14 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, {}>(function Matc
         onMouseDown={onZoomMouseDown}
         onMouseEnter={() => { mouseOverMatchedRef.current = true; }}
         onMouseLeave={() => { mouseOverMatchedRef.current = false; }}>
+        {/* objectFit: cover — image fills the container so one dimension matches
+            exactly and the other overflows (clipped by container's overflow:hidden).
+            User wanted "fill one of x/y" rather than letterboxing both, even if it
+            means zooming in past natural fit. Pan still works to see clipped sides. */}
         <img ref={matchedFrontRef} alt=""
           style={{
             width: `${100 * zoom}%`, height: `${100 * zoom}%`,
-            objectFit: "contain",
+            objectFit: "cover",
             marginLeft: `${pan.x}px`, marginTop: `${pan.y}px`,
             flexShrink: 0,
           }} />
