@@ -78,27 +78,31 @@ export function PresetStrip(props: PresetStripProps) {
           const ringColor = isActive ? "#c19a3a" : isHover ? "#888" : "#555";
           return (
             <div key={key} style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", alignItems: "stretch", gap: 2 }}>
-              <div
-                onMouseEnter={() => setHovered(key)}
-                onMouseLeave={() => setHovered(h => (h === key ? null : h))}
-                onClick={() => onSelect(key)}
-                title={tip}
-                style={{
-                  width: "100%",
-                  // aspect-ratio 1 + width 100% = perfect square that scales with panel width.
-                  // Cover + center keeps the swatch square and shows a center-cropped slice
-                  // of the source variant — paint-swatch aesthetic, no stretching.
-                  aspectRatio: "1 / 1",
-                  backgroundImage: swatches?.[key] ? `url(${swatches[key]})` : "none",
-                  backgroundSize: "cover",
-                  backgroundPosition: "center",
-                  backgroundColor: "#1f1f1f",
-                  border: `1px solid ${ringColor}`,
-                  borderRadius: 2,
-                  cursor: "pointer",
-                  boxShadow: isActive ? "0 0 0 1px #c19a3a" : "none",
-                  transition: "border-color 60ms, box-shadow 60ms",
-                }} />
+              {/* Square via the padding-bottom trick instead of CSS aspect-ratio:
+                  UXP's Chromium runtime doesn't reliably honor aspect-ratio. The outer
+                  wrapper has padding-bottom:100% (= width % since vertical % refs width),
+                  giving height == width. The actual swatch is absolute-positioned to fill. */}
+              <div style={{ position: "relative", width: "100%", paddingBottom: "100%" }}>
+                <div
+                  onMouseEnter={() => setHovered(key)}
+                  onMouseLeave={() => setHovered(h => (h === key ? null : h))}
+                  onClick={() => onSelect(key)}
+                  title={tip}
+                  style={{
+                    position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
+                    // Cover + center: center-cropped slice of the variant, paint-swatch feel.
+                    backgroundImage: swatches?.[key] ? `url(${swatches[key]})` : "none",
+                    backgroundSize: "cover",
+                    backgroundPosition: "center",
+                    backgroundColor: "#1f1f1f",
+                    border: `1px solid ${ringColor}`,
+                    borderRadius: 2,
+                    cursor: "pointer",
+                    boxShadow: isActive ? "0 0 0 1px #c19a3a" : "none",
+                    transition: "border-color 60ms, box-shadow 60ms",
+                    boxSizing: "border-box",
+                  }} />
+              </div>
               <span style={{
                 textAlign: "center",
                 fontSize: 9, opacity: isActive || isHover ? 1 : 0.65,
