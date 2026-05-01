@@ -16,11 +16,13 @@ import { rgbaToPngDataUrl } from "./encodePng";
 import { Preset, sourceVariant } from "../core/histogramMatch";
 import { downsampleToMaxEdge } from "../core/downsample";
 
-// Swatches render at 36px on screen; encode at 80px so the hover popover (160px)
-// still looks crisp without re-encoding. 80x80 = ~6400 px per variant — ~40x less
-// work than encoding at the source's native ~256px max edge. PNG encoding is the
-// dominant cost (pure JS), so this is what makes selecting source layers snappy.
-const SWATCH_ENCODE_EDGE = 80;
+// Swatches scale to fill the panel width (flex: 1 each, square via aspect-ratio).
+// Encode resolution is decoupled from on-screen size — we encode once at this max
+// edge and let the browser scale up. 128px keeps swatches crisp up to ~150px display
+// (more than enough for any reasonable panel width) without paying the full ~256px
+// source-snap cost. PNG encoding is pure JS and proportional to pixel count, so this
+// is the knob that determines source-layer-switch responsiveness.
+const SWATCH_ENCODE_EDGE = 128;
 
 const PRESETS: { key: Preset; label: string; tip: string }[] = [
   { key: "color",    label: "Color",    tip: "Full color match — transfers the source's per-channel tone + color." },
@@ -64,28 +66,29 @@ export function PresetStrip(props: PresetStripProps) {
     return out;
   }, [srcRgba, srcWidth, srcHeight]);
 
-  // Sizing: 36px square swatches; row + tiny labels = ~52px total vertical. Replaces the
-  // bulkier source thumbnail one-for-one and packs four times the information density.
-  const SWATCH = 36;
-
+  // Each swatch's wrapper takes flex: 1 of the row, so 3 swatches divide the panel width
+  // evenly. aspect-ratio: 1 on the square keeps it a perfect square at any width — the
+  // square shrinks if the panel is narrow, grows if wide, but never stretches non-square.
   return (
     <div style={{ position: "relative", marginTop: 4 }}>
-      <div style={{ display: "flex", gap: 4, alignItems: "flex-start" }}>
+      <div style={{ display: "flex", gap: 4, alignItems: "flex-start", width: "100%" }}>
         {PRESETS.map(({ key, label, tip }) => {
           const isActive = active === key;
           const isHover = hovered === key;
           const ringColor = isActive ? "#c19a3a" : isHover ? "#888" : "#555";
           return (
-            <div key={key} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+            <div key={key} style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", alignItems: "stretch", gap: 2 }}>
               <div
                 onMouseEnter={() => setHovered(key)}
                 onMouseLeave={() => setHovered(h => (h === key ? null : h))}
                 onClick={() => onSelect(key)}
                 title={tip}
                 style={{
-                  width: SWATCH, height: SWATCH,
-                  // Cover + center keeps the square; shows a center-cropped slice of the
-                  // source variant — paint-swatch aesthetic, no stretching.
+                  width: "100%",
+                  // aspect-ratio 1 + width 100% = perfect square that scales with panel width.
+                  // Cover + center keeps the swatch square and shows a center-cropped slice
+                  // of the source variant — paint-swatch aesthetic, no stretching.
+                  aspectRatio: "1 / 1",
                   backgroundImage: swatches?.[key] ? `url(${swatches[key]})` : "none",
                   backgroundSize: "cover",
                   backgroundPosition: "center",
@@ -97,6 +100,7 @@ export function PresetStrip(props: PresetStripProps) {
                   transition: "border-color 60ms, box-shadow 60ms",
                 }} />
               <span style={{
+                textAlign: "center",
                 fontSize: 9, opacity: isActive || isHover ? 1 : 0.65,
                 color: isActive ? "#f0d486" : "#cccccc",
                 fontWeight: isActive ? 700 : 400, userSelect: "none",
@@ -106,11 +110,13 @@ export function PresetStrip(props: PresetStripProps) {
         })}
       </div>
       {/* Hover popover — enlarged source facet so the user can read the full image before
-          committing the click. Pointer-events:none so it never traps clicks. */}
+          committing the click. Anchored to the bottom of the strip with top:100% so it
+          doesn't depend on the (now variable) swatch size. Pointer-events:none so it
+          never traps clicks. */}
       {hovered && swatches?.[hovered] && (
         <div style={{
-          position: "absolute", top: SWATCH + 22, left: 0, zIndex: 10,
-          width: 160, height: 160,
+          position: "absolute", top: "100%", marginTop: 4, left: 0, zIndex: 10,
+          width: 200, height: 200,
           background: "#111", border: "1px solid #c19a3a", borderRadius: 3,
           padding: 4, boxShadow: "0 4px 12px rgba(0,0,0,0.6)",
           pointerEvents: "none",
