@@ -1029,17 +1029,20 @@ export function MatchTab() {
         );
       })()}
       {/* Apply (writes Curves layer to PS) and Export LUT (writes .CUBE to disk).
-          Apply is the primary action so it gets ~70% of the row; Export is the
-          smaller secondary action — user clicks it when they want the staged preset
-          as a portable file instead of a PS layer. flex:N controls the split. */}
-      <div style={{ display: "flex", gap: 4, marginTop: 6 }}>
+          50/50 split. flexWrap:nowrap + overflow:hidden + minWidth:0 on each cell
+          guarantees the row stays single-line at any panel width — labels clip
+          silently inside their own button instead of wrapping the buttons to two
+          rows. Sp-button's internal text gets nowrap + overflow:hidden too. */}
+      <div style={{ display: "flex", flexWrap: "nowrap", gap: 4, marginTop: 6, width: "100%" }}>
         {/* @ts-ignore Spectrum web component */}
-        <sp-button variant="secondary" onClick={onApply} style={{ flex: "7 1 0", minWidth: 0 }}
+        <sp-button variant="secondary" onClick={onApply}
+          style={{ flex: "1 1 0", minWidth: 0, overflow: "hidden", whiteSpace: "nowrap" }}
           title={multiZone
             ? "Multi: creates 3 stacked Curves layers (shadow/mid/highlight) with band limiting via mask and/or Blend If. Each editable independently in PS."
             : "Create a new Curves adjustment layer in the target document, clipped to the target layer. Honors Replace and Deselect toggles below."}>{multiZone ? "Apply Multi Curves" : "Apply Curves"}</sp-button>
         {/* @ts-ignore Spectrum web component */}
-        <sp-button variant="secondary" onClick={onExportLut} style={{ flex: "3 1 0", minWidth: 0 }}
+        <sp-button variant="secondary" onClick={onExportLut}
+          style={{ flex: "1 1 0", minWidth: 0, overflow: "hidden", whiteSpace: "nowrap" }}
           title="Export the staged preset as a portable 33³ .CUBE 3D LUT. Loadable in Photoshop (Color Lookup layer), Premiere, Resolve, etc. The LUT bakes the full preset including Color/Luminosity blend behavior that a plain Curves layer can't express.">Export LUT</sp-button>
       </div>
 
