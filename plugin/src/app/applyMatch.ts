@@ -11,7 +11,7 @@ import {
   applyZoneAndEnvelopeToChannels, MERGED_LAYER_ID,
   ChannelCurves, DimensionOpts, DEFAULT_DIMENSIONS, ZoneOpts, DEFAULT_ZONES,
   EnvelopePoint, DEFAULT_ENVELOPE,
-  fitByMode, MatchMode,
+  fitByMode, MatchMode, Preset, transformCurvesForPreset,
   fitMultiZoneByMode, processMultiZoneFit,
 } from "../core/histogramMatch";
 
@@ -60,6 +60,7 @@ export interface ApplyMatchParams {
   colorSpace?: "rgb" | "lab";
   deselectFirst?: boolean;     // drop active marquee before creating layer (default true)
   overwritePrior?: boolean;    // delete prior Match Curves (true) or hide them (false) (default true)
+  preset?: Preset;             // quick-select variant: color (default) | hue | bw | contrast
 }
 
 export async function fitMatchCurves(params: ApplyMatchParams): Promise<ChannelCurves> {
@@ -475,19 +476,52 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     // If keeping prior layers, give the new one a unique numbered suffix so they coexist.
     const layerName = overwrite ? RESULT_LAYER_NAME
       : `${RESULT_LAYER_NAME} ${new Date().toTimeString().slice(0, 8)}`;
+    // Quick-select preset: collapse to a single luma curve for bw/contrast (R=G=B), and pick
+    // the matching blend mode below. color/hue keep per-channel curves.
+    const preset = params.preset ?? "color";
+    const finalCurves = transformCurvesForPreset(curves, preset);
     const curveLayer = await makeCurvesLayer(layerName, [
-      { channel: "red",   points: sampleControlPoints(curves.r, CONTROL_POINTS) },
-      { channel: "green", points: sampleControlPoints(curves.g, CONTROL_POINTS) },
-      { channel: "blue",  points: sampleControlPoints(curves.b, CONTROL_POINTS) },
+      { channel: "red",   points: sampleControlPoints(finalCurves.r, CONTROL_POINTS) },
+      { channel: "green", points: sampleControlPoints(finalCurves.g, CONTROL_POINTS) },
+      { channel: "blue",  points: sampleControlPoints(finalCurves.b, CONTROL_POINTS) },
     ]);
     // Only clip if there's a specific target layer. Merged target = no clip (affects everything below).
     if (target) await setClippingMask(curveLayer, true);
-    if (params.chromaOnly) {
-      // Hue blend (not Color): per-channel curves inflate saturation; Color blend propagates
-      // that inflation, Hue blend keeps target's S+L and only takes H from the curves output.
-      try { curveLayer.blendMode = "hue"; } catch { /* ignore */ }
-    }
+    // Blend mode per preset:
+    //   hue       → Hue blend (chroma from curves, target keeps sat+luma) — same as chromaOnly
+    //   contrast  → Luminosity blend (luma from curves, target keeps colors entirely)
+    //   bw        → Normal blend; we add a Hue/Sat -100 layer above to enforce grayscale
+    //   color     → Normal (or Hue if user explicitly toggled chromaOnly)
+    const presetBlend =
+      preset === "hue" || params.chromaOnly ? "hue" :
+      preset === "contrast" ? "luminosity" :
+      null;
+    if (presetBlend) { try { curveLayer.blendMode = presetBlend; } catch { /* ignore */ } }
     try { await curveLayer.move(group, "placeInside"); } catch { /* ignore */ }
+
+    // B&W: add a Hue/Saturation -100 layer ON TOP of the curves layer inside the group.
+    // Together they: shape tones via averaged curves, then strip all chroma. Failure is
+    // soft — if the descriptor doesn't take in this PS version, the curves alone still
+    // produce a near-monochrome (averaged) output.
+    if (preset === "bw") {
+      try {
+        await action.batchPlay([
+          {
+            _obj: "make",
+            _target: [{ _ref: "adjustmentLayer" }],
+            using: { _obj: "adjustmentLayer", type: { _obj: "hueSaturation", colorize: false }, name: `${layerName} [BW]` },
+          },
+          {
+            _obj: "set",
+            _target: [{ _ref: "adjustmentLayer", _enum: "ordinal", _value: "targetEnum" }],
+            to: { _obj: "hueSaturation", colorize: false, adjustment: [{ _obj: "hueSatAdjustmentV2", hue: 0, saturation: -100, lightness: 0 }] },
+          },
+        ], { synchronousExecution: true });
+        // Move the new layer into the group too. activeLayers is the just-created HueSat.
+        const huesat = tgtDoc.activeLayers?.[0];
+        if (huesat) { try { await huesat.move(group, "placeInside"); } catch { /* ignore */ } }
+      } catch { /* swallow — curves alone is acceptable fallback */ }
+    }
 
     const tags = [`amt ${Math.round(params.amount * 100)}%`];
     if (params.smoothRadius) tags.push(`smooth ${params.smoothRadius}`);

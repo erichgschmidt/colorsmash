@@ -903,6 +903,56 @@ export function applyChannelCurvesToRgba(rgba: Uint8Array, c: ChannelCurves): Ui
 // what Color Smash uses for "Hue only" matching. Hue blend avoids the saturation inflation
 // that per-channel curves naturally produce, so the result tracks the target's existing
 // chroma rather than getting pumped up by the curve fit.
+// Quick-select presets — 4 orthogonal "what aspect of source do I take" options.
+//   color    : full per-channel match (default)
+//   hue      : take chroma from match, keep target's luma + saturation
+//   bw       : grayscale output, value-matched to source
+//   contrast : take luma from match, keep target's chroma — opposite of hue
+export type Preset = "color" | "hue" | "bw" | "contrast";
+
+// Average R/G/B curves into one luma curve. bw + contrast both want a single tone-only
+// response, no per-channel color shift, so they collapse here.
+export function averageChannelCurves(c: ChannelCurves): ChannelCurves {
+  const arr = new Uint8Array(256);
+  for (let v = 0; v < 256; v++) arr[v] = Math.round((c.r[v] + c.g[v] + c.b[v]) / 3);
+  return { r: arr, g: arr, b: arr };
+}
+
+// Per-preset curve transformation. Returns the curves to write into the Curves layer.
+export function transformCurvesForPreset(c: ChannelCurves, preset: Preset): ChannelCurves {
+  return preset === "bw" || preset === "contrast" ? averageChannelCurves(c) : c;
+}
+
+// JS-side post-processing for previews. PS Apply uses blend modes / extra layers to
+// achieve the same visual result, but the preview pane needs the final pixel output.
+export function applyPresetPostprocess(original: Uint8Array, mapped: Uint8Array, preset: Preset): Uint8Array {
+  if (preset === "color") return mapped;
+  if (preset === "hue") return applyChromaOnly(original, mapped);
+  if (preset === "bw") {
+    // Force grayscale: R=G=B=Rec.709 luma of mapped output. Saturation pinned to 0.
+    const out = new Uint8Array(mapped.length);
+    for (let i = 0; i < mapped.length; i += 4) {
+      const luma = Math.round(0.2126 * mapped[i] + 0.7152 * mapped[i + 1] + 0.0722 * mapped[i + 2]);
+      const v = Math.max(0, Math.min(255, luma));
+      out[i] = v; out[i + 1] = v; out[i + 2] = v; out[i + 3] = mapped[i + 3];
+    }
+    return out;
+  }
+  // contrast: shift original RGB by (mapped luma - original luma). Preserves chroma,
+  // applies the luma-curve change. Equivalent to Curves layer at Luminosity blend.
+  const out = new Uint8Array(original.length);
+  for (let i = 0; i < original.length; i += 4) {
+    const oL = 0.2126 * original[i] + 0.7152 * original[i + 1] + 0.0722 * original[i + 2];
+    const mL = 0.2126 * mapped[i]   + 0.7152 * mapped[i + 1]   + 0.0722 * mapped[i + 2];
+    const d = mL - oL;
+    out[i]     = Math.max(0, Math.min(255, Math.round(original[i]     + d)));
+    out[i + 1] = Math.max(0, Math.min(255, Math.round(original[i + 1] + d)));
+    out[i + 2] = Math.max(0, Math.min(255, Math.round(original[i + 2] + d)));
+    out[i + 3] = original[i + 3];
+  }
+  return out;
+}
+
 export function applyChromaOnly(original: Uint8Array, mapped: Uint8Array): Uint8Array {
   const out = new Uint8Array(mapped.length);
   for (let i = 0; i < mapped.length; i += 4) {

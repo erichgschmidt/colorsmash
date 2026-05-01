@@ -10,6 +10,7 @@ import { ZoneCompoundSlider } from "./ZoneCompoundSlider";
 import { Icon } from "./Icon";
 import { MatchedPreview, MatchedPreviewHandle } from "./MatchedPreview";
 import { SourceSelector } from "./SourceSelector";
+import { PresetStrip } from "./PresetStrip";
 import { BottomActionBar } from "./BottomActionBar";
 import { BasicSlider, DimSlider, matchStyles } from "./MatchSliders";
 import { ChannelCurves } from "../core/histogramMatch";
@@ -19,7 +20,7 @@ import {
   DimensionOpts, DEFAULT_DIMENSIONS, ZoneOpts, DEFAULT_ZONES,
   computeLumaBins, bandMeanColor, lumaRange,
   EnvelopePoint, DEFAULT_ENVELOPE,
-  fitByMode, MatchMode,
+  fitByMode, MatchMode, Preset,
   fitMultiZoneByMode, applyMultiZoneToRgba, processMultiZoneFit, MultiZoneFit, adaptiveBandPeaks,
 } from "../core/histogramMatch";
 import { EnvelopeEditor } from "./EnvelopeEditor";
@@ -514,6 +515,39 @@ export function MatchTab() {
     scheduleRedraw();
   }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, multiZoneExtents, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Quick-select preset apply — same path as onApply but forces a specific preset
+  // and skips the chromaOnly toggle (preset takes precedence). Use cases: clicking
+  // a swatch in the PresetStrip to commit one of color/hue/bw/contrast directly.
+  const applyPreset = async (preset: Preset) => {
+    if (targetId == null) { setStatus("Pick target layer."); return; }
+    if (srcMode === "layer" && sourceId == null) { setStatus("Pick source layer."); return; }
+    if (srcMode === "selection" && !srcOverride) { setStatus("Snap a selection first."); return; }
+    if (srcDocId == null || tgtDocId == null) { setStatus("Pick source + target docs."); return; }
+    setStatus(`Applying ${preset}...`);
+    try {
+      setStatus(await applyMatch({
+        srcDocId, tgtDocId,
+        sourceLayerId: sourceId ?? -1,
+        targetLayerId: targetId,
+        matchMode, multiZone, multiZoneLimit, multiZonePeaks, multiZoneExtents,
+        amount: enColor ? amountRef.current / 100 : 1,
+        smoothRadius: enColor ? smoothRef.current : 0,
+        maxStretch: enColor ? stretchRef.current : 999,
+        stretchRange: enColor && anchorStretchToHist && lumaBins ? lumaRange(lumaBins) : undefined,
+        chromaOnly: false, // preset.hue handles this internally; preset overrides toggle
+        dimensions: enTone ? dimsRef.current : DEFAULT_DIMENSIONS,
+        zones: enZones ? zonesRef.current : DEFAULT_ZONES,
+        envelope: enEnvelope ? envelopeRef.current : DEFAULT_ENVELOPE,
+        sourcePixelsOverride: srcOverride?.data,
+        sourceLabel: srcOverride?.name,
+        colorSpace,
+        deselectFirst: deselectOnApply,
+        overwritePrior: overwriteOnApply,
+        preset,
+      }));
+    } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
+  };
+
   const onApply = async () => {
     if (targetId == null) { setStatus("Pick target layer."); return; }
     if (srcMode === "layer" && sourceId == null) { setStatus("Pick source layer."); return; }
@@ -619,6 +653,18 @@ export function MatchTab() {
           />
         </div>
       )}
+
+      {/* Quick-select preset swatches (Color / Hue / B&W / Contrast). 1x4 row of 36px
+          squares showing the four variants applied to the target. Hover for an enlarged
+          peek; click to commit that variant to the PS doc directly. */}
+      <PresetStrip
+        srcRgba={srcSnap?.data ?? null}
+        tgtRgba={tgt.snap?.data ?? null}
+        tgtWidth={tgt.snap?.width ?? 0}
+        tgtHeight={tgt.snap?.height ?? 0}
+        baseCurves={fittedRaw}
+        onApply={(p) => applyPreset(p)}
+      />
 
       {/* Target selector — single horizontal row directly above the matched preview:
           [doc dropdown] [layer dropdown] [refresh]. Kept compact (no list, no thumbnail)
