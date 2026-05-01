@@ -62,6 +62,11 @@ Details: see [algorithm.md](algorithm.md).
 - Preset doc format: JSON + embedded `.cube`, version-tagged
 - Action recording enabled (`enableMenuRecording: true`)
 
+### Shipped in v1.2 (2026-04)
+- Preset strip (Full / Color / Contrast) above matched preview, click-to-stage UX
+- Export LUT button — bakes staged preset to portable 33³ Adobe `.CUBE` 3D LUT (sidesteps PS's flaky Color Lookup automation)
+- Matched preview Before/After badge (click to toggle, click-and-hold to peek)
+
 ## 9. Roadmap
 See [roadmap.md](roadmap.md) for phase breakdown. High-level:
 - **Phase 0:** Spike — prove Imaging API + math (1 wk)

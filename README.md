@@ -8,6 +8,9 @@ Pick a **source** (a layer in any open doc, an active marquee selection, or an i
 
 Beyond the basic fit:
 
+- **Preset strip (v1.2)** — three full-width swatches above the matched preview: **Full · Color · Contrast**. Each swatch paints the source through that preset's characteristic transform so you can see at a glance what's about to be transferred. Click a swatch to *stage* the preset — the matched preview updates live, but nothing writes to PS until you hit **Apply Curves** (non-destructive). **Full** = per-channel R/G/B match (Normal blend). **Color** = PS Color blend (transfers H+S, target keeps its luma). **Contrast** = averaged R/G/B curve + Luminosity blend (transfers tonal curve, target keeps its colors).
+- **Export LUT (v1.2)** — button next to Apply Curves. Bakes the staged preset (curves + blend-mode emulation) into a 33³ Adobe `.CUBE` 3D LUT and writes it to a path you pick. Sidesteps Photoshop's flaky Color Lookup automation — load the LUT manually in PS's Color Lookup layer, Premiere, Resolve, or any LUT-aware host. The LUT captures non-separable Color/Luminosity blend math that a Curves layer alone cannot represent.
+- **Matched preview Before/After badge** — corner overlay on the preview pane. Click toggles a persistent Before/After view; click-and-hold peeks the other state momentarily.
 - **Multi-zone Curves output (v1.1)** — when the **Multi** toggle is on, Apply emits three stacked Curves layers (Shadows / Mids / Highlights) instead of one, each fitted from only the pixels in its luma band. Limit each band spatially with a paintable **Mask**, with **Blend If** sliders, or **Both**. Turn on **Adaptive** to shift the band peaks to the target's P10/P50/P90 luma percentiles (with outer extents matching the actual histogram bounds), so each band gets a meaningful pixel sample on low-key or high-key scenes. Every layer remains independently editable in PS afterward.
 - **RGB or LAB matching** — toggle between per-channel RGB histogram specification and a perceptual L*a*b*-domain match. Curves are sampled back to per-channel R/G/B so the output stays a standard Curves layer.
 - **Color** — overall amount, smoothing (anti-banding), max stretch (slope cap), optional anchor of the slope cap to the target's actual histogram range, and a Hue-only mode that preserves target saturation and luminance.
@@ -44,21 +47,22 @@ The plugin requests `localFileSystem` permission so the **Browse Image…** sour
 
 1. Open a document with the layer you want to recolor (target). Have a reference image available — it can be another layer in the same doc, a layer in a different open doc, an active marquee on the current layer, or a file on disk.
 2. Open **Color Smash** from the Plugins menu.
-3. In the **Source** dropdown (top-left), pick one of:
-   - **Any open document name** — switches to that doc and uses Layer mode; pick the source layer in the dropdown below.
-   - **Use Selection** — samples the active marquee. Below the dropdown: **Auto** (re-sample on selection or pixel changes), **Merge** (sample the visible composite instead of just the active layer), **Lock** (freeze the current sample).
+3. In the **Source** row (`[source/doc ▼] [layer/mode-widget ▼] [⟳]`), pick one of:
+   - **Any open document name** — switches to that doc and uses Layer mode; pick the source layer in the second dropdown.
+   - **Use Selection** — samples the active marquee. The widget exposes **Auto** (re-sample on selection or pixel changes), **Merge** (sample the visible composite instead of just the active layer), **Lock** (freeze the current sample).
    - **Browse Image…** — opens a file picker; the chosen image is loaded as the source. The filename appears as a sticky entry in the dropdown for quick re-selection.
-4. In the **Doc** dropdown (top-right), pick the target document; pick the **Target** layer below it. The **MERGED** option uses the document composite as the target. Source and target docs are independent — each has its own dropdown plus a ⟳ refresh button (forces a hook-level reload to bypass any DOM cache, useful after silent batch renames).
+   Below the source row, the **preset strip** (Full · Color · Contrast) shows the source rendered through each preset. Click a swatch to stage it.
+4. In the **Target** row directly above the matched preview (`[doc ▼] [layer ▼] [⟳]`), pick the target document and target layer. The **MERGED** option uses the document composite as the target. Source and target docs are independent — each row has its own ⟳ refresh button (forces a hook-level reload to bypass any DOM cache, useful after silent batch renames). The Before/After badge in the preview corner identifies the target so no separate target thumbnail is shown.
 5. Layer dropdowns show the full group hierarchy as `Group / Subgroup / LayerName` so nested layers are unambiguous. The plugin's own `[Color Smash]` group is skipped automatically.
 6. Watch the matched preview update live. Zoom with the −/+/1:1 buttons or `+` / `-` / `0` keys when the preview is hovered; drag inside the preview to pan; click the swatch to flip the preview background between dark and panel-gray.
 7. Toggle **RGB / LAB** in the matched preview header to switch color-space; click the small refresh button to re-read both source and target previews from Photoshop.
 8. Tweak any of the accordion sections: **Color**, **Tone**, **Zones**, **Envelope**.
-9. In the bottom bar: **Deselect** (drop the active marquee before applying), **Replace** (overwrite the topmost / selected `Match Curves` layer instead of stacking), **Save** (persist all panel settings to disk, debounced ~500ms, including the Save toggle itself so it survives reloads), **✕** (red, opens a confirm modal: "Reset all panel settings to defaults and clear the saved file?" — wipes settings and deletes the persisted file), **RGB/LAB**, **⟳** (refresh previews).
-10. Click **Apply Curves** — a single Curves adjustment layer appears in `[Color Smash]` group, clipped to the target (or at the top of the stack if MERGED). When source and target live in different documents, the layer is placed in the target's document.
+9. In the bottom action bar (right-anchored — labels clip silently behind the toggles in narrow panels): `[☐ Deselect] [☐ Replace] [☐ Save] [✕] [RGB] [⟳]`. **Deselect** drops the active marquee before applying, **Replace** overwrites the topmost / selected `Match Curves` layer instead of stacking, **Save** persists all panel settings to disk (debounced ~500ms, including the Save toggle itself so it survives reloads), **✕** (red) opens a confirm modal that wipes settings and deletes the persisted file, **RGB/LAB** is the color-space toggle, **⟳** refreshes previews.
+10. Click **Apply Curves** — a single Curves adjustment layer appears in `[Color Smash]` group, clipped to the target (or at the top of the stack if MERGED). When source and target live in different documents, the layer is placed in the target's document. Or click **Export LUT** (50/50 split with Apply Curves) to save the staged preset as a portable 33³ `.CUBE` file instead of writing to PS.
 
 ### Multi-zone Curves
 
-Above the bottom action bar there is a row: `[☐ Multi] [☐ Mask] [☐ Blend If] [☐ Adaptive]`.
+Above the bottom action bar there is a row: `[☐ Multi] [☐ Blend If] [☐ Adaptive]`. (The mask is the default band-limiter; turning Blend If on implicitly switches mask export off — the two are mutually exclusive, so no separate Mask checkbox is needed.)
 
 - **Multi** — turn on to emit three stacked Curves layers (Shadows / Mids / Highlights) instead of one. The Apply button label switches to **Apply Multi Curves**. Each band's curves are fitted from only the pixels whose luma falls inside that band, so a single grade can lift shadows, neutralize mids, and cool highlights independently — useful for mixed-lighting scenes where one global curve over- or under-corrects.
 - **Blend If** — by default each band layer gets a paintable luminosity layer mask (visible thumbnail, editable in PS — paint to localize, blur to feather). Turn the **Blend If** checkbox on to swap that mask for the underlying-luma sliders in Layer Style → Blending Options instead — no mask data, lighter on the file, editable from the Blending Options dialog. The two are mutually exclusive: Blend If on means no mask, off means mask only.
@@ -120,7 +124,7 @@ Identity at default. Each slider deviates the fitted curves along one axis:
 
 ## Bottom bar
 
-Layout: `[☐ Deselect] [☐ Replace] [☐ Save] [✕] [RGB/LAB] [⟳]` above the Apply button.
+Layout: `[☐ Deselect] [☐ Replace] [☐ Save] [✕] [RGB/LAB] [⟳]` above the Apply Curves / Export LUT row. Buttons are right-anchored; their text-labels clip silently behind toggles when the panel is narrow.
 
 - **Deselect** — drops the active marquee before applying so the Curves layer affects the full target.
 - **Replace** — overwrites the topmost / selected `Match Curves` layer instead of stacking a new one beside it.
@@ -128,7 +132,8 @@ Layout: `[☐ Deselect] [☐ Replace] [☐ Save] [✕] [RGB/LAB] [⟳]` above th
 - **✕** — solid red. Opens a UXP confirm modal: "Reset all panel settings to defaults and clear the saved file?" Confirm wipes all panel settings to defaults and deletes the persisted settings file.
 - **RGB/LAB** — color-space toggle (tight, hugs the letters).
 - **⟳** — re-reads source and target previews from Photoshop.
-- **Apply Curves** — writes the result.
+- **Apply Curves** — writes the result (bakes the staged preset to a Curves layer in PS).
+- **Export LUT** — writes the staged preset to a 33³ `.CUBE` file at a path you pick.
 
 ## Development
 

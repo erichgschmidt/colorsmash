@@ -18,6 +18,22 @@ submission to match your final branding/pricing.
 >
 > KEY FEATURES
 >
+> • Preset strip (v1.2): three full-width swatches above the matched
+>   preview — Full / Color / Contrast — each painting the source
+>   through that preset's transform. Click a swatch to STAGE the
+>   preset (matched preview updates live, nothing writes to PS).
+>   Hit Apply Curves to bake. Full = per-channel R/G/B match.
+>   Color = PS Color blend (transfers H+S, target keeps its luma).
+>   Contrast = averaged R/G/B curve + Luminosity blend (transfers
+>   tonal curve, target keeps its colors).
+>
+> • Export LUT (v1.2): one click bakes the staged preset (curves +
+>   blend-mode emulation) into a portable 33³ Adobe .CUBE 3D LUT.
+>   Loadable in Photoshop's Color Lookup layer, Premiere, Resolve,
+>   or any LUT-aware host. The LUT captures non-separable
+>   Color/Luminosity blend math that a Curves layer alone cannot
+>   represent.
+>
 > • Multi-zone Curves output (v1.1): one click emits three stacked
 >   Curves layers (Shadows / Mids / Highlights) instead of one, each
 >   fitted from only the pixels in its luminance band. Limit each band
@@ -84,7 +100,7 @@ submission to match your final branding/pricing.
 
 > histogram match, color grading, curves, color correction,
 > color match, color reference, lab color, photo retouching,
-> multi-zone, blend if, luminosity mask
+> multi-zone, blend if, luminosity mask, lut, cube lut, 3d lut
 
 ## URLs
 

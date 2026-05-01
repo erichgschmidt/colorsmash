@@ -29,8 +29,10 @@ See [PRD.md](PRD.md) for product context and [considerations.md](considerations.
 
 **Exit criteria:** internal alpha usable on real photos; stack stays editable after apply.
 
-## Phase 2 — LUT generation (2 weeks)
+## Phase 2 — LUT generation (partially shipped in v1.2)
 **Goal:** Hybrid mode as default output.
+
+**Shipped (v1.2, 2026-04):** Export LUT button — bakes the staged preset (curves + blend-mode emulation, including the non-separable Color and Luminosity blends) to a portable 33³ Adobe `.CUBE` file at a user-picked path. Sidesteps Photoshop's unreliable Color Lookup install path; user loads the LUT manually wherever (PS Color Lookup layer, Premiere, Resolve, etc.). Hybrid-mode (auto-installed Color Lookup layer alongside helper layers) remains future work.
 
 - 33³ LUT generator from transfer function (pure TS)
 - `.cube` writer
@@ -67,6 +69,16 @@ See [zone-editor-spec.md](zone-editor-spec.md) for full design. May supersede or
 - Perf profile — decide WASM port (§17)
 
 **Exit criteria:** objective wins on ≥ 3 of 9 test categories; no regressions.
+
+## v1.2 — Preset strip + LUT export (shipped, 2026-04)
+**Goal:** One-click preset selection with portable LUT export for use outside Photoshop.
+
+- Preset strip above the matched preview: three full-width swatches — **Full** (per-channel R/G/B match, Normal blend), **Color** (PS Color blend, transfers H+S, target keeps luma), **Contrast** (averaged R/G/B curve + Luminosity blend, transfers tonal curve, target keeps colors). Each swatch paints the source through that preset's transform.
+- Click-to-stage: clicking a swatch updates the matched preview live but does not write to PS — Apply Curves bakes whatever's staged (non-destructive UX).
+- **Export LUT** button (50/50 with Apply Curves): bakes staged preset to a 33³ Adobe `.CUBE` file. Loadable in PS Color Lookup, Premiere, Resolve, etc. Captures non-separable Color/Luminosity blend math a Curves layer cannot.
+- Matched preview gets a Before/After corner badge (click toggles persistent, click-and-hold peeks momentarily).
+- Layout cleanup: target picker is now a single horizontal row above the matched preview; source picker matches the same `[source ▼] [layer/mode ▼] [⟳]` pattern.
+- Internal: repeated Apply Curves no longer nests `[Color Smash]` groups inside one another.
 
 ## v1.1 — Multi-zone Curves (shipped, 2026-04)
 **Goal:** Spatially-aware grading that adapts across mixed-lighting scenes.

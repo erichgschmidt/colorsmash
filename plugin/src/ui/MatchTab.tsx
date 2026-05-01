@@ -1018,6 +1018,8 @@ export function MatchTab() {
                   body: "When ON, the band peaks shift to the target histogram's P10 / P50 / P90 luma percentiles, and the outer extents follow the histogram's actual min/max — so each band gets a meaningful pixel sample even on low-key or high-key images. When OFF, peaks are fixed at 0 / 128 / 255. Default ON; turn off only when you want a strict 0/128/255 partition for a specific look." },
                 { heading: "Replace",
                   body: "When Replace is on, re-applying overwrites the prior multi-zone trio rather than stacking another set on top." },
+                { heading: "Export LUT (next to Apply)",
+                  body: "Bakes the currently STAGED preset (Full / Color / Contrast — the swatch you clicked above the preview) into a 33³ Adobe .CUBE 3D LUT and writes it to a path you pick. The LUT captures the full preset including non-separable Color and Luminosity blend math that a plain Curves layer cannot represent. Loadable in Photoshop's Color Lookup layer, Premiere, Resolve, or any LUT-aware host. Use this when you want a portable look you can apply outside this plugin or share between docs/projects. Note: Export LUT bakes the staged single-curve preset; multi-zone output is Apply Curves only." },
               ]); }}
                 title="What does Multi do? Click for details."
                 style={{ marginLeft: 6, cursor: "help", fontSize: 10, opacity: 0.7, flexShrink: 0,
