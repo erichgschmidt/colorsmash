@@ -4,7 +4,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLayers } from "./useLayers";
 import { useLayerPreview } from "./useLayerPreview";
-import { PreviewPane } from "./PreviewPane";
 import { CurvesGraph } from "./CurvesGraph";
 import { ZoneCompoundSlider } from "./ZoneCompoundSlider";
 import { Icon } from "./Icon";
@@ -17,6 +16,7 @@ import { ChannelCurves } from "../core/histogramMatch";
 import {
   processChannelCurves, applyChannelCurvesToRgba, applyChromaOnly,
   applyDimensions, applyZoneAndEnvelopeToChannels, MERGED_LAYER_ID,
+  transformCurvesForPreset, applyPresetPostprocess,
   DimensionOpts, DEFAULT_DIMENSIONS, ZoneOpts, DEFAULT_ZONES,
   computeLumaBins, bandMeanColor, lumaRange,
   EnvelopePoint, DEFAULT_ENVELOPE,
@@ -65,6 +65,10 @@ export function MatchTab() {
   // Adaptive bands: when on, band peaks shift to target's P10/P50/P90 luma percentiles
   // so each band gets a meaningful pixel sample. When off, fixed peaks at 0/128/255.
   const [adaptiveBands, setAdaptiveBands] = useState(true);
+  // Quick-select preset — staged in the UI, applied to the matched preview live, baked
+  // into PS when the user hits Apply Curves. Defaults to "color" (full match) so the
+  // initial behavior matches v1.0.
+  const [activePreset, setActivePreset] = useState<Preset>("color");
   const [amountLabel, setAmountLabel] = useState(100);
   const [smoothLabel, setSmoothLabel] = useState(0);
   const [stretchLabel, setStretchLabel] = useState(8);
@@ -487,6 +491,15 @@ export function MatchTab() {
       }, 100);
     }
     if (enColor && chromaOnly) out = applyChromaOnly(tgt.snap.data, out);
+    // Apply staged preset on top of everything else. Preset takes precedence: if it's
+    // "color" it's a no-op; otherwise we transform the curves (avg for bw/contrast),
+    // remap the target, then post-process (grayscale clamp, luma swap, etc.) so the
+    // matched preview reflects exactly what Apply Curves will bake into PS.
+    if (activePreset !== "color" && curvesForGraph) {
+      const cP = transformCurvesForPreset(curvesForGraph, activePreset);
+      const mapped = applyChannelCurvesToRgba(tgt.snap.data, cP);
+      out = applyPresetPostprocess(tgt.snap.data, mapped, activePreset);
+    }
     matchedHandleRef.current.setPixels(out, tgt.snap.width, tgt.snap.height);
     // Also push the unmodified target pixels so the preview's Before/After badge
     // can swap to the original on click/hold without a round-trip to the parent.
@@ -514,39 +527,6 @@ export function MatchTab() {
     rafPendingRef.current = false;
     scheduleRedraw();
   }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, multiZoneExtents, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Quick-select preset apply — same path as onApply but forces a specific preset
-  // and skips the chromaOnly toggle (preset takes precedence). Use cases: clicking
-  // a swatch in the PresetStrip to commit one of color/hue/bw/contrast directly.
-  const applyPreset = async (preset: Preset) => {
-    if (targetId == null) { setStatus("Pick target layer."); return; }
-    if (srcMode === "layer" && sourceId == null) { setStatus("Pick source layer."); return; }
-    if (srcMode === "selection" && !srcOverride) { setStatus("Snap a selection first."); return; }
-    if (srcDocId == null || tgtDocId == null) { setStatus("Pick source + target docs."); return; }
-    setStatus(`Applying ${preset}...`);
-    try {
-      setStatus(await applyMatch({
-        srcDocId, tgtDocId,
-        sourceLayerId: sourceId ?? -1,
-        targetLayerId: targetId,
-        matchMode, multiZone, multiZoneLimit, multiZonePeaks, multiZoneExtents,
-        amount: enColor ? amountRef.current / 100 : 1,
-        smoothRadius: enColor ? smoothRef.current : 0,
-        maxStretch: enColor ? stretchRef.current : 999,
-        stretchRange: enColor && anchorStretchToHist && lumaBins ? lumaRange(lumaBins) : undefined,
-        chromaOnly: false, // preset.hue handles this internally; preset overrides toggle
-        dimensions: enTone ? dimsRef.current : DEFAULT_DIMENSIONS,
-        zones: enZones ? zonesRef.current : DEFAULT_ZONES,
-        envelope: enEnvelope ? envelopeRef.current : DEFAULT_ENVELOPE,
-        sourcePixelsOverride: srcOverride?.data,
-        sourceLabel: srcOverride?.name,
-        colorSpace,
-        deselectFirst: deselectOnApply,
-        overwritePrior: overwriteOnApply,
-        preset,
-      }));
-    } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
-  };
 
   const onApply = async () => {
     if (targetId == null) { setStatus("Pick target layer."); return; }
@@ -578,6 +558,7 @@ export function MatchTab() {
         colorSpace,
         deselectFirst: deselectOnApply,
         overwritePrior: overwriteOnApply,
+        preset: activePreset,
       }));
     } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
   };
@@ -645,26 +626,22 @@ export function MatchTab() {
             sampleLock={sampleLock} setSampleLock={setSampleLock}
             selStyle={sel}
             onRefreshLayers={refreshSrcAll}
+            // PresetStrip replaces the source thumbnail: 1x4 row of source-facet
+            // swatches (Color / Hue / B&W / Contrast). Click to STAGE that preset —
+            // the matched preview pane below updates live; nothing is written to PS
+            // until Apply Curves. The strip is non-destructive on its own.
             thumbnail={
-              <PreviewPane label="" layers={[]} selectedId={null} onSelect={() => {}}
-                snapshot={srcOverride ? { ...srcOverride, layerId: -1, layerName: srcOverride.name } : src.snap}
-                hideSelector fitAspect maxHeight={130} />
+              <PresetStrip
+                srcRgba={srcSnap?.data ?? null}
+                srcWidth={srcSnap?.width ?? 0}
+                srcHeight={srcSnap?.height ?? 0}
+                active={activePreset}
+                onSelect={setActivePreset}
+              />
             }
           />
         </div>
       )}
-
-      {/* Quick-select preset swatches (Color / Hue / B&W / Contrast). 1x4 row of 36px
-          squares showing the four variants applied to the target. Hover for an enlarged
-          peek; click to commit that variant to the PS doc directly. */}
-      <PresetStrip
-        srcRgba={srcSnap?.data ?? null}
-        tgtRgba={tgt.snap?.data ?? null}
-        tgtWidth={tgt.snap?.width ?? 0}
-        tgtHeight={tgt.snap?.height ?? 0}
-        baseCurves={fittedRaw}
-        onApply={(p) => applyPreset(p)}
-      />
 
       {/* Target selector — single horizontal row directly above the matched preview:
           [doc dropdown] [layer dropdown] [refresh]. Kept compact (no list, no thumbnail)

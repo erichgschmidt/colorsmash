@@ -903,6 +903,55 @@ export function applyChannelCurvesToRgba(rgba: Uint8Array, c: ChannelCurves): Ui
 // what Color Smash uses for "Hue only" matching. Hue blend avoids the saturation inflation
 // that per-channel curves naturally produce, so the result tracks the target's existing
 // chroma rather than getting pumped up by the curve fit.
+// Render the SOURCE pixels in the visual style of each preset — used by the swatch strip
+// to show what aspect of the source each preset transfers. These are intentionally
+// different from `applyPresetPostprocess` (which transforms target pixels): here we
+// project the source onto each preset's "characteristic visualization":
+//   color    : source unchanged
+//   hue      : source with luma flattened to mid-gray, chroma preserved (pure hue map)
+//   bw       : source converted to Rec.709 grayscale
+//   contrast : grayscale + linear stretch to fill 0..255 (shows tonal dynamic range)
+export function sourceVariant(rgba: Uint8Array, preset: "color" | "hue" | "bw" | "contrast"): Uint8Array {
+  if (preset === "color") return rgba;
+  const out = new Uint8Array(rgba.length);
+  if (preset === "hue") {
+    for (let i = 0; i < rgba.length; i += 4) {
+      const r = rgba[i], g = rgba[i + 1], b = rgba[i + 2];
+      const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      const d = 128 - luma;
+      out[i]     = Math.max(0, Math.min(255, Math.round(r + d)));
+      out[i + 1] = Math.max(0, Math.min(255, Math.round(g + d)));
+      out[i + 2] = Math.max(0, Math.min(255, Math.round(b + d)));
+      out[i + 3] = rgba[i + 3];
+    }
+    return out;
+  }
+  if (preset === "bw") {
+    for (let i = 0; i < rgba.length; i += 4) {
+      const v = Math.round(0.2126 * rgba[i] + 0.7152 * rgba[i + 1] + 0.0722 * rgba[i + 2]);
+      out[i] = out[i + 1] = out[i + 2] = Math.max(0, Math.min(255, v));
+      out[i + 3] = rgba[i + 3];
+    }
+    return out;
+  }
+  // contrast: grayscale + linear normalize to [0,255]
+  let min = 255, max = 0;
+  for (let i = 0; i < rgba.length; i += 4) {
+    if (rgba[i + 3] < 128) continue;
+    const luma = 0.2126 * rgba[i] + 0.7152 * rgba[i + 1] + 0.0722 * rgba[i + 2];
+    if (luma < min) min = luma;
+    if (luma > max) max = luma;
+  }
+  const range = Math.max(1, max - min);
+  for (let i = 0; i < rgba.length; i += 4) {
+    const luma = 0.2126 * rgba[i] + 0.7152 * rgba[i + 1] + 0.0722 * rgba[i + 2];
+    const v = Math.round(((luma - min) / range) * 255);
+    out[i] = out[i + 1] = out[i + 2] = Math.max(0, Math.min(255, v));
+    out[i + 3] = rgba[i + 3];
+  }
+  return out;
+}
+
 // Quick-select presets — 4 orthogonal "what aspect of source do I take" options.
 //   color    : full per-channel match (default)
 //   hue      : take chroma from match, keep target's luma + saturation
