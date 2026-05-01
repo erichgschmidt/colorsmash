@@ -966,7 +966,10 @@ export function transformCurvesForPreset(c: ChannelCurves, preset: Preset): Chan
 // achieve the same visual result, but the preview pane needs the final pixel output.
 export function applyPresetPostprocess(original: Uint8Array, mapped: Uint8Array, preset: Preset): Uint8Array {
   if (preset === "color") return mapped;
-  if (preset === "hue") return applyChromaOnly(original, mapped);
+  // Internal "hue" preset id corresponds to the user-facing "Color" mode, which uses
+  // PS Color blend (H + S from mapped, L from original). Keeping the internal id as
+  // "hue" avoids churning the entire pipeline; only display label + blend mode swap.
+  if (preset === "hue") return applyColorBlend(original, mapped);
   // contrast: shift original RGB by (mapped luma - original luma). Preserves chroma,
   // applies the luma-curve change. Equivalent to Curves layer at Luminosity blend.
   const out = new Uint8Array(original.length);
@@ -991,6 +994,29 @@ export function applyChromaOnly(original: Uint8Array, mapped: Uint8Array): Uint8
     // from the original. This is closer to PS's HSY-style Hue blend than pure HSL.
     const [, , lHsl] = rgbToHsl(original[i], original[i + 1], original[i + 2]);
     const [r0, g0, b0] = hslToRgb(h, sOrig, lHsl);
+    const lumaOrig = 0.2126 * original[i] + 0.7152 * original[i + 1] + 0.0722 * original[i + 2];
+    const lumaCand = 0.2126 * r0 + 0.7152 * g0 + 0.0722 * b0;
+    const delta = lumaOrig - lumaCand;
+    out[i]     = Math.max(0, Math.min(255, Math.round(r0 + delta)));
+    out[i + 1] = Math.max(0, Math.min(255, Math.round(g0 + delta)));
+    out[i + 2] = Math.max(0, Math.min(255, Math.round(b0 + delta)));
+    out[i + 3] = mapped[i + 3];
+  }
+  return out;
+}
+
+// Simulate PS "Color" blend mode: take H+S from mapped, keep L (Rec.709 luma) from
+// original. Like applyChromaOnly but the saturation also transfers, so the target's
+// neutral pixels get colorized to match the source's saturation. Used for the "Color"
+// preset which is the more expressive sibling of Hue blend.
+export function applyColorBlend(original: Uint8Array, mapped: Uint8Array): Uint8Array {
+  const out = new Uint8Array(mapped.length);
+  for (let i = 0; i < mapped.length; i += 4) {
+    const [hM, sM] = rgbToHsl(mapped[i], mapped[i + 1], mapped[i + 2]);
+    const [, , lOrigHsl] = rgbToHsl(original[i], original[i + 1], original[i + 2]);
+    // (H_mapped, S_mapped, L_orig) → RGB, then re-impose Rec.709 luma so neutrals stay
+    // tonally locked to the original. Mirrors PS's Color-blend HSY-style behavior.
+    const [r0, g0, b0] = hslToRgb(hM, sM, lOrigHsl);
     const lumaOrig = 0.2126 * original[i] + 0.7152 * original[i + 1] + 0.0722 * original[i + 2];
     const lumaCand = 0.2126 * r0 + 0.7152 * g0 + 0.0722 * b0;
     const delta = lumaOrig - lumaCand;

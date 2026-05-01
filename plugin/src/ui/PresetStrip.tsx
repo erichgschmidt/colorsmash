@@ -24,10 +24,15 @@ import { downsampleToMaxEdge } from "../core/downsample";
 // is the knob that determines source-layer-switch responsiveness.
 const SWATCH_ENCODE_EDGE = 128;
 
+// Internal preset ids stay unchanged ("color" / "hue" / "contrast") to avoid churning
+// the whole pipeline. Display labels diverged after a UX round: "Color" → "Full",
+// "Hue" → "Color", and the underlying blend mode for the second one swapped from
+// PS-Hue to PS-Color blend (H+S transfer instead of H-only). See applyMatch + the
+// applyPresetPostprocess switch for the corresponding pixel semantics.
 const PRESETS: { key: Preset; label: string; tip: string }[] = [
-  { key: "color",    label: "Color",    tip: "Full color match — transfers the source's per-channel tone + color." },
-  { key: "hue",      label: "Hue",      tip: "Hue only — transfers the source's color, target keeps its own brightness + saturation." },
-  { key: "contrast", label: "Contrast", tip: "Contrast / luma only — transfers the source's tonal curve, target keeps its own colors." },
+  { key: "color",    label: "Full",     tip: "Full match — transfers the source's per-channel tone + color (R/G/B curves)." },
+  { key: "hue",      label: "Color",    tip: "Color blend — transfers the source's hue + saturation, target keeps its own luma." },
+  { key: "contrast", label: "Contrast", tip: "Contrast / luma — transfers the source's tonal curve, target keeps its own colors." },
 ];
 
 export interface PresetStripProps {
