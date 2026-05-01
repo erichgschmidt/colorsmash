@@ -526,7 +526,7 @@ export function MatchTab() {
     // this redraw — fixes "preview blank until I wiggle a slider" on first mount.
     rafPendingRef.current = false;
     scheduleRedraw();
-  }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, multiZoneExtents, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, multiZoneExtents, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope, activePreset]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onApply = async () => {
     if (targetId == null) { setStatus("Pick target layer."); return; }
