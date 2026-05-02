@@ -971,18 +971,21 @@ export function MatchTab() {
         const ROW_GAP = 6;
         const cell = (basis: number): React.CSSProperties => ({
           display: "inline-flex", alignItems: "center", gap: 3,
-          flex: `0 1 ${basis}px`, minWidth: 16, maxWidth: `${basis}px`,
+          flex: `0 1 ${basis}px`, minWidth: 14, maxWidth: `${basis}px`,
           overflow: "hidden", whiteSpace: "nowrap",
         });
         const cbStyle: React.CSSProperties = { margin: 0, flexShrink: 0, cursor: subDisabled ? "default" : "pointer" };
         const txt: React.CSSProperties = { overflow: "hidden", whiteSpace: "nowrap", minWidth: 0 };
         const subTxt: React.CSSProperties = { ...txt, opacity: subDisabled ? 0.5 : 1 };
         return (
+          // width:100% + minWidth:0 force row to panel width and allow shrinking;
+          // without these UXP may size the row to content width and skip the shrink.
           <div style={{
             display: "flex", flexWrap: "nowrap", alignItems: "center",
             marginTop: 8, fontSize: 11,
             color: multiZone ? "#dddddd" : "#aaaaaa",
             height: 18, overflow: "hidden", gap: ROW_GAP,
+            width: "100%", minWidth: 0,
           }}>
             <label style={{ ...cell(70), cursor: "pointer" }}
               title="Multi: emit 3 stacked Curves layers (shadows / mids / highlights), each limited to its luminance band. Adapts spatially across mixed-lighting scenes.">
