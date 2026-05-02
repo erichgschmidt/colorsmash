@@ -354,35 +354,46 @@ export function MatchTab() {
   useEffect(() => {
     if (srcMode !== "selection" || !autoUpdate) return;
     let cancelled = false;
-    const trySnap = async () => {
-      if (snapInFlightRef.current || sampleLockRef.current) return;
-      let bounds: any = null;
-      try { bounds = getSelectionBounds(); } catch { /* */ }
-      if (!bounds) return;
-      snapInFlightRef.current = true;
-      try { const snap = await snapshotFnRef.current(); if (!cancelled) setSrcOverride(snap); }
-      catch { /* ignore transient auto-update failures */ }
-      finally { snapInFlightRef.current = false; }
+    // Debounce: only snap once bounds have been stable for SETTLE_MS. Prevents flicker
+    // during a lasso draw — the user's pointer churns bounds every frame, but we wait
+    // for them to actually let go (or pause) before doing the heavy pixel grab.
+    const SETTLE_MS = 250;
+    let settleTimer: any = null;
+    const scheduleSnap = () => {
+      if (settleTimer) clearTimeout(settleTimer);
+      settleTimer = setTimeout(async () => {
+        if (cancelled || snapInFlightRef.current || sampleLockRef.current) return;
+        let bounds: any = null;
+        try { bounds = getSelectionBounds(); } catch { /* */ }
+        if (!bounds) return;
+        snapInFlightRef.current = true;
+        try { const snap = await snapshotFnRef.current(); if (!cancelled) setSrcOverride(snap); }
+        catch { /* ignore transient auto-update failures */ }
+        finally { snapInFlightRef.current = false; }
+      }, SETTLE_MS);
     };
-    // Immediate re-snap on bounds change (cheap poll: just reads doc.selection.bounds).
+    // Cheap poll: just reads doc.selection.bounds. Schedules a debounced snap only when
+    // the bounds key actually changes — no work if the marquee is sitting idle.
     const boundsTimer = setInterval(() => {
       let bounds: any = null;
       try { bounds = getSelectionBounds(); } catch { /* */ }
       const key = bounds ? `${bounds.left},${bounds.top},${bounds.right},${bounds.bottom}` : "";
-      if (key && key !== lastBoundsRef.current) { lastBoundsRef.current = key; trySnap(); }
-      else if (!key) { lastBoundsRef.current = ""; }
+      if (key !== lastBoundsRef.current) {
+        lastBoundsRef.current = key;
+        if (key) scheduleSnap();
+      }
     }, 200);
-    // Re-snap on any PS event that could change pixels under the marquee.
+    // PS pixel-changing events (paint/fill/etc): also debounced so a flurry of strokes
+    // collapses into one snap. Bounds-change check skipped here since pixels can change
+    // without bounds changing.
     const events = ["set", "make", "delete", "paste", "fill", "stroke", "move", "applyImage", "rasterizeLayer", "modifyLayerEffect"];
-    const onPsEvent = () => trySnap();
+    const onPsEvent = () => scheduleSnap();
     psAction.addNotificationListener(events, onPsEvent);
-    // Periodic backup (some events like brush strokes don't notify reliably).
-    const pollTimer = setInterval(() => trySnap(), 1000);
-    trySnap(); // initial
+    scheduleSnap(); // initial
     return () => {
       cancelled = true;
+      if (settleTimer) clearTimeout(settleTimer);
       clearInterval(boundsTimer);
-      clearInterval(pollTimer);
       psAction.removeNotificationListener?.(events, onPsEvent);
     };
   }, [srcMode, autoUpdate]); // eslint-disable-line react-hooks/exhaustive-deps
