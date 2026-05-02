@@ -685,7 +685,16 @@ export function MatchTab() {
       </div>
 
       {/* Matched preview (full-width, large) with zoom controls + Before/After badge */}
-      <MatchedPreview ref={matchedHandleRef} />
+      <MatchedPreview
+        ref={matchedHandleRef}
+        canSwap={srcMode === "layer"}
+        onSwap={() => {
+          setSrcDocId(tgtDocId);
+          setTgtDocId(srcDocId);
+          setSourceId(targetId);
+          setTargetId(sourceId);
+        }}
+      />
 
       {/* Diagnostic histogram strip — overlays target / source / result luma distributions */}
       <HistogramOverlay
