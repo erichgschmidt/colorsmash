@@ -230,6 +230,15 @@ export function MatchTab() {
   // updated mid-open, so the only way to "feel invisible" is to keep state pre-warmed via
   // PS event notifications. The ⟳ button stays for the rare cross-plugin descriptor-cache
   // case where only a hard remount clears stale names.
+  //
+  // Stash the refresh fns through refs so the effect can run once with [] deps. Without
+  // refs, the effect would re-run on every render (useLayers returns a new refresh fn
+  // each time), churning addNotificationListener / removeNotificationListener calls on
+  // PS's dispatcher for no reason.
+  const refreshSrcLayersRef = useRef(refreshSrcLayers);
+  const refreshTgtLayersRef = useRef(refreshTgtLayers);
+  useEffect(() => { refreshSrcLayersRef.current = refreshSrcLayers; });
+  useEffect(() => { refreshTgtLayersRef.current = refreshTgtLayers; });
   useEffect(() => {
     const events = [
       "select", "make", "delete", "set", "open", "close", "move",
@@ -238,15 +247,13 @@ export function MatchTab() {
     ];
     const onEvt = () => {
       setStale(true);
-      // Soft refresh — debounced inside useLayers via inflight-guard, and refreshDocsRef
-      // is a single PS read. Cheap to fire on every event.
       try { refreshDocsRef.current(); } catch { /* */ }
-      try { refreshSrcLayers(); } catch { /* */ }
-      try { refreshTgtLayers(); } catch { /* */ }
+      try { refreshSrcLayersRef.current(); } catch { /* */ }
+      try { refreshTgtLayersRef.current(); } catch { /* */ }
     };
     psAction.addNotificationListener(events, onEvt);
     return () => { psAction.removeNotificationListener?.(events, onEvt); };
-  }, [refreshSrcLayers, refreshTgtLayers]);
+  }, []);
 
   // Soft pre-open refresh: fires on mousedown of any of the 4 source/target dropdowns,
   // so by the time the user sees the options PS has been re-polled. No remount, no doc-id
