@@ -109,7 +109,6 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, {}>(function Matc
     window.addEventListener("mouseup", onUp);
   };
 
-  const badgeBg = displayBefore ? "rgba(193, 154, 58, 0.92)" : "rgba(40, 40, 40, 0.78)";
   const badgeText = displayBefore ? "Before" : "After";
 
   return (
@@ -117,6 +116,22 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, {}>(function Matc
       <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span>Preview</span>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          {/* Before/After badge — moved out of the preview overlay into the header bar
+              so it doesn't sit on top of the image. Click toggles persistent view;
+              click-and-hold peeks the other view momentarily. Sits just left of the
+              zoom controls. marginRight separates it visually from the zoom cluster. */}
+          <div onMouseDown={onBadgeMouseDown}
+            title={`Currently showing ${badgeText.toLowerCase()}. Click to toggle, hold to peek the other.`}
+            style={{
+              height: 16, padding: "0 6px", marginRight: 8, display: "inline-flex", alignItems: "center", justifyContent: "center",
+              fontSize: 9, fontWeight: 600,
+              color: displayBefore ? "#1a1a1a" : "#dddddd",
+              background: displayBefore ? "#c19a3a" : "transparent",
+              border: "1px solid " + (displayBefore ? "#c19a3a" : "#888"),
+              borderRadius: 2, cursor: "pointer", userSelect: "none", boxSizing: "border-box",
+            }}>
+            {badgeText}
+          </div>
           <div onClick={() => zoom > 0.25 && setZoom(z => Math.max(0.25, z - 0.25))} title="Zoom out"
             style={{ width: 18, height: 16, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, color: zoom <= 0.25 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: zoom <= 0.25 ? "default" : "pointer", userSelect: "none", boxSizing: "border-box" }}>
             <span style={{ marginTop: -2, marginLeft: 1, lineHeight: 1 }}>-</span>
@@ -147,22 +162,6 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, {}>(function Matc
             marginLeft: `${pan.x}px`, marginTop: `${pan.y}px`,
             flexShrink: 0,
           }} />
-        {/* Before/After badge — corner overlay. Click to toggle persistent view; click
-            and hold to peek at the other view momentarily. Outside the drag-pan zone
-            (stopPropagation in onMouseDown). */}
-        <div onMouseDown={onBadgeMouseDown}
-          title={`Currently showing ${badgeText.toLowerCase()}. Click to toggle, hold to peek the other.`}
-          style={{
-            position: "absolute", top: 6, right: 6,
-            padding: "2px 8px", fontSize: 10, fontWeight: 600,
-            color: displayBefore ? "#1a1a1a" : "#eee",
-            background: badgeBg,
-            border: "1px solid " + (displayBefore ? "#c19a3a" : "#888"),
-            borderRadius: 3, cursor: "pointer", userSelect: "none",
-            boxShadow: "0 1px 2px rgba(0,0,0,0.4)",
-          }}>
-          {badgeText}
-        </div>
       </div>
     </>
   );
