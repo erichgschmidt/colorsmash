@@ -107,7 +107,7 @@ export function BottomActionBar(props: BottomActionBarProps) {
           ? "Photoshop changed since last refresh — click to resync"
           : "In sync. Click to refresh source + target previews + layer lists"}
         style={{
-          width: 16, height: 16, padding: 0, marginLeft: 9, display: "inline-flex", alignItems: "center", justifyContent: "center",
+          width: 16, height: 16, padding: 0, marginLeft: 8, display: "inline-flex", alignItems: "center", justifyContent: "center",
           background: stale ? "#c19a3a" : "transparent",
           color: stale ? "#fff" : "#aaa",
           border: stale ? "1px solid #c19a3a" : "1px solid #888",
