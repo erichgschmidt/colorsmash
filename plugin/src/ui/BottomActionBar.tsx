@@ -46,7 +46,7 @@ export function BottomActionBar(props: BottomActionBarProps) {
   // the row taller. The label-span is display:block (not inline) so its overflow
   // truly clips horizontally — inline spans were apparently re-flowing in UXP.
   const cell = (basis: number): React.CSSProperties => ({
-    display: "inline-flex", alignItems: "center", gap: 10,
+    display: "inline-flex", alignItems: "center", gap: 6, paddingLeft: 0,
     flex: `0 1 ${basis}px`, minWidth: 14, maxWidth: `${basis}px`,
     overflow: "hidden", whiteSpace: "nowrap",
     height: 18, lineHeight: "18px",
@@ -54,7 +54,7 @@ export function BottomActionBar(props: BottomActionBarProps) {
   });
   const labelTxt: React.CSSProperties = {
     display: "block", overflow: "hidden", whiteSpace: "nowrap",
-    minWidth: 0, lineHeight: "18px",
+    minWidth: 0, lineHeight: "18px", paddingLeft: 4,
   };
   // Lock checkbox width explicitly — UXP renders native checkboxes at variable
   // widths (16-22px) which can violate cell minWidth and force unexpected reflow.
