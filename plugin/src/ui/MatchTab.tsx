@@ -964,49 +964,50 @@ export function MatchTab() {
           is off. */}
       {(() => {
         const subDisabled = !multiZone;
-        // Mirrors BottomActionBar exactly: flush-left flex row with consistent 6px gap,
-        // items shrink to toggle width only (labels clip silently behind next item).
-        // flex-wrap:nowrap + height:18 + overflow:hidden = row CANNOT jump under any
-        // panel width. Trailing (?) icon stays in place flush left, no marginLeft:auto.
-        const ROW_GAP = 6;
+        // Same layout pattern as BottomActionBar: relative outer with overflow:hidden +
+        // height (locks single row), inner left flex strip for toggle cells (labels
+        // clip silently in narrow panels), trailing (?) icon absolute-pinned to right
+        // so it never disappears regardless of panel width.
         const cell = (basis: number): React.CSSProperties => ({
           display: "inline-flex", alignItems: "center", gap: 3,
-          flex: `0 1 ${basis}px`, minWidth: 16, maxWidth: `${basis}px`,
+          flex: `0 1 ${basis}px`, minWidth: 0, maxWidth: `${basis}px`,
           overflow: "hidden", whiteSpace: "nowrap",
         });
         const cbStyle: React.CSSProperties = { margin: 0, flexShrink: 0, cursor: subDisabled ? "default" : "pointer" };
         const txt: React.CSSProperties = { overflow: "hidden", whiteSpace: "nowrap", minWidth: 0 };
         const subTxt: React.CSSProperties = { ...txt, opacity: subDisabled ? 0.5 : 1 };
+        const RIGHT_RESERVED = 18; // (?) icon ~12 + breathing room
         return (
-          <div style={{
-            display: "flex", flexWrap: "nowrap", alignItems: "center",
-            marginTop: 8, fontSize: 11,
-            color: multiZone ? "#dddddd" : "#aaaaaa",
-            height: 18, overflow: "hidden", gap: ROW_GAP,
-          }}>
-            <label style={{ ...cell(70), cursor: "pointer" }}
-              title="Multi: emit 3 stacked Curves layers (shadows / mids / highlights), each limited to its luminance band. Adapts spatially across mixed-lighting scenes.">
-              <input type="checkbox" checked={multiZone} onChange={e => setMultiZone(e.target.checked)}
-                style={{ margin: 0, flexShrink: 0, cursor: "pointer" }} />
-              <span style={txt}>Multi</span>
-            </label>
-            <label style={{ ...cell(65), cursor: subDisabled ? "default" : "pointer" }}
-              title="Blend If: limit each band layer with the underlying-luma sliders (Layer Style → Blending Options) instead of a luminosity mask. When OFF, a paintable mask is exported instead. May not work in all PS versions.">
-              <input type="checkbox" disabled={subDisabled}
-                checked={multiZoneLimit === "blendIf"}
-                onChange={e => setMultiZoneLimit(e.target.checked ? "blendIf" : "mask")}
-                style={cbStyle} />
-              <span style={subTxt}>Blend If</span>
-            </label>
-            <label style={{ ...cell(65), cursor: subDisabled ? "default" : "pointer" }}
-              title={`Adaptive: shift band peaks + extents to the target histogram's percentiles (P10/P50/P90) instead of fixed 0/128/255. ${multiZone && lumaBins ? `Current peaks: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""}`}>
-              <input type="checkbox" disabled={subDisabled} checked={adaptiveBands}
-                onChange={e => setAdaptiveBands(e.target.checked)}
-                style={cbStyle} />
-              <span style={subTxt}>Adaptive</span>
-            </label>
-            {/* Trailing (?) info icon — flush left like everything else (no auto margin). */}
-            <span style={{ display: "inline-flex", alignItems: "center", flexShrink: 0 }}>
+          <div style={{ position: "relative", marginTop: 8, height: 18, overflow: "hidden" }}>
+            <div style={{
+              display: "flex", flexWrap: "nowrap", alignItems: "center",
+              height: "100%", paddingRight: RIGHT_RESERVED, gap: 6,
+              fontSize: 11, color: multiZone ? "#dddddd" : "#aaaaaa",
+            }}>
+              <label style={{ ...cell(70), cursor: "pointer" }}
+                title="Multi: emit 3 stacked Curves layers (shadows / mids / highlights), each limited to its luminance band. Adapts spatially across mixed-lighting scenes.">
+                <input type="checkbox" checked={multiZone} onChange={e => setMultiZone(e.target.checked)}
+                  style={{ margin: 0, flexShrink: 0, cursor: "pointer" }} />
+                <span style={txt}>Multi</span>
+              </label>
+              <label style={{ ...cell(65), cursor: subDisabled ? "default" : "pointer" }}
+                title="Blend If: limit each band layer with the underlying-luma sliders (Layer Style → Blending Options) instead of a luminosity mask. When OFF, a paintable mask is exported instead. May not work in all PS versions.">
+                <input type="checkbox" disabled={subDisabled}
+                  checked={multiZoneLimit === "blendIf"}
+                  onChange={e => setMultiZoneLimit(e.target.checked ? "blendIf" : "mask")}
+                  style={cbStyle} />
+                <span style={subTxt}>Blend If</span>
+              </label>
+              <label style={{ ...cell(65), cursor: subDisabled ? "default" : "pointer" }}
+                title={`Adaptive: shift band peaks + extents to the target histogram's percentiles (P10/P50/P90) instead of fixed 0/128/255. ${multiZone && lumaBins ? `Current peaks: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""}`}>
+                <input type="checkbox" disabled={subDisabled} checked={adaptiveBands}
+                  onChange={e => setAdaptiveBands(e.target.checked)}
+                  style={cbStyle} />
+                <span style={subTxt}>Adaptive</span>
+              </label>
+            </div>
+            {/* Trailing (?) icon — absolute-pinned right, never disappears. */}
+            <span style={{ position: "absolute", right: 0, top: 0, height: "100%", display: "inline-flex", alignItems: "center" }}>
               <span onClick={(e: any) => { e.stopPropagation(); e.preventDefault(); void uxpInfo("Multi-zone Curves — what each toggle does", [
                 { heading: "Multi",
                   body: "Apply emits three stacked Curves layers (Shadows, Mids, Highlights) instead of one. Each curve is fitted from ONLY the pixels whose luma falls in its band. The three layers land in the [Color Smash] group, clipped to the target, and stay independently editable in Photoshop afterwards. Useful for mixed-lighting scenes where a single global curve over- or under-corrects." },
