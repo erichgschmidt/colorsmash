@@ -679,7 +679,7 @@ export function MatchTab() {
           <option value={MERGED_LAYER_ID}>Merged</option>
         </select>
         <div onClick={refreshTgtAll} title="Refresh target document + layer list"
-          style={{ width: 22, height: 22, marginTop: 1, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", border: "1px solid #888", borderRadius: 2, color: "#ddd", fontSize: 16, userSelect: "none", boxSizing: "border-box", flexShrink: 0 }}>
+          style={{ width: 22, height: 22, marginTop: 2, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", border: "1px solid #888", borderRadius: 2, color: "#ddd", fontSize: 16, userSelect: "none", boxSizing: "border-box", flexShrink: 0 }}>
           <span style={{ marginTop: -3, marginLeft: 1, lineHeight: 1 }}>⟳</span>
         </div>
       </div>
