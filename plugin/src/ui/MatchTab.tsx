@@ -964,24 +964,26 @@ export function MatchTab() {
           is off. */}
       {(() => {
         const subDisabled = !multiZone;
-        // Cell bases match BottomActionBar so checkboxes align with the buttons below:
-        // Multi↔Deselect, Blend If↔Replace, Adaptive↔Save, ?-info↔✕ (the reset button).
+        // Mirrors BottomActionBar exactly: flush-left flex row with consistent 6px gap,
+        // items shrink to toggle width only (labels clip silently behind next item).
+        // flex-wrap:nowrap + height:18 + overflow:hidden = row CANNOT jump under any
+        // panel width. Trailing (?) icon stays in place flush left, no marginLeft:auto.
+        const ROW_GAP = 6;
         const cell = (basis: number): React.CSSProperties => ({
           display: "inline-flex", alignItems: "center", gap: 3,
-          flex: `0 1 ${basis}px`, minWidth: 0, overflow: "hidden",
-          // Belt-and-suspenders: keep the cell from ever growing beyond its basis (so
-          // wide panels don't push later cells out of column alignment) and from
-          // wrapping its label text.
-          maxWidth: `${basis}px`, whiteSpace: "nowrap",
+          flex: `0 1 ${basis}px`, minWidth: 16, maxWidth: `${basis}px`,
+          overflow: "hidden", whiteSpace: "nowrap",
         });
         const cbStyle: React.CSSProperties = { margin: 0, flexShrink: 0, cursor: subDisabled ? "default" : "pointer" };
         const txt: React.CSSProperties = { overflow: "hidden", whiteSpace: "nowrap", minWidth: 0 };
         const subTxt: React.CSSProperties = { ...txt, opacity: subDisabled ? 0.5 : 1 };
         return (
-          // flexWrap: nowrap is the default but we set it explicitly so a narrow panel
-          // can never push a cell to a new row — the label text inside each cell clips
-          // silently behind the next checkbox instead (the "compressed accordion" feel).
-          <div style={{ display: "flex", flexWrap: "nowrap", alignItems: "center", marginTop: 8, fontSize: 11, color: multiZone ? "#dddddd" : "#aaaaaa", height: 18, overflow: "hidden", gap: 0 }}>
+          <div style={{
+            display: "flex", flexWrap: "nowrap", alignItems: "center",
+            marginTop: 8, fontSize: 11,
+            color: multiZone ? "#dddddd" : "#aaaaaa",
+            height: 18, overflow: "hidden", gap: ROW_GAP,
+          }}>
             <label style={{ ...cell(70), cursor: "pointer" }}
               title="Multi: emit 3 stacked Curves layers (shadows / mids / highlights), each limited to its luminance band. Adapts spatially across mixed-lighting scenes.">
               <input type="checkbox" checked={multiZone} onChange={e => setMultiZone(e.target.checked)}
@@ -1003,10 +1005,8 @@ export function MatchTab() {
                 style={cbStyle} />
               <span style={subTxt}>Adaptive</span>
             </label>
-            {/* Trailing slot — aligns with the ✕ reset button below. Holds the (?) info
-                icon for the multi-zone feature explanation. flex-shrink:0 so it never
-                disappears even when the row is heavily compressed. */}
-            <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", flexShrink: 0 }}>
+            {/* Trailing (?) info icon — flush left like everything else (no auto margin). */}
+            <span style={{ display: "inline-flex", alignItems: "center", flexShrink: 0 }}>
               <span onClick={(e: any) => { e.stopPropagation(); e.preventDefault(); void uxpInfo("Multi-zone Curves — what each toggle does", [
                 { heading: "Multi",
                   body: "Apply emits three stacked Curves layers (Shadows, Mids, Highlights) instead of one. Each curve is fitted from ONLY the pixels whose luma falls in its band. The three layers land in the [Color Smash] group, clipped to the target, and stay independently editable in Photoshop afterwards. Useful for mixed-lighting scenes where a single global curve over- or under-corrects." },
