@@ -43,16 +43,20 @@ export function BottomActionBar(props: BottomActionBarProps) {
   const ROW_GAP = 6;
   const cell = (basis: number): React.CSSProperties => ({
     display: "inline-flex", alignItems: "center", gap: 3,
-    flex: `0 1 ${basis}px`, minWidth: 16, maxWidth: `${basis}px`,
+    flex: `0 1 ${basis}px`, minWidth: 14, maxWidth: `${basis}px`,
     overflow: "hidden", whiteSpace: "nowrap",
   });
   const labelTxt: React.CSSProperties = { overflow: "hidden", whiteSpace: "nowrap", minWidth: 0 };
   const checkboxStyle: React.CSSProperties = { margin: 0, flexShrink: 0 };
   return (
+    // width:100% + minWidth:0 force the row to panel width (not max-content) and allow
+    // it to shrink in narrow contexts. Without these, the row may size to its natural
+    // content width and ignore parent constraints in some UXP layouts.
     <div style={{
       display: "flex", flexWrap: "nowrap", alignItems: "center",
       marginTop: 8, fontSize: 10, color: "#cccccc",
       height: 18, overflow: "hidden", gap: ROW_GAP,
+      width: "100%", minWidth: 0,
     }}>
       <label style={{ ...cell(70), cursor: "pointer" }}
         title="Deselect — drop the active marquee before creating the layer so curves apply to the full target.">
