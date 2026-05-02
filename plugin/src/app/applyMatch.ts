@@ -187,12 +187,13 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
         await action.batchPlay([{ _obj: "selectNoLayers", _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }] }], {});
       } catch { /* not critical */ }
       group = await doc.createLayerGroup({ name: GROUP_NAME });
-      // Move the new group to sit directly above the target layer in the panel — more
-      // intuitive than parking it at the doc root, since the curves are clearly tied to
-      // that one layer. Skipped in merged-target mode (no specific layer to anchor to).
-      if (target) {
-        try { await group.move(target, "placeBefore"); } catch { /* ignore — keep at root */ }
-      }
+    }
+    // Position the group directly above the target layer (in the panel) on every run,
+    // not just first-creation. If the user picks a different target after a prior apply,
+    // the group should follow — otherwise the curves visually float somewhere unrelated
+    // to the layer they affect. Skipped in merged-target mode (no specific anchor).
+    if (target) {
+      try { await group.move(target, "placeBefore"); } catch { /* ignore — keep where it is */ }
     }
     const overwrite = params.overwritePrior !== false;
     const matchChildren = [...(group.layers ?? [])].filter((c: any) =>
