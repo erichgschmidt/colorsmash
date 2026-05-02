@@ -972,7 +972,7 @@ export function MatchTab() {
         // Same layout treatment as BottomActionBar: <div> instead of <label>,
         // explicit lineHeight, locked checkbox size, display:block on label spans.
         const cell = (basis: number): React.CSSProperties => ({
-          display: "inline-flex", alignItems: "center", gap: 3,
+          display: "inline-flex", alignItems: "center", gap: 6,
           flex: `0 1 ${basis}px`, minWidth: 14, maxWidth: `${basis}px`,
           overflow: "hidden", whiteSpace: "nowrap",
           height: 18, lineHeight: "18px",

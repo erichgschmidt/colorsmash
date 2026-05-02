@@ -46,7 +46,7 @@ export function BottomActionBar(props: BottomActionBarProps) {
   // the row taller. The label-span is display:block (not inline) so its overflow
   // truly clips horizontally — inline spans were apparently re-flowing in UXP.
   const cell = (basis: number): React.CSSProperties => ({
-    display: "inline-flex", alignItems: "center", gap: 3,
+    display: "inline-flex", alignItems: "center", gap: 6,
     flex: `0 1 ${basis}px`, minWidth: 14, maxWidth: `${basis}px`,
     overflow: "hidden", whiteSpace: "nowrap",
     height: 18, lineHeight: "18px",
@@ -100,12 +100,14 @@ export function BottomActionBar(props: BottomActionBarProps) {
                  border: "1px solid #888", borderRadius: 3, cursor: "pointer", boxSizing: "border-box", flexShrink: 0, userSelect: "none" }}>
         <span style={{ marginTop: 0, lineHeight: 1 }}>{colorSpace.toUpperCase()}</span>
       </div>
+      {/* Extra marginLeft so the visual gap from RGB→⟳ matches the gap from ✕→RGB.
+          Without it, RGB's wider footprint makes the right gap look tighter. */}
       <div onClick={onRefreshAll}
         title={stale
           ? "Photoshop changed since last refresh — click to resync"
           : "In sync. Click to refresh source + target previews + layer lists"}
         style={{
-          width: 16, height: 16, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
+          width: 16, height: 16, padding: 0, marginLeft: 4, display: "inline-flex", alignItems: "center", justifyContent: "center",
           background: stale ? "#c19a3a" : "transparent",
           color: stale ? "#fff" : "#aaa",
           border: stale ? "1px solid #c19a3a" : "1px solid #888",
