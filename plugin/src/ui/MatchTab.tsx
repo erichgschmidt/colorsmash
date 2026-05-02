@@ -978,8 +978,11 @@ export function MatchTab() {
         const subTxt: React.CSSProperties = { ...txt, opacity: subDisabled ? 0.5 : 1 };
         return (
           <div style={{
+            // Trailing 24px track holds the (?) info icon. Explicit width because
+            // UXP grid sometimes collapses `auto` tracks of inline-flex children.
+            // Same template structure as BottomActionBar so checkbox columns align.
             display: "grid",
-            gridTemplateColumns: "minmax(0, 70px) minmax(0, 65px) minmax(0, 65px) auto",
+            gridTemplateColumns: "minmax(0, 70px) minmax(0, 65px) minmax(0, 65px) 80px",
             alignItems: "center", marginTop: 8, fontSize: 11,
             color: multiZone ? "#dddddd" : "#aaaaaa",
             height: 18, overflow: "hidden",
@@ -1005,9 +1008,9 @@ export function MatchTab() {
                 style={cbStyle} />
               <span style={subTxt}>Adaptive</span>
             </label>
-            {/* Trailing track — auto width, aligns with the ✕ button track below.
-                Holds the (?) info icon. flex-shrink:0 so it never disappears. */}
-            <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "flex-end", flexShrink: 0 }}>
+            {/* Trailing track aligns with the [✕][RGB][⟳] cluster below. The (?) info
+                icon sits at the LEFT of this track so it lines up under the ✕. */}
+            <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-start" }}>
               <span onClick={(e: any) => { e.stopPropagation(); e.preventDefault(); void uxpInfo("Multi-zone Curves — what each toggle does", [
                 { heading: "Multi",
                   body: "Apply emits three stacked Curves layers (Shadows, Mids, Highlights) instead of one. Each curve is fitted from ONLY the pixels whose luma falls in its band. The three layers land in the [Color Smash] group, clipped to the target, and stay independently editable in Photoshop afterwards. Useful for mixed-lighting scenes where a single global curve over- or under-corrects." },
