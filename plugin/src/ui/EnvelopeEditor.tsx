@@ -6,7 +6,7 @@
 // Alt-click point → toggles smooth (round handle) ↔ corner (square handle).
 // Smooth segments use monotone cubic Hermite; corner segments are linear.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { EnvelopePoint, LumaBins, buildEnvelopeWeights } from "../core/histogramMatch";
 
 export interface EnvelopeEditorProps {
@@ -40,9 +40,12 @@ export function EnvelopeEditor(props: EnvelopeEditorProps) {
     for (let i = 0; i < 256; i++) out[i] = Math.log1p(c[i]) / max;
     return out;
   };
-  const tgtBars = normBars(props.lumaBins);
-  const srcBars = normBars(props.sourceLumaBins);
-  const resBars = normBars(props.resultLumaBins);
+  // Memoize histogram bars + polylines on bin identity. The editor re-renders on every
+  // envelope-point drag frame, but these only depend on bins (which change rarely) — no
+  // need to recompute log-scale + tessellation 60×/sec while the user is dragging.
+  const tgtBars = useMemo(() => normBars(props.lumaBins), [props.lumaBins]);
+  const srcBars = useMemo(() => normBars(props.sourceLumaBins), [props.sourceLumaBins]);
+  const resBars = useMemo(() => normBars(props.resultLumaBins), [props.resultLumaBins]);
 
   const barsToPolyPoints = (bars: number[]): string => {
     const N = 64;
@@ -54,6 +57,8 @@ export function EnvelopeEditor(props: EnvelopeEditorProps) {
     }
     return out.join(" ");
   };
+  const srcPoly = useMemo(() => srcBars ? barsToPolyPoints(srcBars) : "", [srcBars]);
+  const resPoly = useMemo(() => resBars ? barsToPolyPoints(resBars) : "", [resBars]);
 
   // Convert pointer event → logical (position 0..255, weight 0..W_MAX). Uses inner area
   // (which excludes the padding) so position 0 / 255 land at the histogram extremes.
@@ -179,12 +184,12 @@ export function EnvelopeEditor(props: EnvelopeEditorProps) {
           )}
           {srcBars && (
             <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} preserveAspectRatio="none" viewBox="0 0 100 100">
-              <polyline points={barsToPolyPoints(srcBars)} fill="none" stroke="#e8a060" strokeWidth="0.7" vectorEffect="non-scaling-stroke" opacity="0.85" />
+              <polyline points={srcPoly} fill="none" stroke="#e8a060" strokeWidth="0.7" vectorEffect="non-scaling-stroke" opacity="0.85" />
             </svg>
           )}
           {resBars && (
             <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} preserveAspectRatio="none" viewBox="0 0 100 100">
-              <polyline points={barsToPolyPoints(resBars)} fill="none" stroke="#5fd1c8" strokeWidth="0.7" vectorEffect="non-scaling-stroke" opacity="0.95" />
+              <polyline points={resPoly} fill="none" stroke="#5fd1c8" strokeWidth="0.7" vectorEffect="non-scaling-stroke" opacity="0.95" />
             </svg>
           )}
           <div style={{ position: "absolute", left: 0, right: 0, top: "50%", height: 1, background: "#555", opacity: 0.6 }} />

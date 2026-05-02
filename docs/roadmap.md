@@ -4,7 +4,9 @@
 
 See [PRD.md](PRD.md) for product context and [considerations.md](considerations.md) for pre-build decisions reflected here.
 
-## Phase 0 — Spike (1 week)
+> **Note (2026-04):** Phases 0 and 1 below are historical — the spike used Reinhard mean/σ, but the shipped path (v1.0+) is per-channel histogram-specification fitted to Curves. The v1.1 and v1.2 sections further down reflect what's actually in the panel today.
+
+## Phase 0 — Spike (1 week, historical)
 **Goal:** Prove Imaging API + Reinhard math end-to-end.
 
 - UXP skeleton on PS 25.0+, Manifest v5, apiVersion 2

@@ -1,13 +1,15 @@
 # Color Smash — Plugin
 
-Phase 0 spike scaffold. UXP, Manifest v5, apiVersion 2, TS + React.
+UXP panel source for Color Smash. Manifest v5, apiVersion 2, TypeScript + React.
+
+See the [repo root README](../README.md) for the user-facing feature list and install instructions.
 
 ## Layout
 - `manifest.json` — UXP manifest (PS 25.0+)
-- `src/ui/` — React panel
+- `src/ui/` — React panel (Match tab, preview, envelope/zone editors, hooks)
 - `src/services/photoshop.ts` — only file allowed to call `photoshop` / `batchPlay`
-- `src/core/` — pure-TS algorithm (Lab, Reinhard, downsample). Unit-testable outside PS.
-- `src/app/runSpike.ts` — Phase 0 end-to-end orchestration
+- `src/core/` — pure-TS algorithms (histogram match, Lab, downsample, LUT writer). Unit-testable outside PS.
+- `src/app/` — Apply orchestration (single Curves layer + multi-zone trio)
 - `src/core/__tests__/` — vitest
 
 ## Dev
@@ -20,10 +22,3 @@ npm run typecheck
 ```
 
 Load in Photoshop via UXP Developer Tool → Add Existing Plugin → select this folder's `manifest.json`.
-
-## Phase 0 spike flow
-1. Open a PS doc with ≥ 2 layers (bottom = source, top = target).
-2. Click "Run Reinhard transfer" in the panel.
-3. New layer `[Color Smash] Result` is created with the matched pixels.
-
-Exit criteria: ΔE < 5 vs reference Reinhard on 3 test pairs (golden harness — TODO).

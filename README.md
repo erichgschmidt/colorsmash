@@ -10,7 +10,7 @@ Beyond the basic fit:
 
 - **Preset strip (v1.2)** — three full-width swatches above the matched preview: **Full · Color · Contrast**. Each swatch paints the source through that preset's characteristic transform so you can see at a glance what's about to be transferred. Click a swatch to *stage* the preset — the matched preview updates live, but nothing writes to PS until you hit **Apply Curves** (non-destructive). **Full** = per-channel R/G/B match (Normal blend). **Color** = PS Color blend (transfers H+S, target keeps its luma). **Contrast** = averaged R/G/B curve + Luminosity blend (transfers tonal curve, target keeps its colors).
 - **Export LUT (v1.2)** — button next to Apply Curves. Bakes the staged preset (curves + blend-mode emulation) into a 33³ Adobe `.CUBE` 3D LUT and writes it to a path you pick. Sidesteps Photoshop's flaky Color Lookup automation — load the LUT manually in PS's Color Lookup layer, Premiere, Resolve, or any LUT-aware host. The LUT captures non-separable Color/Luminosity blend math that a Curves layer alone cannot represent.
-- **Matched preview Before/After badge** — corner overlay on the preview pane. Click toggles a persistent Before/After view; click-and-hold peeks the other state momentarily.
+- **Matched preview Before/After badge** — corner overlay on the preview pane. Click toggles a persistent Before/After view; click-and-hold peeks the other state momentarily. A swap (⇄) button just left of the badge swaps source ↔ target docs+layers in one click; it's disabled when the source is a marquee selection or a browsed file (those can't be destinations).
 - **Multi-zone Curves output (v1.1)** — when the **Multi** toggle is on, Apply emits three stacked Curves layers (Shadows / Mids / Highlights) instead of one, each fitted from only the pixels in its luma band. Limit each band spatially with a paintable **Mask**, with **Blend If** sliders, or **Both**. Turn on **Adaptive** to shift the band peaks to the target's P10/P50/P90 luma percentiles (with outer extents matching the actual histogram bounds), so each band gets a meaningful pixel sample on low-key or high-key scenes. Every layer remains independently editable in PS afterward.
 - **RGB or LAB matching** — toggle between per-channel RGB histogram specification and a perceptual L*a*b*-domain match. Curves are sampled back to per-channel R/G/B so the output stays a standard Curves layer.
 - **Color** — overall amount, smoothing (anti-banding), max stretch (slope cap), optional anchor of the slope cap to the target's actual histogram range, and a Hue-only mode that preserves target saturation and luminance.
@@ -109,7 +109,7 @@ Editor controls:
 - **Right-click point** — removes. **Double-click point** — removes (legacy).
 - **Reset** — restores the three identity points.
 
-Background overlay shows the target luma histogram as filled gray bars and the source luma histogram as an orange polyline.
+Background overlay shows the target luma histogram as filled gray bars, the source luma histogram as an orange outline, and the current matched-result luma histogram as a cyan outline so you can see the gap closing as you tweak. (The standalone histogram strip below the preview was removed in v1.2 — these overlays subsume it.)
 
 ## Tone
 

@@ -33,11 +33,12 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, MatchedPreviewPro
   const dragStartRef = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
   const mouseOverMatchedRef = useRef(false);
 
-  // Cached pixel buffers — parent sends both via the handle. We re-encode + swap the
-  // <img> src on demand when the displayed mode changes. Holds Uint8Arrays as-is so
-  // re-display is a single PNG encode (no copy from caller).
-  const afterRef = useRef<{ rgba: Uint8Array; w: number; h: number } | null>(null);
-  const beforeRef = useRef<{ rgba: Uint8Array; w: number; h: number } | null>(null);
+  // Cached pixel buffers — parent sends both via the handle. We encode each buffer
+  // to a PNG data URL ONCE when it arrives and cache the URL alongside it, so flipping
+  // Before/After is a free <img.src> swap rather than a per-flip re-encode (each PNG
+  // encode is a meaningful chunk of CPU at preview resolution).
+  const afterRef = useRef<{ rgba: Uint8Array; w: number; h: number; url: string } | null>(null);
+  const beforeRef = useRef<{ rgba: Uint8Array; w: number; h: number; url: string } | null>(null);
   // Persistent "show before by default" toggle (click on badge).
   const [showBefore, setShowBefore] = useState(false);
   // Momentary hold (mousedown→mouseup on badge). XOR with showBefore decides view.
@@ -45,23 +46,34 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, MatchedPreviewPro
   const displayBefore = showBefore !== holding;
 
   // Render whichever buffer matches displayBefore. Called whenever buffers change OR
-  // the toggle/hold flips.
+  // the toggle/hold flips. No re-encoding — just swap the cached data URL.
   const renderCurrent = () => {
     const img = matchedFrontRef.current;
     if (!img) return;
     const buf = displayBefore ? beforeRef.current : afterRef.current;
     if (!buf) return;
-    try { img.src = rgbaToPngDataUrl(buf.rgba, buf.w, buf.h); } catch { /* ignore */ }
+    img.src = buf.url;
   };
   useEffect(renderCurrent, [showBefore, holding]); // re-render on mode flip
 
   useImperativeHandle(ref, () => ({
     setPixels: (rgba, w, h) => {
-      afterRef.current = { rgba, w, h };
+      // Skip re-encode when the parent hands us the same buffer reference (the result
+      // pixels do change every redraw, so this fast-path mostly catches mode-flip churn).
+      if (afterRef.current && afterRef.current.rgba === rgba) return;
+      let url = "";
+      try { url = rgbaToPngDataUrl(rgba, w, h); } catch { return; }
+      afterRef.current = { rgba, w, h, url };
       if (!displayBefore) renderCurrent();
     },
     setBefore: (rgba, w, h) => {
-      beforeRef.current = { rgba, w, h };
+      // Target.snap.data is a stable reference until the target itself changes, so the
+      // identity check skips the re-encode on every slider tick (the parent calls this
+      // unconditionally per redraw to keep the badge in sync).
+      if (beforeRef.current && beforeRef.current.rgba === rgba) return;
+      let url = "";
+      try { url = rgbaToPngDataUrl(rgba, w, h); } catch { return; }
+      beforeRef.current = { rgba, w, h, url };
       if (displayBefore) renderCurrent();
     },
   }), [displayBefore]);

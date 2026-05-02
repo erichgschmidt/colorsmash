@@ -1,7 +1,7 @@
 # Color Smash — Product Requirements Document
 
-**Version:** v0.3
-**Status:** Draft, pre-Phase 0
+**Version:** v0.3 (original draft) — superseded in practice by what shipped in v1.0–v1.2 (see §8 "Shipped" sections below)
+**Status:** Historical draft. Actual shipped algorithm and architecture diverged from §5/§6.
 **Last updated:** 2026-04-18
 
 ## 1. One-line pitch
@@ -28,9 +28,9 @@ Photoshop's Match Color is destructive, opaque, and hasn't meaningfully evolved.
 - Rationale and tradeoffs: see [decisions/00-compatibility.md](decisions/00-compatibility.md).
 
 ## 5. Algorithm core
-- **MVP:** Reinhard mean/σ transfer in Lab + gray-world neutralize + linear fade.
-- **v2:** Sliced optimal transport for palette fidelity.
-- **v3:** Skin/neutral-aware local transfer via segmentation.
+- **Shipped (v1.0+):** Per-channel R/G/B histogram specification fitted to Curves control points; optional perceptual Lab-domain match sampled back to per-channel curves; Hue-only via PS Hue blend mode. Reinhard mean/σ was prototyped but not the shipped path.
+- **v2 (future):** Sliced optimal transport for palette fidelity.
+- **v3 (future):** Skin/neutral-aware local transfer via segmentation.
 - **v4 (speculative):** Learned flow-based matcher as opt-in AI mode.
 
 Details: see [algorithm.md](algorithm.md).

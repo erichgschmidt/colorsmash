@@ -373,8 +373,12 @@ export function MatchTab() {
       }, SETTLE_MS);
     };
     // Cheap poll: just reads doc.selection.bounds. Schedules a debounced snap only when
-    // the bounds key actually changes — no work if the marquee is sitting idle.
+    // the bounds key actually changes — no work if the marquee is sitting idle. Skipped
+    // entirely when the panel/document is hidden (UXP doesn't pause timers in hidden
+    // panels, so without this gate we'd burn cycles polling while the user is in another
+    // app or the panel is collapsed behind a tab).
     const boundsTimer = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
       let bounds: any = null;
       try { bounds = getSelectionBounds(); } catch { /* */ }
       const key = bounds ? `${bounds.left},${bounds.top},${bounds.right},${bounds.bottom}` : "";
@@ -929,7 +933,7 @@ export function MatchTab() {
             { heading: "What the envelope does",
               body: "Arbitrary-N piecewise weight curve over input range 0–255. Modulates how strongly the match applies at each tonal value. Composes multiplicatively with Zones — fine-grained per-tone weight on top of the broader zone shaping. Default = three identity-weight points (no-op until moved)." },
             { heading: "Track + reference line",
-              body: "X = input tone (0 left, 255 right). Y = weight 0 (bottom, suppress match) to 2 (top, double match). Gray bars = target luma histogram. Colored polyline = source histogram (gap the match is closing). Mid-line at weight=1 = identity." },
+              body: "X = input tone (0 left, 255 right). Y = weight 0 (bottom, suppress match) to 2 (top, double match). Gray bars = target luma histogram. Orange outline = source histogram (the gap the match is closing). Cyan outline = result histogram (current matched output). Mid-line at weight=1 = identity." },
             { heading: "Adding a point",
               body: "Click any empty area of the track. A new smooth point appears and immediately enters drag mode — drop it where you want." },
             { heading: "Moving a point",
