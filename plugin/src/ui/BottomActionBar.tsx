@@ -41,38 +41,51 @@ export function BottomActionBar(props: BottomActionBarProps) {
   //     at full size and stay in place; they don't get pushed by label widths
   //   - gap between all items is uniform so visual spacing reads as "equal apart"
   const ROW_GAP = 6;
+  // Each cell is a flex container with a fixed basis that can shrink down to JUST
+  // the checkbox width. Explicit lineHeight matches row height so text can't push
+  // the row taller. The label-span is display:block (not inline) so its overflow
+  // truly clips horizontally — inline spans were apparently re-flowing in UXP.
   const cell = (basis: number): React.CSSProperties => ({
     display: "inline-flex", alignItems: "center", gap: 3,
     flex: `0 1 ${basis}px`, minWidth: 14, maxWidth: `${basis}px`,
     overflow: "hidden", whiteSpace: "nowrap",
+    height: 18, lineHeight: "18px",
+    cursor: "pointer",
   });
-  const labelTxt: React.CSSProperties = { overflow: "hidden", whiteSpace: "nowrap", minWidth: 0 };
-  const checkboxStyle: React.CSSProperties = { margin: 0, flexShrink: 0 };
+  const labelTxt: React.CSSProperties = {
+    display: "block", overflow: "hidden", whiteSpace: "nowrap",
+    minWidth: 0, lineHeight: "18px",
+  };
+  // Lock checkbox width explicitly — UXP renders native checkboxes at variable
+  // widths (16-22px) which can violate cell minWidth and force unexpected reflow.
+  const checkboxStyle: React.CSSProperties = {
+    margin: 0, flexShrink: 0, width: 14, height: 14, padding: 0, boxSizing: "border-box",
+  };
   return (
-    // width:100% + minWidth:0 force the row to panel width (not max-content) and allow
-    // it to shrink in narrow contexts. Without these, the row may size to its natural
-    // content width and ignore parent constraints in some UXP layouts.
     <div style={{
       display: "flex", flexWrap: "nowrap", alignItems: "center",
       marginTop: 8, fontSize: 10, color: "#cccccc",
-      height: 18, overflow: "hidden", gap: ROW_GAP,
+      height: 18, lineHeight: "18px", overflow: "hidden", gap: ROW_GAP,
       width: "100%", minWidth: 0,
     }}>
-      <label style={{ ...cell(70), cursor: "pointer" }}
+      {/* Use <div> instead of <label> — UXP <label>+<input> has UA-specific
+          intrinsic-sizing rules that bypass some flex constraints. Click on the
+          <div> still toggles via onClick handler. */}
+      <div onClick={() => setDeselectOnApply(!deselectOnApply)} style={cell(70)}
         title="Deselect — drop the active marquee before creating the layer so curves apply to the full target.">
         <input type="checkbox" checked={deselectOnApply} onChange={e => setDeselectOnApply(e.target.checked)} style={checkboxStyle} />
         <span style={labelTxt}>Deselect</span>
-      </label>
-      <label style={{ ...cell(65), cursor: "pointer" }}
+      </div>
+      <div onClick={() => setOverwriteOnApply(!overwriteOnApply)} style={cell(65)}
         title="Replace — on: overwrite the prior Match Curves layer. Off: keep prior layers (hidden) so you can stack alternatives.">
         <input type="checkbox" checked={overwriteOnApply} onChange={e => setOverwriteOnApply(e.target.checked)} style={checkboxStyle} />
         <span style={labelTxt}>Replace</span>
-      </label>
-      <label style={{ ...cell(65), cursor: "pointer" }}
+      </div>
+      <div onClick={() => setRemember(!remember)} style={cell(65)}
         title="Save — persist all panel settings across reloads (sliders, zones, envelope, toggles).">
         <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} style={checkboxStyle} />
         <span style={labelTxt}>Save</span>
-      </label>
+      </div>
       <button onClick={handleResetClick}
         title="Reset all settings to defaults and clear the saved file"
         style={{ width: 16, height: 16, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
