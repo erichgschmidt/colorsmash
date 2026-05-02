@@ -47,12 +47,8 @@ export function BottomActionBar(props: BottomActionBarProps) {
   const checkboxStyle: React.CSSProperties = { margin: 0, flexShrink: 0 };
   return (
     <div style={{
-      // Trailing track is an explicit pixel width — UXP's grid implementation
-      // sometimes collapses `auto` tracks containing inline-flex children to 0
-      // (the buttons disappear). Pinning to ~80px reserves room for [✕][RGB][⟳]
-      // + their inter-button margins (~16+16+16+~14 margins ≈ 76px).
       display: "grid",
-      gridTemplateColumns: "minmax(0, 70px) minmax(0, 65px) minmax(0, 65px) 80px",
+      gridTemplateColumns: "minmax(0, 70px) minmax(0, 65px) minmax(0, 65px) auto",
       alignItems: "center", marginTop: 8, fontSize: 10, color: "#cccccc",
       height: 18, overflow: "hidden",
     }}>
@@ -71,9 +67,9 @@ export function BottomActionBar(props: BottomActionBarProps) {
         <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} style={checkboxStyle} />
         <span style={labelTxt}>Save</span>
       </label>
-      {/* Right-cluster track. flex (not inline-flex) so it fills its 80px grid track
-          predictably; justify-end aligns the buttons to the right edge. */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
+      {/* Right-cluster track — auto width, contents are inline-flex. Buttons here
+          have flex-shrink:0 so they always stay visible + clickable. */}
+      <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "flex-end", gap: 0, minWidth: 0 }}>
       <button onClick={handleResetClick}
         title="Reset all settings to defaults and clear the saved file"
         style={{ width: 16, height: 16, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
