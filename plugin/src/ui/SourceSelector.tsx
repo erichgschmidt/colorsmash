@@ -37,6 +37,9 @@ export interface SourceSelectorProps {
 
   selStyle: React.CSSProperties;
   onRefreshLayers?: () => void;
+  // Soft refresh fired on dropdown mousedown — re-polls docs + layers without
+  // remounting, so by the time the dropdown's options paint, the list is fresh.
+  onPreOpenRefresh?: () => void;
 
   // Optional thumbnail painted below the dropdown row. Caller owns the snapshot logic.
   thumbnail?: ReactNode;
@@ -54,6 +57,7 @@ export function SourceSelector(props: SourceSelectorProps) {
   // the auto/merge/lock toggle cluster. Browsed-file mode → sticky filename label.
   const rightWidget = srcMode === "layer" ? (
     <select style={{ ...selStyle, flex: 1, minWidth: 0 }} value={sourceId ?? ""} onChange={e => setSourceId(Number(e.target.value))}
+      onMouseDown={props.onPreOpenRefresh}
       title="Source layer — pixels are read from this layer in the source document.">
       {layers.length === 0 && <option value="">— none —</option>}
       {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
@@ -89,6 +93,7 @@ export function SourceSelector(props: SourceSelectorProps) {
           Same pattern as the target row above the preview so the two read as a pair. */}
       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
         <select style={{ ...selStyle, flex: 1, minWidth: 0 }}
+          onMouseDown={props.onPreOpenRefresh}
           title="Source — an open document (pick a layer at right), the active selection, or an image file from disk."
           value={
             srcMode === "folder" ? "__file__" :

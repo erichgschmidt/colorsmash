@@ -243,6 +243,13 @@ export function MatchTab() {
     return () => { psAction.removeNotificationListener?.(events, onEvt); };
   }, []);
 
+  // Soft pre-open refresh: fires on mousedown of any of the 4 source/target dropdowns,
+  // so by the time the user sees the options PS has been re-polled. No remount, no doc-id
+  // bounce — that would close the dropdown mid-open. Just docs list + layers list. The
+  // nuclear ⟳ button below stays available for the rare cross-plugin descriptor-cache case.
+  const softRefreshSrc = () => { refreshDocsRef.current(); refreshSrcLayers(); };
+  const softRefreshTgt = () => { refreshDocsRef.current(); refreshTgtLayers(); };
+
   // Combined refresh: docs list + bounce the per-side docId to fully remount useLayers.
   // Bouncing the id drops every cached layer reference (DOM-side and our own state), then
   // re-fetches via batchPlay on remount. This is the nuclear option that works even when
@@ -662,6 +669,7 @@ export function MatchTab() {
             sampleLock={sampleLock} setSampleLock={setSampleLock}
             selStyle={sel}
             onRefreshLayers={refreshSrcAll}
+            onPreOpenRefresh={softRefreshSrc}
             // PresetStrip replaces the source thumbnail: 1x4 row of source-facet
             // swatches (Color / Hue / B&W / Contrast). Click to STAGE that preset —
             // the matched preview pane below updates live; nothing is written to PS
@@ -684,10 +692,12 @@ export function MatchTab() {
           because the preview pane itself shows the target via the Before/After badge. */}
       <div style={{ marginTop: 6, display: "flex", gap: 4, alignItems: "center" }}>
         <select style={{ ...sel, flex: 1, minWidth: 0 }} value={tgtDocId ?? ""} onChange={e => onSwitchTgtDoc(Number(e.target.value))}
+          onMouseDown={softRefreshTgt}
           title="Target document — where the new Curves layer will land. Independent of the source doc.">
           {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
         </select>
         <select style={{ ...sel, flex: 1, minWidth: 0 }} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}
+          onMouseDown={softRefreshTgt}
           title="Target layer — the layer the Curves adjustment will be clipped to.">
           {tgtLayers.length === 0 && <option value="">— none —</option>}
           {tgtLayers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
