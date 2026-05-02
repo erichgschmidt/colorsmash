@@ -30,41 +30,41 @@ export function BottomActionBar(props: BottomActionBarProps) {
     if (ok) onResetAll();
   };
 
-  // Single row, locked to 6 explicit grid columns:
-  //   [Deselect][Replace][Save][✕][RGB][⟳]
+  // Single left-aligned row, all flush left with consistent gap:
+  //   [☐ Deselect] [☐ Replace] [☐ Save] [✕] [RGB] [⟳]
   //
-  // Why grid (not flex): UXP's Chromium kept flowing flex items into a 2nd visual
-  // row at narrow panel widths even with flex-wrap:nowrap. CSS Grid's track sizing
-  // model has no equivalent of "wrap to next row" — overflowing content just clips.
-  // We use minmax(0, basis) for the 3 label cells (they shrink to 0 in narrow panels,
-  // letting labels clip silently) and explicit pixel widths for the 3 trailing
-  // buttons (so they always render at full size, never disappear). Together: row
-  // is locked to a single line at any width, buttons stay put, labels accordion.
-  const cell: React.CSSProperties = {
+  // Layout rules:
+  //   - flex-wrap:nowrap so the row never breaks to a second line
+  //   - Each [toggle+label] cell has a fixed basis but can shrink down to just the
+  //     toggle width (label clips silently behind the next cell when compressed)
+  //   - The 3 trailing buttons (✕/RGB/⟳) are flex-shrink:0 — they always render
+  //     at full size and stay in place; they don't get pushed by label widths
+  //   - gap between all items is uniform so visual spacing reads as "equal apart"
+  const ROW_GAP = 6;
+  const cell = (basis: number): React.CSSProperties => ({
     display: "inline-flex", alignItems: "center", gap: 3,
-    minWidth: 0, overflow: "hidden", whiteSpace: "nowrap",
-  };
+    flex: `0 1 ${basis}px`, minWidth: 16, maxWidth: `${basis}px`,
+    overflow: "hidden", whiteSpace: "nowrap",
+  });
   const labelTxt: React.CSSProperties = { overflow: "hidden", whiteSpace: "nowrap", minWidth: 0 };
   const checkboxStyle: React.CSSProperties = { margin: 0, flexShrink: 0 };
   return (
     <div style={{
-      display: "grid",
-      gridTemplateColumns: "minmax(0, 70px) minmax(0, 65px) minmax(0, 65px) 16px 30px 16px",
-      gap: 6, alignItems: "center",
+      display: "flex", flexWrap: "nowrap", alignItems: "center",
       marginTop: 8, fontSize: 10, color: "#cccccc",
-      height: 18, overflow: "hidden",
+      height: 18, overflow: "hidden", gap: ROW_GAP,
     }}>
-      <label style={{ ...cell, cursor: "pointer" }}
+      <label style={{ ...cell(70), cursor: "pointer" }}
         title="Deselect — drop the active marquee before creating the layer so curves apply to the full target.">
         <input type="checkbox" checked={deselectOnApply} onChange={e => setDeselectOnApply(e.target.checked)} style={checkboxStyle} />
         <span style={labelTxt}>Deselect</span>
       </label>
-      <label style={{ ...cell, cursor: "pointer" }}
+      <label style={{ ...cell(65), cursor: "pointer" }}
         title="Replace — on: overwrite the prior Match Curves layer. Off: keep prior layers (hidden) so you can stack alternatives.">
         <input type="checkbox" checked={overwriteOnApply} onChange={e => setOverwriteOnApply(e.target.checked)} style={checkboxStyle} />
         <span style={labelTxt}>Replace</span>
       </label>
-      <label style={{ ...cell, cursor: "pointer" }}
+      <label style={{ ...cell(65), cursor: "pointer" }}
         title="Save — persist all panel settings across reloads (sliders, zones, envelope, toggles).">
         <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} style={checkboxStyle} />
         <span style={labelTxt}>Save</span>

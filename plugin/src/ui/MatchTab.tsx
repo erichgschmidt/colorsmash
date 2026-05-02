@@ -964,32 +964,33 @@ export function MatchTab() {
           is off. */}
       {(() => {
         const subDisabled = !multiZone;
-        // Same locked-grid layout as BottomActionBar: 4 explicit columns, no wrapping.
-        // Cells 1-3: minmax(0, basis) so labels clip in narrow panels.
-        // Col 4: 14px for the (?) info icon — explicit width = always renders.
-        const cell: React.CSSProperties = {
+        // Mirrors BottomActionBar exactly: flush-left flex row with consistent 6px gap,
+        // items shrink to toggle width only (labels clip silently behind next item).
+        // flex-wrap:nowrap + height:18 + overflow:hidden = row CANNOT jump under any
+        // panel width. Trailing (?) icon stays in place flush left, no marginLeft:auto.
+        const ROW_GAP = 6;
+        const cell = (basis: number): React.CSSProperties => ({
           display: "inline-flex", alignItems: "center", gap: 3,
-          minWidth: 0, overflow: "hidden", whiteSpace: "nowrap",
-        };
+          flex: `0 1 ${basis}px`, minWidth: 16, maxWidth: `${basis}px`,
+          overflow: "hidden", whiteSpace: "nowrap",
+        });
         const cbStyle: React.CSSProperties = { margin: 0, flexShrink: 0, cursor: subDisabled ? "default" : "pointer" };
         const txt: React.CSSProperties = { overflow: "hidden", whiteSpace: "nowrap", minWidth: 0 };
         const subTxt: React.CSSProperties = { ...txt, opacity: subDisabled ? 0.5 : 1 };
         return (
           <div style={{
-            display: "grid",
-            gridTemplateColumns: "minmax(0, 70px) minmax(0, 65px) minmax(0, 65px) 14px",
-            gap: 6, alignItems: "center",
+            display: "flex", flexWrap: "nowrap", alignItems: "center",
             marginTop: 8, fontSize: 11,
             color: multiZone ? "#dddddd" : "#aaaaaa",
-            height: 18, overflow: "hidden",
+            height: 18, overflow: "hidden", gap: ROW_GAP,
           }}>
-            <label style={{ ...cell, cursor: "pointer" }}
+            <label style={{ ...cell(70), cursor: "pointer" }}
               title="Multi: emit 3 stacked Curves layers (shadows / mids / highlights), each limited to its luminance band. Adapts spatially across mixed-lighting scenes.">
               <input type="checkbox" checked={multiZone} onChange={e => setMultiZone(e.target.checked)}
                 style={{ margin: 0, flexShrink: 0, cursor: "pointer" }} />
               <span style={txt}>Multi</span>
             </label>
-            <label style={{ ...cell, cursor: subDisabled ? "default" : "pointer" }}
+            <label style={{ ...cell(65), cursor: subDisabled ? "default" : "pointer" }}
               title="Blend If: limit each band layer with the underlying-luma sliders (Layer Style → Blending Options) instead of a luminosity mask. When OFF, a paintable mask is exported instead. May not work in all PS versions.">
               <input type="checkbox" disabled={subDisabled}
                 checked={multiZoneLimit === "blendIf"}
@@ -997,7 +998,7 @@ export function MatchTab() {
                 style={cbStyle} />
               <span style={subTxt}>Blend If</span>
             </label>
-            <label style={{ ...cell, cursor: subDisabled ? "default" : "pointer" }}
+            <label style={{ ...cell(65), cursor: subDisabled ? "default" : "pointer" }}
               title={`Adaptive: shift band peaks + extents to the target histogram's percentiles (P10/P50/P90) instead of fixed 0/128/255. ${multiZone && lumaBins ? `Current peaks: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""}`}>
               <input type="checkbox" disabled={subDisabled} checked={adaptiveBands}
                 onChange={e => setAdaptiveBands(e.target.checked)}
