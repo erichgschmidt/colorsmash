@@ -135,10 +135,6 @@ export function MatchTab() {
   const [enZones, setEnZones] = useState(true);
   const [enEnvelope, setEnEnvelope] = useState(true);
   const toggleSection = (s: "basic" | "dims" | "zones" | "envelope") => setOpenSection(o => o === s ? null : s);
-  // Source / target document picker — collapsible. Default open so it's visible on first
-  // launch; user can collapse to recover vertical space once docs are picked.
-  const [showDocs, setShowDocs] = useState(true);
-
   // ─── Persistence ───────────────────────────────────────────────────────────
   // Load once on mount. Always read the file so we know whether 'remember' was on
   // last session; only restore the rest of the state if it was. After load,
@@ -164,7 +160,6 @@ export function MatchTab() {
         if (s.multiZone != null) setMultiZone(s.multiZone);
         if (s.multiZoneLimit) setMultiZoneLimit(s.multiZoneLimit);
         if (s.adaptiveBands != null) setAdaptiveBands(s.adaptiveBands);
-        if (s.showDocs != null) setShowDocs(s.showDocs);
         if (s.chromaOnly != null) setChromaOnly(s.chromaOnly);
         if (s.colorSpace) setColorSpace(s.colorSpace);
         if (s.deselectOnApply != null) setDeselectOnApply(s.deselectOnApply);
@@ -190,7 +185,6 @@ export function MatchTab() {
       remember,
       amount: amountLabel, smooth: smoothLabel, stretch: stretchLabel,
       anchorStretchToHist, chromaOnly, colorSpace, matchMode, multiZone, multiZoneLimit, adaptiveBands,
-      showDocs,
       deselectOnApply, overwriteOnApply,
       openSection,
       zones: zonesLabel, lockZoneTotal,
@@ -198,7 +192,7 @@ export function MatchTab() {
       envelope: envelopeLabel,
     };
     saveDebouncedRef.current!(snapshot);
-  }, [remember, matchMode, multiZone, multiZoneLimit, adaptiveBands, showDocs, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
+  }, [remember, matchMode, multiZone, multiZoneLimit, adaptiveBands, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
       colorSpace, deselectOnApply, overwriteOnApply, openSection,
       zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel]);
 
@@ -648,17 +642,10 @@ export function MatchTab() {
 
   return (
     <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-      {/* Documents section — collapsible header matching the other section headers */}
-      <div onClick={() => setShowDocs(s => !s)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "#dddddd", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <Icon name={showDocs ? "chevronDown" : "chevronRight"} size={11} /> Source
-        </span>
-      </div>
       {/* Source picker — full width, doc dropdown + dense layer list + thumbnail right.
           Target lives below (above the preview) and reuses the preview itself for its
           visual feedback, so the target column no longer needs its own thumbnail. */}
-      {showDocs && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
           <SourceSelector
             docs={docs} activeDocId={srcDocId} srcMode={srcMode} browsedFile={browsedFile}
             onSwitchDoc={onSwitchSrcDoc} onSwitchSrcMode={switchSrcMode}
@@ -685,7 +672,6 @@ export function MatchTab() {
             }
           />
         </div>
-      )}
 
       {/* Target selector — single horizontal row directly above the matched preview:
           [doc dropdown] [layer dropdown] [refresh]. Kept compact (no list, no thumbnail)
