@@ -24,7 +24,6 @@ import {
   fitMultiZoneByMode, applyMultiZoneToRgba, processMultiZoneFit, MultiZoneFit, adaptiveBandPeaks,
 } from "../core/histogramMatch";
 import { EnvelopeEditor } from "./EnvelopeEditor";
-import { HistogramOverlay } from "./HistogramOverlay";
 import { loadSettings, makeDebouncedSaver, clearSettings, PersistedSettings } from "./persistence";
 import { uxpInfo } from "./uxpInfo";
 import { applyMatch } from "../app/applyMatch";
@@ -437,6 +436,7 @@ export function MatchTab() {
   // Result pixels captured at the end of each redraw — feeds the diagnostic histogram overlay.
   // Throttled (only commits to state every ~150ms) so we don't thrash React during slider drags.
   const [resultPixels, setResultPixels] = useState<Uint8Array | null>(null);
+  const resultLumaBins = useMemo(() => resultPixels ? computeLumaBins(resultPixels) : null, [resultPixels]);
   const resultTimeoutRef = useRef<any>(null);
   const resultPendingRef = useRef<Uint8Array | null>(null);
   const curvesPendingRef = useRef<ChannelCurves | null>(null);
@@ -696,13 +696,6 @@ export function MatchTab() {
         }}
       />
 
-      {/* Diagnostic histogram strip — overlays target / source / result luma distributions */}
-      <HistogramOverlay
-        targetData={tgt.snap?.data ?? null}
-        sourceData={srcSnap?.data ?? null}
-        resultData={resultPixels}
-      />
-
       {/* Accordion controls */}
       <div style={{ borderTop: "1px solid #444", margin: "6px 0 0" }} />
       <div onClick={() => toggleSection("basic")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", cursor: "pointer", fontSize: 12, fontWeight: 700, color: enColor ? "#dddddd" : "#888", fontStyle: enColor ? "normal" : "italic" }}>
@@ -947,6 +940,7 @@ export function MatchTab() {
             points={envelopeLabel}
             lumaBins={lumaBins}
             sourceLumaBins={sourceLumaBins}
+            resultLumaBins={resultLumaBins}
             onChange={pts => {
               envelopeRef.current = pts;
               setEnvelopeLabel(pts);

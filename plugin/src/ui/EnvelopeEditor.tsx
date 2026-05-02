@@ -14,6 +14,7 @@ export interface EnvelopeEditorProps {
   onChange: (pts: EnvelopePoint[]) => void;
   lumaBins: LumaBins | null;        // target luma histogram (filled bars)
   sourceLumaBins?: LumaBins | null; // source luma histogram (outline overlay)
+  resultLumaBins?: LumaBins | null; // result luma histogram (cyan outline overlay)
   height?: number;
 }
 
@@ -41,6 +42,7 @@ export function EnvelopeEditor(props: EnvelopeEditorProps) {
   };
   const tgtBars = normBars(props.lumaBins);
   const srcBars = normBars(props.sourceLumaBins);
+  const resBars = normBars(props.resultLumaBins);
 
   const barsToPolyPoints = (bars: number[]): string => {
     const N = 64;
@@ -180,6 +182,11 @@ export function EnvelopeEditor(props: EnvelopeEditorProps) {
               <polyline points={barsToPolyPoints(srcBars)} fill="none" stroke="#e8a060" strokeWidth="0.7" vectorEffect="non-scaling-stroke" opacity="0.85" />
             </svg>
           )}
+          {resBars && (
+            <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} preserveAspectRatio="none" viewBox="0 0 100 100">
+              <polyline points={barsToPolyPoints(resBars)} fill="none" stroke="#5fd1c8" strokeWidth="0.7" vectorEffect="non-scaling-stroke" opacity="0.95" />
+            </svg>
+          )}
           <div style={{ position: "absolute", left: 0, right: 0, top: "50%", height: 1, background: "#555", opacity: 0.6 }} />
           {weightSamples && (
             <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} preserveAspectRatio="none" viewBox="0 0 100 100">
@@ -215,7 +222,7 @@ export function EnvelopeEditor(props: EnvelopeEditorProps) {
       </div>
       <div style={{ fontSize: 9, opacity: 0.55, marginTop: 2, display: "flex", justifyContent: "space-between" }}>
         <span>0 (shadows)</span>
-        <span><span style={{ color: "#999" }}>■ target</span>{srcBars ? <> · <span style={{ color: "#e8a060" }}>— source</span></> : null} · {props.points.length} pt{props.points.length === 1 ? "" : "s"} · click to add · drag to move · Alt-click = smooth/corner · Delete to remove</span>
+        <span><span style={{ color: "#999" }}>■ target</span>{srcBars ? <> · <span style={{ color: "#e8a060" }}>— source</span></> : null}{resBars ? <> · <span style={{ color: "#5fd1c8" }}>— result</span></> : null} · {props.points.length} pt{props.points.length === 1 ? "" : "s"} · click to add · drag to move · Alt-click = smooth/corner · Delete to remove</span>
         <span>255 (highlights)</span>
       </div>
     </div>
