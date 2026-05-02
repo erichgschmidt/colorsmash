@@ -225,17 +225,28 @@ export function MatchTab() {
 
   // Stale detector: listens for PS events that would normally trigger an auto-refresh and
   // just flips `stale` true so the ⟳ button can warn the user. Cleared whenever any
-  // refresh runs. No polling — pure event-driven flag.
+  // refresh runs. Also auto-refreshes the docs + layers lists in the background so when
+  // the user opens a dropdown the options are already current — native <select> can't be
+  // updated mid-open, so the only way to "feel invisible" is to keep state pre-warmed via
+  // PS event notifications. The ⟳ button stays for the rare cross-plugin descriptor-cache
+  // case where only a hard remount clears stale names.
   useEffect(() => {
     const events = [
       "select", "make", "delete", "set", "open", "close", "move",
       "duplicate", "paste", "rasterizeLayer", "groupLayer", "ungroupLayer",
       "mergeLayers", "mergeVisible", "rename", "historyStateChanged", "selectDocument",
     ];
-    const onEvt = () => setStale(true);
+    const onEvt = () => {
+      setStale(true);
+      // Soft refresh — debounced inside useLayers via inflight-guard, and refreshDocsRef
+      // is a single PS read. Cheap to fire on every event.
+      try { refreshDocsRef.current(); } catch { /* */ }
+      try { refreshSrcLayers(); } catch { /* */ }
+      try { refreshTgtLayers(); } catch { /* */ }
+    };
     psAction.addNotificationListener(events, onEvt);
     return () => { psAction.removeNotificationListener?.(events, onEvt); };
-  }, []);
+  }, [refreshSrcLayers, refreshTgtLayers]);
 
   // Soft pre-open refresh: fires on mousedown of any of the 4 source/target dropdowns,
   // so by the time the user sees the options PS has been re-polled. No remount, no doc-id
