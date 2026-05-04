@@ -202,6 +202,8 @@ export function MatchTab() {
 
   useEffect(() => {
     let cancelled = false;
+    // Full refresh: re-reads the doc list AND re-applies the doc-id fallback. Used on
+    // mount and when the user explicitly clicks ⟳. Mutates srcDocId / tgtDocId.
     const readNow = () => {
       if (cancelled) return;
       try {
@@ -217,11 +219,29 @@ export function MatchTab() {
         setTgtDocId(pickFallback);
       } catch { /* */ }
     };
+    // Names-only refresh: re-reads doc names but NEVER touches srcDocId / tgtDocId /
+    // srcMode / etc. Used by the PS event listener so Save As updates the dropdown
+    // labels without ever risking a state-correction regression. The probe trace proved
+    // app.documents[i].name is already current at the moment the "save" event fires —
+    // we just have to ask.
+    const refreshNamesOnly = () => {
+      if (cancelled) return;
+      try {
+        const list = (app.documents ?? []).map((d: any) => ({ id: d.id, name: d.name }));
+        setDocs(list);
+      } catch { /* */ }
+    };
     refreshDocsRef.current = readNow;
     readNow();
-    // No event listeners or poll — manual mode. The stale detector below sets `stale`
-    // true on any PS event so the user knows to click ⟳, which calls readNow().
-    return () => { cancelled = true; };
+    // Auto-refresh dropdown labels on doc-mutating events. Read-only with respect to
+    // every other piece of state — the only thing it touches is the docs array.
+    const events = ["save", "rename", "set", "selectDocument", "open", "close"];
+    const onEvt = () => refreshNamesOnly();
+    psAction.addNotificationListener(events, onEvt);
+    return () => {
+      cancelled = true;
+      psAction.removeNotificationListener?.(events, onEvt);
+    };
   }, []);
 
   // Stale detector: listens for PS events that would normally trigger an auto-refresh and
