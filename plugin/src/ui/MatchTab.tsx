@@ -24,6 +24,7 @@ import {
   fitMultiZoneByMode, applyMultiZoneToRgba, processMultiZoneFit, MultiZoneFit, adaptiveBandPeaks,
 } from "../core/histogramMatch";
 import { EnvelopeEditor } from "./EnvelopeEditor";
+import { DocProbe } from "./DocProbe";
 import { loadSettings, makeDebouncedSaver, clearSettings, PersistedSettings } from "./persistence";
 import { uxpInfo } from "./uxpInfo";
 import { applyMatch } from "../app/applyMatch";
@@ -1096,6 +1097,11 @@ export function MatchTab() {
       <CurvesGraph curves={renderedCurves} />
 
       <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7, whiteSpace: "pre-wrap" }}>{status}</div>
+
+      {/* Diagnostic-only doc-rename probe. Read-only; never mutates srcDocId / srcMode /
+          targetId / etc. Logs every name-shaped value across every API surface so we can
+          see whether ANY source updates after Save As before the panel is reopened. */}
+      <DocProbe />
     </div>
   );
 }
