@@ -228,7 +228,10 @@ export function MatchTab() {
             return seg || null;
           })();
           const id: number = r?.documentID ?? r?.ID ?? 0;
-          const name: string = r?.title || r?.name || fromPath || "(untitled)";
+          // Priority: basename(fileReference) → title → name. PS updates the file
+          // path immediately on Save As (it has to, to actually write the file), but
+          // the title/name string fields can lag behind in the descriptor cache.
+          const name: string = fromPath || r?.title || r?.name || "(untitled)";
           return { id, name };
         }).filter((d: { id: number }) => d.id > 0);
       } catch {
