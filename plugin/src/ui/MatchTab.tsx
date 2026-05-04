@@ -198,6 +198,10 @@ export function MatchTab() {
       zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel]);
 
   const [docs, setDocs] = useState<{ id: number; name: string }[]>([]);
+  // Diagnostic-only — surfaces every save/rename event hitting the docs refresh path
+  // so we can see WHEN and WITH WHAT NAME setDocs fires. Removed once the rename bug
+  // is fully resolved.
+  const [refreshTrace, setRefreshTrace] = useState<string>("");
   const refreshDocsRef = useRef<() => void>(() => {});
 
   useEffect(() => {
@@ -224,11 +228,16 @@ export function MatchTab() {
     // labels without ever risking a state-correction regression. The probe trace proved
     // app.documents[i].name is already current at the moment the "save" event fires —
     // we just have to ask.
-    const refreshNamesOnly = () => {
+    const refreshNamesOnly = (trigger: string) => {
       if (cancelled) return;
       try {
         const list = (app.documents ?? []).map((d: any) => ({ id: d.id, name: d.name }));
         setDocs(list);
+        // Diagnostic: surface that the refresh fired and what the active doc's name now
+        // looks like in our state. Visible right next to the dropdown so the user can
+        // confirm each save event is hitting the listener.
+        const active = list.find((d: { id: number }) => d.id === (app.activeDocument?.id ?? -1));
+        setRefreshTrace(`[${trigger}] ${list.length}d active=${active?.name ?? "?"}`);
       } catch { /* */ }
     };
     refreshDocsRef.current = readNow;
@@ -236,7 +245,7 @@ export function MatchTab() {
     // Auto-refresh dropdown labels on doc-mutating events. Read-only with respect to
     // every other piece of state — the only thing it touches is the docs array.
     const events = ["save", "rename", "set", "selectDocument", "open", "close"];
-    const onEvt = () => refreshNamesOnly();
+    const onEvt = (ev: any) => refreshNamesOnly(typeof ev === "string" ? ev : (ev?.event ?? "evt"));
     psAction.addNotificationListener(events, onEvt);
     return () => {
       cancelled = true;
@@ -1121,6 +1130,14 @@ export function MatchTab() {
       {/* Diagnostic-only doc-rename probe. Read-only; never mutates srcDocId / srcMode /
           targetId / etc. Logs every name-shaped value across every API surface so we can
           see whether ANY source updates after Save As before the panel is reopened. */}
+      {/* Diagnostic: live read of the docs state — confirms whether the dropdown's
+          render-time data matches what setDocs received. If this shows the new name
+          but the dropdown above still shows the old, it's a render/memoization issue
+          and not the listener. */}
+      <div style={{ marginTop: 4, padding: 4, fontSize: 10, fontFamily: "Consolas, Monaco, monospace", background: "#1a1a1a", color: "#cfcfcf", border: "1px solid #555", borderRadius: 2 }}>
+        last refresh: {refreshTrace || "(none yet)"}<br />
+        docs state: [{docs.map(d => `${d.id}:${d.name}`).join(", ") || "empty"}]
+      </div>
       <DocProbe />
     </div>
   );
