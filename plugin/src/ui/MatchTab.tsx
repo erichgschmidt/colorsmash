@@ -254,9 +254,16 @@ export function MatchTab() {
     };
     refreshDocsRef.current = readNow;
     readNow();
-    // No event listeners or poll — manual mode. The stale detector below sets `stale`
-    // true on any PS event so the user knows to click ⟳, which calls readNow().
-    return () => { cancelled = true; };
+    // Backstop poll: PS doesn't reliably notify on Save As (the doc title changes but
+    // no consistent event fires across versions). The notification listener below
+    // catches most cases, but renames slip through. Polling docs every 2s while the
+    // panel is visible is cheap (one batchPlay) and invisible to the user — the only
+    // alternative is leaving the dropdown stuck on stale names until close/reopen.
+    const pollTimer = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      readNow();
+    }, 2000);
+    return () => { cancelled = true; clearInterval(pollTimer); };
   }, []);
 
   // Stale detector: listens for PS events that would normally trigger an auto-refresh and
