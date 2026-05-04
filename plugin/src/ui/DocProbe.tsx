@@ -165,13 +165,17 @@ export function DocProbe() {
 
   const allText = records.map(recordToText).join("\n\n");
 
-  // UXP's navigator.clipboard is restricted; the easiest reliable copy path is to
-  // render the trace into a textarea and tell the user to use Ctrl+A, Ctrl+C in it.
-  const [showCopyTextarea, setShowCopyTextarea] = useState(false);
-  const taRef = useRef<HTMLTextAreaElement>(null);
-  const showCopy = () => {
-    setShowCopyTextarea(true);
-    setTimeout(() => { taRef.current?.focus(); taRef.current?.select(); }, 0);
+  // UXP sandboxes clipboard and textarea selection paths, so the only reliable
+  // way out of the panel is writing to a file the user picks via the save dialog.
+  const exportTrace = async () => {
+    try {
+      const uxp = require("uxp");
+      const file = await uxp.storage.localFileSystem.getFileForSaving("doc-probe.txt", {
+        types: ["txt"],
+      });
+      if (!file) return;
+      await file.write(allText, { format: uxp.storage.formats.utf8 });
+    } catch (e) { /* ignore — user cancelled or no permission */ }
   };
 
   return (
@@ -182,9 +186,9 @@ export function DocProbe() {
           style={{ padding: "2px 8px", fontSize: 10, background: busy ? "#333" : "#1473e6", color: "#fff", border: "none", borderRadius: 2, cursor: busy ? "default" : "pointer" }}>
           {busy ? "..." : "Probe now"}
         </button>
-        <button onClick={showCopy}
+        <button onClick={exportTrace}
           style={{ padding: "2px 8px", fontSize: 10, background: "transparent", color: "#aaa", border: "1px solid #555", borderRadius: 2, cursor: "pointer" }}>
-          Copy…
+          Export…
         </button>
         <button onClick={() => setRecords([])}
           style={{ padding: "2px 8px", fontSize: 10, background: "transparent", color: "#aaa", border: "1px solid #555", borderRadius: 2, cursor: "pointer" }}>
@@ -200,16 +204,6 @@ export function DocProbe() {
       }}>
         {allText || "(no probes yet — Save As a doc, click Probe now, or wait for an event)"}
       </pre>
-      {showCopyTextarea && (
-        <div style={{ marginTop: 4 }}>
-          <div style={{ fontSize: 10, opacity: 0.7, marginBottom: 2 }}>
-            Selected. Press Ctrl+C (or Cmd+C) to copy.
-            <span onClick={() => setShowCopyTextarea(false)} style={{ marginLeft: 8, cursor: "pointer", color: "#aaa", textDecoration: "underline" }}>close</span>
-          </div>
-          <textarea ref={taRef} readOnly value={allText}
-            style={{ width: "100%", height: 100, fontSize: 10, fontFamily: "Consolas, Monaco, monospace", background: "#222", color: "#ddd", border: "1px solid #555", borderRadius: 2, padding: 4, boxSizing: "border-box" }} />
-        </div>
-      )}
     </div>
   );
 }
