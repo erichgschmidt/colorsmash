@@ -40,6 +40,10 @@ export interface SourceSelectorProps {
   // Soft refresh fired on dropdown mousedown — re-polls docs + layers without
   // remounting, so by the time the dropdown's options paint, the list is fresh.
   onPreOpenRefresh?: () => void;
+  // Hash of doc id+name pairs from the parent. When it changes (e.g. doc rename),
+  // we use it as the <select>'s key so React fully remounts and UXP picks up the
+  // new option labels — UXP's native select caches displayed text otherwise.
+  docsKey?: string;
 
   // Optional thumbnail painted below the dropdown row. Caller owns the snapshot logic.
   thumbnail?: ReactNode;
@@ -92,7 +96,7 @@ export function SourceSelector(props: SourceSelectorProps) {
       {/* Single horizontal row: source/doc, then mode-specific widget, then refresh.
           Same pattern as the target row above the preview so the two read as a pair. */}
       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-        <select style={{ ...selStyle, flex: 1, minWidth: 0 }}
+        <select key={`srcdoc-${props.docsKey ?? ""}`} style={{ ...selStyle, flex: 1, minWidth: 0 }}
           onMouseDown={props.onPreOpenRefresh}
           title="Source — an open document (pick a layer at right), the active selection, or an image file from disk."
           value={

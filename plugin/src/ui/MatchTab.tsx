@@ -198,6 +198,12 @@ export function MatchTab() {
       zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel]);
 
   const [docs, setDocs] = useState<{ id: number; name: string }[]>([]);
+  // Hash of doc id+name pairs. Used as the key on the <select> elements so that
+  // when a doc gets renamed (Save As), React fully remounts the select rather than
+  // patching it in place. UXP's native select widget caches the displayed option
+  // text and won't repaint when only an <option>'s children change — only a fresh
+  // mount picks up the new label. Cheap to compute; only changes when names change.
+  const docsKey = useMemo(() => docs.map(d => `${d.id}:${d.name}`).join("|"), [docs]);
   // Diagnostic-only — surfaces every save/rename event hitting the docs refresh path
   // so we can see WHEN and WITH WHAT NAME setDocs fires. Removed once the rename bug
   // is fully resolved.
@@ -705,6 +711,7 @@ export function MatchTab() {
             selStyle={sel}
             onRefreshLayers={refreshSrcAll}
             onPreOpenRefresh={softRefreshSrc}
+            docsKey={docsKey}
             // PresetStrip replaces the source thumbnail: 1x4 row of source-facet
             // swatches (Color / Hue / B&W / Contrast). Click to STAGE that preset —
             // the matched preview pane below updates live; nothing is written to PS
@@ -725,7 +732,7 @@ export function MatchTab() {
           [doc dropdown] [layer dropdown] [refresh]. Kept compact (no list, no thumbnail)
           because the preview pane itself shows the target via the Before/After badge. */}
       <div style={{ marginTop: 6, display: "flex", gap: 4, alignItems: "center" }}>
-        <select style={{ ...sel, flex: 1, minWidth: 0 }} value={tgtDocId ?? ""} onChange={e => onSwitchTgtDoc(Number(e.target.value))}
+        <select key={`tgtdoc-${docsKey}`} style={{ ...sel, flex: 1, minWidth: 0 }} value={tgtDocId ?? ""} onChange={e => onSwitchTgtDoc(Number(e.target.value))}
           onMouseDown={softRefreshTgt}
           title="Target document — where the new Curves layer will land. Independent of the source doc.">
           {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
