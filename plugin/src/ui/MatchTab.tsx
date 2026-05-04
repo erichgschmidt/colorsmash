@@ -197,51 +197,69 @@ export function MatchTab() {
       zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel]);
 
   const [docs, setDocs] = useState<{ id: number; name: string }[]>([]);
-  // Hash of doc id+name pairs. Used as the key on the <select> elements so that
+  // Hash of doc id+name pairs. Used as the key on the doc <select> elements so that
   // when a doc gets renamed (Save As), React fully remounts the select rather than
-  // patching it in place. UXP's native select widget caches the displayed option
-  // text and won't repaint when only an <option>'s children change — only a fresh
-  // mount picks up the new label. Cheap to compute; only changes when names change.
+  // patching it in place. UXP's native select widget caches the displayed option text
+  // and won't repaint when only an <option>'s children change — only a fresh mount
+  // picks up the new label. Same trick applied to layer <select>s below.
   const docsKey = useMemo(() => docs.map(d => `${d.id}:${d.name}`).join("|"), [docs]);
-  const refreshDocsRef = useRef<() => void>(() => {});
+  const srcLayersKey = useMemo(() => srcLayers.map(l => `${l.id}:${l.name}`).join("|"), [srcLayers]);
+  const tgtLayersKey = useMemo(() => tgtLayers.map(l => `${l.id}:${l.name}`).join("|"), [tgtLayers]);
+
+  // Single source of truth for "re-read PS state into our React mirror". Splits into
+  // two concerns:
+  //   • readDocs():  re-read the doc list. Names-only by default (no pickFallback) so
+  //                  background events never mutate srcDocId / tgtDocId / srcMode.
+  //                  Mount path passes withFallback=true to seed the initial selection.
+  //   • Layer refresh: deferred to useLayers' refresh() per side.
+  // The doc <select>s + layer <select>s have docsKey/layersKey applied so any name
+  // change forces a UXP widget remount — which is why we no longer need the doc-id
+  // bounce that the old refreshSrcAll/refreshTgtAll did to clear UXP's label cache.
+  const refreshDocsRef = useRef<(withFallback?: boolean) => void>(() => {});
+  const refreshSrcLayersRef = useRef(refreshSrcLayers);
+  const refreshTgtLayersRef = useRef(refreshTgtLayers);
+  useEffect(() => { refreshSrcLayersRef.current = refreshSrcLayers; });
+  useEffect(() => { refreshTgtLayersRef.current = refreshTgtLayers; });
 
   useEffect(() => {
     let cancelled = false;
-    // Full refresh: re-reads the doc list AND re-applies the doc-id fallback. Used on
-    // mount and when the user explicitly clicks ⟳. Mutates srcDocId / tgtDocId.
-    const readNow = () => {
+    const readDocs = (withFallback = false) => {
       if (cancelled) return;
       try {
         const list = (app.documents ?? []).map((d: any) => ({ id: d.id, name: d.name }));
         setDocs(list);
-        // Auto-pick the active doc if nothing is selected yet, or if the previously selected
-        // doc has been closed. Otherwise, keep the panel selection — don't follow PS chrome.
-        const pickFallback = (prev: number | null) => {
-          if (prev != null && list.some((d: { id: number }) => d.id === prev)) return prev;
-          return app.activeDocument?.id ?? list[0]?.id ?? null;
-        };
-        setSrcDocId(pickFallback);
-        setTgtDocId(pickFallback);
+        if (withFallback) {
+          // Auto-pick the active doc if nothing is selected yet, or if the previously
+          // selected doc has been closed. Only on mount and explicit ⟳ — never on
+          // background events, which is what caused the auto-swap-to-selection regression.
+          const pickFallback = (prev: number | null) => {
+            if (prev != null && list.some((d: { id: number }) => d.id === prev)) return prev;
+            return app.activeDocument?.id ?? list[0]?.id ?? null;
+          };
+          setSrcDocId(pickFallback);
+          setTgtDocId(pickFallback);
+        }
       } catch { /* */ }
     };
-    // Names-only refresh: re-reads doc names but NEVER touches srcDocId / tgtDocId /
-    // srcMode / etc. Used by the PS event listener so Save As updates the dropdown
-    // labels without ever risking a state-correction regression. The probe trace proved
-    // app.documents[i].name is already current at the moment the "save" event fires —
-    // we just have to ask.
-    const refreshNamesOnly = () => {
-      if (cancelled) return;
-      try {
-        const list = (app.documents ?? []).map((d: any) => ({ id: d.id, name: d.name }));
-        setDocs(list);
-      } catch { /* */ }
+    refreshDocsRef.current = readDocs;
+    readDocs(true);  // mount: seed selection
+
+    // Single consolidated listener — replaces 3 overlapping ones. Every event that
+    // could change the doc list, layer list, or any name fires the same refresh path.
+    // Sets stale=true so the ⟳ button shows a "something changed" affordance, then
+    // re-reads docs (names-only) and re-pulls layer lists for both sides. The
+    // docsKey/layersKey on the <select>s handle UXP widget label invalidation.
+    const events = [
+      "save", "rename", "set", "select", "make", "delete", "open", "close", "move",
+      "duplicate", "paste", "rasterizeLayer", "groupLayer", "ungroupLayer",
+      "mergeLayers", "mergeVisible", "historyStateChanged", "selectDocument",
+    ];
+    const onEvt = () => {
+      setStale(true);
+      readDocs(false);
+      try { refreshSrcLayersRef.current(); } catch { /* */ }
+      try { refreshTgtLayersRef.current(); } catch { /* */ }
     };
-    refreshDocsRef.current = readNow;
-    readNow();
-    // Auto-refresh dropdown labels on doc-mutating events. Read-only with respect to
-    // every other piece of state — the only thing it touches is the docs array.
-    const events = ["save", "rename", "set", "selectDocument", "open", "close"];
-    const onEvt = () => refreshNamesOnly();
     psAction.addNotificationListener(events, onEvt);
     return () => {
       cancelled = true;
@@ -249,66 +267,19 @@ export function MatchTab() {
     };
   }, []);
 
-  // Stale detector: listens for PS events that would normally trigger an auto-refresh and
-  // just flips `stale` true so the ⟳ button can warn the user. Cleared whenever any
-  // refresh runs. Also auto-refreshes the docs + layers lists in the background so when
-  // the user opens a dropdown the options are already current — native <select> can't be
-  // updated mid-open, so the only way to "feel invisible" is to keep state pre-warmed via
-  // PS event notifications. The ⟳ button stays for the rare cross-plugin descriptor-cache
-  // case where only a hard remount clears stale names.
-  //
-  // Stash the refresh fns through refs so the effect can run once with [] deps. Without
-  // refs, the effect would re-run on every render (useLayers returns a new refresh fn
-  // each time), churning addNotificationListener / removeNotificationListener calls on
-  // PS's dispatcher for no reason.
-  const refreshSrcLayersRef = useRef(refreshSrcLayers);
-  const refreshTgtLayersRef = useRef(refreshTgtLayers);
-  useEffect(() => { refreshSrcLayersRef.current = refreshSrcLayers; });
-  useEffect(() => { refreshTgtLayersRef.current = refreshTgtLayers; });
-  useEffect(() => {
-    const events = [
-      "select", "make", "delete", "set", "open", "close", "move",
-      "duplicate", "paste", "rasterizeLayer", "groupLayer", "ungroupLayer",
-      "mergeLayers", "mergeVisible", "rename", "historyStateChanged", "selectDocument",
-    ];
-    const onEvt = () => {
-      setStale(true);
-      try { refreshDocsRef.current(); } catch { /* */ }
-      try { refreshSrcLayersRef.current(); } catch { /* */ }
-      try { refreshTgtLayersRef.current(); } catch { /* */ }
-    };
-    psAction.addNotificationListener(events, onEvt);
-    return () => { psAction.removeNotificationListener?.(events, onEvt); };
-  }, []);
-
-  // Soft pre-open refresh: fires on mousedown of any of the 4 source/target dropdowns,
-  // so by the time the user sees the options PS has been re-polled. No remount, no doc-id
-  // bounce — that would close the dropdown mid-open. Just docs list + layers list. The
-  // nuclear ⟳ button below stays available for the rare cross-plugin descriptor-cache case.
-  const softRefreshSrc = () => { refreshDocsRef.current(); refreshSrcLayers(); };
-  const softRefreshTgt = () => { refreshDocsRef.current(); refreshTgtLayers(); };
-
-  // Combined refresh: docs list + bounce the per-side docId to fully remount useLayers.
-  // Bouncing the id drops every cached layer reference (DOM-side and our own state), then
-  // re-fetches via batchPlay on remount. This is the nuclear option that works even when
-  // PS's internal descriptor cache holds stale names from another plugin's silent batch ops.
+  // ⟳ button: force-refresh path. Same data sources as the auto-refresh, but allows
+  // pickFallback to repair a closed-doc selection. No more doc-id bounce — the
+  // layersKey on the layer <select> takes care of UXP label cache invalidation, so
+  // we don't need to drop+remount useLayers. Kept for the rare case where another
+  // plugin's silent batch ops leave PS's descriptor cache stale and only a manual
+  // re-read clears it.
   const refreshSrcAll = () => {
-    refreshDocsRef.current();
+    refreshDocsRef.current(true);
     refreshSrcLayers();
-    const id = srcDocId;
-    if (id != null) {
-      setSrcDocId(null);
-      setTimeout(() => setSrcDocId(id), 50);
-    }
   };
   const refreshTgtAll = () => {
-    refreshDocsRef.current();
+    refreshDocsRef.current(true);
     refreshTgtLayers();
-    const id = tgtDocId;
-    if (id != null) {
-      setTgtDocId(null);
-      setTimeout(() => setTgtDocId(id), 50);
-    }
   };
 
   // Picking a doc in our dropdown is panel-only — we do NOT change PS's active document.
@@ -700,8 +671,8 @@ export function MatchTab() {
             sampleLock={sampleLock} setSampleLock={setSampleLock}
             selStyle={sel}
             onRefreshLayers={refreshSrcAll}
-            onPreOpenRefresh={softRefreshSrc}
             docsKey={docsKey}
+            layersKey={srcLayersKey}
             // PresetStrip replaces the source thumbnail: 1x4 row of source-facet
             // swatches (Color / Hue / B&W / Contrast). Click to STAGE that preset —
             // the matched preview pane below updates live; nothing is written to PS
@@ -723,20 +694,21 @@ export function MatchTab() {
           because the preview pane itself shows the target via the Before/After badge. */}
       <div style={{ marginTop: 6, display: "flex", gap: 4, alignItems: "center" }}>
         <select key={`tgtdoc-${docsKey}`} style={{ ...sel, flex: 1, minWidth: 0 }} value={tgtDocId ?? ""} onChange={e => onSwitchTgtDoc(Number(e.target.value))}
-          onMouseDown={softRefreshTgt}
           title="Target document — where the new Curves layer will land. Independent of the source doc.">
           {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
         </select>
-        <select style={{ ...sel, flex: 1, minWidth: 0 }} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}
-          onMouseDown={softRefreshTgt}
+        <select key={`tgtlayer-${tgtLayersKey}`} style={{ ...sel, flex: 1, minWidth: 0 }} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}
           title="Target layer — the layer the Curves adjustment will be clipped to.">
           {tgtLayers.length === 0 && <option value="">— none —</option>}
           {tgtLayers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
           <option value={MERGED_LAYER_ID}>Merged</option>
         </select>
-        <div onClick={refreshTgtAll} title="Refresh target document + layer list"
-          style={{ width: 22, height: 22, marginTop: 2, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", border: "1px solid #888", borderRadius: 2, color: "#ddd", fontSize: 16, userSelect: "none", boxSizing: "border-box", flexShrink: 0 }}>
-          <span style={{ marginTop: -3, marginLeft: 1, lineHeight: 1 }}>⟳</span>
+        {/* ⟳ demoted: smaller and dim. PS event listener auto-refreshes everything in
+            the background, so this is now a fallback for the rare cross-plugin
+            descriptor-cache case where PS itself returns stale data. */}
+        <div onClick={refreshTgtAll} title="Force refresh — rare; only needed if names look stale after another plugin's batch ops"
+          style={{ width: 18, height: 18, marginTop: 2, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", border: "1px solid #555", borderRadius: 2, color: "#888", fontSize: 12, userSelect: "none", boxSizing: "border-box", flexShrink: 0, opacity: stale ? 1 : 0.5 }}>
+          <span style={{ marginTop: -2, marginLeft: 1, lineHeight: 1 }}>⟳</span>
         </div>
       </div>
 

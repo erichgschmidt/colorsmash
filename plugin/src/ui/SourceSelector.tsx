@@ -37,13 +37,13 @@ export interface SourceSelectorProps {
 
   selStyle: React.CSSProperties;
   onRefreshLayers?: () => void;
-  // Soft refresh fired on dropdown mousedown — re-polls docs + layers without
-  // remounting, so by the time the dropdown's options paint, the list is fresh.
-  onPreOpenRefresh?: () => void;
-  // Hash of doc id+name pairs from the parent. When it changes (e.g. doc rename),
-  // we use it as the <select>'s key so React fully remounts and UXP picks up the
-  // new option labels — UXP's native select caches displayed text otherwise.
+  // Hashes of doc/layer id+name pairs from the parent. Used as the <select>'s key
+  // so when any name changes (e.g. Save As, layer rename), React remounts the select
+  // and UXP picks up the new option labels — UXP's native select caches displayed
+  // text otherwise. Auto-refreshes happen on PS events upstream; we just ride the
+  // resulting key change.
   docsKey?: string;
+  layersKey?: string;
 
   // Optional thumbnail painted below the dropdown row. Caller owns the snapshot logic.
   thumbnail?: ReactNode;
@@ -60,8 +60,7 @@ export function SourceSelector(props: SourceSelectorProps) {
   // Right-of-doc widget changes per mode. Layer mode → layer dropdown. Selection mode →
   // the auto/merge/lock toggle cluster. Browsed-file mode → sticky filename label.
   const rightWidget = srcMode === "layer" ? (
-    <select style={{ ...selStyle, flex: 1, minWidth: 0 }} value={sourceId ?? ""} onChange={e => setSourceId(Number(e.target.value))}
-      onMouseDown={props.onPreOpenRefresh}
+    <select key={`srclayer-${props.layersKey ?? ""}`} style={{ ...selStyle, flex: 1, minWidth: 0 }} value={sourceId ?? ""} onChange={e => setSourceId(Number(e.target.value))}
       title="Source layer — pixels are read from this layer in the source document.">
       {layers.length === 0 && <option value="">— none —</option>}
       {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
@@ -97,7 +96,6 @@ export function SourceSelector(props: SourceSelectorProps) {
           Same pattern as the target row above the preview so the two read as a pair. */}
       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
         <select key={`srcdoc-${props.docsKey ?? ""}`} style={{ ...selStyle, flex: 1, minWidth: 0 }}
-          onMouseDown={props.onPreOpenRefresh}
           title="Source — an open document (pick a layer at right), the active selection, or an image file from disk."
           value={
             srcMode === "folder" ? "__file__" :
@@ -116,10 +114,13 @@ export function SourceSelector(props: SourceSelectorProps) {
           {browsedFile && <option value="__file__">📁 {browsedFile}</option>}
         </select>
         {rightWidget}
+        {/* ⟳ demoted: smaller and dim. PS event listener auto-refreshes everything in
+            the background; this is now a fallback for the rare cross-plugin descriptor-
+            cache case. */}
         {props.onRefreshLayers && (
-          <div onClick={props.onRefreshLayers} title="Refresh document + layer list (use if a doc was just opened/closed or another plugin renamed layers)"
-            style={{ width: 22, height: 22, marginTop: 2, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", border: "1px solid #888", borderRadius: 2, color: "#ddd", fontSize: 16, userSelect: "none", boxSizing: "border-box", flexShrink: 0 }}>
-            <span style={{ marginTop: -3, marginLeft: 1, lineHeight: 1 }}>⟳</span>
+          <div onClick={props.onRefreshLayers} title="Force refresh — rare; only needed if names look stale after another plugin's batch ops"
+            style={{ width: 18, height: 18, marginTop: 2, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", border: "1px solid #555", borderRadius: 2, color: "#888", fontSize: 12, userSelect: "none", boxSizing: "border-box", flexShrink: 0, opacity: 0.5 }}>
+            <span style={{ marginTop: -2, marginLeft: 1, lineHeight: 1 }}>⟳</span>
           </div>
         )}
       </div>
