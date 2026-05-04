@@ -204,28 +204,18 @@ export function MatchTab() {
     // Fetch each open doc's name via batchPlay rather than trusting the UXP DOM's
      // cached `doc.name`. Same staleness issue layers had: the cache only invalidates
      // on certain notifications and Save As / rename doesn't always trigger them.
-     // Pull the full document descriptor (no _property filter) so PS returns every
-     // name-shaped field — title, name, fileReference — and we pick whichever looks
-     // freshest. Different PS versions return different fields after Save As.
      const fetchFreshDocNames = async (ids: number[]): Promise<Map<number, string>> => {
        const out = new Map<number, string>();
        if (ids.length === 0) return out;
        try {
          const queries = ids.map(id => ({
            _obj: "get",
-           _target: [{ _ref: "document", _id: id }],
+           _target: [{ _property: "title" }, { _ref: "document", _id: id }],
          }));
          const results: any[] = await psAction.batchPlay(queries, { synchronousExecution: false } as any);
          ids.forEach((id, i) => {
-           const r = results[i];
-           const fromPath = (() => {
-             const fr = r?.fileReference?._path ?? r?.fileReference;
-             if (typeof fr !== "string") return null;
-             const seg = fr.replace(/\\/g, "/").split("/").pop();
-             return seg || null;
-           })();
-           const n = r?.title || r?.name || fromPath;
-           if (typeof n === "string" && n.length > 0) out.set(id, n);
+           const n = results[i]?.title;
+           if (typeof n === "string") out.set(id, n);
          });
        } catch { /* fall back to DOM names */ }
        return out;
@@ -280,17 +270,11 @@ export function MatchTab() {
       // doc dropdown picks up the new title.
       "save",
     ];
-    const onEvt = (event?: string) => {
+    const onEvt = () => {
       setStale(true);
       try { refreshDocsRef.current(); } catch { /* */ }
       try { refreshSrcLayersRef.current(); } catch { /* */ }
       try { refreshTgtLayersRef.current(); } catch { /* */ }
-      // Save As: PS sometimes fires the event before the doc descriptor reflects the
-      // new file path/title, so a single refresh races and reads stale names. Defer
-      // a second refresh ~250ms later as a backstop.
-      if (event === "save") {
-        setTimeout(() => { try { refreshDocsRef.current(); } catch { /* */ } }, 250);
-      }
     };
     psAction.addNotificationListener(events, onEvt);
     return () => { psAction.removeNotificationListener?.(events, onEvt); };
