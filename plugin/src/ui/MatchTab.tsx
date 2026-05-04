@@ -201,32 +201,10 @@ export function MatchTab() {
 
   useEffect(() => {
     let cancelled = false;
-    // Fetch each open doc's name via batchPlay rather than trusting the UXP DOM's
-     // cached `doc.name`. Same staleness issue layers had: the cache only invalidates
-     // on certain notifications and Save As / rename doesn't always trigger them.
-     const fetchFreshDocNames = async (ids: number[]): Promise<Map<number, string>> => {
-       const out = new Map<number, string>();
-       if (ids.length === 0) return out;
-       try {
-         const queries = ids.map(id => ({
-           _obj: "get",
-           _target: [{ _property: "title" }, { _ref: "document", _id: id }],
-         }));
-         const results: any[] = await psAction.batchPlay(queries, { synchronousExecution: false } as any);
-         ids.forEach((id, i) => {
-           const n = results[i]?.title;
-           if (typeof n === "string") out.set(id, n);
-         });
-       } catch { /* fall back to DOM names */ }
-       return out;
-     };
-    const readNow = async () => {
+    const readNow = () => {
       if (cancelled) return;
       try {
-        const raw = (app.documents ?? []).map((d: any) => ({ id: d.id as number, name: d.name as string }));
-        const fresh = await fetchFreshDocNames(raw.map((d: { id: number }) => d.id));
-        const list = raw.map((d: { id: number; name: string }) => ({ id: d.id, name: fresh.get(d.id) ?? d.name }));
-        if (cancelled) return;
+        const list = (app.documents ?? []).map((d: any) => ({ id: d.id, name: d.name }));
         setDocs(list);
         // Auto-pick the active doc if nothing is selected yet, or if the previously selected
         // doc has been closed. Otherwise, keep the panel selection — don't follow PS chrome.
@@ -266,9 +244,6 @@ export function MatchTab() {
       "select", "make", "delete", "set", "open", "close", "move",
       "duplicate", "paste", "rasterizeLayer", "groupLayer", "ungroupLayer",
       "mergeLayers", "mergeVisible", "rename", "historyStateChanged", "selectDocument",
-      // "save" fires on Save As — the only way to rename a doc in PS — so the
-      // doc dropdown picks up the new title.
-      "save",
     ];
     const onEvt = () => {
       setStale(true);
