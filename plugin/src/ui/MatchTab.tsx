@@ -201,45 +201,41 @@ export function MatchTab() {
 
   useEffect(() => {
     let cancelled = false;
-    // Enumerate every open doc by ordinal index via batchPlay rather than reading
-    // `app.documents`. The DOM wrapper caches doc.name and doesn't always invalidate
-    // on Save As / rename; even querying-by-id can return cached descriptors. Walking
-    // by index forces PS to re-resolve its current doc list from scratch, returning
-    // the live title/fileReference every time. Layers had the same issue and use a
-    // similar batchPlay-bypass pattern.
-    const readDocsViaBatchPlay = async (): Promise<{ id: number; name: string }[]> => {
-      try {
-        const countRes: any[] = await psAction.batchPlay(
-          [{ _obj: "get", _target: [{ _property: "numberOfDocuments" }, { _ref: "application", _enum: "ordinal", _value: "targetEnum" }] }],
-          { synchronousExecution: false } as any
-        );
-        const count: number = countRes[0]?.numberOfDocuments ?? 0;
-        if (count === 0) return [];
-        const queries = Array.from({ length: count }, (_, i) => ({
-          _obj: "get",
-          _target: [{ _ref: "document", _index: i + 1 }],
-        }));
-        const results: any[] = await psAction.batchPlay(queries, { synchronousExecution: false } as any);
-        return results.map((r: any) => {
-          const fromPath = (() => {
-            const fr = r?.fileReference?._path ?? r?.fileReference;
-            if (typeof fr !== "string") return null;
-            const seg = fr.replace(/\\/g, "/").split("/").pop();
-            return seg || null;
-          })();
-          const id: number = r?.documentID ?? r?.ID ?? 0;
-          const name: string = r?.title || r?.name || fromPath || "(untitled)";
-          return { id, name };
-        }).filter((d: { id: number }) => d.id > 0);
-      } catch {
-        // Fall back to DOM read if batchPlay refuses (e.g. modal is active).
-        return (app.documents ?? []).map((d: any) => ({ id: d.id as number, name: d.name as string }));
-      }
-    };
+    // Fetch each open doc's name via batchPlay rather than trusting the UXP DOM's
+     // cached `doc.name`. Same staleness issue layers had: the cache only invalidates
+     // on certain notifications and Save As / rename doesn't always trigger them.
+     // Pull the full document descriptor (no _property filter) so PS returns every
+     // name-shaped field — title, name, fileReference — and we pick whichever looks
+     // freshest. Different PS versions return different fields after Save As.
+     const fetchFreshDocNames = async (ids: number[]): Promise<Map<number, string>> => {
+       const out = new Map<number, string>();
+       if (ids.length === 0) return out;
+       try {
+         const queries = ids.map(id => ({
+           _obj: "get",
+           _target: [{ _ref: "document", _id: id }],
+         }));
+         const results: any[] = await psAction.batchPlay(queries, { synchronousExecution: false } as any);
+         ids.forEach((id, i) => {
+           const r = results[i];
+           const fromPath = (() => {
+             const fr = r?.fileReference?._path ?? r?.fileReference;
+             if (typeof fr !== "string") return null;
+             const seg = fr.replace(/\\/g, "/").split("/").pop();
+             return seg || null;
+           })();
+           const n = r?.title || r?.name || fromPath;
+           if (typeof n === "string" && n.length > 0) out.set(id, n);
+         });
+       } catch { /* fall back to DOM names */ }
+       return out;
+     };
     const readNow = async () => {
       if (cancelled) return;
       try {
-        const list = await readDocsViaBatchPlay();
+        const raw = (app.documents ?? []).map((d: any) => ({ id: d.id as number, name: d.name as string }));
+        const fresh = await fetchFreshDocNames(raw.map((d: { id: number }) => d.id));
+        const list = raw.map((d: { id: number; name: string }) => ({ id: d.id, name: fresh.get(d.id) ?? d.name }));
         if (cancelled) return;
         setDocs(list);
         // Auto-pick the active doc if nothing is selected yet, or if the previously selected
