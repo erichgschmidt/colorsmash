@@ -25,7 +25,6 @@ interface MatchedPreviewProps {
 
 export const MatchedPreview = forwardRef<MatchedPreviewHandle, MatchedPreviewProps>(function MatchedPreview(props, ref) {
   const { onSwap, canSwap } = props;
-  const matchedFrontRef = useRef<HTMLImageElement>(null);
   const matchedContainerRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -33,10 +32,8 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, MatchedPreviewPro
   const dragStartRef = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
   const mouseOverMatchedRef = useRef(false);
 
-  // Cached pixel buffers — parent sends both via the handle. We encode each buffer
-  // to a PNG data URL ONCE when it arrives and cache the URL alongside it, so flipping
-  // Before/After is a free <img.src> swap rather than a per-flip re-encode (each PNG
-  // encode is a meaningful chunk of CPU at preview resolution).
+  // Cached pixel buffers — parent sends both via the handle. We PNG-encode once
+  // per arriving buffer and cache the URL so mode flips are free.
   const afterRef = useRef<{ rgba: Uint8Array; w: number; h: number; url: string } | null>(null);
   const beforeRef = useRef<{ rgba: Uint8Array; w: number; h: number; url: string } | null>(null);
   // Persistent "show before by default" toggle (click on badge).
@@ -45,38 +42,85 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, MatchedPreviewPro
   const [holding, setHolding] = useState(false);
   const displayBefore = showBefore !== holding;
 
-  // Render whichever buffer matches displayBefore. Called whenever buffers change OR
-  // the toggle/hold flips. No re-encoding — just swap the cached data URL.
+  // Double-buffer + latest-frame token. We render through TWO <img> elements
+  // and only show one at a time. When a new buffer arrives we set the OFF-screen
+  // img's src; when it loads (decode complete), we swap which is visible. The
+  // currently-visible img keeps showing the previous frame in the meantime, so
+  // there's no blank/flicker gap between updates.
+  //
+  // The token guards against late decodes for stale frames: we increment a
+  // counter on every setPixels and capture it at the start of the encode. When
+  // the off-screen img's onload fires, we only swap if our captured token is
+  // still the latest — otherwise a newer frame is already in flight or just
+  // landed and we discard ours.
+  const imgARef = useRef<HTMLImageElement>(null);
+  const imgBRef = useRef<HTMLImageElement>(null);
+  const [activeBuffer, setActiveBuffer] = useState<"A" | "B">("A");
+  // Most recent token issued. Capture at encode time; check at onload time.
+  const latestTokenRef = useRef(0);
+
+  // Render whichever buffer matches displayBefore. Routes the new url to the
+  // currently-OFF-screen img and swaps on its onload. For mode-flips (no new
+  // url, just toggle which buffer's url we're already showing) we don't need
+  // the swap dance — both URLs are pre-cached, so we just push them to both
+  // imgs and update the active flag synchronously.
   const renderCurrent = () => {
-    const img = matchedFrontRef.current;
-    if (!img) return;
     const buf = displayBefore ? beforeRef.current : afterRef.current;
-    if (!buf) return;
-    img.src = buf.url;
+    const a = imgARef.current; const b = imgBRef.current;
+    if (!a || !b || !buf) return;
+    // Mode-flip path: same url, just decide which img shows it. Set both src's
+    // to the same url so whichever becomes active has the right content.
+    if (a.src !== buf.url) a.src = buf.url;
+    if (b.src !== buf.url) b.src = buf.url;
   };
-  useEffect(renderCurrent, [showBefore, holding]); // re-render on mode flip
+  useEffect(renderCurrent, [showBefore, holding]);
+
+  // Push a new buffer onto the off-screen img and swap on load. Token-guarded.
+  const pushNew = (which: "after" | "before", buf: { rgba: Uint8Array; w: number; h: number; url: string }) => {
+    const token = ++latestTokenRef.current;
+    // Decide which img is currently off-screen (based on activeBuffer state).
+    // Use the ref values at call time rather than closure-capturing activeBuffer
+    // because pushNew is invoked from the imperative setPixels.
+    const showingA = (activeBuffer === "A");
+    const offImg = showingA ? imgBRef.current : imgARef.current;
+    if (!offImg) return;
+    // Skip the swap if we're not currently showing this buffer's view.
+    const isViewActive = (which === "before") === displayBefore;
+    if (!isViewActive) return;
+    const onload = () => {
+      offImg.removeEventListener("load", onload);
+      offImg.removeEventListener("error", onerror);
+      // Stale-frame guard: a newer pushNew has already happened, drop ours.
+      if (token !== latestTokenRef.current) return;
+      setActiveBuffer(showingA ? "B" : "A");
+    };
+    const onerror = () => {
+      offImg.removeEventListener("load", onload);
+      offImg.removeEventListener("error", onerror);
+    };
+    offImg.addEventListener("load", onload);
+    offImg.addEventListener("error", onerror);
+    offImg.src = buf.url;
+  };
 
   useImperativeHandle(ref, () => ({
     setPixels: (rgba, w, h) => {
-      // Skip re-encode when the parent hands us the same buffer reference (the result
-      // pixels do change every redraw, so this fast-path mostly catches mode-flip churn).
       if (afterRef.current && afterRef.current.rgba === rgba) return;
       let url = "";
       try { url = rgbaToPngDataUrl(rgba, w, h); } catch { return; }
-      afterRef.current = { rgba, w, h, url };
-      if (!displayBefore) renderCurrent();
+      const buf = { rgba, w, h, url };
+      afterRef.current = buf;
+      if (!displayBefore) pushNew("after", buf);
     },
     setBefore: (rgba, w, h) => {
-      // Target.snap.data is a stable reference until the target itself changes, so the
-      // identity check skips the re-encode on every slider tick (the parent calls this
-      // unconditionally per redraw to keep the badge in sync).
       if (beforeRef.current && beforeRef.current.rgba === rgba) return;
       let url = "";
       try { url = rgbaToPngDataUrl(rgba, w, h); } catch { return; }
-      beforeRef.current = { rgba, w, h, url };
-      if (displayBefore) renderCurrent();
+      const buf = { rgba, w, h, url };
+      beforeRef.current = buf;
+      if (displayBefore) pushNew("before", buf);
     },
-  }), [displayBefore]);
+  }), [displayBefore, activeBuffer]);
 
   const onZoomMouseDown = (e: React.MouseEvent) => {
     dragStartRef.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y };
@@ -211,13 +255,26 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, MatchedPreviewPro
         onMouseDown={onZoomMouseDown}
         onMouseEnter={() => { mouseOverMatchedRef.current = true; }}
         onMouseLeave={() => { mouseOverMatchedRef.current = false; }}>
-        <img ref={matchedFrontRef} alt=""
-          style={{
-            width: `${100 * zoom}%`, height: `${100 * zoom}%`,
-            objectFit: "contain",
-            marginLeft: `${pan.x}px`, marginTop: `${pan.y}px`,
-            flexShrink: 0,
-          }} />
+        {/* Two stacked imgs for double-buffered swap. The off-screen one
+            decodes the next frame; on its onload we swap which is visible.
+            This eliminates the brief blank gap that single-img + img.src=
+            update can show when the parent feeds a new buffer mid-decode.
+            We render BOTH absolutely-positioned with the same zoom/pan
+            transform so the swap is pixel-identical in geometry. */}
+        {(["A", "B"] as const).map(which => (
+          <img key={which} ref={which === "A" ? imgARef : imgBRef} alt=""
+            style={{
+              position: "absolute", inset: 0, margin: "auto",
+              width: `${100 * zoom}%`, height: `${100 * zoom}%`,
+              objectFit: "contain",
+              transform: `translate(${pan.x}px, ${pan.y}px)`,
+              flexShrink: 0,
+              opacity: activeBuffer === which ? 1 : 0,
+              // No transition — we want the swap to be instant. Opacity is
+              // the binary visibility toggle; both imgs are mounted and
+              // decoded in their respective slots.
+            }} />
+        ))}
       </div>
     </>
   );
