@@ -90,13 +90,27 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, MatchedPreviewPro
   };
   const resetZoom = () => { setZoom(1); setPan({ x: 0, y: 0 }); };
 
-  // Note for future perf revisits: UXP's Chromium canvas 2D context is missing
-  // every pixel-data API (createImageData / putImageData / getImageData /
-  // ImageData / OffscreenCanvas / createImageBitmap). The PNG-data-URL → <img>
-  // path used here is the only option in UXP; canvas was attempted in the
-  // weighted-palette branch and reverted. Blob + URL.createObjectURL DO exist
-  // but only help if you've already paid the PNG encode cost, which is the
-  // actual bottleneck. Captured here so we don't re-run the experiment.
+  // Note for future perf revisits: UXP's Chromium is unusually restricted on
+  // pixel-data paths. Two experiments captured here so we don't re-run them:
+  //
+  //   1. Canvas 2D pixel APIs — ALL missing: createImageData, putImageData,
+  //      getImageData, ImageData global, OffscreenCanvas, createImageBitmap.
+  //      ctx.fillRect works (basic 2D primitives are fine), but you can't push
+  //      a raw RGBA buffer onto a canvas. Tried in feature/palette-weighted-bar
+  //      and reverted.
+  //
+  //   2. BMP data URL — silently rejected. UXP's <img> decoder fires neither
+  //      onload nor onerror for `data:image/bmp;base64,...`, even with the img
+  //      mounted in DOM. PNG control fires events fine in the same harness, so
+  //      it's specifically BMP that's not decoded. Tried in
+  //      feature/bmp-preview-probe (branch deleted).
+  //
+  // Blob + URL.createObjectURL DO exist, but they only help once you've paid
+  // the PNG encode cost — and PNG encoding is the actual bottleneck. So PNG
+  // data URL → <img> is the floor. Drag perf is acceptable thanks to the
+  // cluster-assignment cache + 30fps redraw throttle in MatchTab. If preview
+  // ever feels slow again, the next lever is lower-res-during-interaction
+  // (render at 128² during drag, full 256² on release) — not a new transport.
 
   // Wheel-zoom was attempted but UXP's host-level scroll routing pre-empts our document
   // handler unless an active mouse interaction is happening. Conceded — buttons + drag-pan
