@@ -49,37 +49,79 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, MatchedPreviewPro
   const [holding, setHolding] = useState(false);
   const displayBefore = showBefore !== holding;
 
+  // Diagnostic flag — set to true to log per-frame state. Leave on while
+  // debugging the canvas blank-preview issue, remove once we've confirmed
+  // what's working.
+  const DEBUG_RENDER = true;
+  // One-time canvas sanity check: fill a colored rect to confirm the context
+  // can draw at all. If this never appears the issue is canvas mounting / CSS
+  // visibility, not ImageData.
+  const sanityCheckedRef = useRef(false);
+
   // Blit the chosen buffer onto the canvas. Resizes canvas intrinsic dims to match
   // the buffer (no-op if unchanged) so putImageData lands 1:1 in pixel space; CSS
-  // handles the visual sizing via the zoom/pan style. Wraps the Uint8Array in a
-  // Uint8ClampedArray view of the same memory — zero-copy.
+  // handles the visual sizing via the zoom/pan style.
   const renderCurrent = () => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas) {
+      if (DEBUG_RENDER) console.log("MP render: canvas ref null");
+      return;
+    }
     const buf = displayBefore ? beforeRef.current : afterRef.current;
-    if (!buf) return;
+    if (!buf) {
+      if (DEBUG_RENDER) console.log("MP render: buffer null", { displayBefore, hasBefore: !!beforeRef.current, hasAfter: !!afterRef.current });
+      return;
+    }
     if (canvas.width !== buf.w) canvas.width = buf.w;
     if (canvas.height !== buf.h) canvas.height = buf.h;
     const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    if (!ctx) {
+      if (DEBUG_RENDER) console.error("MP render: getContext('2d') returned null — UXP canvas may not support 2D");
+      return;
+    }
+
+    // First-time sanity check: draw a magenta square so we can confirm the
+    // canvas, its context, and CSS visibility are all working independently
+    // of putImageData / ImageData.
+    if (!sanityCheckedRef.current) {
+      sanityCheckedRef.current = true;
+      try {
+        ctx.fillStyle = "magenta";
+        ctx.fillRect(0, 0, Math.min(40, buf.w), Math.min(40, buf.h));
+        if (DEBUG_RENDER) console.log("MP render: drew sanity rect", {
+          canvasW: canvas.width, canvasH: canvas.height,
+          rectW: canvas.getBoundingClientRect().width,
+          rectH: canvas.getBoundingClientRect().height,
+        });
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error("MP render: fillRect failed:", e);
+      }
+      // Don't return — fall through to putImageData so subsequent frames
+      // overwrite the magenta with real pixels.
+    }
+
     try {
-      // UXP's Chromium doesn't expose ImageData as a global, so we can't use
-      // `new ImageData(...)`. The canvas 2D context provides a factory:
-      // ctx.createImageData(w, h) returns an ImageData object owned by the
-      // context with zeroed data. Copy our rgba bytes into its .data buffer
-      // (.set is fast — single memcpy at the underlying TypedArray level)
-      // then putImageData blits it onto the canvas.
+      // UXP's Chromium doesn't expose ImageData as a global. ctx.createImageData
+      // is the supported factory.
       const imageData = ctx.createImageData(buf.w, buf.h);
       imageData.data.set(buf.rgba);
       ctx.putImageData(imageData, 0, 0);
+      if (DEBUG_RENDER) console.log("MP render: putImageData ok", {
+        bufLen: buf.rgba.length, expected: buf.w * buf.h * 4,
+        canvasW: canvas.width, canvasH: canvas.height,
+      });
     } catch (e) {
-      // Surface unexpected errors to console so a blank preview is debuggable
-      // instead of silent. Common cases: dim mismatch, browser quota.
       // eslint-disable-next-line no-console
       console.error("MatchedPreview putImageData failed:", e);
     }
   };
   useEffect(renderCurrent, [showBefore, holding]); // re-render on mode flip
+  // Render-on-mount fallback: if the parent called setPixels before the canvas
+  // ref was attached, the cached buffer never made it onto the canvas. Run
+  // once after first commit so any pre-mount buffer paints. Cheap if no buffer
+  // is cached yet (early-return).
+  useEffect(() => { renderCurrent(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useImperativeHandle(ref, () => ({
     setPixels: (rgba, w, h) => {
@@ -225,6 +267,11 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, MatchedPreviewPro
             transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
             transformOrigin: "center",
             flexShrink: 0,
+            // Diagnostic background — yellow tint shows the canvas is mounted
+            // and visible even when no pixels have been drawn. Will be fully
+            // covered by putImageData when rendering succeeds. Remove once we
+            // confirm the preview renders.
+            background: "rgba(255, 255, 0, 0.15)",
           }} />
       </div>
     </>
