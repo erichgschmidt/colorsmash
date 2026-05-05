@@ -231,15 +231,33 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, MatchedPreviewPro
             }}>
             {badgeText}
           </div>
+          {/* Zoom cluster: − [slider] + [%-readout]. Slider borrowed from
+              Selectrix's MaskPreview — log2-scaled so each unit doubles/halves,
+              which feels natural for zoom (linear range would crowd the lower
+              end and feel sluggish near 1.0). Min 0.25× = -2, max 8× = +3 in
+              log2 space. */}
           <div onClick={() => zoom > 0.25 && setZoom(z => Math.max(0.25, z - 0.25))} title="Zoom out"
             style={{ width: 18, height: 16, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, color: zoom <= 0.25 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: zoom <= 0.25 ? "default" : "pointer", userSelect: "none", boxSizing: "border-box" }}>
             <span style={{ marginTop: -2, marginLeft: 1, lineHeight: 1 }}>-</span>
           </div>
-          <span style={{ minWidth: 36, textAlign: "center" }}>{Math.round(zoom * 100)}%</span>
+          <input type="range"
+            min={Math.log2(0.25)} max={Math.log2(8)} step={0.05}
+            value={Math.log2(Math.max(0.25, Math.min(8, zoom)))}
+            onInput={e => {
+              const v = parseFloat((e.target as HTMLInputElement).value);
+              if (!isNaN(v)) setZoom(Math.pow(2, v));
+            }}
+            onChange={e => {
+              const v = parseFloat((e.target as HTMLInputElement).value);
+              if (!isNaN(v)) setZoom(Math.pow(2, v));
+            }}
+            title={`Zoom ${Math.round(zoom * 100)}%`}
+            style={{ width: 70, margin: 0, cursor: "pointer" }} />
           <div onClick={() => zoom < 8 && setZoom(z => Math.min(8, z + 0.25))} title="Zoom in"
             style={{ width: 18, height: 16, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, color: zoom >= 8 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: zoom >= 8 ? "default" : "pointer", userSelect: "none", boxSizing: "border-box" }}>
             <span style={{ marginTop: -2, marginLeft: 1, lineHeight: 1 }}>+</span>
           </div>
+          <span style={{ minWidth: 32, textAlign: "right", opacity: 0.7 }}>{Math.round(zoom * 100)}%</span>
           <div
             onClick={() => setBgMatchPanel(b => !b)}
             title={bgMatchPanel ? "Preview background: panel gray (click for dark)" : "Preview background: dark (click to match panel)"}
