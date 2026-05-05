@@ -104,17 +104,9 @@ export function PaletteStrip(props: PaletteStripProps) {
     for (const w of displayWidths) { leftEdges.push(acc); acc += w; }
   }
 
-  // Drag a boundary handle: index `i` separates display-order segment i from i+1.
-  // Two modes:
-  //
-  // Pair-wise (default): mass-conserving across the two adjacent segments only.
-  //   The pair's total displayValue stays constant; segments outside the pair
-  //   are unchanged. Feels like local rebalancing.
-  //
-  // Adaptive: drag determines a new value for segment i (the segment to the
-  //   left of the handle), and ALL OTHER segments rescale by the same factor
-  //   so their ratios stay intact. Total displayValue stays at 1.0 (normalized).
-  //   Feels like editing a single weight in isolation.
+  // Pair-wise drag (handle between two segments): mass-conserving across the two
+  // adjacent segments only. The pair's total displayValue stays constant; segments
+  // outside the pair are unchanged. Used in the default (non-adaptive) mode.
   const startHandleDrag = (i: number) => (e: React.PointerEvent) => {
     e.preventDefault(); e.stopPropagation();
     const bar = barRef.current;
@@ -122,60 +114,6 @@ export function PaletteStrip(props: PaletteStripProps) {
     (e.target as Element).setPointerCapture?.(e.pointerId);
     const idxLeft = orderedIndices[i];
     const idxRight = orderedIndices[i + 1];
-
-    if (adaptive) {
-      // Snapshot at drag start: total displayValue normalization, segment i's
-      // value, and the sum of all segments to the LEFT of i. We solve for vi_new
-      // such that the cursor lands at leftEdges[i]_new + vi_new, with all
-      // non-i segments scaling proportionally as vi changes.
-      //
-      //   leftEdges[i]_new = L_start × (1 - vi_new) / (1 - vi_start)
-      //   xFrac = leftEdges[i]_new + vi_new
-      //   → vi_new = (xFrac - ratio_left) / (1 - ratio_left)
-      //   where ratio_left = L_start / (1 - vi_start)
-      const totalStart = displayValues.reduce((a, b) => a + b, 0) || 1;
-      const viStart = displayValues[i] / totalStart;
-      const lStart = leftEdges[i] / 100; // already in % normalized to bar
-      const sumOthersStart = 1 - viStart;
-      if (sumOthersStart < 1e-6) {
-        // Degenerate: segment i is the only one with weight. Nothing to scale.
-        return;
-      }
-      const ratioLeft = lStart / sumOthersStart;
-      const pi = Math.max(1e-6, swatches[idxLeft]?.weight ?? 0);
-      // Capture the current weights so each onMove computes from the snapshot,
-      // not from the previous frame's weights (would compound rounding).
-      const weightsStart = weights.slice();
-
-      const onMove = (ev: PointerEvent) => {
-        const rect = bar.getBoundingClientRect();
-        if (rect.width === 0) return;
-        const xFrac = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
-        const denom = 1 - ratioLeft;
-        if (denom < 1e-6) return; // degenerate; shouldn't happen if sumOthersStart > 0
-        const viNew = Math.max(0, Math.min(1, (xFrac - ratioLeft) / denom));
-        // Scale factor applied to every OTHER weight.
-        const scale = (1 - viNew) / Math.max(1e-6, 1 - viStart);
-        const next = weightsStart.slice();
-        next[idxLeft] = (viNew * totalStart) / pi;
-        for (let j = 0; j < next.length; j++) {
-          if (j === idxLeft) continue;
-          next[j] = weightsStart[j] * scale;
-        }
-        setWeights(next);
-      };
-      const onUp = () => {
-        window.removeEventListener("pointermove", onMove);
-        window.removeEventListener("pointerup", onUp);
-      };
-      window.addEventListener("pointermove", onMove);
-      window.addEventListener("pointerup", onUp);
-      return;
-    }
-
-    // Pair-wise mode (default): mass-conserving on the displayValue (= weights ×
-    // natural prevalence) of just the two adjacent segments. The pair's total
-    // stays constant, the split shifts based on cursor position within the pair.
     const leftEdgeOfPair = leftEdges[i];
     const rightEdgeOfPair = leftEdges[i + 1] + displayWidths[i + 1];
     const pLeft = Math.max(1e-6, swatches[idxLeft]?.weight ?? 0);
@@ -194,6 +132,51 @@ export function PaletteStrip(props: PaletteStripProps) {
       const next = weights.slice();
       next[idxLeft] = (pairValue * fracLeft) / pLeft;
       next[idxRight] = (pairValue * (1 - fracLeft)) / pRight;
+      setWeights(next);
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+
+  // Body drag (adaptive mode): each swatch becomes its own draggable target.
+  // Drag right to grow the swatch, drag left to shrink it. All OTHER swatches
+  // rebalance proportionally so their relative ratios stay intact. Symmetric:
+  // every swatch has its own body, so the asymmetry of N-1 handles for N
+  // segments doesn't show up here. Cursor delta in % of bar width maps
+  // directly to Δvi (the segment's normalized displayValue). E.g., dragging
+  // right by half the bar grows the segment's share by 50 percentage points.
+  const startBodyDrag = (i: number) => (e: React.PointerEvent) => {
+    e.preventDefault(); e.stopPropagation();
+    const bar = barRef.current;
+    if (!bar) return;
+    (e.target as Element).setPointerCapture?.(e.pointerId);
+    const idx = orderedIndices[i];
+    const totalStart = displayValues.reduce((a, b) => a + b, 0) || 1;
+    const viStart = displayValues[i] / totalStart;
+    const sumOthersStart = 1 - viStart;
+    const pi = Math.max(1e-6, swatches[idx]?.weight ?? 0);
+    const weightsStart = weights.slice();
+    const startX = e.clientX;
+    const rect = bar.getBoundingClientRect();
+    const barWidth = rect.width || 1;
+
+    const onMove = (ev: PointerEvent) => {
+      const dxFrac = (ev.clientX - startX) / barWidth; // − = shrink, + = grow
+      const viNew = Math.max(0, Math.min(1, viStart + dxFrac));
+      // Scale factor for all OTHER segments. If sum_others_start was 0
+      // (segment i held all the weight), there's nothing to scale and we
+      // can't redistribute back; clamp to leaving others at 0.
+      const scale = sumOthersStart < 1e-6 ? 0 : (1 - viNew) / sumOthersStart;
+      const next = weightsStart.slice();
+      next[idx] = (viNew * totalStart) / pi;
+      for (let j = 0; j < next.length; j++) {
+        if (j === idx) continue;
+        next[j] = weightsStart[j] * scale;
+      }
       setWeights(next);
     };
     const onUp = () => {
@@ -225,8 +208,8 @@ export function PaletteStrip(props: PaletteStripProps) {
   const adaptiveToggle = setAdaptive ? (
     <div onClick={() => setAdaptive(!adaptive)}
       title={adaptive
-        ? "Adaptive: dragging keeps OTHER swatches' ratios intact (proportional rebalance). Click to switch to pair-wise."
-        : "Pair-wise: dragging only redistributes between the two neighbors. Click to switch to adaptive (proportional rebalance)."}
+        ? "Adaptive: drag a swatch body to grow/shrink it; others rebalance proportionally. Click to switch to handle mode."
+        : "Handle mode: drag the white dividers to redistribute weight between adjacent neighbors. Click to switch to adaptive (drag swatch body)."}
       style={countBtnStyle(adaptive)}>
       adapt
     </div>
@@ -277,15 +260,20 @@ export function PaletteStrip(props: PaletteStripProps) {
           sit exactly at boundary edges without flex math drifting. */}
       <div ref={barRef}
         style={{ position: "relative", height: BAR_HEIGHT, width: "100%", userSelect: "none" }}
-        title={`Source palette — ${tipForPreset} (drag handles to weight)`}>
+        title={`Source palette — ${tipForPreset} ${adaptive ? "(drag swatch body — others rebalance)" : "(drag handles to weight)"}`}>
         {orderedIndices.map((idx, i) => {
           const s = swatches[idx];
           const w = weights[idx] ?? 0;
           const naturalPct = (s.weight * 100).toFixed(0);
           const currentPct = ((displayValues[i] / valueSum) * 100).toFixed(0);
           const multiplierStr = w === 1 ? "neutral" : `×${w.toFixed(2)}`;
+          // In adaptive mode the swatch body itself is the drag target — every
+          // swatch can be sized in isolation, with all others rebalancing
+          // proportionally. In pair-wise mode, segments are visual only and
+          // the white handles between them do the work.
           return (
             <div key={`seg-${idx}`}
+              onPointerDown={adaptive ? startBodyDrag(i) : undefined}
               style={{
                 position: "absolute", top: 0, height: BAR_HEIGHT,
                 left: `${leftEdges[i]}%`, width: `${displayWidths[i]}%`,
@@ -293,14 +281,18 @@ export function PaletteStrip(props: PaletteStripProps) {
                 border: "1px solid #333",
                 borderRadius: 2,
                 opacity: w < 0.02 ? 0.35 : 1,
+                cursor: adaptive ? "ew-resize" : "default",
+                touchAction: adaptive ? "none" : "auto",
               }}
               title={`rgb(${s.r}, ${s.g}, ${s.b}) — natural ${naturalPct}% · current ${currentPct}% · ${multiplierStr}`}
             />
           );
         })}
-        {/* Drag handles at internal boundaries. Sit on top of the segment edge
-            with a small grab affordance. Only N-1 handles for N segments. */}
-        {orderedIndices.slice(0, -1).map((_, i) => {
+        {/* Pair-wise drag handles at internal boundaries. Hidden in adaptive
+            mode since the swatch bodies themselves are the drag targets there.
+            Only N-1 handles for N segments — that's the asymmetry that made
+            adaptive feel weird when bound to handles instead of bodies. */}
+        {!adaptive && orderedIndices.slice(0, -1).map((_, i) => {
           const x = leftEdges[i] + displayWidths[i]; // boundary between i and i+1
           return (
             <div key={`handle-${i}`} onPointerDown={startHandleDrag(i)}
