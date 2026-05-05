@@ -63,20 +63,18 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, MatchedPreviewPro
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     try {
-      // Copying constructor: `new Uint8ClampedArray(typedArray)` element-wise
-      // copies. Safer than the zero-copy buffer-view form, which throws in some
-      // environments when the source buffer's type isn't a plain ArrayBuffer
-      // (e.g. SharedArrayBuffer, detached, or post-transfer). The copy is one
-      // memcpy per redraw — still vastly cheaper than PNG encoding.
-      const clamped = new Uint8ClampedArray(buf.rgba);
+      // Wrap rgba in a Uint8ClampedArray view of the same memory — zero-copy. The
+      // explicit Uint8ClampedArray constructor signature TS likes is the buffer-
+      // view form (cast through unknown is needed because TS's lib types narrow
+      // the buffer generic in a way that isn't ergonomic here).
+      const clamped = new Uint8ClampedArray(
+        buf.rgba.buffer as unknown as ArrayBuffer,
+        buf.rgba.byteOffset,
+        buf.rgba.length,
+      );
       const imageData = new ImageData(clamped, buf.w, buf.h);
       ctx.putImageData(imageData, 0, 0);
-    } catch (e) {
-      // Surface unexpected errors to console so a blank preview is debuggable
-      // instead of silent. Common cases: dim mismatch, browser quota.
-      // eslint-disable-next-line no-console
-      console.error("MatchedPreview putImageData failed:", e);
-    }
+    } catch { /* ignore: malformed buffer / browser limit */ }
   };
   useEffect(renderCurrent, [showBefore, holding]); // re-render on mode flip
 
@@ -209,20 +207,16 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, MatchedPreviewPro
         onMouseDown={onZoomMouseDown}
         onMouseEnter={() => { mouseOverMatchedRef.current = true; }}
         onMouseLeave={() => { mouseOverMatchedRef.current = false; }}>
-        {/* Canvas sizing: intrinsic dimensions match the buffer (set in
-            renderCurrent via canvas.width/height). CSS uses auto sizing
-            constrained by max-width/max-height so the canvas fits the container
-            at zoom=1 with its native aspect preserved. Zoom + pan applied via
-            transform — transform-origin: center so zooming pivots around the
-            visual center, not the top-left corner.
-            (object-fit on canvas is unreliable across Chromium versions, so
-            we don't use it; max-* + auto sizing is the portable equivalent.) */}
+        {/* Canvas styling mirrors the previous <img>: zoom-scaled width/height with
+            objectFit:contain for aspect-preserving fit. Modern Chromium (which UXP
+            uses) honors object-fit on canvas. imageRendering kept default ("auto")
+            for smooth scaling — pixel-art crisp would be wrong for a photographic
+            preview. */}
         <canvas ref={canvasRef}
           style={{
-            width: "auto", height: "auto",
-            maxWidth: "100%", maxHeight: "100%",
-            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-            transformOrigin: "center",
+            width: `${100 * zoom}%`, height: `${100 * zoom}%`,
+            objectFit: "contain",
+            marginLeft: `${pan.x}px`, marginTop: `${pan.y}px`,
             flexShrink: 0,
           }} />
       </div>
