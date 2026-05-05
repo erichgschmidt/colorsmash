@@ -198,24 +198,23 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, MatchedPreviewPro
   return (
     <>
       <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span>Preview</span>
+        {/* Swap source/target button — flush left so it doesn't compete with the
+            zoom cluster on the right. Only enabled when source is an actual layer
+            (selection/folder sources can't be valid destinations). */}
+        {onSwap ? (
+          <div onClick={() => { if (canSwap) onSwap(); }}
+            title={canSwap ? "Swap source and target (docs + layers)" : "Swap unavailable: source must be a layer"}
+            style={{
+              height: 16, width: 22, display: "inline-flex", alignItems: "center", justifyContent: "center",
+              fontSize: 11, fontWeight: 700,
+              color: canSwap ? "#ddd" : "#666",
+              border: "1px solid " + (canSwap ? "#888" : "#555"),
+              borderRadius: 2, cursor: canSwap ? "pointer" : "default", userSelect: "none", boxSizing: "border-box",
+            }}>
+            <span style={{ marginTop: -1, lineHeight: 1 }}>⇄</span>
+          </div>
+        ) : <span />}
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          {/* Swap source/target button — sits just left of the Before/After badge.
-              Only enabled when source is an actual layer (selection/folder sources
-              can't be valid destinations, so swap is meaningless there). */}
-          {onSwap && (
-            <div onClick={() => { if (canSwap) onSwap(); }}
-              title={canSwap ? "Swap source and target (docs + layers)" : "Swap unavailable: source must be a layer"}
-              style={{
-                height: 16, width: 22, marginRight: 8, display: "inline-flex", alignItems: "center", justifyContent: "center",
-                fontSize: 11, fontWeight: 700,
-                color: canSwap ? "#ddd" : "#666",
-                border: "1px solid " + (canSwap ? "#888" : "#555"),
-                borderRadius: 2, cursor: canSwap ? "pointer" : "default", userSelect: "none", boxSizing: "border-box",
-              }}>
-              <span style={{ marginTop: -1, lineHeight: 1 }}>⇄</span>
-            </div>
-          )}
           {/* Before/After badge — moved out of the preview overlay into the header bar
               so it doesn't sit on top of the image. Click toggles persistent view;
               click-and-hold peeks the other view momentarily. Sits just left of the

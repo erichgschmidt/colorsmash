@@ -72,6 +72,10 @@ export function MatchTab() {
   const [activePreset, setActivePreset] = useState<Preset>("color");
   // Palette swatch count (3 / 5 / 7). Persisted across sessions.
   const [paletteCount, setPaletteCount] = useState<PaletteCount>(5);
+  // Adaptive drag mode: when true, dragging a handle keeps the other swatches'
+  // ratio intact by scaling them all proportionally. When false (default), only
+  // the two neighbors of the dragged handle redistribute. Persisted.
+  const [paletteAdaptive, setPaletteAdaptive] = useState(false);
   // Per-cluster weights (1 = neutral, 0 = excluded, >1 = boosted). Reset on every
   // source/count change since clusters change identity. NOT persisted — different
   // sources produce different clusters and stale weights would be confusing.
@@ -169,6 +173,7 @@ export function MatchTab() {
         if (s.multiZoneLimit) setMultiZoneLimit(s.multiZoneLimit);
         if (s.adaptiveBands != null) setAdaptiveBands(s.adaptiveBands);
         if (s.paletteCount === 3 || s.paletteCount === 5 || s.paletteCount === 7) setPaletteCount(s.paletteCount);
+        if (s.paletteAdaptive != null) setPaletteAdaptive(s.paletteAdaptive);
         if (s.chromaOnly != null) setChromaOnly(s.chromaOnly);
         if (s.colorSpace) setColorSpace(s.colorSpace);
         if (s.deselectOnApply != null) setDeselectOnApply(s.deselectOnApply);
@@ -200,11 +205,12 @@ export function MatchTab() {
       dimensions: dimsLabel,
       envelope: envelopeLabel,
       paletteCount,
+      paletteAdaptive,
     };
     saveDebouncedRef.current!(snapshot);
   }, [remember, matchMode, multiZone, multiZoneLimit, adaptiveBands, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
       colorSpace, deselectOnApply, overwriteOnApply, openSection,
-      zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel, paletteCount]);
+      zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel, paletteCount, paletteAdaptive]);
 
   const [docs, setDocs] = useState<{ id: number; name: string }[]>([]);
   // Hash of doc id+name pairs. Used as the key on the doc <select> elements so that
@@ -813,6 +819,8 @@ export function MatchTab() {
                   preset={activePreset}
                   count={paletteCount}
                   setCount={setPaletteCount}
+                  adaptive={paletteAdaptive}
+                  setAdaptive={setPaletteAdaptive}
                 />
               </div>
             }

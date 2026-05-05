@@ -38,6 +38,10 @@ export interface PersistedSettings {
   envelope?: any[];
   // Palette strip — number of swatches (3 / 5 / 7).
   paletteCount?: 3 | 5 | 7;
+  // Palette weight bar — adaptive mode keeps the ratio of all OTHER swatches
+  // intact when you drag one (proportional rebalance) instead of redistributing
+  // weight only between two adjacent neighbors.
+  paletteAdaptive?: boolean;
 }
 
 async function readSettingsFile(): Promise<PersistedSettings | null> {
