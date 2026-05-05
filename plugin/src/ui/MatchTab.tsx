@@ -223,11 +223,20 @@ export function MatchTab() {
 
   useEffect(() => {
     let cancelled = false;
+    // Cache the last-applied docs list so we can skip setDocs when nothing changed.
+    // Most "set" events change layer pixel data, not doc identity/name; without this
+    // we'd produce a fresh array reference on every brush stroke and force a parent
+    // re-render for no UI change. Compared by length + (id:name) tuples — cheap.
+    let lastDocsKey = "";
     const readDocs = (withFallback = false) => {
       if (cancelled) return;
       try {
         const list = (app.documents ?? []).map((d: any) => ({ id: d.id, name: d.name }));
-        setDocs(list);
+        const key = list.map((d: { id: number; name: string }) => `${d.id}:${d.name}`).join("|");
+        if (key !== lastDocsKey) {
+          lastDocsKey = key;
+          setDocs(list);
+        }
         if (withFallback) {
           // Auto-pick the active doc if nothing is selected yet, or if the previously
           // selected doc has been closed. Only on mount and explicit ⟳ — never on
@@ -249,21 +258,53 @@ export function MatchTab() {
     // Sets stale=true so the ⟳ button shows a "something changed" affordance, then
     // re-reads docs (names-only) and re-pulls layer lists for both sides. The
     // docsKey/layersKey on the <select>s handle UXP widget label invalidation.
+    //
+    // Coalesced via a 60ms trailing debounce: PS fires events in bursts (a paint stroke
+    // can produce 30+ "set" descriptors in 100ms). Without coalescing each one schedules
+    // its own setDocs + 2 layer refreshes, all of which would be no-ops thanks to the
+    // identity-skip above and useLayers' inflight guard — but they each still cost a
+    // React render. Debouncing collapses bursts into one trailing refresh.
+    //
+    // Visibility-gated: when document.hidden is true (PS in another app or panel
+    // collapsed), defer the work until visibility returns. UXP doesn't pause timers
+    // on hidden panels, so this is real CPU we'd otherwise burn.
     const events = [
       "save", "rename", "set", "select", "make", "delete", "open", "close", "move",
       "duplicate", "paste", "rasterizeLayer", "groupLayer", "ungroupLayer",
       "mergeLayers", "mergeVisible", "historyStateChanged", "selectDocument",
     ];
-    const onEvt = () => {
+    let burstTimer: any = null;
+    let pendingWhileHidden = false;
+    const flushRefresh = () => {
+      if (cancelled) return;
+      if (typeof document !== "undefined" && document.hidden) {
+        // Hidden: arm a flag; we'll flush on visibilitychange instead.
+        pendingWhileHidden = true;
+        return;
+      }
       setStale(true);
       readDocs(false);
       try { refreshSrcLayersRef.current(); } catch { /* */ }
       try { refreshTgtLayersRef.current(); } catch { /* */ }
     };
+    const scheduleRefresh = () => {
+      if (burstTimer) clearTimeout(burstTimer);
+      burstTimer = setTimeout(flushRefresh, 60);
+    };
+    const onEvt = () => scheduleRefresh();
     psAction.addNotificationListener(events, onEvt);
+    const onVisibility = () => {
+      if (typeof document !== "undefined" && !document.hidden && pendingWhileHidden) {
+        pendingWhileHidden = false;
+        flushRefresh();
+      }
+    };
+    if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVisibility);
     return () => {
       cancelled = true;
+      if (burstTimer) clearTimeout(burstTimer);
       psAction.removeNotificationListener?.(events, onEvt);
+      if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisibility);
     };
   }, []);
 
