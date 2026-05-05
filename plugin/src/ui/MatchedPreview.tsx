@@ -1,12 +1,7 @@
-// Matched-preview block for MatchTab: header (zoom +/−/1:1, swap, before/after),
-// draggable container, keyboard shortcut handling for +/-/0, and a <canvas> driven
-// imperatively by the parent via the exposed handle (setPixels for matched/after,
-// setBefore for the unmodified target).
-//
-// Uses canvas + putImageData rather than <img> + PNG data URL — PNG encoding was
-// the heaviest single op in the preview redraw chain, and putImageData skips it
-// entirely. Per-frame work drops by ~5-10× at 256-edge preview, which makes
-// every interactive control (sliders, palette weights, presets) feel real-time.
+// Matched-preview block for MatchTab: header (zoom +/−/1:1), draggable container,
+// keyboard shortcut handling for +/-/0, and the inline <img> driven imperatively
+// by the parent via the exposed handle (setPixels for matched/after, setBefore
+// for the unmodified target).
 //
 // Before/After UX:
 //   • Small corner badge overlay shows the current view ("After" / "Before").
@@ -16,6 +11,7 @@
 // to "Before" and then peek at "After" by holding the badge.
 
 import { useEffect, useImperativeHandle, useRef, useState, forwardRef } from "react";
+import { rgbaToPngDataUrl } from "./encodePng";
 
 export interface MatchedPreviewHandle {
   setPixels: (rgba: Uint8Array, width: number, height: number) => void;
@@ -29,7 +25,7 @@ interface MatchedPreviewProps {
 
 export const MatchedPreview = forwardRef<MatchedPreviewHandle, MatchedPreviewProps>(function MatchedPreview(props, ref) {
   const { onSwap, canSwap } = props;
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const matchedFrontRef = useRef<HTMLImageElement>(null);
   const matchedContainerRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -37,61 +33,47 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, MatchedPreviewPro
   const dragStartRef = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
   const mouseOverMatchedRef = useRef(false);
 
-  // Cached pixel buffers — parent sends both via the handle. We store the rgba
-  // reference + dims and blit via putImageData on demand. No encoding step at all,
-  // so flipping Before/After or pushing a new buffer costs only the time to copy
-  // bytes onto the canvas.
-  const afterRef = useRef<{ rgba: Uint8Array; w: number; h: number } | null>(null);
-  const beforeRef = useRef<{ rgba: Uint8Array; w: number; h: number } | null>(null);
+  // Cached pixel buffers — parent sends both via the handle. We encode each buffer
+  // to a PNG data URL ONCE when it arrives and cache the URL alongside it, so flipping
+  // Before/After is a free <img.src> swap rather than a per-flip re-encode (each PNG
+  // encode is a meaningful chunk of CPU at preview resolution).
+  const afterRef = useRef<{ rgba: Uint8Array; w: number; h: number; url: string } | null>(null);
+  const beforeRef = useRef<{ rgba: Uint8Array; w: number; h: number; url: string } | null>(null);
   // Persistent "show before by default" toggle (click on badge).
   const [showBefore, setShowBefore] = useState(false);
   // Momentary hold (mousedown→mouseup on badge). XOR with showBefore decides view.
   const [holding, setHolding] = useState(false);
   const displayBefore = showBefore !== holding;
 
-  // Blit the chosen buffer onto the canvas. Resizes canvas intrinsic dims to match
-  // the buffer (no-op if unchanged) so putImageData lands 1:1 in pixel space; CSS
-  // handles the visual sizing via the zoom/pan style. Wraps the Uint8Array in a
-  // Uint8ClampedArray view of the same memory — zero-copy.
+  // Render whichever buffer matches displayBefore. Called whenever buffers change OR
+  // the toggle/hold flips. No re-encoding — just swap the cached data URL.
   const renderCurrent = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    const img = matchedFrontRef.current;
+    if (!img) return;
     const buf = displayBefore ? beforeRef.current : afterRef.current;
     if (!buf) return;
-    if (canvas.width !== buf.w) canvas.width = buf.w;
-    if (canvas.height !== buf.h) canvas.height = buf.h;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    try {
-      // Wrap rgba in a Uint8ClampedArray view of the same memory — zero-copy. The
-      // explicit Uint8ClampedArray constructor signature TS likes is the buffer-
-      // view form (cast through unknown is needed because TS's lib types narrow
-      // the buffer generic in a way that isn't ergonomic here).
-      const clamped = new Uint8ClampedArray(
-        buf.rgba.buffer as unknown as ArrayBuffer,
-        buf.rgba.byteOffset,
-        buf.rgba.length,
-      );
-      const imageData = new ImageData(clamped, buf.w, buf.h);
-      ctx.putImageData(imageData, 0, 0);
-    } catch { /* ignore: malformed buffer / browser limit */ }
+    img.src = buf.url;
   };
   useEffect(renderCurrent, [showBefore, holding]); // re-render on mode flip
 
   useImperativeHandle(ref, () => ({
     setPixels: (rgba, w, h) => {
-      // Skip blit when the parent hands us the same buffer reference — primarily
-      // catches mode-flip churn since result pixels do change every redraw.
+      // Skip re-encode when the parent hands us the same buffer reference (the result
+      // pixels do change every redraw, so this fast-path mostly catches mode-flip churn).
       if (afterRef.current && afterRef.current.rgba === rgba) return;
-      afterRef.current = { rgba, w, h };
+      let url = "";
+      try { url = rgbaToPngDataUrl(rgba, w, h); } catch { return; }
+      afterRef.current = { rgba, w, h, url };
       if (!displayBefore) renderCurrent();
     },
     setBefore: (rgba, w, h) => {
-      // Target.snap.data is a stable reference until the target itself changes,
-      // so the identity check skips the blit on every slider tick (the parent
-      // calls this unconditionally per redraw to keep the badge in sync).
+      // Target.snap.data is a stable reference until the target itself changes, so the
+      // identity check skips the re-encode on every slider tick (the parent calls this
+      // unconditionally per redraw to keep the badge in sync).
       if (beforeRef.current && beforeRef.current.rgba === rgba) return;
-      beforeRef.current = { rgba, w, h };
+      let url = "";
+      try { url = rgbaToPngDataUrl(rgba, w, h); } catch { return; }
+      beforeRef.current = { rgba, w, h, url };
       if (displayBefore) renderCurrent();
     },
   }), [displayBefore]);
@@ -207,12 +189,7 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, MatchedPreviewPro
         onMouseDown={onZoomMouseDown}
         onMouseEnter={() => { mouseOverMatchedRef.current = true; }}
         onMouseLeave={() => { mouseOverMatchedRef.current = false; }}>
-        {/* Canvas styling mirrors the previous <img>: zoom-scaled width/height with
-            objectFit:contain for aspect-preserving fit. Modern Chromium (which UXP
-            uses) honors object-fit on canvas. imageRendering kept default ("auto")
-            for smooth scaling — pixel-art crisp would be wrong for a photographic
-            preview. */}
-        <canvas ref={canvasRef}
+        <img ref={matchedFrontRef} alt=""
           style={{
             width: `${100 * zoom}%`, height: `${100 * zoom}%`,
             objectFit: "contain",
