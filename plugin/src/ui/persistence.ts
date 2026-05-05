@@ -36,6 +36,8 @@ export interface PersistedSettings {
   dimensions?: any;
   // Envelope
   envelope?: any[];
+  // Palette strip — number of swatches (3 / 5 / 7).
+  paletteCount?: 3 | 5 | 7;
 }
 
 async function readSettingsFile(): Promise<PersistedSettings | null> {

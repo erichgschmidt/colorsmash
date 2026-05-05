@@ -10,7 +10,7 @@ import { Icon } from "./Icon";
 import { MatchedPreview, MatchedPreviewHandle } from "./MatchedPreview";
 import { SourceSelector } from "./SourceSelector";
 import { PresetStrip } from "./PresetStrip";
-import { PaletteStrip } from "./PaletteStrip";
+import { PaletteStrip, PaletteCount } from "./PaletteStrip";
 import { BottomActionBar } from "./BottomActionBar";
 import { BasicSlider, DimSlider, matchStyles } from "./MatchSliders";
 import { ChannelCurves } from "../core/histogramMatch";
@@ -69,6 +69,8 @@ export function MatchTab() {
   // into PS when the user hits Apply Curves. Defaults to "color" (full match) so the
   // initial behavior matches v1.0.
   const [activePreset, setActivePreset] = useState<Preset>("color");
+  // Palette swatch count (3 / 5 / 7). Persisted across sessions.
+  const [paletteCount, setPaletteCount] = useState<PaletteCount>(5);
   const [amountLabel, setAmountLabel] = useState(100);
   const [smoothLabel, setSmoothLabel] = useState(0);
   const [stretchLabel, setStretchLabel] = useState(8);
@@ -161,6 +163,7 @@ export function MatchTab() {
         if (s.multiZone != null) setMultiZone(s.multiZone);
         if (s.multiZoneLimit) setMultiZoneLimit(s.multiZoneLimit);
         if (s.adaptiveBands != null) setAdaptiveBands(s.adaptiveBands);
+        if (s.paletteCount === 3 || s.paletteCount === 5 || s.paletteCount === 7) setPaletteCount(s.paletteCount);
         if (s.chromaOnly != null) setChromaOnly(s.chromaOnly);
         if (s.colorSpace) setColorSpace(s.colorSpace);
         if (s.deselectOnApply != null) setDeselectOnApply(s.deselectOnApply);
@@ -191,11 +194,12 @@ export function MatchTab() {
       zones: zonesLabel, lockZoneTotal,
       dimensions: dimsLabel,
       envelope: envelopeLabel,
+      paletteCount,
     };
     saveDebouncedRef.current!(snapshot);
   }, [remember, matchMode, multiZone, multiZoneLimit, adaptiveBands, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
       colorSpace, deselectOnApply, overwriteOnApply, openSection,
-      zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel]);
+      zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel, paletteCount]);
 
   const [docs, setDocs] = useState<{ id: number; name: string }[]>([]);
   // Hash of doc id+name pairs. Used as the key on the doc <select> elements so that
@@ -739,6 +743,8 @@ export function MatchTab() {
                   srcWidth={srcSnap?.width ?? 0}
                   srcHeight={srcSnap?.height ?? 0}
                   preset={activePreset}
+                  count={paletteCount}
+                  setCount={setPaletteCount}
                 />
               </div>
             }
