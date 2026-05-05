@@ -63,13 +63,14 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, MatchedPreviewPro
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     try {
-      // Copying constructor: `new Uint8ClampedArray(typedArray)` element-wise
-      // copies. Safer than the zero-copy buffer-view form, which throws in some
-      // environments when the source buffer's type isn't a plain ArrayBuffer
-      // (e.g. SharedArrayBuffer, detached, or post-transfer). The copy is one
-      // memcpy per redraw — still vastly cheaper than PNG encoding.
-      const clamped = new Uint8ClampedArray(buf.rgba);
-      const imageData = new ImageData(clamped, buf.w, buf.h);
+      // UXP's Chromium doesn't expose ImageData as a global, so we can't use
+      // `new ImageData(...)`. The canvas 2D context provides a factory:
+      // ctx.createImageData(w, h) returns an ImageData object owned by the
+      // context with zeroed data. Copy our rgba bytes into its .data buffer
+      // (.set is fast — single memcpy at the underlying TypedArray level)
+      // then putImageData blits it onto the canvas.
+      const imageData = ctx.createImageData(buf.w, buf.h);
+      imageData.data.set(buf.rgba);
       ctx.putImageData(imageData, 0, 0);
     } catch (e) {
       // Surface unexpected errors to console so a blank preview is debuggable
