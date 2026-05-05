@@ -715,24 +715,30 @@ export function MatchTab() {
             onRefreshLayers={refreshSrcAll}
             docsKey={docsKey}
             layersKey={srcLayersKey}
-            // Source thumbnail slot: PaletteStrip on top (display-only k-means
-            // swatches — visual identity / mood read of the source) stacked above
-            // the existing PresetStrip (interactive Color / Hue / B&W / Contrast
-            // staging). Phase A is palette display only; future phases may make
-            // it interactive (subtractive filtering, saved presets).
+            // Source thumbnail slot: PresetStrip on top (interactive Full /
+            // Color / Contrast staging — these are the source previews under
+            // each preset) and PaletteStrip below (display-only k-means
+            // swatches that visually "synthesize" out of the previews above).
+            // Order intentional: previews → palette reads as cause → effect.
+            //
+            // PaletteStrip mirrors the active preset: Full shows raw clusters,
+            // Color flattens luminance for pure-hue swatches, Contrast desats
+            // to a grayscale value strip — the palette is a visual preview of
+            // what the source contributes to the match under that preset.
             thumbnail={
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <PaletteStrip
-                  srcRgba={srcSnap?.data ?? null}
-                  srcWidth={srcSnap?.width ?? 0}
-                  srcHeight={srcSnap?.height ?? 0}
-                />
                 <PresetStrip
                   srcRgba={srcSnap?.data ?? null}
                   srcWidth={srcSnap?.width ?? 0}
                   srcHeight={srcSnap?.height ?? 0}
                   active={activePreset}
                   onSelect={setActivePreset}
+                />
+                <PaletteStrip
+                  srcRgba={srcSnap?.data ?? null}
+                  srcWidth={srcSnap?.width ?? 0}
+                  srcHeight={srcSnap?.height ?? 0}
+                  preset={activePreset}
                 />
               </div>
             }
