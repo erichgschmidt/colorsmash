@@ -90,33 +90,13 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, MatchedPreviewPro
   };
   const resetZoom = () => { setZoom(1); setPan({ x: 0, y: 0 }); };
 
-  // One-time UXP canvas API probe. Logs which pixel-data APIs are actually
-  // available so we know definitively whether putImageData / OffscreenCanvas /
-  // createImageBitmap could be a future perf path — without iterating
-  // implementation guesses. Removed once we've captured the answer.
-  useEffect(() => {
-    try {
-      const c = document.createElement("canvas");
-      c.width = 2; c.height = 2;
-      const cx = c.getContext("2d");
-      const g = globalThis as any;
-      // eslint-disable-next-line no-console
-      console.log("UXP canvas probe:", {
-        ctx: !!cx,
-        createImageData: typeof cx?.createImageData,
-        putImageData: typeof cx?.putImageData,
-        getImageData: typeof cx?.getImageData,
-        ImageData: typeof g.ImageData,
-        OffscreenCanvas: typeof g.OffscreenCanvas,
-        createImageBitmap: typeof g.createImageBitmap,
-        Blob: typeof g.Blob,
-        URL_createObjectURL: typeof URL?.createObjectURL,
-      });
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error("UXP canvas probe threw:", e);
-    }
-  }, []);
+  // Note for future perf revisits: UXP's Chromium canvas 2D context is missing
+  // every pixel-data API (createImageData / putImageData / getImageData /
+  // ImageData / OffscreenCanvas / createImageBitmap). The PNG-data-URL → <img>
+  // path used here is the only option in UXP; canvas was attempted in the
+  // weighted-palette branch and reverted. Blob + URL.createObjectURL DO exist
+  // but only help if you've already paid the PNG encode cost, which is the
+  // actual bottleneck. Captured here so we don't re-run the experiment.
 
   // Wheel-zoom was attempted but UXP's host-level scroll routing pre-empts our document
   // handler unless an active mouse interaction is happening. Conceded — buttons + drag-pan
