@@ -494,76 +494,30 @@ export function MatchTab() {
     setPaletteWeights(paletteSwatches.map(() => 1));
   }, [paletteIdentity]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Lower-res snapshots for use during interactive drags. PNG encode + histogram
-  // fit + curves application all scale roughly with pixel count, so dropping from
-  // 256 → 128 max edge during drag cuts ~75% of the per-frame work. On drag end
-  // (interacting flips false), the deps below re-derive at full 256² and the
-  // useEffect that watches them schedules one final high-quality redraw.
-  const LOW_RES_EDGE = 128;
-  // SourceSnap (used in selection-mode) is missing the `bounds` field that
-  // PixelBuffer requires; synthesize it from width/height since downsample
-  // doesn't actually use the original bounds for anything other than
-  // forwarding. tgt.snap already conforms.
-  const srcSnap128 = useMemo(() => {
-    if (!srcSnap) return null;
-    const asBuf = "bounds" in (srcSnap as any) && (srcSnap as any).bounds
-      ? (srcSnap as any)
-      : { ...srcSnap, bounds: { left: 0, top: 0, right: srcSnap.width, bottom: srcSnap.height } };
-    return downsampleToMaxEdge(asBuf, LOW_RES_EDGE);
-  }, [srcSnap]);
-  const tgtSnap128 = useMemo(() => {
-    if (!tgt.snap) return null;
-    // LayerSnapshot also lacks `bounds`; same shim as srcSnap128 above.
-    const asBuf = "bounds" in (tgt.snap as any) && (tgt.snap as any).bounds
-      ? (tgt.snap as any)
-      : { ...tgt.snap, bounds: { left: 0, top: 0, right: tgt.snap.width, bottom: tgt.snap.height } };
-    return downsampleToMaxEdge(asBuf, LOW_RES_EDGE);
-  }, [tgt.snap]);
-
-  // Per-pixel cluster assignment cache, one per resolution. Expensive (~3M ops
-  // at 256-edge: RGB→Lab + nearest-centroid for every pixel) but only depends
-  // on the snap + palette identity — NOT weights. Recompute only when source
-  // or palette changes. Saves ~95% of the synthesis cost during drag where
-  // weights change every pointermove but assignments don't. Both resolutions
-  // are computed up-front (cheap at 128) so the during-drag swap is free.
+  // Per-pixel cluster assignment cache. Expensive (~3M ops at 256-edge: RGB→Lab
+  // + nearest-centroid for every pixel) but only depends on srcSnap + palette
+  // identity — NOT weights. Recompute only when one of those changes. Saves
+  // ~95% of the synthesis cost during drag where weights change every
+  // pointermove but assignments don't.
   const clusterAssignments = useMemo(() => {
     if (!srcSnap || paletteSwatches.length === 0) return null;
     return computeClusterAssignments(srcSnap.data, paletteSwatches);
   }, [srcSnap, paletteSwatches]);
-  const clusterAssignments128 = useMemo(() => {
-    if (!srcSnap128 || paletteSwatches.length === 0) return null;
-    return computeClusterAssignments(srcSnap128.data, paletteSwatches);
-  }, [srcSnap128, paletteSwatches]);
-
-  // Interaction-aware buffer selection. During an active drag we run the whole
-  // pipeline (synthesize → fit → curves → encode) on the 128-edge snaps; on
-  // ~200ms idle we snap back to 256². See pingInteracting below.
-  const [interacting, setInteracting] = useState(false);
-  const interactionTimerRef = useRef<any>(null);
-  const pingInteracting = () => {
-    setInteracting(prev => prev ? prev : true);
-    if (interactionTimerRef.current) clearTimeout(interactionTimerRef.current);
-    interactionTimerRef.current = setTimeout(() => { setInteracting(false); }, 200);
-  };
-
-  const activeSrcSnap = (interacting && srcSnap128) ? srcSnap128 : srcSnap;
-  const activeTgtSnap = (interacting && tgtSnap128) ? tgtSnap128 : tgt.snap;
-  const activeAssignments = (interacting && clusterAssignments128) ? clusterAssignments128 : clusterAssignments;
 
   // Weighted-source buffer: synthesized only when at least one weight diverges
-  // from neutral. Otherwise the active snap's data is passed through unchanged
+  // from neutral. Otherwise the original srcSnap.data is passed through unchanged
   // (synthesizeWeightedSource has a fast path for the neutral case).
   const weightedSrcData = useMemo(() => {
-    if (!activeSrcSnap || !activeAssignments || paletteWeights.length !== paletteSwatches.length) {
-      return activeSrcSnap?.data ?? null;
+    if (!srcSnap || !clusterAssignments || paletteWeights.length !== paletteSwatches.length) {
+      return srcSnap?.data ?? null;
     }
-    return synthesizeWeightedSource(activeSrcSnap.data, activeAssignments, paletteWeights);
-  }, [activeSrcSnap, activeAssignments, paletteSwatches.length, paletteWeights]);
+    return synthesizeWeightedSource(srcSnap.data, clusterAssignments, paletteWeights);
+  }, [srcSnap, clusterAssignments, paletteSwatches.length, paletteWeights]);
 
   const fittedRaw = useMemo(() => {
-    if (!weightedSrcData || !activeTgtSnap) return null;
-    return fitByMode(matchMode, weightedSrcData, activeTgtSnap.data, colorSpace);
-  }, [weightedSrcData, activeTgtSnap, colorSpace, matchMode]);
+    if (!weightedSrcData || !tgt.snap) return null;
+    return fitByMode(matchMode, weightedSrcData, tgt.snap.data, colorSpace);
+  }, [weightedSrcData, tgt.snap, colorSpace, matchMode]);
 
   // Multi-zone band peaks. Adaptive (P10/P50/P90 of target luma) when toggle is on,
   // fixed at 0/128/255 otherwise. Adaptive peaks make each band fit on a similar
@@ -593,9 +547,9 @@ export function MatchTab() {
   // Multi-zone fit: 3 separate per-band curves. Computed only when the multi-zone toggle
   // is on (otherwise null).
   const fittedMulti = useMemo<MultiZoneFit | null>(() => {
-    if (!multiZone || !weightedSrcData || !activeTgtSnap) return null;
-    return fitMultiZoneByMode(matchMode, weightedSrcData, activeTgtSnap.data, multiZonePeaks, multiZoneExtents);
-  }, [multiZone, weightedSrcData, activeTgtSnap, multiZonePeaks, multiZoneExtents, matchMode]);
+    if (!multiZone || !weightedSrcData || !tgt.snap) return null;
+    return fitMultiZoneByMode(matchMode, weightedSrcData, tgt.snap.data, multiZonePeaks, multiZoneExtents);
+  }, [multiZone, weightedSrcData, tgt.snap, multiZonePeaks, multiZoneExtents, matchMode]);
 
   // Matched preview is rendered by <MatchedPreview/>; we drive it imperatively via a handle.
   const matchedHandleRef = useRef<MatchedPreviewHandle | null>(null);
@@ -611,11 +565,7 @@ export function MatchTab() {
   const curvesTimeoutRef = useRef<any>(null);
 
   const redrawMatched = () => {
-    // Use activeTgtSnap (128-edge during drag, 256-edge on idle) so the entire
-    // pipeline — applyChannelCurvesToRgba, multi-zone composite, preset post-
-    // process, and the eventual PNG encode in MatchedPreview — runs at the
-    // appropriate resolution for the current interaction phase.
-    const tgtBuf = activeTgtSnap;
+    const tgtBuf = tgt.snap;
     if (!tgtBuf || !fittedRaw) return;
     // Handle ref may not be bound yet on first render — retry shortly.
     if (!matchedHandleRef.current) {
@@ -689,14 +639,16 @@ export function MatchTab() {
   };
 
   const scheduleRedraw = () => {
-    // Each redraw schedule is a sign of activity — flip into low-res "drag mode"
-    // (or refresh the timer if we're already there). On 200ms idle the timer
-    // fires setInteracting(false), which re-runs the deps below at full 256²
-    // and triggers one trailing full-quality redraw.
-    pingInteracting();
+    // 16ms throttle (~60fps). Drag latency is bounded by this throttle, not
+    // by per-frame work — at 256² the synthesize → fit → curves → PNG encode
+    // chain takes ~20-25ms, well under one frame. Tightening the throttle
+    // from 33ms to 16ms is the actual lever for "feels more real-time" while
+    // keeping full preview quality. requestAnimationFrame would be cleaner
+    // here than setTimeout but UXP's RAF behavior under heavy load isn't
+    // characterized — sticking with setTimeout for predictability.
     if (rafPendingRef.current) return;
     rafPendingRef.current = true;
-    setTimeout(() => { rafPendingRef.current = false; redrawMatched(); }, 33);
+    setTimeout(() => { rafPendingRef.current = false; redrawMatched(); }, 16);
   };
 
   useEffect(() => {
@@ -704,10 +656,7 @@ export function MatchTab() {
     // this redraw — fixes "preview blank until I wiggle a slider" on first mount.
     rafPendingRef.current = false;
     scheduleRedraw();
-    // `interacting` in deps: when the idle timer flips it false, this fires
-    // once and the redraw renders at full 256². When it flips true at the
-    // start of a drag, the same effect fires and the redraw renders at 128².
-  }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, multiZoneExtents, activeTgtSnap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope, activePreset, interacting]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, multiZoneExtents, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope, activePreset]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Export the staged preset as a 33-grid 3D LUT in .CUBE format. Sidesteps the
   // unreliable PS Color Lookup API entirely — user picks a save location, we write
