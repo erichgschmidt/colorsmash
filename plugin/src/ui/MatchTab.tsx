@@ -11,6 +11,7 @@ import { MatchedPreview, MatchedPreviewHandle } from "./MatchedPreview";
 import { SourceSelector } from "./SourceSelector";
 import { PresetStrip } from "./PresetStrip";
 import { PaletteStrip, PaletteCount } from "./PaletteStrip";
+import { extractPalette, synthesizeWeightedSource } from "../core/palette";
 import { BottomActionBar } from "./BottomActionBar";
 import { BasicSlider, DimSlider, matchStyles } from "./MatchSliders";
 import { ChannelCurves } from "../core/histogramMatch";
@@ -71,6 +72,10 @@ export function MatchTab() {
   const [activePreset, setActivePreset] = useState<Preset>("color");
   // Palette swatch count (3 / 5 / 7). Persisted across sessions.
   const [paletteCount, setPaletteCount] = useState<PaletteCount>(5);
+  // Per-cluster weights (1 = neutral, 0 = excluded, >1 = boosted). Reset on every
+  // source/count change since clusters change identity. NOT persisted — different
+  // sources produce different clusters and stale weights would be confusing.
+  const [paletteWeights, setPaletteWeights] = useState<number[]>([]);
   const [amountLabel, setAmountLabel] = useState(100);
   const [smoothLabel, setSmoothLabel] = useState(0);
   const [stretchLabel, setStretchLabel] = useState(8);
@@ -469,10 +474,40 @@ export function MatchTab() {
     if (m === "layer") { setSrcOverride(null); setBrowsedFile(""); }
   };
 
+  // Palette extraction lives at the parent level so weights can be wired into both
+  // the PaletteStrip UI and the synthesized-weighted-source path that drives the
+  // histogram match. Recomputes when source pixels or count change.
+  const paletteSwatches = useMemo(() => {
+    if (!srcSnap) return [];
+    return extractPalette(srcSnap.data, srcSnap.width, srcSnap.height, paletteCount);
+  }, [srcSnap, paletteCount]);
+
+  // Reset weights to all-1 (neutral) whenever the palette identity changes. Stale
+  // weights from a previous source's clusters would be meaningless against a fresh
+  // set of centroids. We trigger off swatches.length + the first swatch's centroid
+  // (cheap proxy for "did the palette actually change") rather than re-running on
+  // every re-render.
+  const paletteIdentity = paletteSwatches.length > 0
+    ? `${paletteSwatches.length}:${paletteSwatches[0].labL.toFixed(1)}:${paletteSwatches[0].labA.toFixed(1)}:${paletteSwatches[0].labB.toFixed(1)}`
+    : "0";
+  useEffect(() => {
+    setPaletteWeights(paletteSwatches.map(() => 1));
+  }, [paletteIdentity]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Weighted-source buffer: synthesized only when at least one weight diverges
+  // from neutral. Otherwise the original srcSnap.data is passed through unchanged
+  // (synthesizeWeightedSource has a fast path for the neutral case).
+  const weightedSrcData = useMemo(() => {
+    if (!srcSnap || paletteSwatches.length === 0 || paletteWeights.length !== paletteSwatches.length) {
+      return srcSnap?.data ?? null;
+    }
+    return synthesizeWeightedSource(srcSnap.data, paletteSwatches, paletteWeights);
+  }, [srcSnap, paletteSwatches, paletteWeights]);
+
   const fittedRaw = useMemo(() => {
-    if (!srcSnap || !tgt.snap) return null;
-    return fitByMode(matchMode, srcSnap.data, tgt.snap.data, colorSpace);
-  }, [srcSnap, tgt.snap, colorSpace, matchMode]);
+    if (!weightedSrcData || !tgt.snap) return null;
+    return fitByMode(matchMode, weightedSrcData, tgt.snap.data, colorSpace);
+  }, [weightedSrcData, tgt.snap, colorSpace, matchMode]);
 
   // Multi-zone band peaks. Adaptive (P10/P50/P90 of target luma) when toggle is on,
   // fixed at 0/128/255 otherwise. Adaptive peaks make each band fit on a similar
@@ -502,9 +537,9 @@ export function MatchTab() {
   // Multi-zone fit: 3 separate per-band curves. Computed only when the multi-zone toggle
   // is on (otherwise null).
   const fittedMulti = useMemo<MultiZoneFit | null>(() => {
-    if (!multiZone || !srcSnap || !tgt.snap) return null;
-    return fitMultiZoneByMode(matchMode, srcSnap.data, tgt.snap.data, multiZonePeaks, multiZoneExtents);
-  }, [multiZone, srcSnap, tgt.snap, multiZonePeaks, multiZoneExtents, matchMode]);
+    if (!multiZone || !weightedSrcData || !tgt.snap) return null;
+    return fitMultiZoneByMode(matchMode, weightedSrcData, tgt.snap.data, multiZonePeaks, multiZoneExtents);
+  }, [multiZone, weightedSrcData, tgt.snap, multiZonePeaks, multiZoneExtents, matchMode]);
 
   // Matched preview is rendered by <MatchedPreview/>; we drive it imperatively via a handle.
   const matchedHandleRef = useRef<MatchedPreviewHandle | null>(null);
@@ -651,7 +686,22 @@ export function MatchTab() {
         dimensions: enTone ? dimsRef.current : DEFAULT_DIMENSIONS,
         zones: enZones ? zonesRef.current : DEFAULT_ZONES,
         envelope: enEnvelope ? envelopeRef.current : DEFAULT_ENVELOPE,
-        sourcePixelsOverride: srcOverride?.data,
+        // sourcePixelsOverride: priority order is
+        //   1) weighted source (when palette weights diverge from neutral) — supersedes
+        //      everything else because the user has explicitly shaped the source's
+        //      tonal contribution and that override must reach the bake.
+        //   2) selection snapshot (when source mode = selection) — the pre-snapped
+        //      marquee pixels, which would otherwise be lost.
+        //   3) undefined → applyMatch reads full-res pixels from the source layer.
+        // Note: when weights are non-neutral we lose the full-res advantage because
+        // the synthesized buffer is built from the 256-edge snapshot. Acceptable
+        // tradeoff — histogram stats from a 256-edge sample are already representative
+        // and the user's weight control operates on the cluster centroids anyway.
+        sourcePixelsOverride: (() => {
+          const isNonNeutral = paletteWeights.some(w => Math.abs(w - 1) > 0.01);
+          if (isNonNeutral && weightedSrcData) return weightedSrcData;
+          return srcOverride?.data;
+        })(),
         sourceLabel: srcOverride?.name,
         colorSpace,
         deselectFirst: deselectOnApply,
@@ -739,9 +789,9 @@ export function MatchTab() {
                   onSelect={setActivePreset}
                 />
                 <PaletteStrip
-                  srcRgba={srcSnap?.data ?? null}
-                  srcWidth={srcSnap?.width ?? 0}
-                  srcHeight={srcSnap?.height ?? 0}
+                  swatches={paletteSwatches}
+                  weights={paletteWeights}
+                  setWeights={setPaletteWeights}
                   preset={activePreset}
                   count={paletteCount}
                   setCount={setPaletteCount}
