@@ -71,16 +71,19 @@ export function PaletteStrip(props: PaletteStripProps) {
       .map(([i]) => i);
   }, [swatches]);
 
-  const totalWeight = useMemo(() => weights.reduce((acc, w) => acc + Math.max(0, w), 0), [weights]);
-  const safeTotal = totalWeight > 0 ? totalWeight : 1;
-
-  // Width % per swatch (in display order). Clamped to MIN_VISUAL_WIDTH_PCT so a
-  // zeroed segment stays visible + grabbable; the math weight stays at 0.
-  const widthsPct = orderedIndices.map(idx => {
+  // Display value per cluster = natural prevalence × user multiplier. With all
+  // multipliers = 1 (the default), the bar's segment widths reflect the natural
+  // k-means prevalence — exactly what users expect from a "this is your source"
+  // palette display. Dragging adjusts a multiplier; reset returns multipliers to 1
+  // so the bar snaps back to its natural look.
+  const displayValues = orderedIndices.map(idx => {
     const w = Math.max(0, weights[idx] ?? 0);
-    return Math.max(MIN_VISUAL_WIDTH_PCT, (w / safeTotal) * 100);
+    const p = Math.max(0, swatches[idx]?.weight ?? 0);
+    return w * p;
   });
-  // Renormalize so the displayed widths sum to 100 (after the min-clamp inflation).
+  const valueSum = displayValues.reduce((a, b) => a + b, 0) || 1;
+  // Width % per segment, with min-visual clamp so a zeroed segment stays grabbable.
+  const widthsPct = displayValues.map(v => Math.max(MIN_VISUAL_WIDTH_PCT, (v / valueSum) * 100));
   const widthSum = widthsPct.reduce((a, b) => a + b, 0);
   const displayWidths = widthsPct.map(w => (w / widthSum) * 100);
 
@@ -92,8 +95,10 @@ export function PaletteStrip(props: PaletteStripProps) {
   }
 
   // Drag a boundary handle: index `i` separates display-order segment i from i+1.
-  // Mass-conserving: weights[orderedIndices[i]] + weights[orderedIndices[i+1]] stays
-  // constant, the split shifts based on cursor position within the bar.
+  // Mass-conserving on the displayValue (= weights × natural prevalence): the pair's
+  // total displayValue stays constant, the split shifts based on cursor position.
+  // We solve for new weights such that the new ratio of displayValues matches the
+  // handle's fractional position within the pair.
   const startHandleDrag = (i: number) => (e: React.PointerEvent) => {
     e.preventDefault(); e.stopPropagation();
     const bar = barRef.current;
@@ -103,24 +108,26 @@ export function PaletteStrip(props: PaletteStripProps) {
     const idxRight = orderedIndices[i + 1];
     const leftEdgeOfPair = leftEdges[i];
     const rightEdgeOfPair = leftEdges[i + 1] + displayWidths[i + 1];
-    const pairWeight = (weights[idxLeft] ?? 0) + (weights[idxRight] ?? 0);
+    // Natural prevalences for each side of the pair — divide displayValue by these
+    // to recover the user-multiplier weights.
+    const pLeft = Math.max(1e-6, swatches[idxLeft]?.weight ?? 0);
+    const pRight = Math.max(1e-6, swatches[idxRight]?.weight ?? 0);
+    // Conserve the pair's total displayValue across the drag.
+    const pairValue = (weights[idxLeft] ?? 0) * pLeft + (weights[idxRight] ?? 0) * pRight;
     const onMove = (ev: PointerEvent) => {
       const rect = bar.getBoundingClientRect();
       if (rect.width === 0) return;
       const xPct = ((ev.clientX - rect.left) / rect.width) * 100;
-      // Clamp so the handle can't cross its neighbors.
       const minX = leftEdgeOfPair + 0.5;
       const maxX = rightEdgeOfPair - 0.5;
       const clamped = Math.max(minX, Math.min(maxX, xPct));
-      // Convert handle position back to a weight split. The displayed pair spans
-      // (leftEdgeOfPair → rightEdgeOfPair) in % and represents pairWeight in absolute
-      // terms; the handle's fractional position within that span is the new ratio.
       const span = rightEdgeOfPair - leftEdgeOfPair;
       if (span <= 0) return;
       const fracLeft = (clamped - leftEdgeOfPair) / span;
+      // Solve back from displayValue to weight: w[c] = displayValue[c] / prevalence[c].
       const next = weights.slice();
-      next[idxLeft] = pairWeight * fracLeft;
-      next[idxRight] = pairWeight * (1 - fracLeft);
+      next[idxLeft] = (pairValue * fracLeft) / pLeft;
+      next[idxRight] = (pairValue * (1 - fracLeft)) / pRight;
       setWeights(next);
     };
     const onUp = () => {
@@ -195,7 +202,9 @@ export function PaletteStrip(props: PaletteStripProps) {
         {orderedIndices.map((idx, i) => {
           const s = swatches[idx];
           const w = weights[idx] ?? 0;
-          const pct = (Math.max(0, w) / safeTotal) * 100;
+          const naturalPct = (s.weight * 100).toFixed(0);
+          const currentPct = ((displayValues[i] / valueSum) * 100).toFixed(0);
+          const multiplierStr = w === 1 ? "neutral" : `×${w.toFixed(2)}`;
           return (
             <div key={`seg-${idx}`}
               style={{
@@ -206,7 +215,7 @@ export function PaletteStrip(props: PaletteStripProps) {
                 borderRadius: 2,
                 opacity: w < 0.02 ? 0.35 : 1,
               }}
-              title={`rgb(${s.r}, ${s.g}, ${s.b}) — natural ${(s.weight * 100).toFixed(0)}%, current weight ${pct.toFixed(0)}%`}
+              title={`rgb(${s.r}, ${s.g}, ${s.b}) — natural ${naturalPct}% · current ${currentPct}% · ${multiplierStr}`}
             />
           );
         })}

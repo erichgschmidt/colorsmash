@@ -11,7 +11,7 @@ import { MatchedPreview, MatchedPreviewHandle } from "./MatchedPreview";
 import { SourceSelector } from "./SourceSelector";
 import { PresetStrip } from "./PresetStrip";
 import { PaletteStrip, PaletteCount } from "./PaletteStrip";
-import { extractPalette, synthesizeWeightedSource } from "../core/palette";
+import { extractPalette, synthesizeWeightedSource, computeClusterAssignments } from "../core/palette";
 import { BottomActionBar } from "./BottomActionBar";
 import { BasicSlider, DimSlider, matchStyles } from "./MatchSliders";
 import { ChannelCurves } from "../core/histogramMatch";
@@ -494,15 +494,26 @@ export function MatchTab() {
     setPaletteWeights(paletteSwatches.map(() => 1));
   }, [paletteIdentity]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Per-pixel cluster assignment cache. Expensive (~3M ops on a 256-edge source:
+  // RGB→Lab + nearest-centroid for every pixel) but only depends on srcSnap +
+  // palette identity — NOT weights. Recompute only when one of those changes.
+  // Saves ~95% of the synthesis cost during drag, where weights change every
+  // pointermove but assignments don't.
+  const clusterAssignments = useMemo(() => {
+    if (!srcSnap || paletteSwatches.length === 0) return null;
+    return computeClusterAssignments(srcSnap.data, paletteSwatches);
+  }, [srcSnap, paletteSwatches]);
+
   // Weighted-source buffer: synthesized only when at least one weight diverges
   // from neutral. Otherwise the original srcSnap.data is passed through unchanged
-  // (synthesizeWeightedSource has a fast path for the neutral case).
+  // (synthesizeWeightedSource has a fast path for the neutral case). Synthesis
+  // is now fast — just reads the cached assignments + emits per-pixel copies.
   const weightedSrcData = useMemo(() => {
-    if (!srcSnap || paletteSwatches.length === 0 || paletteWeights.length !== paletteSwatches.length) {
+    if (!srcSnap || !clusterAssignments || paletteWeights.length !== paletteSwatches.length) {
       return srcSnap?.data ?? null;
     }
-    return synthesizeWeightedSource(srcSnap.data, paletteSwatches, paletteWeights);
-  }, [srcSnap, paletteSwatches, paletteWeights]);
+    return synthesizeWeightedSource(srcSnap.data, clusterAssignments, paletteWeights);
+  }, [srcSnap, clusterAssignments, paletteSwatches.length, paletteWeights]);
 
   const fittedRaw = useMemo(() => {
     if (!weightedSrcData || !tgt.snap) return null;

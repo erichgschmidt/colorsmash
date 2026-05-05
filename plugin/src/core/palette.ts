@@ -150,51 +150,28 @@ export function extractPalette(rgba: Uint8Array, width: number, height: number, 
   return out;
 }
 
-// Synthesize a weighted source buffer from RGBA + per-cluster weights. For each
-// pixel: assign it to the nearest centroid (Lab distance), then emit
-// `floor(weight)` copies plus 1 more with probability `weight - floor(weight)`.
-// Heavy clusters → pixels appear multiple times → contribute more to histograms.
-// Light clusters → pixels appear less often or not at all → contribute less.
-//
-// The fit functions (full / mean / median / percentile / multi-zone) consume the
-// resulting buffer unchanged, so weighting works across every match mode without
-// touching the math.
-//
-// Weights at length k must align positionally with the swatches returned by
-// extractPalette — caller is responsible for keeping that mapping intact.
-export function synthesizeWeightedSource(
+// Compute the cluster id for every pixel in rgba — i.e., assign each pixel to
+// its nearest swatch centroid in Lab space. This is the EXPENSIVE part of the
+// weighted-source pipeline: per-pixel RGB→Lab conversion + k distance comparisons.
+// Cache the result and reuse across weight changes (the assignments only depend
+// on the palette, not the user's weights). Returns -1 for masked-out pixels.
+export function computeClusterAssignments(
   rgba: Uint8Array,
   swatches: PaletteSwatch[],
-  weights: number[],
-): Uint8Array {
+): Int32Array {
   const k = swatches.length;
-  if (k === 0 || weights.length !== k) return rgba;
-  // Fast path: weights all ≈ 1 (natural / no override). Return original buffer
-  // unchanged so the existing fit pipeline is bit-for-bit identical.
-  let isNeutral = true;
-  for (let i = 0; i < k; i++) if (Math.abs(weights[i] - 1) > 0.01) { isNeutral = false; break; }
-  if (isNeutral) return rgba;
-
-  // Precompute centroid array (Float32 for tight inner loop).
+  const pxCount = rgba.length / 4;
+  const assign = new Int32Array(pxCount);
+  if (k === 0) { assign.fill(-1); return assign; }
   const cents = new Float32Array(k * 3);
   for (let i = 0; i < k; i++) {
     cents[i * 3] = swatches[i].labL;
     cents[i * 3 + 1] = swatches[i].labA;
     cents[i * 3 + 2] = swatches[i].labB;
   }
-
-  // First pass: determine output length so we allocate exactly. Same iteration
-  // structure as the second pass so probabilistic rounding lands in both.
-  const pxCount = rgba.length / 4;
-  // Cluster id per pixel (cached so the assignment cost is paid once).
-  const assign = new Int32Array(pxCount);
-  // Per-pixel emit count (floor + stochastic 1 if frac roll succeeds).
-  const emitCount = new Uint8Array(pxCount);
-
-  let total = 0;
   for (let i = 0; i < pxCount; i++) {
     const o = i * 4;
-    if (rgba[o + 3] < 128) { emitCount[i] = 0; continue; }
+    if (rgba[o + 3] < 128) { assign[i] = -1; continue; }
     const [L, a, b] = rgbToLab(rgba[o], rgba[o + 1], rgba[o + 2]);
     let best = 0, bestDist = Infinity;
     for (let c = 0; c < k; c++) {
@@ -205,17 +182,54 @@ export function synthesizeWeightedSource(
       if (d < bestDist) { bestDist = d; best = c; }
     }
     assign[i] = best;
-    const w = Math.max(0, weights[best]);
+  }
+  return assign;
+}
+
+// Deterministic pseudo-random in [0,1) keyed on pixel index. Replaces Math.random()
+// during drag so consecutive frames with the same weights produce the same output —
+// no shimmer, no flicker. Knuth multiplicative hash, 32-bit unsigned.
+const hash01 = (i: number) => ((Math.imul(i + 1, 2654435761) >>> 0) / 4294967296);
+
+// Synthesize a weighted source buffer from precomputed cluster assignments + weights.
+// Each pixel emits `floor(weight)` copies plus 1 more if its deterministic threshold
+// hash falls below the fractional part. Heavy clusters → pixels appear multiple times
+// in the output → contribute more to histograms. Light clusters → fewer or zero copies.
+//
+// The fit functions (full / mean / median / percentile / multi-zone) consume the
+// resulting buffer unchanged, so weighting works across every match mode without
+// touching the math.
+//
+// Weights at length k must align positionally with the swatches that produced the
+// assignments. Pixels with assignment === -1 (masked-out) are skipped.
+export function synthesizeWeightedSource(
+  rgba: Uint8Array,
+  assignments: Int32Array,
+  weights: number[],
+): Uint8Array {
+  const k = weights.length;
+  if (k === 0) return rgba;
+  // Fast path: weights all ≈ 1 (neutral). Return original buffer unchanged so
+  // the existing fit pipeline is bit-for-bit identical.
+  let isNeutral = true;
+  for (let i = 0; i < k; i++) if (Math.abs(weights[i] - 1) > 0.01) { isNeutral = false; break; }
+  if (isNeutral) return rgba;
+
+  const pxCount = rgba.length / 4;
+  // First pass: compute total output size (so we allocate exactly once).
+  let total = 0;
+  const emitCount = new Uint8Array(pxCount);
+  for (let i = 0; i < pxCount; i++) {
+    const c = assignments[i];
+    if (c < 0) continue;
+    const w = Math.max(0, weights[c]);
     const floor = Math.floor(w);
     const frac = w - floor;
-    const extra = Math.random() < frac ? 1 : 0;
+    const extra = hash01(i) < frac ? 1 : 0;
     const n = Math.min(255, floor + extra);
     emitCount[i] = n;
     total += n;
   }
-
-  // Second pass: emit. Skip A=0 pixels (the fit functions skip them anyway, but
-  // we'd rather not waste output buffer space on them).
   if (total === 0) return new Uint8Array(0);
   const out = new Uint8Array(total * 4);
   let w = 0;
