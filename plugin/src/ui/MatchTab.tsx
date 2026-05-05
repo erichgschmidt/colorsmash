@@ -10,6 +10,7 @@ import { Icon } from "./Icon";
 import { MatchedPreview, MatchedPreviewHandle } from "./MatchedPreview";
 import { SourceSelector } from "./SourceSelector";
 import { PresetStrip } from "./PresetStrip";
+import { PaletteStrip } from "./PaletteStrip";
 import { BottomActionBar } from "./BottomActionBar";
 import { BasicSlider, DimSlider, matchStyles } from "./MatchSliders";
 import { ChannelCurves } from "../core/histogramMatch";
@@ -714,18 +715,26 @@ export function MatchTab() {
             onRefreshLayers={refreshSrcAll}
             docsKey={docsKey}
             layersKey={srcLayersKey}
-            // PresetStrip replaces the source thumbnail: 1x4 row of source-facet
-            // swatches (Color / Hue / B&W / Contrast). Click to STAGE that preset —
-            // the matched preview pane below updates live; nothing is written to PS
-            // until Apply Curves. The strip is non-destructive on its own.
+            // Source thumbnail slot: PaletteStrip on top (display-only k-means
+            // swatches — visual identity / mood read of the source) stacked above
+            // the existing PresetStrip (interactive Color / Hue / B&W / Contrast
+            // staging). Phase A is palette display only; future phases may make
+            // it interactive (subtractive filtering, saved presets).
             thumbnail={
-              <PresetStrip
-                srcRgba={srcSnap?.data ?? null}
-                srcWidth={srcSnap?.width ?? 0}
-                srcHeight={srcSnap?.height ?? 0}
-                active={activePreset}
-                onSelect={setActivePreset}
-              />
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <PaletteStrip
+                  srcRgba={srcSnap?.data ?? null}
+                  srcWidth={srcSnap?.width ?? 0}
+                  srcHeight={srcSnap?.height ?? 0}
+                />
+                <PresetStrip
+                  srcRgba={srcSnap?.data ?? null}
+                  srcWidth={srcSnap?.width ?? 0}
+                  srcHeight={srcSnap?.height ?? 0}
+                  active={activePreset}
+                  onSelect={setActivePreset}
+                />
+              </div>
             }
           />
         </div>
