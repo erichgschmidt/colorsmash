@@ -11,7 +11,7 @@
 // Active preset still drives a per-swatch RGB display transform (Full / Color /
 // Contrast) so the bar reads consistently with the PresetStrip above it.
 
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PaletteSwatch } from "../core/palette";
 import { Preset } from "../core/histogramMatch";
 
@@ -76,9 +76,34 @@ export function PaletteStrip(props: PaletteStripProps) {
   const { swatches, weights, setWeights, preset, count, setCount } = props;
   const adaptive = !!props.adaptive;
   const setAdaptive = props.setAdaptive;
-  const softness = Math.max(0, Math.min(100, props.softness ?? 0));
+  const propsSoftness = Math.max(0, Math.min(100, props.softness ?? 0));
   const setSoftness = props.setSoftness;
   const barRef = useRef<HTMLDivElement>(null);
+
+  // Local mirror of softness for immediate slider tracking. Pointer events
+  // update this synchronously every tick (cheap — no preview redraw triggered),
+  // while the actual commit to parent state — which invalidates the per-pixel
+  // effective-weights memo and triggers the heavy preview redraw — is throttled
+  // to ~16ms. Keeps the slider thumb glued to the cursor without stacking
+  // precompute calls on every pointermove during a fast drag.
+  const [localSoftness, setLocalSoftness] = useState(propsSoftness);
+  // Sync from parent when prop changes (persistence load, programmatic reset).
+  useEffect(() => { setLocalSoftness(propsSoftness); }, [propsSoftness]);
+  const softnessCommitRef = useRef<any>(null);
+  const softnessLatestRef = useRef(propsSoftness);
+  const onSoftnessInput = (v: number) => {
+    setLocalSoftness(v);
+    softnessLatestRef.current = v;
+    if (softnessCommitRef.current) return; // pending commit already scheduled
+    softnessCommitRef.current = setTimeout(() => {
+      softnessCommitRef.current = null;
+      if (setSoftness) setSoftness(softnessLatestRef.current);
+    }, 16);
+  };
+  // The visual gradient on the bar uses localSoftness so it tracks the cursor
+  // immediately. The preview pipeline reads from props.softness which lags by
+  // up to 16ms — invisible.
+  const softness = localSoftness;
 
   // Display order: sort swatches by luminance dark→light so the bar reads as a value
   // gradient. We sort the indices, not the swatches themselves — weights stay aligned
@@ -359,8 +384,15 @@ export function PaletteStrip(props: PaletteStripProps) {
           title={`Softness: ${Math.round(softness)} — falloff between cluster regions (0 = hard, 100 = smooth blend)`}>
           <span style={{ fontSize: 9, opacity: 0.5, width: 38 }}>softness</span>
           <input type="range" min={0} max={100} step={1} value={softness}
-            onInput={e => setSoftness(parseFloat((e.target as HTMLInputElement).value))}
-            onChange={e => setSoftness(parseFloat((e.target as HTMLInputElement).value))}
+            onInput={e => onSoftnessInput(parseFloat((e.target as HTMLInputElement).value))}
+            onChange={e => {
+              // mouseup: clear pending throttle and commit final value to parent
+              // so we don't end on a stale throttled-out tick.
+              if (softnessCommitRef.current) { clearTimeout(softnessCommitRef.current); softnessCommitRef.current = null; }
+              const v = parseFloat((e.target as HTMLInputElement).value);
+              setLocalSoftness(v);
+              setSoftness(v);
+            }}
             style={{ flex: 1, margin: 0, cursor: "pointer", height: 12 }} />
           <span style={{ fontSize: 9, opacity: 0.5, width: 22, textAlign: "right" }}>{Math.round(softness)}</span>
         </div>
