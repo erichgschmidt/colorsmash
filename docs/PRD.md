@@ -67,6 +67,15 @@ Details: see [algorithm.md](algorithm.md).
 - Export LUT button — bakes staged preset to portable 33³ Adobe `.CUBE` 3D LUT (sidesteps PS's flaky Color Lookup automation)
 - Matched preview Before/After badge (click to toggle, click-and-hold to peek)
 
+### Shipped in v1.4 → v1.7 (2026-05)
+- **Source palette display strip** (v1.4, Phase A): k-means clustering in CIE Lab space, 3 / 5 / 7 swatch count toggle, sorted dark→light. Mirrors the active preset (Full = raw clusters, Color = pure-hue swatches with luminance flattened, Contrast = grayscale value strip).
+- **Weighted palette bar** (v1.5+): proportional segments where each cluster's width = natural prevalence × user multiplier. Two drag modes — handle mode (default, white dividers redistribute weight pair-wise between adjacent neighbors, mass-conserving on the pair) and adaptive mode (`adapt` toggle, persisted: drag a swatch body to grow/shrink it; all other swatches rebalance proportionally to maintain their relative ratios). Reset returns all weights to neutral. The reweighted palette feeds both the live preview and the Apply Curves bake.
+- **Selectrix-style log2 zoom slider** in the preview header — smooth fluid scrubbing alongside discrete −/+ buttons.
+- **Preview header cleanup**: "Preview" label dropped; ⇄ swap moved flush-left so the zoom cluster owns the right side.
+- **Performance** (v1.7): cluster-assignment cache (~10× faster palette synthesis during drag), double-buffered `<img>` swap with a latest-frame token (no flicker between frames), redraw throttle tightened from 33 ms to 16 ms (60 fps).
+
+For the user-facing copy of all shipped features, the repo root [README](../README.md) is canonical — this PRD is kept as a historical design document.
+
 ## 9. Roadmap
 See [roadmap.md](roadmap.md) for phase breakdown. High-level:
 - **Phase 0:** Spike — prove Imaging API + math (1 wk)

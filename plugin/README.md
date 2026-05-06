@@ -6,7 +6,7 @@ See the [repo root README](../README.md) for the user-facing feature list and in
 
 ## Layout
 - `manifest.json` — UXP manifest (PS 25.0+)
-- `src/ui/` — React panel (Match tab, preview, envelope/zone editors, hooks)
+- `src/ui/` — React panel (Match tab, preview with log2 zoom slider, preset strip, palette strip with weighted/adaptive drag, envelope/zone editors, hooks)
 - `src/services/photoshop.ts` — only file allowed to call `photoshop` / `batchPlay`
 - `src/core/` — pure-TS algorithms (histogram match, Lab, downsample, LUT writer). Unit-testable outside PS.
 - `src/app/` — Apply orchestration (single Curves layer + multi-zone trio)

@@ -34,6 +34,19 @@ submission to match your final branding/pricing.
 >   Color/Luminosity blend math that a Curves layer alone cannot
 >   represent.
 >
+> • Source palette with weighted bar (v1.4–v1.5): k-means
+>   swatches sampled from the source in CIE Lab space, with a
+>   3 / 5 / 7 cluster toggle, sorted dark to light. Mirrors the
+>   active preset (Full = raw clusters, Color = pure-hue swatches,
+>   Contrast = grayscale value strip). Segments are proportional
+>   to natural prevalence × your multiplier. Drag the dividers
+>   between swatches to redistribute weight between neighbors, or
+>   flip 'adapt' on to drag a swatch body and have all others
+>   rebalance proportionally. Reset restores neutral. The
+>   reweighted palette feeds both the live preview and the Apply
+>   Curves bake, so you can bias the match toward a specific
+>   accent color in the reference.
+>
 > • Multi-zone Curves output (v1.1): one click emits three stacked
 >   Curves layers (Shadows / Mids / Highlights) instead of one, each
 >   fitted from only the pixels in its luminance band. Limit each band
@@ -45,7 +58,11 @@ submission to match your final branding/pricing.
 >
 > • Per-channel histogram matching in RGB or perceptual Lab space
 >
-> • Live preview of the match as you tweak — no Apply round-trips
+> • Live preview of the match as you tweak — no Apply round-trips.
+>   Smooth log2-scaled zoom slider in the preview header, double-
+>   buffered frame swap (no flicker during drag), 60fps redraws,
+>   and a cluster-assignment cache that keeps weighted-palette
+>   synthesis fluid even while dragging swatches.
 >
 > • Cross-document workflow: source and target each have independent
 >   document dropdowns. Pick a source layer in one open document and

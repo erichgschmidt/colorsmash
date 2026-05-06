@@ -82,6 +82,16 @@ See [zone-editor-spec.md](zone-editor-spec.md) for full design. May supersede or
 - Layout cleanup: target picker is now a single horizontal row above the matched preview; source picker matches the same `[source ▼] [layer/mode ▼] [⟳]` pattern.
 - Internal: repeated Apply Curves no longer nests `[Color Smash]` groups inside one another.
 
+## v1.7 — Weighted palette + perf polish (shipped, 2026-05)
+**Goal:** Bias the match toward a specific accent color in the reference, with real-time response.
+
+- **v1.4 — Source palette display strip (Phase A):** k-means in CIE Lab space, 3 / 5 / 7 cluster count toggle, swatches sorted dark→light, mirrors the active preset (Full = raw clusters, Color = pure-hue swatches with luminance flattened, Contrast = grayscale value strip). Display-only; no influence on the match yet.
+- **v1.5 — Weighted palette bar:** proportional segments (width = natural prevalence × user multiplier). Handle mode (default): drag white dividers between segments to redistribute weight pair-wise between adjacent neighbors, mass-conserving on the pair. The reweighted palette synthesizes a biased source that drives both the live preview and the Apply Curves bake.
+- **v1.6 — Adaptive drag mode:** `adapt` toggle (persisted) flips the bar from handle-drag to swatch-body-drag — drag the body of any swatch to grow/shrink it, and every other swatch rebalances proportionally to maintain its relative ratio. Symmetric across all swatches regardless of position. Reset button returns all weights to neutral (×1).
+- **v1.6 — Selectrix-style log2 zoom slider** in preview header: `<input type="range">` on a log2 axis (step 0.05) between − and + buttons, so each unit doubles/halves zoom. Smooth fluid scrubbing complementing the discrete buttons.
+- **v1.6 — Preview header cleanup:** "Preview" label removed; ⇄ swap moved flush-left so the zoom cluster owns the right.
+- **v1.7 — Performance:** cluster-assignment cache (~10× faster palette synthesis during drag), double-buffered `<img>` swap with a latest-frame token (no flicker between frames), redraw throttle tightened from 33 ms to 16 ms (60 fps).
+
 ## v1.1 — Multi-zone Curves (shipped, 2026-04)
 **Goal:** Spatially-aware grading that adapts across mixed-lighting scenes.
 
