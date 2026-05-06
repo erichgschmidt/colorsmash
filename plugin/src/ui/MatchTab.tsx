@@ -685,13 +685,32 @@ export function MatchTab() {
       && targetPaletteWeights.some(w => Math.abs(w - 1) > 0.01);
 
     if (multiZone && fittedMulti) {
-      // Multi-zone path: process each band's curves through Color + Tone, simulate the
-      // 3-curve composite via triangular blend (matches what PS will produce on apply).
-      // Skip Zones + Envelope — they're zone-modulators that would double-apply over the bands.
-      // Target-palette weighting is also skipped here — multi-zone already partitions
-      // application by luma; layering the cluster mask on top would double-modulate.
+      // Multi-zone path: process each band's curves through Color + Tone, simulate
+      // the 3-curve composite via compositional layer-stack blend (matches what PS
+      // produces from three stacked masked Curves layers). Zones + Envelope are
+      // skipped — they're zone-modulators that would double-apply over the bands.
       const procFit = processMultiZoneFit(fittedMulti, curveOpts, dimOpts);
       out = applyMultiZoneToRgba(tgtBuf.data, procFit, multiZonePeaks, multiZoneExtents);
+      // Target-palette mask: when active, the bake wraps the 3 band Curves layers
+      // in a sub-group and attaches the target-palette mask to the SUB-GROUP. PS
+      // evaluates that as (multi-zone composite) × (group mask). Mirror the same
+      // composition here per-pixel: lerp the multi-zone output toward original by
+      // each pixel's effective weight.
+      if (targetWeightsActive && targetEffectiveWeights) {
+        const orig = tgtBuf.data;
+        const ew = targetEffectiveWeights;
+        for (let i = 0, p = 0; i < out.length; i += 4, p++) {
+          const w = Math.max(0, Math.min(1, ew[p]));
+          if (w >= 0.999) continue; // full match: keep as-is
+          if (w <= 0.001) {
+            out[i] = orig[i]; out[i + 1] = orig[i + 1]; out[i + 2] = orig[i + 2];
+            continue;
+          }
+          out[i]     = Math.round(orig[i]     + (out[i]     - orig[i])     * w);
+          out[i + 1] = Math.round(orig[i + 1] + (out[i + 1] - orig[i + 1]) * w);
+          out[i + 2] = Math.round(orig[i + 2] + (out[i + 2] - orig[i + 2]) * w);
+        }
+      }
       // Curves graph shows the mid-band curve as representative (graph doesn't render 3 sets).
       curvesForGraph = procFit.mid;
     } else {

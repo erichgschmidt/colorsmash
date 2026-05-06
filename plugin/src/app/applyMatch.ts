@@ -209,6 +209,23 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       try { await group.move(target, "placeBefore"); } catch { /* ignore — keep where it is */ }
     }
     const overwrite = params.overwritePrior !== false;
+    // Preset blend mode used by every Curves layer we create (single-curve and
+    // each band of multi-zone). Must be consistent across both paths so the
+    // user's preset choice (Hue / Saturation / Contrast / Color / Full) is
+    // honored regardless of multi-zone mode.
+    //   color           → null         (Normal blend, default)
+    //   hue (Color UI)  → "color"      H + S transfer, target keeps L
+    //   hueOnly (Hue UI)→ "hue"        H only
+    //   saturationOnly  → "saturation" S only
+    //   contrast        → "luminosity" L only
+    //   chromaOnly flag → "color"      legacy "Hue only" toggle, semantically same as Color preset
+    const preset = params.preset ?? "color";
+    const presetBlend =
+      preset === "hue" || params.chromaOnly ? "color" :
+      preset === "hueOnly" ? "hue" :
+      preset === "saturationOnly" ? "saturation" :
+      preset === "contrast" ? "luminosity" :
+      null;
     const matchChildren = [...(group.layers ?? [])].filter((c: any) =>
       c.name === RESULT_LAYER_NAME || (typeof c.name === "string" && c.name.startsWith(RESULT_LAYER_NAME))
     );
@@ -326,9 +343,33 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       const failures: string[] = [];
       const limitMode = params.multiZoneLimit ?? "mask"; // 'mask' | 'blendIf' | 'both'
 
+      // When the user has non-neutral target-palette weights, wrap the three band
+      // Curves layers in a sub-group and attach the target-palette mask to that
+      // sub-group. The result composes correctly: each band layer gets its own
+      // luma mask (band limiter), and the group mask attenuates the whole
+      // multi-zone result by per-cluster color weight. PS evaluates this as
+      // (band-curves) × (group mask), exactly the user's mental model.
+      const tp = params.targetPalette;
+      const useTargetSubGroup = !!(tp && tp.weights.some(w => Math.abs(w - 1) > 0.01) && !targetIsMerged);
+      let bandContainer: any = group;
+      if (useTargetSubGroup) {
+        try {
+          // selectNoLayers so the new group isn't created inside whatever's currently
+          // active (matches the same precaution the parent [Color Smash] group uses).
+          await action.batchPlay([{ _obj: "selectNoLayers", _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }] }], {});
+        } catch { /* not critical */ }
+        const subName = overwrite ? RESULT_LAYER_NAME : `${RESULT_LAYER_NAME} ${new Date().toTimeString().slice(0, 8)}`;
+        try {
+          bandContainer = await doc.createLayerGroup({ name: subName });
+          await bandContainer.move(group, "placeInside");
+        } catch { bandContainer = group; /* fallback to flat layout */ }
+      }
+
       for (const band of bands) {
         const baseName = `${RESULT_LAYER_NAME} [${band.suffix}]`;
-        const layerName = overwrite ? baseName
+        // Inside a sub-group, individual layer names don't need timestamps even
+        // when not overwriting (the sub-group itself is the unique unit).
+        const layerName = (overwrite || useTargetSubGroup) ? baseName
           : `${baseName} ${new Date().toTimeString().slice(0, 8)}`;
         const c = multiZoneFit[band.key];
         const layer = await makeCurvesLayer(layerName, [
@@ -338,11 +379,15 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
         ]);
         // No clipping mask in multi-zone — the per-band luminosity mask (or Blend If) is
         // the spatial limiter. User can manually clip if they want layer-specific restriction.
-        if (params.chromaOnly) { try { layer.blendMode = "hue"; } catch { /* ignore */ } }
-        // Move into the group BEFORE Blend If attempts — recent testing shows the layer.move
-        // call after a successful blendRange set may revert the destWhiteMax field back to
-        // default. Doing the move first means subsequent Blend If is the final state.
-        try { await layer.move(group, "placeInside"); } catch { /* ignore */ }
+        // Apply the preset's blend mode (Hue/Color/Saturation/Luminosity/Normal) — same
+        // logic the single-curve branch uses, so preset choice is honored across all paths.
+        if (presetBlend) { try { layer.blendMode = presetBlend; } catch { /* ignore */ } }
+        // Move into the container BEFORE Blend If attempts — recent testing shows the
+        // layer.move call after a successful blendRange set may revert the destWhiteMax
+        // field back to default. Doing the move first means subsequent Blend If is the
+        // final state. bandContainer is either the [Color Smash] group directly, or a
+        // sub-group when target-palette masking is active.
+        try { await layer.move(bandContainer, "placeInside"); } catch { /* ignore */ }
 
         // Try the user-preferred limiting method(s). 'mask' uses putLayerMask only (clean
         // single approach). 'blendIf' uses batchPlay-set descriptor only. 'both' applies
@@ -501,9 +546,101 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
           if (blendIfErr) reasons.push(`blendIf: ${blendIfErr?.message ?? blendIfErr}`);
           failures.push(`${band.suffix} (${reasons.join("; ")})`);
         }
-        // Move into [Color Smash] group AFTER mask/blend if attempts so layer descriptor
-        // readback isn't confused by group nesting (per audit suggestion #1).
-        try { await layer.move(group, "placeInside"); } catch { /* ignore */ }
+        // Move into the band container AFTER mask/blend if attempts so layer descriptor
+        // readback isn't confused by group nesting (per audit suggestion #1). When target
+        // palette is active, bandContainer is the sub-group; otherwise it's the parent
+        // [Color Smash] group directly.
+        try { await layer.move(bandContainer, "placeInside"); } catch { /* ignore */ }
+      }
+
+      // Attach target-palette mask to the sub-group when active. Same Lab cluster
+      // assignment + Lorentzian soft-blend as the single-curve target mask path
+      // (parity with applyChannelCurvesToRgbaWeighted's preview math). Putting
+      // the mask on the GROUP rather than per-band-layer is what the user wants:
+      // each band keeps its luma limiter, the group mask attenuates the whole
+      // multi-zone composite by per-cluster color weight.
+      if (useTargetSubGroup && bandContainer !== group && tp && t && t.data) {
+        try {
+          const k = tp.swatches.length;
+          const softness = Math.max(0, Math.min(100, tp.softness ?? 0));
+          const useSoft = softness > 0;
+          const sigma2 = (softness / 100) * (softness / 100) * 5000;
+          const wFloat = new Float32Array(k);
+          const wByte = new Uint8Array(k);
+          for (let i = 0; i < k; i++) {
+            const w = Math.max(0, Math.min(1, tp.weights[i]));
+            wFloat[i] = w;
+            wByte[i] = Math.round(w * 255);
+          }
+          const cents = new Float32Array(k * 3);
+          for (let i = 0; i < k; i++) {
+            cents[i * 3] = tp.swatches[i].labL;
+            cents[i * 3 + 1] = tp.swatches[i].labA;
+            cents[i * 3 + 2] = tp.swatches[i].labB;
+          }
+          const pxCount = t.width * t.height;
+          const tpMask = new Uint8Array(pxCount);
+          const srgbToLinear = (c: number) => {
+            const x = c / 255;
+            return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+          };
+          const f = (t0: number) => t0 > 0.008856 ? Math.cbrt(t0) : (7.787 * t0 + 16 / 116);
+          const distBuf = new Float32Array(k);
+          for (let i = 0; i < pxCount; i++) {
+            const o = i * 4;
+            if (t.data[o + 3] < 128) { tpMask[i] = 0; continue; }
+            const R = srgbToLinear(t.data[o]);
+            const G = srgbToLinear(t.data[o + 1]);
+            const B = srgbToLinear(t.data[o + 2]);
+            const X = R * 0.4124564 + G * 0.3575761 + B * 0.1804375;
+            const Y = R * 0.2126729 + G * 0.7151522 + B * 0.0721750;
+            const Z = R * 0.0193339 + G * 0.1191920 + B * 0.9503041;
+            const fx = f(X / 0.95047), fy = f(Y), fz = f(Z / 1.08883);
+            const L = 116 * fy - 16, a = 500 * (fx - fy), b2 = 200 * (fy - fz);
+            if (!useSoft) {
+              let best = 0, bestDist = Infinity;
+              for (let c = 0; c < k; c++) {
+                const dl = L - cents[c * 3];
+                const da = a - cents[c * 3 + 1];
+                const db = b2 - cents[c * 3 + 2];
+                const d = dl * dl + da * da + db * db;
+                if (d < bestDist) { bestDist = d; best = c; }
+              }
+              tpMask[i] = wByte[best];
+            } else {
+              let minD = Infinity;
+              for (let c = 0; c < k; c++) {
+                const dl = L - cents[c * 3];
+                const da = a - cents[c * 3 + 1];
+                const db = b2 - cents[c * 3 + 2];
+                const d = dl * dl + da * da + db * db;
+                distBuf[c] = d;
+                if (d < minD) minD = d;
+              }
+              const invS2 = 1 / sigma2;
+              let sumG = 0, sumWG = 0;
+              for (let c = 0; c < k; c++) {
+                const g = 1 / (1 + (distBuf[c] - minD) * invS2);
+                sumG += g;
+                sumWG += g * wFloat[c];
+              }
+              const wf = sumG > 0 ? sumWG / sumG : 1;
+              tpMask[i] = Math.max(0, Math.min(255, Math.round(wf * 255)));
+            }
+          }
+          const tpMaskImageData = await imaging.createImageDataFromBuffer(tpMask, {
+            width: t.width, height: t.height, components: 1, chunky: true,
+            colorProfile: "Gray Gamma 2.2", colorSpace: "Grayscale",
+          });
+          await imaging.putLayerMask({
+            documentID: doc.id,
+            layerID: bandContainer.id,
+            imageData: tpMaskImageData,
+            targetBounds: t.bounds,
+            replace: true,
+          });
+          if (tpMaskImageData.dispose) tpMaskImageData.dispose();
+        } catch { /* group mask is best-effort; bands still apply unmasked if it fails */ }
       }
 
       const adaptive = (eMin > 0 || eMax < 255 || sP > 0 || hP < 255);
@@ -524,7 +661,8 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       : `${RESULT_LAYER_NAME} ${new Date().toTimeString().slice(0, 8)}`;
     // Quick-select preset: collapse to a single luma curve for bw/contrast (R=G=B), and pick
     // the matching blend mode below. color/hue keep per-channel curves.
-    const preset = params.preset ?? "color";
+    // (preset / presetBlend are hoisted near the top of the function so both single-curve
+    // and multi-zone paths share the same blend-mode mapping.)
     const finalCurves = transformCurvesForPreset(curves, preset);
     const curveLayer = await makeCurvesLayer(layerName, [
       { channel: "red",   points: sampleControlPoints(finalCurves.r, CONTROL_POINTS) },
@@ -539,12 +677,6 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     //   saturationOnly  → "saturation" blend  (S only from curves, target keeps H+L) — labelled "Saturation" in UI
     //   contrast        → "luminosity" blend  (L only from curves, target keeps H+S)
     //   color           → Normal              (full per-channel transfer — labelled "Full" in the UI)
-    const presetBlend =
-      preset === "hue" || params.chromaOnly ? "color" :
-      preset === "hueOnly" ? "hue" :
-      preset === "saturationOnly" ? "saturation" :
-      preset === "contrast" ? "luminosity" :
-      null;
     if (presetBlend) { try { curveLayer.blendMode = presetBlend; } catch { /* ignore */ } }
     try { await curveLayer.move(group, "placeInside"); } catch { /* ignore */ }
 
