@@ -322,23 +322,61 @@ function histMean(h: Float64Array): number {
   return total > 0 ? sum / total : 128;
 }
 
-// Simulate the multi-zone composite for the preview. Uses the same parameterized weights
-// as fitMultiZone so preview = applied output. Non-normalized weights mean the remainder
-// (1 - sum) passes through as identity — matches what Blend If / masks do in PS.
+// Simulate the multi-zone composite for the preview. Mirrors what PS produces
+// when three stacked Curves adjustment layers (shadow / mid / highlight) each
+// have a band-mask attached.
+//
+// The CRITICAL detail: PS evaluates stacked masked Curves COMPOSITIONALLY, not
+// summed. Each layer's curve operates on the OUTPUT of the layer below it, not
+// on the original target. Sum-based preview math (the v1.7→v1.10 implementation)
+// produced visibly different results than the bake at any pixel where two band
+// masks overlap — typically at band-transition luma ranges.
+//
+// Mask values themselves are derived from the ORIGINAL target's luma in the
+// bake (we pre-write static grayscale masks; PS doesn't re-derive them per
+// layer). So the weights are functions of the unmodified pixel; only the
+// curve application is compositional.
+//
+// Order: shadow first, then mid, then highlight — matching PS layer-stack
+// evaluation order (bottom layer's effect lands first; subsequent layers see
+// the shifted composite). applyMatch creates the layers in this same order
+// via group `placeInside` so each new layer goes on top of the previous one.
 export function applyMultiZoneToRgba(
   tgtRgba: Uint8Array, fit: MultiZoneFit,
   peaks: { shadow: number; mid: number; highlight: number } = { shadow: 0, mid: 128, highlight: 255 },
   extents: { min: number; max: number } = { min: 0, max: 255 },
 ): Uint8Array {
   const out = new Uint8Array(tgtRgba.length);
+  // Helper: blend per-channel curve into current value at strength w.
+  // out = lerp(v, curve(round(v)), w). v stays float between layers; curve
+  // input is rounded since the LUT is 0..255.
+  const blend = (v: number, curve: Uint8Array, w: number): number => {
+    if (w <= 0) return v;
+    if (w >= 1) return curve[Math.max(0, Math.min(255, Math.round(v)))];
+    const cv = curve[Math.max(0, Math.min(255, Math.round(v)))];
+    return v * (1 - w) + cv * w;
+  };
   for (let i = 0; i < tgtRgba.length; i += 4) {
-    const r = tgtRgba[i], g = tgtRgba[i + 1], b = tgtRgba[i + 2];
-    const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    const r0 = tgtRgba[i], g0 = tgtRgba[i + 1], b0 = tgtRgba[i + 2];
+    // Weights from ORIGINAL target luma — masks are static, set at bake time.
+    const luma = 0.2126 * r0 + 0.7152 * g0 + 0.0722 * b0;
     const w = multiZoneWeights(luma, peaks, extents);
-    const passthrough = Math.max(0, 1 - (w.shadow + w.mid + w.highlight));
-    out[i]     = Math.max(0, Math.min(255, Math.round(w.shadow * fit.shadow.r[r] + w.mid * fit.mid.r[r] + w.highlight * fit.highlight.r[r] + passthrough * r)));
-    out[i + 1] = Math.max(0, Math.min(255, Math.round(w.shadow * fit.shadow.g[g] + w.mid * fit.mid.g[g] + w.highlight * fit.highlight.g[g] + passthrough * g)));
-    out[i + 2] = Math.max(0, Math.min(255, Math.round(w.shadow * fit.shadow.b[b] + w.mid * fit.mid.b[b] + w.highlight * fit.highlight.b[b] + passthrough * b)));
+    let r = r0, g = g0, b = b0;
+    // Shadow layer (bottom).
+    r = blend(r, fit.shadow.r, w.shadow);
+    g = blend(g, fit.shadow.g, w.shadow);
+    b = blend(b, fit.shadow.b, w.shadow);
+    // Mid layer (middle) — operates on shadow-blended values.
+    r = blend(r, fit.mid.r, w.mid);
+    g = blend(g, fit.mid.g, w.mid);
+    b = blend(b, fit.mid.b, w.mid);
+    // Highlight layer (top) — operates on shadow+mid blended values.
+    r = blend(r, fit.highlight.r, w.highlight);
+    g = blend(g, fit.highlight.g, w.highlight);
+    b = blend(b, fit.highlight.b, w.highlight);
+    out[i]     = Math.max(0, Math.min(255, Math.round(r)));
+    out[i + 1] = Math.max(0, Math.min(255, Math.round(g)));
+    out[i + 2] = Math.max(0, Math.min(255, Math.round(b)));
     out[i + 3] = tgtRgba[i + 3];
   }
   return out;
