@@ -82,6 +82,22 @@ See [zone-editor-spec.md](zone-editor-spec.md) for full design. May supersede or
 - Layout cleanup: target picker is now a single horizontal row above the matched preview; source picker matches the same `[source ▼] [layer/mode ▼] [⟳]` pattern.
 - Internal: repeated Apply Curves no longer nests `[Color Smash]` groups inside one another.
 
+## v1.9 — Target palette polish (shipped, 2026-05)
+**Goal:** Tighten the v1.8 dual-palette UI.
+
+- Reset buttons moved next to the 3/5/7 count toggle in both source and target palette headers; styled with a reddish coral tone (#d87a7a) to read as a destructive action.
+- Preview header restructured: swap + Before/After cluster flush left, zoom controls (− slider +) centered, background + 1:1 right.
+- Documentation pass — Zones references removed from user-facing copy now that the section is gone from the UI.
+
+## v1.8 — Target palette weight bar + softness (shipped, 2026-05)
+**Goal:** Replace the fixed-luma-band Zones panel with a strictly more general per-cluster targeting tool.
+
+- **Target palette weight bar** under the matched preview. Mirrors the source palette UI (3/5/7 count toggle, handle/adapt drag modes, dark→light sort, Reset) but with different math: source weights bias the histogram fit (which source colors influence the curves), target weights control curve application strength per cluster (drag a target swatch toward 0 to leave that color region untouched while the rest gets matched).
+- **Mask toggle** on the target palette header (default on). When on, the per-cluster attenuation produces a layer mask on the baked Curves layer in addition to feathering the preview. When off, both preview and bake skip the mask — uniform curves. A/B compare with one click.
+- **Softness slider** below each palette bar (0..100). 0 = hard nearest-cluster boundary, 100 = smooth Lorentzian blend across all clusters. Source and target each have their own slider; both are persisted. Feathering visible immediately on the bar itself.
+- **Adaptive mode** clarified: in adapt, dragging a swatch BODY grows/shrinks it and all others rebalance proportionally. White boundary markers stay visible as non-interactive visual guides.
+- **Zones accordion section removed.** The cluster-based bar is strictly more general than the old three fixed luma bands. ZoneOpts persistence still ships for backward-compat with saved settings — they load cleanly, but there's no longer a UI to edit them.
+
 ## v1.7 — Weighted palette + perf polish (shipped, 2026-05)
 **Goal:** Bias the match toward a specific accent color in the reference, with real-time response.
 

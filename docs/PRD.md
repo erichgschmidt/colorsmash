@@ -74,6 +74,11 @@ Details: see [algorithm.md](algorithm.md).
 - **Preview header cleanup**: "Preview" label dropped; ⇄ swap moved flush-left so the zoom cluster owns the right side.
 - **Performance** (v1.7): cluster-assignment cache (~10× faster palette synthesis during drag), double-buffered `<img>` swap with a latest-frame token (no flicker between frames), redraw throttle tightened from 33 ms to 16 ms (60 fps).
 
+### Shipped in v1.8 → v1.9 (2026-05)
+- **Target palette weight bar + softness** (v1.8): a second weight bar under the matched preview, mirroring the source palette's 3/5/7/handle/adapt UI but with different math — target weights control curve application strength per cluster (drag a swatch toward 0 to leave that color region untouched), source weights still bias the histogram fit. Mask toggle on the target header bakes the per-cluster attenuation as a layer mask on the output Curves layer. Softness slider (0..100) on each bar controls cluster-region falloff (hard nearest-cluster → smooth Lorentzian blend).
+- **Zones accordion removed** (v1.8): superseded by the target palette weight bar. Cluster-based attenuation in Lab space is strictly more general than three fixed luma bands. ZoneOpts persistence still ships for backward-compat — older saved settings load cleanly but the UI is gone.
+- **v1.9 polish**: reset buttons relocated next to the 3/5/7 count toggles and tinted coral as destructive actions; preview header restructured (swap + B/A flush left, zoom centered, bg + 1:1 right).
+
 For the user-facing copy of all shipped features, the repo root [README](../README.md) is canonical — this PRD is kept as a historical design document.
 
 ## 9. Roadmap
