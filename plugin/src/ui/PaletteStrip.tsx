@@ -366,24 +366,34 @@ export function PaletteStrip(props: PaletteStripProps) {
             />
           );
         })}
-        {/* Pair-wise drag handles at internal boundaries. Hidden in adaptive
-            mode since the swatch bodies themselves are the drag targets there.
-            Only N-1 handles for N segments — that's the asymmetry that made
-            adaptive feel weird when bound to handles instead of bodies. */}
-        {!adaptive && orderedIndices.slice(0, -1).map((_, i) => {
+        {/* Boundary markers between cluster segments. In handle mode these
+            are interactive (drag to redistribute weight pair-wise). In
+            adaptive mode they stay visible as VISUAL CUES showing where
+            cluster regions split — useful when softness > 0 blurs the
+            actual color transitions, the markers anchor where the centroid
+            boundaries are. They're rendered with pointerEvents: none in
+            adaptive mode so clicks pass through to the segment body
+            (which is the drag target there). */}
+        {orderedIndices.slice(0, -1).map((_, i) => {
           const x = leftEdges[i] + displayWidths[i]; // boundary between i and i+1
           return (
-            <div key={`handle-${i}`} onPointerDown={startHandleDrag(i)}
+            <div key={`handle-${i}`}
+              onPointerDown={adaptive ? undefined : startHandleDrag(i)}
               style={{
                 position: "absolute", top: -1, height: BAR_HEIGHT + 2,
                 left: `calc(${x}% - ${HANDLE_HALF_WIDTH}px)`,
                 width: HANDLE_HALF_WIDTH * 2,
-                cursor: "ew-resize", touchAction: "none",
+                cursor: adaptive ? "default" : "ew-resize",
+                touchAction: adaptive ? "auto" : "none",
+                pointerEvents: adaptive ? "none" : "auto",
                 display: "flex", alignItems: "center", justifyContent: "center",
               }}>
               <div style={{
                 width: 2, height: BAR_HEIGHT - 4, background: "#fff",
-                opacity: 0.6, borderRadius: 1, pointerEvents: "none",
+                // Slightly dimmer in adapt mode (visual marker only, not
+                // a grabbable control) so it reads as "guide" not "handle".
+                opacity: adaptive ? 0.4 : 0.6,
+                borderRadius: 1, pointerEvents: "none",
                 boxShadow: "0 0 2px rgba(0,0,0,0.6)",
               }} />
             </div>
