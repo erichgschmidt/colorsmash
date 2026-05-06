@@ -317,7 +317,7 @@ export function PaletteStrip(props: PaletteStripProps) {
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 4 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <span style={{ fontSize: 9, opacity: 0.5 }}>palette</span>
+          <span />{/* spacer — was 'palette' label, removed as self-evident */}
           {countToggle}
         </div>
         <div style={{ display: "flex", height: BAR_HEIGHT, gap: 2, opacity: 0.4 }}>
