@@ -80,29 +80,47 @@ export function PaletteStrip(props: PaletteStripProps) {
   const setSoftness = props.setSoftness;
   const barRef = useRef<HTMLDivElement>(null);
 
-  // Local mirror of softness for immediate slider tracking. Pointer events
-  // update this synchronously every tick (cheap — no preview redraw triggered),
-  // while the actual commit to parent state — which invalidates the per-pixel
-  // effective-weights memo and triggers the heavy preview redraw — is throttled
-  // to ~16ms. Keeps the slider thumb glued to the cursor without stacking
-  // precompute calls on every pointermove during a fast drag.
+  // Local mirror of softness for immediate slider + gradient-bar tracking.
+  // Pointer events update this synchronously every tick (cheap — no preview
+  // redraw triggered), while the actual commit to parent state — which
+  // invalidates the per-pixel effective-weights memo and triggers the heavy
+  // preview redraw — is throttled. Keeps the slider thumb glued to the cursor
+  // without stacking precompute calls.
+  //
+  // Two refs guard against feedback loops:
+  //   • draggingRef: true while a drag is in progress. Blocks the
+  //     prop→local sync below so a mid-drag commit doesn't echo back and
+  //     "jump" the local state to a stale parent value while the user's
+  //     cursor is already past it.
+  //   • softnessLatestRef: the most recent value typed into the slider,
+  //     captured in onInput. The throttled commit reads from here so we
+  //     always commit the LATEST value, not whatever was current when the
+  //     timer was first scheduled.
   const [localSoftness, setLocalSoftness] = useState(propsSoftness);
-  // Sync from parent when prop changes (persistence load, programmatic reset).
-  useEffect(() => { setLocalSoftness(propsSoftness); }, [propsSoftness]);
+  const draggingRef = useRef(false);
+  useEffect(() => {
+    if (draggingRef.current) return; // ignore self-echoed prop changes mid-drag
+    setLocalSoftness(propsSoftness);
+  }, [propsSoftness]);
   const softnessCommitRef = useRef<any>(null);
   const softnessLatestRef = useRef(propsSoftness);
+  // 33ms throttle (~30Hz commits) gives precompute breathing room. Faster than
+  // that and the heavy work compounds (each precompute ~10ms + apply ~10ms +
+  // encode ~10ms = ~30ms / commit), starving the main thread during a drag.
+  const SOFTNESS_COMMIT_MS = 33;
   const onSoftnessInput = (v: number) => {
+    draggingRef.current = true;
     setLocalSoftness(v);
     softnessLatestRef.current = v;
     if (softnessCommitRef.current) return; // pending commit already scheduled
     softnessCommitRef.current = setTimeout(() => {
       softnessCommitRef.current = null;
       if (setSoftness) setSoftness(softnessLatestRef.current);
-    }, 16);
+    }, SOFTNESS_COMMIT_MS);
   };
   // The visual gradient on the bar uses localSoftness so it tracks the cursor
   // immediately. The preview pipeline reads from props.softness which lags by
-  // up to 16ms — invisible.
+  // up to ~33ms — invisible visually, just compute breathing room.
   const softness = localSoftness;
 
   // Display order: sort swatches by luminance dark→light so the bar reads as a value
@@ -386,12 +404,14 @@ export function PaletteStrip(props: PaletteStripProps) {
           <input type="range" min={0} max={100} step={1} value={softness}
             onInput={e => onSoftnessInput(parseFloat((e.target as HTMLInputElement).value))}
             onChange={e => {
-              // mouseup: clear pending throttle and commit final value to parent
-              // so we don't end on a stale throttled-out tick.
+              // mouseup: clear pending throttle, commit final value to parent,
+              // and lower the dragging flag so subsequent prop updates can
+              // sync down again normally.
               if (softnessCommitRef.current) { clearTimeout(softnessCommitRef.current); softnessCommitRef.current = null; }
               const v = parseFloat((e.target as HTMLInputElement).value);
               setLocalSoftness(v);
               setSoftness(v);
+              draggingRef.current = false;
             }}
             style={{ flex: 1, margin: 0, cursor: "pointer", height: 12 }} />
           <span style={{ fontSize: 9, opacity: 0.5, width: 22, textAlign: "right" }}>{Math.round(softness)}</span>
