@@ -226,12 +226,26 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       preset === "saturationOnly" ? "saturation" :
       preset === "contrast" ? "luminosity" :
       null;
-    const matchChildren = [...(group.layers ?? [])].filter((c: any) =>
-      c.name === RESULT_LAYER_NAME || (typeof c.name === "string" && c.name.startsWith(RESULT_LAYER_NAME))
-    );
+    // Collect every descendant whose name matches the Match-Curves prefix, recursing
+    // into sub-groups. Critical for multi-zone: the sub-group ('Match Curves') contains
+    // band layers ('Match Curves [Shadows]', etc.) — when PS deletes the group it often
+    // ORPHANS those children up to the parent rather than deleting them, leaving 3 stale
+    // siblings beside the new sub-group on the next run. Walking the tree first means we
+    // delete (or hide) every band layer individually, then the now-empty sub-group.
+    const collectMatches = (parent: any, out: any[]) => {
+      for (const child of parent.layers ?? []) {
+        const name = child.name;
+        const matches = typeof name === "string" && (name === RESULT_LAYER_NAME || name.startsWith(RESULT_LAYER_NAME));
+        if (matches) {
+          // Recurse first so descendants get deleted before their group container
+          if (child.layers) collectMatches(child, out);
+          out.push(child);
+        }
+      }
+    };
+    const matchChildren: any[] = [];
+    collectMatches(group, matchChildren);
     if (overwrite) {
-      // Delete every prior Match Curves layer in the group. Predictable and avoids the
-      // multi-zone footgun where deleting only the topmost would leave stale band-layers.
       for (const child of matchChildren) {
         try { await child.delete(); } catch { /* ignore */ }
       }
