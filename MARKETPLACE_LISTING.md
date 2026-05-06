@@ -47,6 +47,23 @@ submission to match your final branding/pricing.
 >   Curves bake, so you can bias the match toward a specific
 >   accent color in the reference.
 >
+> • Target palette + mask (v1.8): a second weight bar under the
+>   matched preview, mirroring the source UI but with different
+>   math. Source weights bias which source colors influence the
+>   curves; target weights control curve application strength
+>   per cluster — drag a swatch toward 0 to leave that color
+>   region of the target untouched while the rest gets matched.
+>   A mask toggle on the target header (on by default) bakes
+>   the per-cluster attenuation into a layer mask on the output
+>   Curves layer. Strictly more general than the old fixed luma
+>   bands.
+>
+> • Softness slider (v1.8): below each palette bar, 0–100.
+>   Controls falloff between cluster regions — 0 = hard nearest-
+>   cluster boundary, 100 = smooth Lorentzian blend across all
+>   clusters. Source and target each have their own slider.
+>   Visible immediately as feathering on the bar itself.
+>
 > • Multi-zone Curves output (v1.1): one click emits three stacked
 >   Curves layers (Shadows / Mids / Highlights) instead of one, each
 >   fitted from only the pixels in its luminance band. Limit each band
@@ -81,9 +98,10 @@ submission to match your final branding/pricing.
 >
 > • Three-section control surface — Color (match strength, smoothing,
 >   stretch, hue-only), Tone (value, chroma, hue, contrast,
->   neutralize, separation), Zones (shadows / midtones / highlights
->   with independent amount, anchor, falloff, and competitive bias;
->   lock the total to redistribute weight without changing strength).
+>   neutralize, separation), Envelope (arbitrary-N per-tone weight
+>   curve). The dual palette weight bars handle per-cluster
+>   targeting that older versions did with a fixed-band Zones
+>   panel.
 >
 > • Envelope editor for arbitrary-N per-tone weight curves with mix
 >   of smooth (monotone-cubic) and corner (linear) interpolation
