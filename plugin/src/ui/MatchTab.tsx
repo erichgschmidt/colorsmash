@@ -16,7 +16,7 @@ import { BottomActionBar } from "./BottomActionBar";
 import { BasicSlider, DimSlider, matchStyles } from "./MatchSliders";
 import { ChannelCurves } from "../core/histogramMatch";
 import {
-  processChannelCurves, applyChannelCurvesToRgba, applyChromaOnly,
+  processChannelCurves, applyChannelCurvesToRgba, applyChannelCurvesToRgbaWeighted, applyChromaOnly,
   applyDimensions, applyZoneAndEnvelopeToChannels, MERGED_LAYER_ID,
   transformCurvesForPreset, applyPresetPostprocess, generateLutCube,
   DimensionOpts, DEFAULT_DIMENSIONS, ZoneOpts, DEFAULT_ZONES,
@@ -80,6 +80,12 @@ export function MatchTab() {
   // source/count change since clusters change identity. NOT persisted — different
   // sources produce different clusters and stale weights would be confusing.
   const [paletteWeights, setPaletteWeights] = useState<number[]>([]);
+  // Target-side palette: same UI/mechanics as source but the weights modulate
+  // CURVE APPLICATION strength per cluster rather than fit contribution. Drag
+  // a target cluster's weight to 0 → that cluster's pixels pass through
+  // unchanged (the match curves don't apply there). Replaces the previous
+  // 1D-luma Zones tab with a more intuitive color-based control.
+  const [targetPaletteWeights, setTargetPaletteWeights] = useState<number[]>([]);
   const [amountLabel, setAmountLabel] = useState(100);
   const [smoothLabel, setSmoothLabel] = useState(0);
   const [stretchLabel, setStretchLabel] = useState(8);
@@ -510,6 +516,26 @@ export function MatchTab() {
     return computeClusterAssignments(srcSnap.data, paletteSwatches);
   }, [srcSnap, paletteSwatches]);
 
+  // Target-side palette + assignments. Same paletteCount drives both bars
+  // (one count toggle for the user's mental model — N source clusters /
+  // N target clusters in one number). Target weights default to all-1
+  // (full match everywhere) so the existing behavior is preserved when the
+  // user hasn't touched the target bar.
+  const targetPaletteSwatches = useMemo(() => {
+    if (!tgt.snap) return [];
+    return extractPalette(tgt.snap.data, tgt.snap.width, tgt.snap.height, paletteCount);
+  }, [tgt.snap, paletteCount]);
+  const targetClusterAssignments = useMemo(() => {
+    if (!tgt.snap || targetPaletteSwatches.length === 0) return null;
+    return computeClusterAssignments(tgt.snap.data, targetPaletteSwatches);
+  }, [tgt.snap, targetPaletteSwatches]);
+  const targetPaletteIdentity = targetPaletteSwatches.length > 0
+    ? `${targetPaletteSwatches.length}:${targetPaletteSwatches[0].labL.toFixed(1)}:${targetPaletteSwatches[0].labA.toFixed(1)}:${targetPaletteSwatches[0].labB.toFixed(1)}`
+    : "0";
+  useEffect(() => {
+    setTargetPaletteWeights(targetPaletteSwatches.map(() => 1));
+  }, [targetPaletteIdentity]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Weighted-source buffer: synthesized only when at least one weight diverges
   // from neutral. Otherwise the original srcSnap.data is passed through unchanged
   // (synthesizeWeightedSource has a fast path for the neutral case).
@@ -592,10 +618,20 @@ export function MatchTab() {
     let out: Uint8Array;
     let curvesForGraph: ChannelCurves;
 
+    // Target palette weighting: if any target cluster's weight diverges from 1
+    // we use the per-pixel weighted apply (cluster blend strength); otherwise
+    // the standard apply (bit-for-bit identical to v1.7 when target weights
+    // are neutral, which they are by default).
+    const targetWeightsActive = targetClusterAssignments != null
+      && targetPaletteWeights.length === targetPaletteSwatches.length
+      && targetPaletteWeights.some(w => Math.abs(w - 1) > 0.01);
+
     if (multiZone && fittedMulti) {
       // Multi-zone path: process each band's curves through Color + Tone, simulate the
       // 3-curve composite via triangular blend (matches what PS will produce on apply).
       // Skip Zones + Envelope — they're zone-modulators that would double-apply over the bands.
+      // Target-palette weighting is also skipped here — multi-zone already partitions
+      // application by luma; layering the cluster mask on top would double-modulate.
       const procFit = processMultiZoneFit(fittedMulti, curveOpts, dimOpts);
       out = applyMultiZoneToRgba(tgtBuf.data, procFit, multiZonePeaks, multiZoneExtents);
       // Curves graph shows the mid-band curve as representative (graph doesn't render 3 sets).
@@ -609,7 +645,14 @@ export function MatchTab() {
         enZones ? zonesRef.current : DEFAULT_ZONES,
         enEnvelope ? envelopeRef.current : DEFAULT_ENVELOPE,
       );
-      out = applyChannelCurvesToRgba(tgtBuf.data, curvesForGraph);
+      // Use weighted apply if target weights are non-neutral, else fast path.
+      // The assignments were computed against tgt.snap (full-quality 256), and
+      // tgtBuf may equal tgt.snap or be a downsampled version. When they differ
+      // (legacy code path in earlier versions), the assignments wouldn't align —
+      // here they always match because we removed the dual-resolution path.
+      out = (targetWeightsActive && targetClusterAssignments)
+        ? applyChannelCurvesToRgbaWeighted(tgtBuf.data, curvesForGraph, targetClusterAssignments, targetPaletteWeights)
+        : applyChannelCurvesToRgba(tgtBuf.data, curvesForGraph);
     }
 
     curvesPendingRef.current = curvesForGraph;
@@ -626,7 +669,11 @@ export function MatchTab() {
     // matched preview reflects exactly what Apply Curves will bake into PS.
     if (activePreset !== "color" && curvesForGraph) {
       const cP = transformCurvesForPreset(curvesForGraph, activePreset);
-      const mapped = applyChannelCurvesToRgba(tgtBuf.data, cP);
+      // Mirror the target-weighting choice on the preset's separate apply pass
+      // so cluster strength applies consistently regardless of preset.
+      const mapped = (targetWeightsActive && targetClusterAssignments)
+        ? applyChannelCurvesToRgbaWeighted(tgtBuf.data, cP, targetClusterAssignments, targetPaletteWeights)
+        : applyChannelCurvesToRgba(tgtBuf.data, cP);
       out = applyPresetPostprocess(tgtBuf.data, mapped, activePreset);
     }
     matchedHandleRef.current.setPixels(out, tgtBuf.width, tgtBuf.height);
@@ -731,6 +778,21 @@ export function MatchTab() {
         deselectFirst: deselectOnApply,
         overwritePrior: overwriteOnApply,
         preset: activePreset,
+        // Target-palette weighting → layer mask on the Curves adjustment.
+        // Pass the cluster centroids + per-cluster weights through; applyMatch
+        // (when it sees non-neutral weights) reads full-res target pixels,
+        // assigns each to its nearest centroid, and builds a grayscale mask
+        // where mask[pixel] = clamp01(weights[cluster]) × 255. The Curves
+        // layer then applies at masked strength: full-match where weight=1,
+        // pass-through where weight=0, blended in between.
+        targetPalette: (() => {
+          const isNonNeutral = targetPaletteWeights.some(w => Math.abs(w - 1) > 0.01);
+          if (!isNonNeutral || targetPaletteSwatches.length === 0) return undefined;
+          return {
+            swatches: targetPaletteSwatches,
+            weights: targetPaletteWeights.slice(),
+          };
+        })(),
       }));
     } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
   };
@@ -862,6 +924,25 @@ export function MatchTab() {
         }}
       />
 
+      {/* Target palette weight bar — mirrors the source palette but the
+          weights modulate CURVE APPLICATION strength per cluster (not source
+          contribution). Drag a target swatch to 0 → curves don't apply to that
+          cluster's pixels (e.g., "leave skies alone, push the rest"). Reuses
+          the same component, no preset transform (target swatches always show
+          actual target colors). Sits directly below the matched preview, where
+          it visually relates to "what's being modified" rather than to source. */}
+      <div style={{ marginTop: 4 }}>
+        <PaletteStrip
+          swatches={targetPaletteSwatches}
+          weights={targetPaletteWeights}
+          setWeights={setTargetPaletteWeights}
+          count={paletteCount}
+          setCount={setPaletteCount}
+          adaptive={paletteAdaptive}
+          setAdaptive={setPaletteAdaptive}
+        />
+      </div>
+
       {/* Accordion controls */}
       <div style={{ borderTop: "1px solid #444", margin: "6px 0 0" }} />
       <div onClick={() => toggleSection("basic")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", cursor: "pointer", fontSize: 12, fontWeight: 700, color: enColor ? "#dddddd" : "#888", fontStyle: enColor ? "normal" : "italic" }}>
@@ -974,8 +1055,16 @@ export function MatchTab() {
         </div>
       )}
 
-      <div style={{ borderTop: "1px solid #444" }} />
-      <div onClick={() => toggleSection("zones")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", cursor: "pointer", fontSize: 12, fontWeight: 700, color: enZones ? "#dddddd" : "#888", fontStyle: enZones ? "normal" : "italic" }}>
+      {/* Zones accordion section removed in v1.8: replaced by the target
+          palette weight bar above the accordion. The bar is a strictly more
+          general tool (color clusters in Lab space vs. the old 3 fixed luma
+          bands) and feels parallel to the source palette. The ZoneOpts
+          math, persistence, and applyZoneAndEnvelopeToChannels still ship
+          unchanged for backward-compatibility on saved settings, but the
+          zonesLabel state stays at its default values now since users can't
+          edit it. The Color section's enZones flag is unused but kept to
+          avoid a persistence schema break. */}
+      {false && <div onClick={() => toggleSection("zones")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", cursor: "pointer", fontSize: 12, fontWeight: 700, color: enZones ? "#dddddd" : "#888", fontStyle: enZones ? "normal" : "italic" }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           <span onClick={(e: any) => { e.stopPropagation(); setEnZones(!enZones); }}
             title={enZones ? "Zones section ENABLED — click to disable" : "Zones section DISABLED — click to enable"}
@@ -1020,8 +1109,8 @@ export function MatchTab() {
             title="What this section does — full explanation"
             style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 14, height: 14, borderRadius: "50%", border: "1px solid #888", color: "#aaa", fontSize: 10, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>i</span>
         </span>
-      </div>
-      {openSection === "zones" && (["shadows", "mids", "highlights"] as const).map(zone => {
+      </div>}
+      {false && openSection === "zones" && (["shadows", "mids", "highlights"] as const).map(zone => {
         const fallback: Record<string, string> = { shadows: "#4a7fc1", mids: "#bbb", highlights: "#e0b85a" };
         const ankKey = `${zone}Anchor` as keyof ZoneOpts;
         const falKey = `${zone}Falloff` as keyof ZoneOpts;

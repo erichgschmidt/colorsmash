@@ -61,6 +61,16 @@ export interface ApplyMatchParams {
   deselectFirst?: boolean;     // drop active marquee before creating layer (default true)
   overwritePrior?: boolean;    // delete prior Match Curves (true) or hide them (false) (default true)
   preset?: Preset;             // quick-select variant: color (default) | hue | bw | contrast
+  // Target-palette mask: when present, the Curves adjustment layer is masked so
+  // pixels in each cluster get the curves applied at strength = clamp01(weight).
+  // The full-res target pixels are clustered against `swatches` (Lab nearest-
+  // centroid), and a grayscale mask is generated where mask[pixel] =
+  // weights[clusterId] × 255. Curves layer is created with that mask attached.
+  // Skipped when all weights ≈ 1 (caller drops `targetPalette` in that case).
+  targetPalette?: {
+    swatches: Array<{ labL: number; labA: number; labB: number; r: number; g: number; b: number; weight: number }>;
+    weights: number[];
+  };
 }
 
 export async function fitMatchCurves(params: ApplyMatchParams): Promise<ChannelCurves> {
@@ -532,6 +542,75 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       null;
     if (presetBlend) { try { curveLayer.blendMode = presetBlend; } catch { /* ignore */ } }
     try { await curveLayer.move(group, "placeInside"); } catch { /* ignore */ }
+
+    // Target-palette mask: when the user has dialed any cluster's weight away
+    // from 1, build a grayscale mask at full target resolution (one byte per
+    // pixel = clamp01(weight[clusterId]) × 255) and attach it to the Curves
+    // layer via imaging.putLayerMask. Each target pixel is assigned to its
+    // nearest cluster centroid (Lab distance) — same math the preview uses,
+    // just at full resolution. Skipped on merged-target since we don't have
+    // a layer-bounds-aligned full-res buffer in that path.
+    if (params.targetPalette && !targetIsMerged && t && t.data) {
+      const tp = params.targetPalette;
+      try {
+        const k = tp.swatches.length;
+        // Pre-clamp weights to integer 0..255 mask values.
+        const wByte = new Uint8Array(k);
+        for (let i = 0; i < k; i++) wByte[i] = Math.round(Math.max(0, Math.min(1, tp.weights[i])) * 255);
+        // Lab centroids for nearest-neighbor assignment.
+        const cents = new Float32Array(k * 3);
+        for (let i = 0; i < k; i++) {
+          cents[i * 3] = tp.swatches[i].labL;
+          cents[i * 3 + 1] = tp.swatches[i].labA;
+          cents[i * 3 + 2] = tp.swatches[i].labB;
+        }
+        const pxCount = t.width * t.height;
+        const mask = new Uint8Array(pxCount);
+        // Inline RGB→Lab so we don't re-import the helper from histogramMatch.
+        // sRGB → linear via gamma 2.4 piecewise; linear → XYZ via D65 sRGB primaries;
+        // XYZ → Lab via standard f() with D65 white point.
+        const srgbToLinear = (c: number) => {
+          const x = c / 255;
+          return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+        };
+        const f = (t0: number) => t0 > 0.008856 ? Math.cbrt(t0) : (7.787 * t0 + 16 / 116);
+        for (let i = 0; i < pxCount; i++) {
+          const o = i * 4;
+          // Skip transparent — mask should be 0 (no curve effect) for invisible pixels.
+          if (t.data[o + 3] < 128) { mask[i] = 0; continue; }
+          const R = srgbToLinear(t.data[o]);
+          const G = srgbToLinear(t.data[o + 1]);
+          const B = srgbToLinear(t.data[o + 2]);
+          const X = R * 0.4124564 + G * 0.3575761 + B * 0.1804375;
+          const Y = R * 0.2126729 + G * 0.7151522 + B * 0.0721750;
+          const Z = R * 0.0193339 + G * 0.1191920 + B * 0.9503041;
+          const fx = f(X / 0.95047), fy = f(Y), fz = f(Z / 1.08883);
+          const L = 116 * fy - 16, a = 500 * (fx - fy), b2 = 200 * (fy - fz);
+          let best = 0, bestDist = Infinity;
+          for (let c = 0; c < k; c++) {
+            const dl = L - cents[c * 3];
+            const da = a - cents[c * 3 + 1];
+            const db = b2 - cents[c * 3 + 2];
+            const d = dl * dl + da * da + db * db;
+            if (d < bestDist) { bestDist = d; best = c; }
+          }
+          mask[i] = wByte[best];
+        }
+        const { imaging } = require("photoshop");
+        const maskImageData = await imaging.createImageDataFromBuffer(mask, {
+          width: t.width, height: t.height, components: 1, chunky: true,
+          colorProfile: "Gray Gamma 2.2", colorSpace: "Grayscale",
+        });
+        await imaging.putLayerMask({
+          documentID: doc.id,
+          layerID: curveLayer.id,
+          imageData: maskImageData,
+          targetBounds: t.bounds,
+          replace: true,
+        });
+        if (maskImageData.dispose) maskImageData.dispose();
+      } catch { /* mask attach is best-effort; if it fails, the curves still apply unmasked */ }
+    }
 
     const tags = [`amt ${Math.round(params.amount * 100)}%`];
     if (params.smoothRadius) tags.push(`smooth ${params.smoothRadius}`);
