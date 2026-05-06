@@ -565,15 +565,29 @@ export function MatchTab() {
     return synthesizeWeightedSource(srcSnap.data, effective, false);
   }, [srcSnap, clusterDistances, paletteSwatches.length, paletteWeights, sourceSoftness]);
 
-  // Target-side per-pixel effective-weight cache. Keyed on the SAME inputs as
-  // the cluster math: distances + weights + softness. Recomputes only when one
-  // of those changes — NOT on every redraw frame. The apply hot loop reads
-  // effectiveWeights[i] directly, no inline cluster blending. This is what
-  // makes interactive softness drag feel snappy even with N×K Lorentzian
-  // computations behind the scenes.
-  const targetEffectiveWeights = useMemo(() => {
-    if (!targetClusterDistances || targetPaletteWeights.length !== targetPaletteSwatches.length) return null;
-    return precomputeEffectiveWeights(targetClusterDistances, targetPaletteWeights, targetSoftness);
+  // Target-side per-pixel effective-weight cache. Computed asynchronously via
+  // setTimeout(0) so the heavy per-pixel Lorentzian-blend math doesn't block
+  // the synchronous render path. While this is pending, the slider thumb (in
+  // PaletteStrip's local state) keeps tracking the cursor at full pointer
+  // rate — only the preview redraw lags by one microtask + the compute time.
+  //
+  // Without the defer, useMemo ran the precompute INSIDE React render, which
+  // means the slider thumb's repaint had to wait for ~10-15ms of math on
+  // every commit. With non-neutral target weights, that visibly stutters.
+  const [targetEffectiveWeights, setTargetEffectiveWeights] = useState<Float32Array | null>(null);
+  useEffect(() => {
+    if (!targetClusterDistances || targetPaletteWeights.length !== targetPaletteSwatches.length) {
+      setTargetEffectiveWeights(null);
+      return;
+    }
+    // setTimeout(0) yields to the browser so paint/UI tasks can land before
+    // the precompute. cleanup cancels in-flight work if a newer commit
+    // arrives — keeps the queue short.
+    const id = setTimeout(() => {
+      const ew = precomputeEffectiveWeights(targetClusterDistances, targetPaletteWeights, targetSoftness);
+      setTargetEffectiveWeights(ew);
+    }, 0);
+    return () => clearTimeout(id);
   }, [targetClusterDistances, targetPaletteSwatches.length, targetPaletteWeights, targetSoftness]);
 
   const fittedRaw = useMemo(() => {
