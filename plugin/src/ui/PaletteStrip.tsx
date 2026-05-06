@@ -315,7 +315,7 @@ export function PaletteStrip(props: PaletteStripProps) {
 
   if (swatches.length === 0) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 4 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span style={{ fontSize: 9, opacity: 0.5 }}>palette</span>
           {countToggle}
@@ -334,7 +334,7 @@ export function PaletteStrip(props: PaletteStripProps) {
                      :                          "dominant colors (preset: Full)";
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 4 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
         <span style={{ fontSize: 9, opacity: 0.5 }}>palette</span>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
