@@ -1,5 +1,5 @@
-// Quick-select preset swatches: 1x4 row of square previews showing the SOURCE in each
-// preset's characteristic visualization (full color / pure hue / grayscale / contrast).
+// Quick-select preset swatches: 1×5 row of square previews showing the SOURCE in each
+// preset's characteristic visualization (Full / Color / Hue / Saturation / Contrast).
 // Click a swatch to STAGE that preset — the matched preview pane below updates to show
 // the result on the target. Apply Curves bakes whatever's staged into the PS doc.
 //
@@ -24,15 +24,23 @@ import { downsampleToMaxEdge } from "../core/downsample";
 // is the knob that determines source-layer-switch responsiveness.
 const SWATCH_ENCODE_EDGE = 128;
 
-// Internal preset ids stay unchanged ("color" / "hue" / "contrast") to avoid churning
-// the whole pipeline. Display labels diverged after a UX round: "Color" → "Full",
-// "Hue" → "Color", and the underlying blend mode for the second one swapped from
-// PS-Hue to PS-Color blend (H+S transfer instead of H-only). See applyMatch + the
-// applyPresetPostprocess switch for the corresponding pixel semantics.
+// Five-preset H/S/L decomposition of the histogram match. Internal ids are
+// historical — "color"/"hue"/"contrast" predate the renaming, "hueOnly" and
+// "saturationOnly" are the new isolations. Display labels reflect what users
+// see; the table:
+//
+//   key             label        H  S  L   PS blend mode
+//   color           Full         ✓  ✓  ✓   normal
+//   hue             Color        ✓  ✓  —   color
+//   hueOnly         Hue          ✓  —  —   hue
+//   saturationOnly  Saturation   —  ✓  —   saturation
+//   contrast        Contrast     —  —  ✓   luminosity
 const PRESETS: { key: Preset; label: string; tip: string }[] = [
-  { key: "color",    label: "Full",     tip: "Full match — transfers the source's per-channel tone + color (R/G/B curves)." },
-  { key: "hue",      label: "Color",    tip: "Color blend — transfers the source's hue + saturation, target keeps its own luma." },
-  { key: "contrast", label: "Contrast", tip: "Contrast / luma — transfers the source's tonal curve, target keeps its own colors." },
+  { key: "color",          label: "Full",       tip: "Full match — transfers the source's per-channel tone + color (H + S + L)." },
+  { key: "hue",            label: "Color",      tip: "Color blend — transfers the source's hue + saturation. Target keeps its own luma." },
+  { key: "hueOnly",        label: "Hue",        tip: "Hue blend — transfers the source's hue only. Target keeps its own saturation + luma." },
+  { key: "saturationOnly", label: "Saturation", tip: "Saturation blend — transfers the source's saturation only. Target keeps its own hue + luma." },
+  { key: "contrast",       label: "Contrast",   tip: "Luminosity blend — transfers the source's tonal curve only. Target keeps its own colors." },
 ];
 
 export interface PresetStripProps {
@@ -61,7 +69,7 @@ export function PresetStrip(props: PresetStripProps) {
       { data: srcRgba, width: srcWidth, height: srcHeight, bounds: { left: 0, top: 0, right: srcWidth, bottom: srcHeight } },
       SWATCH_ENCODE_EDGE,
     );
-    const out: Record<Preset, string> = { color: "", hue: "", contrast: "" };
+    const out: Record<Preset, string> = { color: "", hue: "", hueOnly: "", saturationOnly: "", contrast: "" };
     for (const { key } of PRESETS) {
       try {
         const variant = sourceVariant(small.data, key);

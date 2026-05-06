@@ -945,10 +945,14 @@ export function applyChannelCurvesToRgbaWeighted(
 // to show what aspect of the source each preset transfers. These are intentionally
 // different from `applyPresetPostprocess` (which transforms target pixels): here we
 // project the source onto each preset's "characteristic visualization":
-//   color    : source unchanged
-//   hue      : source with luma flattened to mid-gray, chroma preserved (pure hue map)
-//   contrast : grayscale + linear stretch to fill 0..255 (shows tonal dynamic range)
-export function sourceVariant(rgba: Uint8Array, preset: "color" | "hue" | "contrast"): Uint8Array {
+//   color           : source unchanged
+//   hue             : luma flattened to mid-gray, H + S preserved (pure hue + sat map)
+//   hueOnly         : luma flattened AND saturation pushed to max — pure hue at constant
+//                     lightness, the literal "what hues are present" preview
+//   saturationOnly  : grayscale where brightness = saturation level (vibrant → bright,
+//                     neutral → dark) — the "vibrancy map" preview
+//   contrast        : grayscale + linear stretch to fill 0..255 (tonal dynamic range)
+export function sourceVariant(rgba: Uint8Array, preset: Preset): Uint8Array {
   if (preset === "color") return rgba;
   const out = new Uint8Array(rgba.length);
   if (preset === "hue") {
@@ -959,6 +963,26 @@ export function sourceVariant(rgba: Uint8Array, preset: "color" | "hue" | "contr
       out[i]     = Math.max(0, Math.min(255, Math.round(r + d)));
       out[i + 1] = Math.max(0, Math.min(255, Math.round(g + d)));
       out[i + 2] = Math.max(0, Math.min(255, Math.round(b + d)));
+      out[i + 3] = rgba[i + 3];
+    }
+    return out;
+  }
+  if (preset === "hueOnly") {
+    // Pure hue at fixed lightness 0.5 + max saturation. Reads as "the hue axis only."
+    for (let i = 0; i < rgba.length; i += 4) {
+      const [h] = rgbToHsl(rgba[i], rgba[i + 1], rgba[i + 2]);
+      const [r0, g0, b0] = hslToRgb(h, 1.0, 0.5);
+      out[i] = r0; out[i + 1] = g0; out[i + 2] = b0;
+      out[i + 3] = rgba[i + 3];
+    }
+    return out;
+  }
+  if (preset === "saturationOnly") {
+    // Grayscale heatmap of saturation. Vibrant = bright, neutral = black.
+    for (let i = 0; i < rgba.length; i += 4) {
+      const [, s] = rgbToHsl(rgba[i], rgba[i + 1], rgba[i + 2]);
+      const v = Math.max(0, Math.min(255, Math.round(s * 255)));
+      out[i] = v; out[i + 1] = v; out[i + 2] = v;
       out[i + 3] = rgba[i + 3];
     }
     return out;
@@ -993,7 +1017,7 @@ export function sourceVariant(rgba: Uint8Array, preset: "color" | "hue" | "contr
 // another PS doc via Color Lookup → Load 3D LUT).
 export function generateLutCube(
   curves: ChannelCurves,
-  preset: "color" | "hue" | "contrast",
+  preset: Preset,
   size = 33,
   title = "Color Smash",
 ): string {
@@ -1003,8 +1027,13 @@ export function generateLutCube(
   const orig = new Uint8Array(4);
   const mapped = new Uint8Array(4);
   orig[3] = 255; mapped[3] = 255;
+  const presetLabel = preset === "color" ? "Full"
+                    : preset === "hue" ? "Color"
+                    : preset === "hueOnly" ? "Hue"
+                    : preset === "saturationOnly" ? "Saturation"
+                    : "Contrast";
   const lines: string[] = [
-    `# Color Smash LUT — preset: ${preset === "color" ? "Full" : preset === "hue" ? "Color" : "Contrast"}`,
+    `# Color Smash LUT — preset: ${presetLabel}`,
     `TITLE "${title} ${preset}"`,
     `LUT_3D_SIZE ${size}`,
     `DOMAIN_MIN 0.0 0.0 0.0`,
@@ -1032,11 +1061,20 @@ export function generateLutCube(
   return lines.join("\n") + "\n";
 }
 
-// Quick-select presets — 3 orthogonal "what aspect of source do I take" options.
-//   color    : full per-channel match (default)
-//   hue      : take chroma from match, keep target's luma + saturation
-//   contrast : take luma from match, keep target's chroma — opposite of hue
-export type Preset = "color" | "hue" | "contrast";
+// Quick-select presets — five-way decomposition of the histogram match across
+// the H / S / L axes. Each preset takes a different subset of source axes and
+// keeps the rest of target's. Internal ids are historical; display labels
+// reflect what the user sees.
+//
+//   color           → label "Full"        H + S + L (full per-channel match, default)
+//   hue             → label "Color"       H + S (PS Color blend; target keeps L)
+//   hueOnly         → label "Hue"         H only (PS Hue blend; target keeps S + L)
+//   saturationOnly  → label "Saturation"  S only (PS Saturation blend; target keeps H + L)
+//   contrast        → label "Contrast"    L only (PS Luminosity blend; target keeps H + S)
+//
+// The "color" / "hue" / "contrast" ids stay unchanged for backward compat with
+// saved settings. New ids are camelCase to read clearly alongside them.
+export type Preset = "color" | "hue" | "hueOnly" | "saturationOnly" | "contrast";
 
 // Average R/G/B curves into one luma curve. Contrast wants a single tone-only response
 // with no per-channel color shift, so it collapses here.
@@ -1059,6 +1097,10 @@ export function applyPresetPostprocess(original: Uint8Array, mapped: Uint8Array,
   // PS Color blend (H + S from mapped, L from original). Keeping the internal id as
   // "hue" avoids churning the entire pipeline; only display label + blend mode swap.
   if (preset === "hue") return applyColorBlend(original, mapped);
+  // hueOnly → PS Hue blend (H from mapped, S + L from original).
+  if (preset === "hueOnly") return applyHueBlend(original, mapped);
+  // saturationOnly → PS Saturation blend (S from mapped, H + L from original).
+  if (preset === "saturationOnly") return applySaturationBlend(original, mapped);
   // contrast: shift original RGB by (mapped luma - original luma). Preserves chroma,
   // applies the luma-curve change. Equivalent to Curves layer at Luminosity blend.
   const out = new Uint8Array(original.length);
@@ -1106,6 +1148,47 @@ export function applyColorBlend(original: Uint8Array, mapped: Uint8Array): Uint8
     // (H_mapped, S_mapped, L_orig) → RGB, then re-impose Rec.709 luma so neutrals stay
     // tonally locked to the original. Mirrors PS's Color-blend HSY-style behavior.
     const [r0, g0, b0] = hslToRgb(hM, sM, lOrigHsl);
+    const lumaOrig = 0.2126 * original[i] + 0.7152 * original[i + 1] + 0.0722 * original[i + 2];
+    const lumaCand = 0.2126 * r0 + 0.7152 * g0 + 0.0722 * b0;
+    const delta = lumaOrig - lumaCand;
+    out[i]     = Math.max(0, Math.min(255, Math.round(r0 + delta)));
+    out[i + 1] = Math.max(0, Math.min(255, Math.round(g0 + delta)));
+    out[i + 2] = Math.max(0, Math.min(255, Math.round(b0 + delta)));
+    out[i + 3] = mapped[i + 3];
+  }
+  return out;
+}
+
+// PS Hue blend equivalent: take H from mapped, keep S + L from original. Same
+// HSY-style luma re-imposition as applyColorBlend so neutrals stay locked.
+// Lets users shift the source's color cast onto the target without bumping the
+// target's saturation level — a more reserved alternative to Color blend.
+export function applyHueBlend(original: Uint8Array, mapped: Uint8Array): Uint8Array {
+  const out = new Uint8Array(mapped.length);
+  for (let i = 0; i < mapped.length; i += 4) {
+    const [hM] = rgbToHsl(mapped[i], mapped[i + 1], mapped[i + 2]);
+    const [, sOrig, lOrig] = rgbToHsl(original[i], original[i + 1], original[i + 2]);
+    const [r0, g0, b0] = hslToRgb(hM, sOrig, lOrig);
+    const lumaOrig = 0.2126 * original[i] + 0.7152 * original[i + 1] + 0.0722 * original[i + 2];
+    const lumaCand = 0.2126 * r0 + 0.7152 * g0 + 0.0722 * b0;
+    const delta = lumaOrig - lumaCand;
+    out[i]     = Math.max(0, Math.min(255, Math.round(r0 + delta)));
+    out[i + 1] = Math.max(0, Math.min(255, Math.round(g0 + delta)));
+    out[i + 2] = Math.max(0, Math.min(255, Math.round(b0 + delta)));
+    out[i + 3] = mapped[i + 3];
+  }
+  return out;
+}
+
+// PS Saturation blend equivalent: take S from mapped, keep H + L from original.
+// Useful for matching the source's vibrancy without shifting the target's hue —
+// "make this image as punchy as that reference."
+export function applySaturationBlend(original: Uint8Array, mapped: Uint8Array): Uint8Array {
+  const out = new Uint8Array(mapped.length);
+  for (let i = 0; i < mapped.length; i += 4) {
+    const [, sM] = rgbToHsl(mapped[i], mapped[i + 1], mapped[i + 2]);
+    const [hOrig, , lOrig] = rgbToHsl(original[i], original[i + 1], original[i + 2]);
+    const [r0, g0, b0] = hslToRgb(hOrig, sM, lOrig);
     const lumaOrig = 0.2126 * original[i] + 0.7152 * original[i + 1] + 0.0722 * original[i + 2];
     const lumaCand = 0.2126 * r0 + 0.7152 * g0 + 0.0722 * b0;
     const delta = lumaOrig - lumaCand;

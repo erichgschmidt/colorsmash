@@ -534,13 +534,15 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     // Only clip if there's a specific target layer. Merged target = no clip (affects everything below).
     if (target) await setClippingMask(curveLayer, true);
     // Blend mode per preset:
-    //   hue       → "color" blend (H+S from curves, target keeps luma) — formerly
-    //               "hue" blend; user-facing label is now "Color" since color blend
-    //               transfers saturation too which is what users actually want
-    //   contrast  → Luminosity blend (luma from curves, target keeps colors entirely)
-    //   color     → Normal (full per-channel transfer — labelled "Full" in the UI)
+    //   hue             → "color" blend       (H+S from curves, target keeps L) — labelled "Color" in UI
+    //   hueOnly         → "hue" blend         (H only from curves, target keeps S+L) — labelled "Hue" in UI
+    //   saturationOnly  → "saturation" blend  (S only from curves, target keeps H+L) — labelled "Saturation" in UI
+    //   contrast        → "luminosity" blend  (L only from curves, target keeps H+S)
+    //   color           → Normal              (full per-channel transfer — labelled "Full" in the UI)
     const presetBlend =
       preset === "hue" || params.chromaOnly ? "color" :
+      preset === "hueOnly" ? "hue" :
+      preset === "saturationOnly" ? "saturation" :
       preset === "contrast" ? "luminosity" :
       null;
     if (presetBlend) { try { curveLayer.blendMode = presetBlend; } catch { /* ignore */ } }
