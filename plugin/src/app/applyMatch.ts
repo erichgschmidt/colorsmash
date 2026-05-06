@@ -343,27 +343,26 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       const failures: string[] = [];
       const limitMode = params.multiZoneLimit ?? "mask"; // 'mask' | 'blendIf' | 'both'
 
-      // When the user has non-neutral target-palette weights, wrap the three band
-      // Curves layers in a sub-group and attach the target-palette mask to that
-      // sub-group. The result composes correctly: each band layer gets its own
-      // luma mask (band limiter), and the group mask attenuates the whole
-      // multi-zone result by per-cluster color weight. PS evaluates this as
-      // (band-curves) × (group mask), exactly the user's mental model.
+      // ALWAYS wrap the three band Curves layers in a sub-group in multi-zone mode.
+      // This unifies the output format regardless of whether a target-palette mask is
+      // attached, so re-applying with overwrite cleanly replaces the prior sub-group
+      // (matched by RESULT_LAYER_NAME prefix in matchChildren cleanup above) instead of
+      // leaving orphaned band layers next to the new sub-group. When non-neutral target
+      // weights are active, the palette mask is attached to this sub-group below.
       const tp = params.targetPalette;
-      const useTargetSubGroup = !!(tp && tp.weights.some(w => Math.abs(w - 1) > 0.01) && !targetIsMerged);
+      const useTargetMask = !!(tp && tp.weights.some(w => Math.abs(w - 1) > 0.01) && !targetIsMerged);
       let bandContainer: any = group;
-      if (useTargetSubGroup) {
-        try {
-          // selectNoLayers so the new group isn't created inside whatever's currently
-          // active (matches the same precaution the parent [Color Smash] group uses).
-          await action.batchPlay([{ _obj: "selectNoLayers", _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }] }], {});
-        } catch { /* not critical */ }
-        const subName = overwrite ? RESULT_LAYER_NAME : `${RESULT_LAYER_NAME} ${new Date().toTimeString().slice(0, 8)}`;
-        try {
-          bandContainer = await doc.createLayerGroup({ name: subName });
-          await bandContainer.move(group, "placeInside");
-        } catch { bandContainer = group; /* fallback to flat layout */ }
-      }
+      try {
+        // selectNoLayers so the new group isn't created inside whatever's currently
+        // active (matches the same precaution the parent [Color Smash] group uses).
+        await action.batchPlay([{ _obj: "selectNoLayers", _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }] }], {});
+      } catch { /* not critical */ }
+      const subName = overwrite ? RESULT_LAYER_NAME : `${RESULT_LAYER_NAME} ${new Date().toTimeString().slice(0, 8)}`;
+      try {
+        bandContainer = await doc.createLayerGroup({ name: subName });
+        await bandContainer.move(group, "placeInside");
+      } catch { bandContainer = group; /* fallback to flat layout if group creation fails */ }
+      const useTargetSubGroup = useTargetMask && bandContainer !== group;
 
       for (const band of bands) {
         const baseName = `${RESULT_LAYER_NAME} [${band.suffix}]`;
