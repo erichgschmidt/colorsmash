@@ -222,19 +222,44 @@ export function PaletteStrip(props: PaletteStripProps) {
     const startX = e.clientX;
     const rect = bar.getBoundingClientRect();
     const barWidth = rect.width || 1;
+    // Sum of OTHER clusters' natural prevalences — used as the fallback ratio
+    // when sumOthersStart is degenerate (all other clusters at zero weight).
+    let sumPOthers = 0;
+    for (let j = 0; j < swatches.length; j++) {
+      if (j === idx) continue;
+      sumPOthers += Math.max(0, swatches[j]?.weight ?? 0);
+    }
 
     const onMove = (ev: PointerEvent) => {
       const dxFrac = (ev.clientX - startX) / barWidth; // − = shrink, + = grow
       const viNew = Math.max(0, Math.min(1, viStart + dxFrac));
-      // Scale factor for all OTHER segments. If sum_others_start was 0
-      // (segment i held all the weight), there's nothing to scale and we
-      // can't redistribute back; clamp to leaving others at 0.
-      const scale = sumOthersStart < 1e-6 ? 0 : (1 - viNew) / sumOthersStart;
       const next = weightsStart.slice();
       next[idx] = (viNew * totalStart) / pi;
-      for (let j = 0; j < next.length; j++) {
-        if (j === idx) continue;
-        next[j] = weightsStart[j] * scale;
+      if (sumOthersStart < 1e-6) {
+        // Degenerate: this cluster held all the weight on drag-start. Standard
+        // "scale others by current ratio" math collapses to 0 (0×anything=0),
+        // so the user couldn't shrink back into the others — they'd be stuck
+        // at maxed-out. Fallback: redistribute the freed budget by NATURAL
+        // prevalence, so each other cluster gets weight proportional to its
+        // native presence in the source. Each cluster c gets w_c such that
+        // w_c × p_c = (1 − viNew) × p_c / sumPOthers
+        // → w_c = (1 − viNew) / sumPOthers (uniform across others, scaled by
+        // their natural ratios via the displayValue product).
+        if (sumPOthers > 1e-6) {
+          const w = (1 - viNew) / sumPOthers;
+          for (let j = 0; j < next.length; j++) {
+            if (j === idx) continue;
+            next[j] = w;
+          }
+        }
+      } else {
+        // Normal path: scale all OTHER weights by the same factor so their
+        // relative ratios stay intact while the freed/added budget redistributes.
+        const scale = (1 - viNew) / sumOthersStart;
+        for (let j = 0; j < next.length; j++) {
+          if (j === idx) continue;
+          next[j] = weightsStart[j] * scale;
+        }
       }
       setWeights(next);
     };
