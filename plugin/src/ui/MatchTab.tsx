@@ -83,6 +83,14 @@ export function MatchTab() {
   // Persisted.
   const [sourceSoftness, setSourceSoftness] = useState(0);
   const [targetSoftness, setTargetSoftness] = useState(0);
+  // Target-palette mask active toggle. When ON (default), the target weights
+  // produce per-pixel attenuation in BOTH the preview (via the weighted apply
+  // path) AND the bake (via a layer mask on the Curves adjustment). When OFF,
+  // the mask is bypassed in both — preview shows curves uniformly, bake
+  // outputs a Curves layer with no mask. Lets the user toggle the mask
+  // contribution on/off and see both states. Default true so existing
+  // behavior is preserved on first load.
+  const [targetMaskEnabled, setTargetMaskEnabled] = useState(true);
   // Per-cluster weights (1 = neutral, 0 = excluded, >1 = boosted). Reset on every
   // source/count change since clusters change identity. NOT persisted — different
   // sources produce different clusters and stale weights would be confusing.
@@ -189,6 +197,7 @@ export function MatchTab() {
         if (s.paletteAdaptive != null) setPaletteAdaptive(s.paletteAdaptive);
         if (typeof s.sourceSoftness === "number") setSourceSoftness(Math.max(0, Math.min(100, s.sourceSoftness)));
         if (typeof s.targetSoftness === "number") setTargetSoftness(Math.max(0, Math.min(100, s.targetSoftness)));
+        if (typeof s.targetMaskEnabled === "boolean") setTargetMaskEnabled(s.targetMaskEnabled);
         if (s.chromaOnly != null) setChromaOnly(s.chromaOnly);
         if (s.colorSpace) setColorSpace(s.colorSpace);
         if (s.deselectOnApply != null) setDeselectOnApply(s.deselectOnApply);
@@ -223,11 +232,12 @@ export function MatchTab() {
       paletteAdaptive,
       sourceSoftness,
       targetSoftness,
+      targetMaskEnabled,
     };
     saveDebouncedRef.current!(snapshot);
   }, [remember, matchMode, multiZone, multiZoneLimit, adaptiveBands, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
       colorSpace, deselectOnApply, overwriteOnApply, openSection,
-      zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel, paletteCount, paletteAdaptive, sourceSoftness, targetSoftness]);
+      zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel, paletteCount, paletteAdaptive, sourceSoftness, targetSoftness, targetMaskEnabled]);
 
   const [docs, setDocs] = useState<{ id: number; name: string }[]>([]);
   // Hash of doc id+name pairs. Used as the key on the doc <select> elements so that
@@ -666,7 +676,12 @@ export function MatchTab() {
     // we use the per-pixel weighted apply (cluster blend strength); otherwise
     // the standard apply (bit-for-bit identical to v1.7 when target weights
     // are neutral, which they are by default).
-    const targetWeightsActive = targetEffectiveWeights != null
+    // Mask gate: when targetMaskEnabled is false, the user has explicitly
+    // turned off the per-cluster attenuation. Preview falls back to uniform
+    // curves application; bake skips the layer mask. Lets the user A/B-compare
+    // the masked vs unmasked output in the same panel.
+    const targetWeightsActive = targetMaskEnabled
+      && targetEffectiveWeights != null
       && targetPaletteWeights.some(w => Math.abs(w - 1) > 0.01);
 
     if (multiZone && fittedMulti) {
@@ -755,7 +770,9 @@ export function MatchTab() {
     // targetEffectiveWeights captures the (distances, weights, softness)
     // memoized cache, so any change to those inputs invalidates it and
     // triggers a redraw with the fresh per-pixel weights.
-  }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, multiZoneExtents, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope, activePreset, targetEffectiveWeights]); // eslint-disable-line react-hooks/exhaustive-deps
+    // targetMaskEnabled also in deps so toggling the mask gate redraws the
+    // preview between masked and uniform application.
+  }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, multiZoneExtents, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope, activePreset, targetEffectiveWeights, targetMaskEnabled]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Export the staged preset as a 33-grid 3D LUT in .CUBE format. Sidesteps the
   // unreliable PS Color Lookup API entirely — user picks a save location, we write
@@ -832,6 +849,10 @@ export function MatchTab() {
         // layer then applies at masked strength: full-match where weight=1,
         // pass-through where weight=0, blended in between.
         targetPalette: (() => {
+          // Honor the mask toggle: when off, the bake produces an unmasked
+          // Curves layer regardless of weights. Matches the preview, which
+          // is also unmasked when the gate is off.
+          if (!targetMaskEnabled) return undefined;
           const isNonNeutral = targetPaletteWeights.some(w => Math.abs(w - 1) > 0.01);
           if (!isNonNeutral || targetPaletteSwatches.length === 0) return undefined;
           return {
@@ -991,6 +1012,8 @@ export function MatchTab() {
           setAdaptive={setPaletteAdaptive}
           softness={targetSoftness}
           setSoftness={setTargetSoftness}
+          maskEnabled={targetMaskEnabled}
+          setMaskEnabled={setTargetMaskEnabled}
         />
       </div>
 

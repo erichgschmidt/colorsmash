@@ -47,6 +47,10 @@ export interface PersistedSettings {
   // cluster (existing behavior); higher = smoother gradient.
   sourceSoftness?: number;
   targetSoftness?: number;
+  // Target-palette mask gate. When false, both preview and bake bypass the
+  // per-cluster attenuation (preview shows uniform curves, bake produces a
+  // Curves layer with no mask). Default true.
+  targetMaskEnabled?: boolean;
 }
 
 async function readSettingsFile(): Promise<PersistedSettings | null> {

@@ -39,6 +39,13 @@ interface PaletteStripProps {
   // see what the current softness is doing.
   softness?: number;
   setSoftness?: (n: number) => void;
+  // Mask gate — only meaningful for the target bar. When passed, renders a
+  // "mask" toggle in the header that turns the per-cluster attenuation on
+  // and off in BOTH preview and bake. Lets the user A/B-compare masked vs
+  // unmasked output. Source bar caller should leave these undefined; toggle
+  // is hidden in that case.
+  maskEnabled?: boolean;
+  setMaskEnabled?: (b: boolean) => void;
 }
 
 // Per-preset display transform on a swatch's RGB. Cluster math is unchanged.
@@ -267,6 +274,20 @@ export function PaletteStrip(props: PaletteStripProps) {
     </div>
   ) : null;
 
+  // Mask toggle (target bar only — source caller leaves these undefined).
+  // Active state = mask is "on" (curves attenuated by per-cluster weights in
+  // preview AND a layer mask is attached to the baked Curves layer). Inactive
+  // = curves apply uniformly in preview AND bake produces an unmasked layer.
+  const maskToggle = props.setMaskEnabled ? (
+    <div onClick={() => props.setMaskEnabled!(!props.maskEnabled)}
+      title={props.maskEnabled
+        ? "Mask ON — preview shows curves attenuated per-cluster weights, bake includes a layer mask. Click to disable."
+        : "Mask OFF — preview shows uniform curves, bake outputs an unmasked Curves layer. Click to enable."}
+      style={countBtnStyle(!!props.maskEnabled)}>
+      mask
+    </div>
+  ) : null;
+
   if (swatches.length === 0) {
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
@@ -302,6 +323,7 @@ export function PaletteStrip(props: PaletteStripProps) {
               borderRadius: 2, cursor: isNeutral ? "default" : "pointer", userSelect: "none",
               height: 14, lineHeight: "12px", boxSizing: "border-box",
             }}>reset</div>
+          {maskToggle}
           {adaptiveToggle}
           {countToggle}
         </div>
