@@ -65,11 +65,14 @@ export interface ApplyMatchParams {
   // pixels in each cluster get the curves applied at strength = clamp01(weight).
   // The full-res target pixels are clustered against `swatches` (Lab nearest-
   // centroid), and a grayscale mask is generated where mask[pixel] =
-  // weights[clusterId] × 255. Curves layer is created with that mask attached.
-  // Skipped when all weights ≈ 1 (caller drops `targetPalette` in that case).
+  // softWeight(weights, distances, softness) × 255. Curves layer is created
+  // with that mask attached. Skipped when all weights ≈ 1.
   targetPalette?: {
     swatches: Array<{ labL: number; labA: number; labB: number; r: number; g: number; b: number; weight: number }>;
     weights: number[];
+    // Softness 0..100. 0 = hard nearest-cluster (sharp mask boundaries),
+    // >0 = gaussian-soft blend across all clusters (smooth gradients).
+    softness?: number;
   };
 }
 
@@ -554,10 +557,18 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       const tp = params.targetPalette;
       try {
         const k = tp.swatches.length;
-        // Pre-clamp weights to integer 0..255 mask values.
+        const softness = Math.max(0, Math.min(100, tp.softness ?? 0));
+        const useSoft = softness > 0;
+        const sigma2 = (softness / 100) * (softness / 100) * 5000; // matches histogramMatch SIGMA_BASE_2_APPLY
+        // Per-cluster weights as float [0,1] (used in soft path) and as
+        // pre-rounded byte values (used in hard path).
+        const wFloat = new Float32Array(k);
         const wByte = new Uint8Array(k);
-        for (let i = 0; i < k; i++) wByte[i] = Math.round(Math.max(0, Math.min(1, tp.weights[i])) * 255);
-        // Lab centroids for nearest-neighbor assignment.
+        for (let i = 0; i < k; i++) {
+          const w = Math.max(0, Math.min(1, tp.weights[i]));
+          wFloat[i] = w;
+          wByte[i] = Math.round(w * 255);
+        }
         const cents = new Float32Array(k * 3);
         for (let i = 0; i < k; i++) {
           cents[i * 3] = tp.swatches[i].labL;
@@ -566,17 +577,15 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
         }
         const pxCount = t.width * t.height;
         const mask = new Uint8Array(pxCount);
-        // Inline RGB→Lab so we don't re-import the helper from histogramMatch.
-        // sRGB → linear via gamma 2.4 piecewise; linear → XYZ via D65 sRGB primaries;
-        // XYZ → Lab via standard f() with D65 white point.
         const srgbToLinear = (c: number) => {
           const x = c / 255;
           return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
         };
         const f = (t0: number) => t0 > 0.008856 ? Math.cbrt(t0) : (7.787 * t0 + 16 / 116);
+        // Reusable distance buffer for the soft path (avoids per-pixel allocation).
+        const distBuf = new Float32Array(k);
         for (let i = 0; i < pxCount; i++) {
           const o = i * 4;
-          // Skip transparent — mask should be 0 (no curve effect) for invisible pixels.
           if (t.data[o + 3] < 128) { mask[i] = 0; continue; }
           const R = srgbToLinear(t.data[o]);
           const G = srgbToLinear(t.data[o + 1]);
@@ -586,15 +595,37 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
           const Z = R * 0.0193339 + G * 0.1191920 + B * 0.9503041;
           const fx = f(X / 0.95047), fy = f(Y), fz = f(Z / 1.08883);
           const L = 116 * fy - 16, a = 500 * (fx - fy), b2 = 200 * (fy - fz);
-          let best = 0, bestDist = Infinity;
-          for (let c = 0; c < k; c++) {
-            const dl = L - cents[c * 3];
-            const da = a - cents[c * 3 + 1];
-            const db = b2 - cents[c * 3 + 2];
-            const d = dl * dl + da * da + db * db;
-            if (d < bestDist) { bestDist = d; best = c; }
+          if (!useSoft) {
+            // Hard nearest-cluster path: bit-for-bit same as previous behavior.
+            let best = 0, bestDist = Infinity;
+            for (let c = 0; c < k; c++) {
+              const dl = L - cents[c * 3];
+              const da = a - cents[c * 3 + 1];
+              const db = b2 - cents[c * 3 + 2];
+              const d = dl * dl + da * da + db * db;
+              if (d < bestDist) { bestDist = d; best = c; }
+            }
+            mask[i] = wByte[best];
+          } else {
+            // Soft-blend: gaussian over all clusters, weighted sum of weights.
+            let minD = Infinity;
+            for (let c = 0; c < k; c++) {
+              const dl = L - cents[c * 3];
+              const da = a - cents[c * 3 + 1];
+              const db = b2 - cents[c * 3 + 2];
+              const d = dl * dl + da * da + db * db;
+              distBuf[c] = d;
+              if (d < minD) minD = d;
+            }
+            let sumG = 0, sumWG = 0;
+            for (let c = 0; c < k; c++) {
+              const g = Math.exp(-(distBuf[c] - minD) / sigma2);
+              sumG += g;
+              sumWG += g * wFloat[c];
+            }
+            const wf = sumG > 0 ? sumWG / sumG : 1;
+            mask[i] = Math.max(0, Math.min(255, Math.round(wf * 255)));
           }
-          mask[i] = wByte[best];
         }
         const { imaging } = require("photoshop");
         const maskImageData = await imaging.createImageDataFromBuffer(mask, {

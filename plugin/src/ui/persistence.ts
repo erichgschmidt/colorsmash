@@ -42,6 +42,11 @@ export interface PersistedSettings {
   // intact when you drag one (proportional rebalance) instead of redistributing
   // weight only between two adjacent neighbors.
   paletteAdaptive?: boolean;
+  // Falloff between cluster regions, 0..100. Source and target are independent
+  // since they affect different math (fit vs apply). Default 0 = hard nearest-
+  // cluster (existing behavior); higher = smoother gradient.
+  sourceSoftness?: number;
+  targetSoftness?: number;
 }
 
 async function readSettingsFile(): Promise<PersistedSettings | null> {

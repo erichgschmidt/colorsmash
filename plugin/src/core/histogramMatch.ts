@@ -898,46 +898,76 @@ export function applyChannelCurvesToRgba(rgba: Uint8Array, c: ChannelCurves): Ui
   return out;
 }
 
-// Per-pixel weighted curve application. Each pixel's cluster id (from the
-// target palette's k-means) selects a per-cluster strength weight in [0, 1];
-// the output blends between the original and the curve-applied value at that
-// strength. Cluster weight 1 = full match (identical to applyChannelCurvesToRgba),
-// 0 = pass-through (curves don't apply to that cluster's pixels).
+// Per-pixel weighted curve application. The pixel's effective strength is
+// computed from its precomputed Lab distances to all cluster centroids:
+// at softness=0 → argmin (nearest cluster's weight), at softness>0 → gaussian-
+// soft blend across all clusters. Output blends between the original and the
+// curve-applied value at that strength.
 //
-// Intended for the target-side palette: drag the sky cluster's weight to 0 to
-// leave skies untouched while still matching everything else.
+// Cluster weight 1 = full match (identical to applyChannelCurvesToRgba),
+// 0 = pass-through (curves don't apply to that cluster's pixels). Soft mode
+// produces smooth gradients in the mask instead of hard cluster boundaries —
+// useful for "fade out" the curves over color transitions.
 //
-// `assignments` must align positionally with `rgba` (one Int32 entry per pixel).
-// Out-of-range or -1 cluster ids fall back to weight=1 (full match).
+// `distances` must align with `rgba`: pxCount × k Float32, indexed [i*k + c].
+// Pixels with distances[i*k] === Infinity (masked-out) get weight=1 (full match).
+//
+// SIGMA_BASE_2 mirrors palette.ts for consistency between the source-synthesize
+// path and this target-apply path.
+const SIGMA_BASE_2_APPLY = 5000;
 export function applyChannelCurvesToRgbaWeighted(
   rgba: Uint8Array,
   c: ChannelCurves,
-  assignments: Int32Array,
+  distances: Float32Array,
   weights: number[],
+  softness: number = 0,
 ): Uint8Array {
   const out = new Uint8Array(rgba.length);
   const k = weights.length;
-  // Pre-clamp + scale weights to integer 0..256 fixed-point so the inner loop
-  // does integer math instead of float multiplies (~3× faster on hot pixels).
+  // Clamp + scale weights to fixed-point for the integer fast-path. Soft mode
+  // computes float weights then rounds to fixed-point per-pixel.
   const wInt = new Int32Array(k);
   for (let i = 0; i < k; i++) wInt[i] = Math.round(Math.max(0, Math.min(1, weights[i])) * 256);
   const pxCount = rgba.length / 4;
+  const useSoft = softness > 0;
+  const sigma2 = (softness / 100) * (softness / 100) * SIGMA_BASE_2_APPLY;
   for (let i = 0; i < pxCount; i++) {
     const o = i * 4;
-    const cId = assignments[i];
-    const wi = (cId >= 0 && cId < k) ? wInt[cId] : 256; // default: full match
+    const base = i * k;
+    let wi: number;
+    if (distances[base] === Infinity) {
+      wi = 256; // masked-out → full match (curves apply where layer has pixels anyway)
+    } else if (!useSoft) {
+      // Hard nearest-cluster path.
+      let best = 0, bestDist = Infinity;
+      for (let cc = 0; cc < k; cc++) {
+        const d = distances[base + cc];
+        if (d < bestDist) { bestDist = d; best = cc; }
+      }
+      wi = wInt[best];
+    } else {
+      // Soft-blend path. Subtract min for numerical stability.
+      let minD = Infinity;
+      for (let cc = 0; cc < k; cc++) { const d = distances[base + cc]; if (d < minD) minD = d; }
+      let sumG = 0, sumWG = 0;
+      for (let cc = 0; cc < k; cc++) {
+        const d = distances[base + cc];
+        const g = Math.exp(-(d - minD) / sigma2);
+        sumG += g;
+        sumWG += g * Math.max(0, Math.min(1, weights[cc]));
+      }
+      const wf = sumG > 0 ? sumWG / sumG : 1;
+      wi = Math.round(wf * 256);
+    }
     if (wi === 256) {
-      // Fast path: full match for this pixel.
       out[o]     = c.r[rgba[o]];
       out[o + 1] = c.g[rgba[o + 1]];
       out[o + 2] = c.b[rgba[o + 2]];
     } else if (wi === 0) {
-      // Fast path: pass through unchanged.
       out[o]     = rgba[o];
       out[o + 1] = rgba[o + 1];
       out[o + 2] = rgba[o + 2];
     } else {
-      // Blend: out = orig + (curve - orig) × w / 256.
       const r0 = rgba[o], g0 = rgba[o + 1], b0 = rgba[o + 2];
       out[o]     = r0 + (((c.r[r0] - r0) * wi) >> 8);
       out[o + 1] = g0 + (((c.g[g0] - g0) * wi) >> 8);

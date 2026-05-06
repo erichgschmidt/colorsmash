@@ -32,6 +32,13 @@ interface PaletteStripProps {
   // models — both useful.
   adaptive?: boolean;
   setAdaptive?: (b: boolean) => void;
+  // Softness 0..100. 0 = hard nearest-cluster boundaries (existing behavior);
+  // higher values blend cluster contributions across the bar so pixels between
+  // clusters get smoothly interpolated weights. The bar shows this visually as
+  // gradient transitions between adjacent segments — no slider scrub needed to
+  // see what the current softness is doing.
+  softness?: number;
+  setSoftness?: (n: number) => void;
 }
 
 // Per-preset display transform on a swatch's RGB. Cluster math is unchanged.
@@ -69,6 +76,8 @@ export function PaletteStrip(props: PaletteStripProps) {
   const { swatches, weights, setWeights, preset, count, setCount } = props;
   const adaptive = !!props.adaptive;
   const setAdaptive = props.setAdaptive;
+  const softness = Math.max(0, Math.min(100, props.softness ?? 0));
+  const setSoftness = props.setSoftness;
   const barRef = useRef<HTMLDivElement>(null);
 
   // Display order: sort swatches by luminance dark→light so the bar reads as a value
@@ -261,24 +270,50 @@ export function PaletteStrip(props: PaletteStripProps) {
       <div ref={barRef}
         style={{ position: "relative", height: BAR_HEIGHT, width: "100%", userSelect: "none" }}
         title={`Source palette — ${tipForPreset} ${adaptive ? "(drag swatch body — others rebalance)" : "(drag handles to weight)"}`}>
+        {/* Segments. With softness=0 each segment is a solid color block, so
+            adjacent segments meet at hard boundaries (the existing v1.7
+            behavior). With softness>0 each segment's background becomes a
+            horizontal linear-gradient that fades from the average-with-left-
+            neighbor color at its left edge, through its own color at the
+            center, to the average-with-right-neighbor color at its right edge.
+            The fade-pad % is `softness/2`, so at softness=100 the fades reach
+            the segment's center and the bar reads as a continuous gradient
+            across all clusters. End segments don't fade at the panel edges. */}
         {orderedIndices.map((idx, i) => {
           const s = swatches[idx];
           const w = weights[idx] ?? 0;
           const naturalPct = (s.weight * 100).toFixed(0);
           const currentPct = ((displayValues[i] / valueSum) * 100).toFixed(0);
           const multiplierStr = w === 1 ? "neutral" : `×${w.toFixed(2)}`;
-          // In adaptive mode the swatch body itself is the drag target — every
-          // swatch can be sized in isolation, with all others rebalancing
-          // proportionally. In pair-wise mode, segments are visual only and
-          // the white handles between them do the work.
+          const myCol = swatchColor(s, preset);
+          const leftNeighbor = i > 0 ? swatches[orderedIndices[i - 1]] : null;
+          const rightNeighbor = i < orderedIndices.length - 1 ? swatches[orderedIndices[i + 1]] : null;
+          const blend = (a: PaletteSwatch | null) => {
+            if (!a) return myCol;
+            // Average my displayed color with neighbor's displayed color in RGB.
+            const aCol = swatchColor(a, preset);
+            const m1 = myCol.match(/rgb\((\d+), (\d+), (\d+)\)/);
+            const m2 = aCol.match(/rgb\((\d+), (\d+), (\d+)\)/);
+            if (!m1 || !m2) return myCol;
+            const r = Math.round((+m1[1] + +m2[1]) / 2);
+            const g = Math.round((+m1[2] + +m2[2]) / 2);
+            const b = Math.round((+m1[3] + +m2[3]) / 2);
+            return `rgb(${r}, ${g}, ${b})`;
+          };
+          const leftEdge = blend(leftNeighbor);
+          const rightEdge = blend(rightNeighbor);
+          const fadePct = softness / 2; // 0..50
+          const bg = softness <= 0
+            ? myCol
+            : `linear-gradient(to right, ${leftEdge} 0%, ${myCol} ${fadePct}%, ${myCol} ${100 - fadePct}%, ${rightEdge} 100%)`;
           return (
             <div key={`seg-${idx}`}
               onPointerDown={adaptive ? startBodyDrag(i) : undefined}
               style={{
                 position: "absolute", top: 0, height: BAR_HEIGHT,
                 left: `${leftEdges[i]}%`, width: `${displayWidths[i]}%`,
-                background: swatchColor(s, preset),
-                border: "1px solid #333",
+                background: bg,
+                border: softness > 0 ? "none" : "1px solid #333",
                 borderRadius: 2,
                 opacity: w < 0.02 ? 0.35 : 1,
                 cursor: adaptive ? "ew-resize" : "default",
@@ -312,6 +347,24 @@ export function PaletteStrip(props: PaletteStripProps) {
           );
         })}
       </div>
+
+      {/* Softness slider: thin range below the bar. Drives the gradient feathering
+          on the bar above (visible immediately) AND the runtime softness used by
+          synthesize/apply (per-pixel cluster blend strength). 0 = hard nearest-
+          cluster boundaries (existing behavior); 100 = smooth blend across all
+          clusters → gradient mask. Tooltip shows the current value. Hidden when
+          no setSoftness handler is provided (caller can opt out). */}
+      {setSoftness && (
+        <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 2, height: 12 }}
+          title={`Softness: ${Math.round(softness)} — falloff between cluster regions (0 = hard, 100 = smooth blend)`}>
+          <span style={{ fontSize: 9, opacity: 0.5, width: 38 }}>softness</span>
+          <input type="range" min={0} max={100} step={1} value={softness}
+            onInput={e => setSoftness(parseFloat((e.target as HTMLInputElement).value))}
+            onChange={e => setSoftness(parseFloat((e.target as HTMLInputElement).value))}
+            style={{ flex: 1, margin: 0, cursor: "pointer", height: 12 }} />
+          <span style={{ fontSize: 9, opacity: 0.5, width: 22, textAlign: "right" }}>{Math.round(softness)}</span>
+        </div>
+      )}
     </div>
   );
 }

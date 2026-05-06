@@ -11,7 +11,7 @@ import { MatchedPreview, MatchedPreviewHandle } from "./MatchedPreview";
 import { SourceSelector } from "./SourceSelector";
 import { PresetStrip } from "./PresetStrip";
 import { PaletteStrip, PaletteCount } from "./PaletteStrip";
-import { extractPalette, synthesizeWeightedSource, computeClusterAssignments } from "../core/palette";
+import { extractPalette, synthesizeWeightedSource, computeClusterDistances } from "../core/palette";
 import { BottomActionBar } from "./BottomActionBar";
 import { BasicSlider, DimSlider, matchStyles } from "./MatchSliders";
 import { ChannelCurves } from "../core/histogramMatch";
@@ -76,6 +76,13 @@ export function MatchTab() {
   // ratio intact by scaling them all proportionally. When false (default), only
   // the two neighbors of the dragged handle redistribute. Persisted.
   const [paletteAdaptive, setPaletteAdaptive] = useState(false);
+  // Falloff between cluster regions, 0..100. 0 = hard nearest-cluster boundaries
+  // (existing behavior), >0 = gaussian-soft blend across all clusters → smooth
+  // gradients in the mask / soft histogram contribution. Source and target each
+  // get their own slider since they affect different math (fit vs apply).
+  // Persisted.
+  const [sourceSoftness, setSourceSoftness] = useState(0);
+  const [targetSoftness, setTargetSoftness] = useState(0);
   // Per-cluster weights (1 = neutral, 0 = excluded, >1 = boosted). Reset on every
   // source/count change since clusters change identity. NOT persisted — different
   // sources produce different clusters and stale weights would be confusing.
@@ -180,6 +187,8 @@ export function MatchTab() {
         if (s.adaptiveBands != null) setAdaptiveBands(s.adaptiveBands);
         if (s.paletteCount === 3 || s.paletteCount === 5 || s.paletteCount === 7) setPaletteCount(s.paletteCount);
         if (s.paletteAdaptive != null) setPaletteAdaptive(s.paletteAdaptive);
+        if (typeof s.sourceSoftness === "number") setSourceSoftness(Math.max(0, Math.min(100, s.sourceSoftness)));
+        if (typeof s.targetSoftness === "number") setTargetSoftness(Math.max(0, Math.min(100, s.targetSoftness)));
         if (s.chromaOnly != null) setChromaOnly(s.chromaOnly);
         if (s.colorSpace) setColorSpace(s.colorSpace);
         if (s.deselectOnApply != null) setDeselectOnApply(s.deselectOnApply);
@@ -212,11 +221,13 @@ export function MatchTab() {
       envelope: envelopeLabel,
       paletteCount,
       paletteAdaptive,
+      sourceSoftness,
+      targetSoftness,
     };
     saveDebouncedRef.current!(snapshot);
   }, [remember, matchMode, multiZone, multiZoneLimit, adaptiveBands, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
       colorSpace, deselectOnApply, overwriteOnApply, openSection,
-      zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel, paletteCount, paletteAdaptive]);
+      zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel, paletteCount, paletteAdaptive, sourceSoftness, targetSoftness]);
 
   const [docs, setDocs] = useState<{ id: number; name: string }[]>([]);
   // Hash of doc id+name pairs. Used as the key on the doc <select> elements so that
@@ -511,9 +522,9 @@ export function MatchTab() {
   // identity — NOT weights. Recompute only when one of those changes. Saves
   // ~95% of the synthesis cost during drag where weights change every
   // pointermove but assignments don't.
-  const clusterAssignments = useMemo(() => {
+  const clusterDistances = useMemo(() => {
     if (!srcSnap || paletteSwatches.length === 0) return null;
-    return computeClusterAssignments(srcSnap.data, paletteSwatches);
+    return computeClusterDistances(srcSnap.data, paletteSwatches);
   }, [srcSnap, paletteSwatches]);
 
   // Target-side palette + assignments. Same paletteCount drives both bars
@@ -525,9 +536,9 @@ export function MatchTab() {
     if (!tgt.snap) return [];
     return extractPalette(tgt.snap.data, tgt.snap.width, tgt.snap.height, paletteCount);
   }, [tgt.snap, paletteCount]);
-  const targetClusterAssignments = useMemo(() => {
+  const targetClusterDistances = useMemo(() => {
     if (!tgt.snap || targetPaletteSwatches.length === 0) return null;
-    return computeClusterAssignments(tgt.snap.data, targetPaletteSwatches);
+    return computeClusterDistances(tgt.snap.data, targetPaletteSwatches);
   }, [tgt.snap, targetPaletteSwatches]);
   const targetPaletteIdentity = targetPaletteSwatches.length > 0
     ? `${targetPaletteSwatches.length}:${targetPaletteSwatches[0].labL.toFixed(1)}:${targetPaletteSwatches[0].labA.toFixed(1)}:${targetPaletteSwatches[0].labB.toFixed(1)}`
@@ -540,11 +551,11 @@ export function MatchTab() {
   // from neutral. Otherwise the original srcSnap.data is passed through unchanged
   // (synthesizeWeightedSource has a fast path for the neutral case).
   const weightedSrcData = useMemo(() => {
-    if (!srcSnap || !clusterAssignments || paletteWeights.length !== paletteSwatches.length) {
+    if (!srcSnap || !clusterDistances || paletteWeights.length !== paletteSwatches.length) {
       return srcSnap?.data ?? null;
     }
-    return synthesizeWeightedSource(srcSnap.data, clusterAssignments, paletteWeights);
-  }, [srcSnap, clusterAssignments, paletteSwatches.length, paletteWeights]);
+    return synthesizeWeightedSource(srcSnap.data, clusterDistances, paletteWeights, sourceSoftness);
+  }, [srcSnap, clusterDistances, paletteSwatches.length, paletteWeights, sourceSoftness]);
 
   const fittedRaw = useMemo(() => {
     if (!weightedSrcData || !tgt.snap) return null;
@@ -622,7 +633,7 @@ export function MatchTab() {
     // we use the per-pixel weighted apply (cluster blend strength); otherwise
     // the standard apply (bit-for-bit identical to v1.7 when target weights
     // are neutral, which they are by default).
-    const targetWeightsActive = targetClusterAssignments != null
+    const targetWeightsActive = targetClusterDistances != null
       && targetPaletteWeights.length === targetPaletteSwatches.length
       && targetPaletteWeights.some(w => Math.abs(w - 1) > 0.01);
 
@@ -650,8 +661,8 @@ export function MatchTab() {
       // tgtBuf may equal tgt.snap or be a downsampled version. When they differ
       // (legacy code path in earlier versions), the assignments wouldn't align —
       // here they always match because we removed the dual-resolution path.
-      out = (targetWeightsActive && targetClusterAssignments)
-        ? applyChannelCurvesToRgbaWeighted(tgtBuf.data, curvesForGraph, targetClusterAssignments, targetPaletteWeights)
+      out = (targetWeightsActive && targetClusterDistances)
+        ? applyChannelCurvesToRgbaWeighted(tgtBuf.data, curvesForGraph, targetClusterDistances, targetPaletteWeights, targetSoftness)
         : applyChannelCurvesToRgba(tgtBuf.data, curvesForGraph);
     }
 
@@ -671,8 +682,8 @@ export function MatchTab() {
       const cP = transformCurvesForPreset(curvesForGraph, activePreset);
       // Mirror the target-weighting choice on the preset's separate apply pass
       // so cluster strength applies consistently regardless of preset.
-      const mapped = (targetWeightsActive && targetClusterAssignments)
-        ? applyChannelCurvesToRgbaWeighted(tgtBuf.data, cP, targetClusterAssignments, targetPaletteWeights)
+      const mapped = (targetWeightsActive && targetClusterDistances)
+        ? applyChannelCurvesToRgbaWeighted(tgtBuf.data, cP, targetClusterDistances, targetPaletteWeights, targetSoftness)
         : applyChannelCurvesToRgba(tgtBuf.data, cP);
       out = applyPresetPostprocess(tgtBuf.data, mapped, activePreset);
     }
@@ -709,11 +720,11 @@ export function MatchTab() {
     // this redraw — fixes "preview blank until I wiggle a slider" on first mount.
     rafPendingRef.current = false;
     scheduleRedraw();
-    // targetPaletteWeights + targetClusterAssignments in deps so the preview
-    // re-renders when the user drags a target swatch. Without them the state
-    // updates but scheduleRedraw never fires (deps array unchanged), leaving
-    // the preview frozen at the last weighted snapshot.
-  }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, multiZoneExtents, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope, activePreset, targetPaletteWeights, targetClusterAssignments]); // eslint-disable-line react-hooks/exhaustive-deps
+    // targetPaletteWeights + targetClusterDistances + targetSoftness in deps
+    // so the preview re-renders when the user drags a target swatch or
+    // adjusts softness. Without them state updates but scheduleRedraw never
+    // fires, leaving the preview frozen at the last weighted snapshot.
+  }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, multiZoneExtents, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope, activePreset, targetPaletteWeights, targetClusterDistances, targetSoftness]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Export the staged preset as a 33-grid 3D LUT in .CUBE format. Sidesteps the
   // unreliable PS Color Lookup API entirely — user picks a save location, we write
@@ -795,6 +806,7 @@ export function MatchTab() {
           return {
             swatches: targetPaletteSwatches,
             weights: targetPaletteWeights.slice(),
+            softness: targetSoftness,
           };
         })(),
       }));
@@ -887,6 +899,8 @@ export function MatchTab() {
                   setCount={setPaletteCount}
                   adaptive={paletteAdaptive}
                   setAdaptive={setPaletteAdaptive}
+                  softness={sourceSoftness}
+                  setSoftness={setSourceSoftness}
                 />
               </div>
             }
@@ -944,6 +958,8 @@ export function MatchTab() {
           setCount={setPaletteCount}
           adaptive={paletteAdaptive}
           setAdaptive={setPaletteAdaptive}
+          softness={targetSoftness}
+          setSoftness={setTargetSoftness}
         />
       </div>
 

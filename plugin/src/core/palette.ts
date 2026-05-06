@@ -150,19 +150,23 @@ export function extractPalette(rgba: Uint8Array, width: number, height: number, 
   return out;
 }
 
-// Compute the cluster id for every pixel in rgba — i.e., assign each pixel to
-// its nearest swatch centroid in Lab space. This is the EXPENSIVE part of the
-// weighted-source pipeline: per-pixel RGB→Lab conversion + k distance comparisons.
-// Cache the result and reuse across weight changes (the assignments only depend
-// on the palette, not the user's weights). Returns -1 for masked-out pixels.
-export function computeClusterAssignments(
+// Compute squared Lab distance from every pixel to every cluster centroid.
+// Output: Float32Array of length pxCount × k, indexed as [i*k + c]. Sentinel
+// value Infinity at [i*k] for masked-out pixels (alpha < 128) — the apply
+// path checks distances[i*k] === Infinity to skip those pixels.
+//
+// Cache this result and reuse across weight + softness changes; only depends
+// on rgba + swatches identity. The expensive part is the per-pixel RGB→Lab
+// conversion which we'd otherwise repeat on every redraw frame. Memory cost
+// at 256² × 5 = 1.3MB, acceptable for the perf gain.
+export function computeClusterDistances(
   rgba: Uint8Array,
   swatches: PaletteSwatch[],
-): Int32Array {
+): Float32Array {
   const k = swatches.length;
   const pxCount = rgba.length / 4;
-  const assign = new Int32Array(pxCount);
-  if (k === 0) { assign.fill(-1); return assign; }
+  const out = new Float32Array(pxCount * Math.max(1, k));
+  if (k === 0) return out;
   const cents = new Float32Array(k * 3);
   for (let i = 0; i < k; i++) {
     cents[i * 3] = swatches[i].labL;
@@ -171,19 +175,66 @@ export function computeClusterAssignments(
   }
   for (let i = 0; i < pxCount; i++) {
     const o = i * 4;
-    if (rgba[o + 3] < 128) { assign[i] = -1; continue; }
+    if (rgba[o + 3] < 128) {
+      // Mark masked: any sentinel that the apply path treats as skip. Infinity
+      // works because softmax(-inf/σ²) = 0, so the pixel naturally contributes
+      // nothing and the no-cluster fallback can be detected via [i*k+0]=Inf.
+      for (let c = 0; c < k; c++) out[i * k + c] = Infinity;
+      continue;
+    }
     const [L, a, b] = rgbToLab(rgba[o], rgba[o + 1], rgba[o + 2]);
-    let best = 0, bestDist = Infinity;
     for (let c = 0; c < k; c++) {
       const dl = L - cents[c * 3];
       const da = a - cents[c * 3 + 1];
       const db = b - cents[c * 3 + 2];
-      const d = dl * dl + da * da + db * db;
+      out[i * k + c] = dl * dl + da * da + db * db;
+    }
+  }
+  return out;
+}
+
+// Convert per-pixel cluster distances + softness to a single effective weight.
+// At softness=0 → argmin behavior (returns weights[nearest]). At softness>0,
+// gaussian-soft blend across all clusters (closer clusters dominate, but
+// neighbors contribute proportionally). Returned value is in the same units
+// as the input weights (typically [0, 1] for target apply, [0, ∞) for source
+// boost). Masked-out pixels (distances[base]=Infinity) return 0.
+//
+// Inline-callable from per-pixel hot loops; avoid function-call overhead by
+// duplicating the math when calling this in tight inner loops would matter.
+//
+// SIGMA_BASE: tuned so softness=100 gives a meaningfully wide blend in Lab
+// space (~70 units, comparable to the typical inter-cluster spread).
+const SIGMA_BASE_2 = 5000; // σ² at softness=100
+function softWeightAt(
+  distances: Float32Array,
+  base: number,
+  k: number,
+  weights: number[],
+  softness: number,
+): number {
+  if (distances[base] === Infinity) return 0;
+  if (softness <= 0) {
+    // Hard nearest: argmin
+    let best = 0, bestDist = Infinity;
+    for (let c = 0; c < k; c++) {
+      const d = distances[base + c];
       if (d < bestDist) { bestDist = d; best = c; }
     }
-    assign[i] = best;
+    return weights[best];
   }
-  return assign;
+  const sigma2 = (softness / 100) * (softness / 100) * SIGMA_BASE_2;
+  let sumG = 0, sumWG = 0;
+  // Subtract minimum distance for numerical stability before exp().
+  let minD = Infinity;
+  for (let c = 0; c < k; c++) { const d = distances[base + c]; if (d < minD) minD = d; }
+  for (let c = 0; c < k; c++) {
+    const d = distances[base + c];
+    const g = Math.exp(-(d - minD) / sigma2);
+    sumG += g;
+    sumWG += g * weights[c];
+  }
+  return sumG > 0 ? sumWG / sumG : 0;
 }
 
 // Deterministic pseudo-random in [0,1) keyed on pixel index. Replaces Math.random()
@@ -191,38 +242,39 @@ export function computeClusterAssignments(
 // no shimmer, no flicker. Knuth multiplicative hash, 32-bit unsigned.
 const hash01 = (i: number) => ((Math.imul(i + 1, 2654435761) >>> 0) / 4294967296);
 
-// Synthesize a weighted source buffer from precomputed cluster assignments + weights.
-// Each pixel emits `floor(weight)` copies plus 1 more if its deterministic threshold
-// hash falls below the fractional part. Heavy clusters → pixels appear multiple times
-// in the output → contribute more to histograms. Light clusters → fewer or zero copies.
+// Synthesize a weighted source buffer from precomputed cluster distances +
+// weights. Each pixel emits `floor(effectiveWeight)` copies plus 1 more if its
+// deterministic threshold hash falls below the fractional part, where
+// effectiveWeight is the soft-blended weight from softWeightAt. Heavy clusters
+// → pixels appear multiple times → contribute more to histograms.
 //
-// The fit functions (full / mean / median / percentile / multi-zone) consume the
-// resulting buffer unchanged, so weighting works across every match mode without
-// touching the math.
+// At softness=0 the blend collapses to nearest-cluster (matches v1.7 behavior
+// bit-for-bit when softness defaults to 0). At softness>0, pixels between
+// clusters get weights interpolated across all clusters.
 //
-// Weights at length k must align positionally with the swatches that produced the
-// assignments. Pixels with assignment === -1 (masked-out) are skipped.
+// Weights at length k must align positionally with the swatches that produced
+// the distances.
 export function synthesizeWeightedSource(
   rgba: Uint8Array,
-  assignments: Int32Array,
+  distances: Float32Array,
   weights: number[],
+  softness: number = 0,
 ): Uint8Array {
   const k = weights.length;
   if (k === 0) return rgba;
-  // Fast path: weights all ≈ 1 (neutral). Return original buffer unchanged so
-  // the existing fit pipeline is bit-for-bit identical.
+  // Fast path: weights all ≈ 1 (neutral). Softness has no effect when all
+  // weights are equal, so we can return the original buffer unchanged.
   let isNeutral = true;
   for (let i = 0; i < k; i++) if (Math.abs(weights[i] - 1) > 0.01) { isNeutral = false; break; }
   if (isNeutral) return rgba;
 
   const pxCount = rgba.length / 4;
-  // First pass: compute total output size (so we allocate exactly once).
   let total = 0;
   const emitCount = new Uint8Array(pxCount);
   for (let i = 0; i < pxCount; i++) {
-    const c = assignments[i];
-    if (c < 0) continue;
-    const w = Math.max(0, weights[c]);
+    const base = i * k;
+    if (distances[base] === Infinity) continue; // masked-out
+    const w = Math.max(0, softWeightAt(distances, base, k, weights, softness));
     const floor = Math.floor(w);
     const frac = w - floor;
     const extra = hash01(i) < frac ? 1 : 0;
