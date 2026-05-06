@@ -607,7 +607,12 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
             }
             mask[i] = wByte[best];
           } else {
-            // Soft-blend: gaussian over all clusters, weighted sum of weights.
+            // Soft-blend: Lorentzian over all clusters, weighted sum of weights.
+            // MUST match the preview's falloff (palette.precomputeEffectiveWeights)
+            // exactly — otherwise the bake mask attenuates curves differently
+            // than the preview shows. v1.8.3 switched the preview from gaussian
+            // to Lorentzian (1/(1+d²/σ²)) for performance; the bake here was
+            // left on gaussian, causing visible mismatch at softness > 0.
             let minD = Infinity;
             for (let c = 0; c < k; c++) {
               const dl = L - cents[c * 3];
@@ -617,9 +622,10 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
               distBuf[c] = d;
               if (d < minD) minD = d;
             }
+            const invS2 = 1 / sigma2;
             let sumG = 0, sumWG = 0;
             for (let c = 0; c < k; c++) {
-              const g = Math.exp(-(distBuf[c] - minD) / sigma2);
+              const g = 1 / (1 + (distBuf[c] - minD) * invS2);
               sumG += g;
               sumWG += g * wFloat[c];
             }
