@@ -197,32 +197,35 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, MatchedPreviewPro
 
   return (
     <>
-      <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        {/* Swap source/target button — flush left so it doesn't compete with the
-            zoom cluster on the right. Only enabled when source is an actual layer
-            (selection/folder sources can't be valid destinations). */}
-        {onSwap ? (
-          <div onClick={() => { if (canSwap) onSwap(); }}
-            title={canSwap ? "Swap source and target (docs + layers)" : "Swap unavailable: source must be a layer"}
-            style={{
-              height: 16, width: 22, display: "inline-flex", alignItems: "center", justifyContent: "center",
-              fontSize: 11, fontWeight: 700,
-              color: canSwap ? "#ddd" : "#666",
-              border: "1px solid " + (canSwap ? "#888" : "#555"),
-              borderRadius: 2, cursor: canSwap ? "pointer" : "default", userSelect: "none", boxSizing: "border-box",
-            }}>
-            <span style={{ marginTop: -1, lineHeight: 1 }}>⇄</span>
-          </div>
-        ) : <span />}
-        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          {/* Before/After badge — moved out of the preview overlay into the header bar
-              so it doesn't sit on top of the image. Click toggles persistent view;
-              click-and-hold peeks the other view momentarily. Sits just left of the
-              zoom controls. marginRight separates it visually from the zoom cluster. */}
+      {/* Three-zone header layout: LEFT (swap + Before/After clustered),
+          CENTER (zoom controls — − [slider] + [readout], centered with
+          breathing room), RIGHT (bg + 1:1). flex:1 on the side groups
+          and flex:0 on center keeps the zoom cluster genuinely centered
+          regardless of how many controls live on either side. */}
+      <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7, display: "flex", alignItems: "center", gap: 4 }}>
+        {/* LEFT: swap + Before/After badge clustered together. */}
+        <div style={{ display: "flex", alignItems: "center", gap: 4, flex: 1 }}>
+          {/* Swap source/target — flush left. Only enabled when source is an
+              actual layer (selection/folder sources can't be valid destinations). */}
+          {onSwap ? (
+            <div onClick={() => { if (canSwap) onSwap(); }}
+              title={canSwap ? "Swap source and target (docs + layers)" : "Swap unavailable: source must be a layer"}
+              style={{
+                height: 16, width: 22, display: "inline-flex", alignItems: "center", justifyContent: "center",
+                fontSize: 11, fontWeight: 700,
+                color: canSwap ? "#ddd" : "#666",
+                border: "1px solid " + (canSwap ? "#888" : "#555"),
+                borderRadius: 2, cursor: canSwap ? "pointer" : "default", userSelect: "none", boxSizing: "border-box",
+              }}>
+              <span style={{ marginTop: -1, lineHeight: 1 }}>⇄</span>
+            </div>
+          ) : null}
+          {/* Before/After badge directly right of swap. Click toggles persistent
+              view; click-and-hold peeks the other view momentarily. */}
           <div onMouseDown={onBadgeMouseDown}
             title={`Currently showing ${badgeText.toLowerCase()}. Click to toggle, hold to peek the other.`}
             style={{
-              height: 16, padding: "0 6px", marginRight: 8, display: "inline-flex", alignItems: "center", justifyContent: "center",
+              height: 16, padding: "0 6px", display: "inline-flex", alignItems: "center", justifyContent: "center",
               fontSize: 9, fontWeight: 600,
               color: displayBefore ? "#1a1a1a" : "#dddddd",
               background: displayBefore ? "#c19a3a" : "transparent",
@@ -231,11 +234,13 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, MatchedPreviewPro
             }}>
             {badgeText}
           </div>
-          {/* Zoom cluster: − [slider] + [%-readout]. Slider borrowed from
-              Selectrix's MaskPreview — log2-scaled so each unit doubles/halves,
-              which feels natural for zoom (linear range would crowd the lower
-              end and feel sluggish near 1.0). Min 0.25× = -2, max 8× = +3 in
-              log2 space. */}
+        </div>
+
+        {/* CENTER: zoom cluster. Selectrix-borrowed log2-scaled slider between
+            the discrete − / + buttons; readout to the right. flex:0 so the
+            cluster sizes to its content and the surrounding flex:1 groups
+            push it to true center. */}
+        <div style={{ display: "flex", alignItems: "center", gap: 4, flex: 0 }}>
           <div onClick={() => zoom > 0.25 && setZoom(z => Math.max(0.25, z - 0.25))} title="Zoom out"
             style={{ width: 18, height: 16, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, color: zoom <= 0.25 ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: zoom <= 0.25 ? "default" : "pointer", userSelect: "none", boxSizing: "border-box" }}>
             <span style={{ marginTop: -2, marginLeft: 1, lineHeight: 1 }}>-</span>
@@ -258,12 +263,17 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, MatchedPreviewPro
             <span style={{ marginTop: -2, marginLeft: 1, lineHeight: 1 }}>+</span>
           </div>
           <span style={{ minWidth: 32, textAlign: "right", opacity: 0.7 }}>{Math.round(zoom * 100)}%</span>
+        </div>
+
+        {/* RIGHT: bg color toggle + reset zoom. flex:1 with justify-end pins
+            them to the right edge, mirroring the left group's flex:1. */}
+        <div style={{ display: "flex", alignItems: "center", gap: 4, flex: 1, justifyContent: "flex-end" }}>
           <div
             onClick={() => setBgMatchPanel(b => !b)}
             title={bgMatchPanel ? "Preview background: panel gray (click for dark)" : "Preview background: dark (click to match panel)"}
-            style={{ width: 16, height: 16, marginLeft: 8, background: bgMatchPanel ? "#535353" : "#111", border: "1px solid #888", borderRadius: 2, cursor: "pointer", boxSizing: "border-box" }} />
+            style={{ width: 16, height: 16, background: bgMatchPanel ? "#535353" : "#111", border: "1px solid #888", borderRadius: 2, cursor: "pointer", boxSizing: "border-box" }} />
           <div onClick={() => (zoom !== 1 || pan.x !== 0 || pan.y !== 0) && resetZoom()} title="Reset zoom + pan"
-            style={{ height: 16, width: 30, marginLeft: 10, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: (zoom === 1 && pan.x === 0 && pan.y === 0) ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: (zoom === 1 && pan.x === 0 && pan.y === 0) ? "default" : "pointer", userSelect: "none", boxSizing: "border-box" }}>
+            style={{ height: 16, width: 30, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: (zoom === 1 && pan.x === 0 && pan.y === 0) ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: (zoom === 1 && pan.x === 0 && pan.y === 0) ? "default" : "pointer", userSelect: "none", boxSizing: "border-box" }}>
             <span style={{ marginTop: -1, lineHeight: 1 }}>1:1</span>
           </div>
         </div>

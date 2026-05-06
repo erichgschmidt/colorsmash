@@ -313,19 +313,24 @@ export function PaletteStrip(props: PaletteStripProps) {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
         <span style={{ fontSize: 9, opacity: 0.5 }}>palette</span>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          {maskToggle}
+          {adaptiveToggle}
+          {countToggle}
+          {/* Reset moved RIGHT of the count toggle to read as "the destructive
+              option at the end" — and tinted a soft coral so it's visually
+              distinct from the dim mode-toggle buttons. Same opacity scheme:
+              dim when neutral (nothing to reset), full color when there's
+              something to undo. */}
           <div onClick={isNeutral ? undefined : resetWeights}
             title={isNeutral ? "Weights are neutral" : "Reset all weights to natural ratios"}
             style={{
               padding: "1px 6px", fontSize: 9, fontWeight: 600,
               background: "transparent",
-              color: isNeutral ? "#444" : "#aaa",
-              border: `1px solid ${isNeutral ? "#333" : "#555"}`,
+              color: isNeutral ? "#5a3a3a" : "#d87a7a",
+              border: `1px solid ${isNeutral ? "#5a3a3a" : "#d87a7a"}`,
               borderRadius: 2, cursor: isNeutral ? "default" : "pointer", userSelect: "none",
               height: 14, lineHeight: "12px", boxSizing: "border-box",
             }}>reset</div>
-          {maskToggle}
-          {adaptiveToggle}
-          {countToggle}
         </div>
       </div>
 
