@@ -709,7 +709,11 @@ export function MatchTab() {
     // this redraw — fixes "preview blank until I wiggle a slider" on first mount.
     rafPendingRef.current = false;
     scheduleRedraw();
-  }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, multiZoneExtents, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope, activePreset]); // eslint-disable-line react-hooks/exhaustive-deps
+    // targetPaletteWeights + targetClusterAssignments in deps so the preview
+    // re-renders when the user drags a target swatch. Without them the state
+    // updates but scheduleRedraw never fires (deps array unchanged), leaving
+    // the preview frozen at the last weighted snapshot.
+  }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, multiZoneExtents, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope, activePreset, targetPaletteWeights, targetClusterAssignments]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Export the staged preset as a 33-grid 3D LUT in .CUBE format. Sidesteps the
   // unreliable PS Color Lookup API entirely — user picks a save location, we write
