@@ -80,7 +80,9 @@ Above the bottom action bar there is a row: `[☐ Multi] [☐ Blend If] [☐ Ada
 - **Blend If** — by default each band layer gets a paintable luminosity layer mask (visible thumbnail, editable in PS — paint to localize, blur to feather). Turn the **Blend If** checkbox on to swap that mask for the underlying-luma sliders in Layer Style → Blending Options instead — no mask data, lighter on the file, editable from the Blending Options dialog. The two are mutually exclusive: Blend If on means no mask, off means mask only.
 - **Adaptive** — when on, the band peaks shift to the target's P10 / P50 / P90 luma percentiles, and the outer extents (the leftmost shadow point and the rightmost highlight point) follow the histogram's actual min / max. When off, peaks are fixed at 0 / 128 / 255. Adaptive is on by default and is what you want for most images; turn off only when you want a strict 0/128/255 partition for a specific look.
 
-The three layers land in the `[Color Smash]` group named `Match — Shadows`, `Match — Mids`, `Match — Highlights`, all clipped to the target. **Replace** still works — re-applying overwrites the prior multi-zone trio.
+The three layers land inside a `Match Curves` sub-group (named `Match Curves [Shadows]`, `Match Curves [Mids]`, `Match Curves [Highlights]`) within the `[Color Smash]` group. The sub-group means **Replace** can cleanly swap the whole trio in one operation — re-applying overwrites the prior sub-group instead of leaving stale band layers behind. When the target-palette region weights are non-neutral, the destination palette mask is attached to the sub-group itself, so the multi-zone result is gated by the target color region exactly the same way single-curve mode is (v1.10.3+).
+
+The preset selection (Full / Color / Hue / Saturation / Contrast) applies to all three band layers — each one inherits the corresponding blend mode (Normal / Color / Hue / Saturation / Luminosity), so multi-zone honors your preset choice the same as single-curve mode.
 
 ### Cross-document
 
