@@ -18,14 +18,19 @@ submission to match your final branding/pricing.
 >
 > KEY FEATURES
 >
-> • Preset strip (v1.2): three full-width swatches above the matched
->   preview — Full / Color / Contrast — each painting the source
->   through that preset's transform. Click a swatch to STAGE the
->   preset (matched preview updates live, nothing writes to PS).
->   Hit Apply Curves to bake. Full = per-channel R/G/B match.
->   Color = PS Color blend (transfers H+S, target keeps its luma).
->   Contrast = averaged R/G/B curve + Luminosity blend (transfers
->   tonal curve, target keeps its colors).
+> • Preset strip (v1.2, expanded v1.10): five full-width swatches
+>   above the matched preview — Full / Color / Hue / Saturation /
+>   Contrast — each painting the source through that preset's
+>   transform. Click a swatch to STAGE the preset (matched preview
+>   updates live, nothing writes to PS). Hit Apply Curves to bake.
+>   The five presets cover every H/S/L combination: Full transfers
+>   all three (per-channel R/G/B match, Normal blend); Color
+>   transfers hue + saturation (target keeps luma); Hue transfers
+>   only the hue cast (target keeps sat + luma) — the gentler
+>   alternative when Color over-saturates; Saturation transfers
+>   only vibrancy (target keeps hue + luma); Contrast transfers
+>   only the tonal curve (target keeps its colors, Luminosity
+>   blend).
 >
 > • Export LUT (v1.2): one click bakes the staged preset (curves +
 >   blend-mode emulation) into a portable 33³ Adobe .CUBE 3D LUT.

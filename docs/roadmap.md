@@ -82,6 +82,14 @@ See [zone-editor-spec.md](zone-editor-spec.md) for full design. May supersede or
 - Layout cleanup: target picker is now a single horizontal row above the matched preview; source picker matches the same `[source ▼] [layer/mode ▼] [⟳]` pattern.
 - Internal: repeated Apply Curves no longer nests `[Color Smash]` groups inside one another.
 
+## v1.10 — Hue + Saturation presets (shipped, 2026-05)
+**Goal:** Complete the H/S/L decomposition of the preset strip and clean up an adapt-mode degenerate state.
+
+- **Hue preset** (PS Hue blend): transfers only the source's hue cast; target keeps its own saturation and luma. The gentler alternative to Color, which transfers H+S and frequently over-saturates — Hue is what users often actually wanted when reaching for "shift the color cast."
+- **Saturation preset** (PS Saturation blend): symmetric case — matches the source's vibrancy without shifting hue. "Make this image as punchy as that reference."
+- Preset strip now has 5 entries — **Full · Color · Hue · Saturation · Contrast** — covering every combination of H / S / L transfer. The new swatches render the source on their characteristic visualization: Hue as pure-hue at fixed L=0.5 / max S, Saturation as a grayscale saturation heatmap (vibrant = bright, neutral = dark).
+- **v1.10.1 fix**: adaptive palette drag now recovers cleanly from a fully-overscaled state (one swatch maxed, others at zero) — previously the bar was stuck and required leaving adapt mode or hitting Reset to recover. Recovery redistributes the freed budget by natural prevalence so dragging flows smoothly.
+
 ## v1.9 — Target palette polish (shipped, 2026-05)
 **Goal:** Tighten the v1.8 dual-palette UI.
 

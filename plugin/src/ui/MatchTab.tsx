@@ -786,7 +786,11 @@ export function MatchTab() {
     setStatus("Exporting LUT...");
     try {
       const uxp = require("uxp");
-      const presetLabel = activePreset === "color" ? "full" : activePreset === "hue" ? "color" : "contrast";
+      const presetLabel = activePreset === "color" ? "full"
+                        : activePreset === "hue" ? "color"
+                        : activePreset === "hueOnly" ? "hue"
+                        : activePreset === "saturationOnly" ? "saturation"
+                        : "contrast";
       const file = await uxp.storage.localFileSystem.getFileForSaving(`color-smash-${presetLabel}.cube`, { types: ["cube"] });
       if (!file) { setStatus("Export cancelled."); return; }
       const cube = generateLutCube(curves, activePreset, 33, "Color Smash");
@@ -1043,7 +1047,7 @@ export function MatchTab() {
           { heading: "Hue only",
             body: "Toggle. Sets the output Curves layer to Photoshop's Hue blend mode (instead of Normal). Result: only the hue shifts toward the source; target's saturation and luminance are preserved. Sidesteps the saturation inflation that per-channel curves naturally produce." },
           { heading: "Source palette weights bar (above, under the source previews)",
-            body: "K-means swatches sampled from the source in CIE Lab space (3 / 5 / 7 toggle, sorted dark→left to light→right). Mirrors the active preset (Full = raw clusters, Color = pure-hue swatches with luminance flattened, Contrast = grayscale value strip). Segment widths are proportional: each cluster's natural prevalence × your multiplier. Drag the white dividers to redistribute weight pair-wise between two adjacent neighbors, or flip 'adapt' on to drag a swatch BODY — that swatch grows/shrinks and all others rebalance proportionally. Reset restores neutral (×1) weights. Source weights bias the histogram fit — which source colors influence the computed curves. Drives both live preview and Apply Curves bake." },
+            body: "K-means swatches sampled from the source in CIE Lab space (3 / 5 / 7 toggle, sorted dark→left to light→right). Mirrors the active preset's color emphasis: Full / Hue / Saturation = raw clusters, Color = pure-hue swatches with luminance flattened, Contrast = grayscale value strip. Segment widths are proportional: each cluster's natural prevalence × your multiplier. Drag the white dividers to redistribute weight pair-wise between two adjacent neighbors, or flip 'adapt' on to drag a swatch BODY — that swatch grows/shrinks and all others rebalance proportionally. Reset restores neutral (×1) weights. Source weights bias the histogram fit — which source colors influence the computed curves. Drives both live preview and Apply Curves bake." },
           { heading: "Target palette weights bar (under the matched preview)",
             body: "Same UI as the source bar (3/5/7 count, handle/adapt drag, dark→light sort, Reset) but different math. Target weights control curve application strength per cluster — drag a swatch toward 0 to leave that color region of the target untouched while the rest gets matched. The mask toggle on the header (default ON) bakes the per-cluster attenuation into a layer mask on the output Curves layer; OFF skips the mask on both preview and bake (uniform curves — useful for A/B comparing). Replaces the old Zones accordion." },
           { heading: "Softness slider (under each palette bar)",
