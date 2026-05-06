@@ -898,67 +898,25 @@ export function applyChannelCurvesToRgba(rgba: Uint8Array, c: ChannelCurves): Ui
   return out;
 }
 
-// Per-pixel weighted curve application. The pixel's effective strength is
-// computed from its precomputed Lab distances to all cluster centroids:
-// at softness=0 → argmin (nearest cluster's weight), at softness>0 → gaussian-
-// soft blend across all clusters. Output blends between the original and the
-// curve-applied value at that strength.
+// Per-pixel weighted curve application using a precomputed effective-weight
+// buffer (one Float32 per pixel). The cluster math (hard argmin or soft blend)
+// happens once in palette.precomputeEffectiveWeights and is cached at the
+// MatchTab level; this function stays a tight per-pixel lookup + blend loop.
 //
-// Cluster weight 1 = full match (identical to applyChannelCurvesToRgba),
-// 0 = pass-through (curves don't apply to that cluster's pixels). Soft mode
-// produces smooth gradients in the mask instead of hard cluster boundaries —
-// useful for "fade out" the curves over color transitions.
-//
-// `distances` must align with `rgba`: pxCount × k Float32, indexed [i*k + c].
-// Pixels with distances[i*k] === Infinity (masked-out) get weight=1 (full match).
-//
-// SIGMA_BASE_2 mirrors palette.ts for consistency between the source-synthesize
-// path and this target-apply path.
-const SIGMA_BASE_2_APPLY = 5000;
+// effectiveWeights[i] is in [0, 1] for target apply (clamped). 1 = full match,
+// 0 = pass-through, in-between blends.
 export function applyChannelCurvesToRgbaWeighted(
   rgba: Uint8Array,
   c: ChannelCurves,
-  distances: Float32Array,
-  weights: number[],
-  softness: number = 0,
+  effectiveWeights: Float32Array,
 ): Uint8Array {
   const out = new Uint8Array(rgba.length);
-  const k = weights.length;
-  // Clamp + scale weights to fixed-point for the integer fast-path. Soft mode
-  // computes float weights then rounds to fixed-point per-pixel.
-  const wInt = new Int32Array(k);
-  for (let i = 0; i < k; i++) wInt[i] = Math.round(Math.max(0, Math.min(1, weights[i])) * 256);
   const pxCount = rgba.length / 4;
-  const useSoft = softness > 0;
-  const sigma2 = (softness / 100) * (softness / 100) * SIGMA_BASE_2_APPLY;
   for (let i = 0; i < pxCount; i++) {
     const o = i * 4;
-    const base = i * k;
-    let wi: number;
-    if (distances[base] === Infinity) {
-      wi = 256; // masked-out → full match (curves apply where layer has pixels anyway)
-    } else if (!useSoft) {
-      // Hard nearest-cluster path.
-      let best = 0, bestDist = Infinity;
-      for (let cc = 0; cc < k; cc++) {
-        const d = distances[base + cc];
-        if (d < bestDist) { bestDist = d; best = cc; }
-      }
-      wi = wInt[best];
-    } else {
-      // Soft-blend path. Subtract min for numerical stability.
-      let minD = Infinity;
-      for (let cc = 0; cc < k; cc++) { const d = distances[base + cc]; if (d < minD) minD = d; }
-      let sumG = 0, sumWG = 0;
-      for (let cc = 0; cc < k; cc++) {
-        const d = distances[base + cc];
-        const g = Math.exp(-(d - minD) / sigma2);
-        sumG += g;
-        sumWG += g * Math.max(0, Math.min(1, weights[cc]));
-      }
-      const wf = sumG > 0 ? sumWG / sumG : 1;
-      wi = Math.round(wf * 256);
-    }
+    const wf = effectiveWeights[i];
+    // Fixed-point blend: out = orig + (curve - orig) × w / 256.
+    const wi = Math.round(Math.max(0, Math.min(1, wf)) * 256);
     if (wi === 256) {
       out[o]     = c.r[rgba[o]];
       out[o + 1] = c.g[rgba[o + 1]];

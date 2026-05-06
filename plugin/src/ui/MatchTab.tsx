@@ -11,7 +11,7 @@ import { MatchedPreview, MatchedPreviewHandle } from "./MatchedPreview";
 import { SourceSelector } from "./SourceSelector";
 import { PresetStrip } from "./PresetStrip";
 import { PaletteStrip, PaletteCount } from "./PaletteStrip";
-import { extractPalette, synthesizeWeightedSource, computeClusterDistances } from "../core/palette";
+import { extractPalette, synthesizeWeightedSource, computeClusterDistances, precomputeEffectiveWeights } from "../core/palette";
 import { BottomActionBar } from "./BottomActionBar";
 import { BasicSlider, DimSlider, matchStyles } from "./MatchSliders";
 import { ChannelCurves } from "../core/histogramMatch";
@@ -554,8 +554,27 @@ export function MatchTab() {
     if (!srcSnap || !clusterDistances || paletteWeights.length !== paletteSwatches.length) {
       return srcSnap?.data ?? null;
     }
-    return synthesizeWeightedSource(srcSnap.data, clusterDistances, paletteWeights, sourceSoftness);
+    // Fast path: weights neutral → no synthesis needed (would be identity).
+    const isNeutral = !paletteWeights.some(w => Math.abs(w - 1) > 0.01);
+    if (isNeutral) return srcSnap.data;
+    // Precompute soft-blended per-pixel weight cache, then emit the weighted
+    // buffer using just lookups. The expensive cluster math happens once here
+    // instead of in synthesizeWeightedSource's inner loop, which keeps the
+    // hot path cheap during interactive softness drags.
+    const effective = precomputeEffectiveWeights(clusterDistances, paletteWeights, sourceSoftness);
+    return synthesizeWeightedSource(srcSnap.data, effective, false);
   }, [srcSnap, clusterDistances, paletteSwatches.length, paletteWeights, sourceSoftness]);
+
+  // Target-side per-pixel effective-weight cache. Keyed on the SAME inputs as
+  // the cluster math: distances + weights + softness. Recomputes only when one
+  // of those changes — NOT on every redraw frame. The apply hot loop reads
+  // effectiveWeights[i] directly, no inline cluster blending. This is what
+  // makes interactive softness drag feel snappy even with N×K Lorentzian
+  // computations behind the scenes.
+  const targetEffectiveWeights = useMemo(() => {
+    if (!targetClusterDistances || targetPaletteWeights.length !== targetPaletteSwatches.length) return null;
+    return precomputeEffectiveWeights(targetClusterDistances, targetPaletteWeights, targetSoftness);
+  }, [targetClusterDistances, targetPaletteSwatches.length, targetPaletteWeights, targetSoftness]);
 
   const fittedRaw = useMemo(() => {
     if (!weightedSrcData || !tgt.snap) return null;
@@ -633,8 +652,7 @@ export function MatchTab() {
     // we use the per-pixel weighted apply (cluster blend strength); otherwise
     // the standard apply (bit-for-bit identical to v1.7 when target weights
     // are neutral, which they are by default).
-    const targetWeightsActive = targetClusterDistances != null
-      && targetPaletteWeights.length === targetPaletteSwatches.length
+    const targetWeightsActive = targetEffectiveWeights != null
       && targetPaletteWeights.some(w => Math.abs(w - 1) > 0.01);
 
     if (multiZone && fittedMulti) {
@@ -661,8 +679,8 @@ export function MatchTab() {
       // tgtBuf may equal tgt.snap or be a downsampled version. When they differ
       // (legacy code path in earlier versions), the assignments wouldn't align —
       // here they always match because we removed the dual-resolution path.
-      out = (targetWeightsActive && targetClusterDistances)
-        ? applyChannelCurvesToRgbaWeighted(tgtBuf.data, curvesForGraph, targetClusterDistances, targetPaletteWeights, targetSoftness)
+      out = (targetWeightsActive && targetEffectiveWeights)
+        ? applyChannelCurvesToRgbaWeighted(tgtBuf.data, curvesForGraph, targetEffectiveWeights)
         : applyChannelCurvesToRgba(tgtBuf.data, curvesForGraph);
     }
 
@@ -682,8 +700,8 @@ export function MatchTab() {
       const cP = transformCurvesForPreset(curvesForGraph, activePreset);
       // Mirror the target-weighting choice on the preset's separate apply pass
       // so cluster strength applies consistently regardless of preset.
-      const mapped = (targetWeightsActive && targetClusterDistances)
-        ? applyChannelCurvesToRgbaWeighted(tgtBuf.data, cP, targetClusterDistances, targetPaletteWeights, targetSoftness)
+      const mapped = (targetWeightsActive && targetEffectiveWeights)
+        ? applyChannelCurvesToRgbaWeighted(tgtBuf.data, cP, targetEffectiveWeights)
         : applyChannelCurvesToRgba(tgtBuf.data, cP);
       out = applyPresetPostprocess(tgtBuf.data, mapped, activePreset);
     }
@@ -720,11 +738,10 @@ export function MatchTab() {
     // this redraw — fixes "preview blank until I wiggle a slider" on first mount.
     rafPendingRef.current = false;
     scheduleRedraw();
-    // targetPaletteWeights + targetClusterDistances + targetSoftness in deps
-    // so the preview re-renders when the user drags a target swatch or
-    // adjusts softness. Without them state updates but scheduleRedraw never
-    // fires, leaving the preview frozen at the last weighted snapshot.
-  }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, multiZoneExtents, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope, activePreset, targetPaletteWeights, targetClusterDistances, targetSoftness]); // eslint-disable-line react-hooks/exhaustive-deps
+    // targetEffectiveWeights captures the (distances, weights, softness)
+    // memoized cache, so any change to those inputs invalidates it and
+    // triggers a redraw with the fresh per-pixel weights.
+  }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, multiZoneExtents, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope, activePreset, targetEffectiveWeights]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Export the staged preset as a 33-grid 3D LUT in .CUBE format. Sidesteps the
   // unreliable PS Color Lookup API entirely — user picks a save location, we write

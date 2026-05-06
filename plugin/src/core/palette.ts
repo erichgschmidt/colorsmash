@@ -193,48 +193,67 @@ export function computeClusterDistances(
   return out;
 }
 
-// Convert per-pixel cluster distances + softness to a single effective weight.
-// At softness=0 → argmin behavior (returns weights[nearest]). At softness>0,
-// gaussian-soft blend across all clusters (closer clusters dominate, but
-// neighbors contribute proportionally). Returned value is in the same units
-// as the input weights (typically [0, 1] for target apply, [0, ∞) for source
-// boost). Masked-out pixels (distances[base]=Infinity) return 0.
+// Rational (Lorentzian) falloff used instead of gaussian: g(d²) = 1 / (1 + d²/σ²).
+// Visually nearly identical to exp(-d²/σ²) at the softness ranges we use, but
+// avoids Math.exp() in the per-pixel hot loop — exp is slow in V8 (~100ns each)
+// and was the bottleneck during interactive softness drags.
 //
-// Inline-callable from per-pixel hot loops; avoid function-call overhead by
-// duplicating the math when calling this in tight inner loops would matter.
+// SIGMA_BASE_2: tuned so softness=100 gives a meaningfully wide blend in Lab
+// space (~70 units, comparable to typical inter-cluster spread).
+export const SIGMA_BASE_2 = 5000;
+
+// Precompute per-pixel effective weight from cluster distances + cluster
+// weights + softness. Returns Float32Array(pxCount) where each entry is the
+// soft-blended scalar weight for that pixel. At softness=0 → nearest-cluster's
+// weight (hard). At softness>0 → Lorentzian-soft blend across all clusters.
+// Masked-out pixels (distances[i*k] === Infinity) get weight 0.
 //
-// SIGMA_BASE: tuned so softness=100 gives a meaningfully wide blend in Lab
-// space (~70 units, comparable to the typical inter-cluster spread).
-const SIGMA_BASE_2 = 5000; // σ² at softness=100
-function softWeightAt(
+// Calling this once when (distances, weights, softness) change and reading
+// from the resulting cache in the apply hot loop drops the apply cost to a
+// single per-pixel lookup + fixed-point blend, no transcendentals or distance
+// recomputation. The cache itself is N×4 bytes (~256KB at 256²).
+export function precomputeEffectiveWeights(
   distances: Float32Array,
-  base: number,
-  k: number,
   weights: number[],
   softness: number,
-): number {
-  if (distances[base] === Infinity) return 0;
+): Float32Array {
+  const k = weights.length;
+  const pxCount = distances.length / Math.max(1, k);
+  const out = new Float32Array(pxCount);
+  if (k === 0) return out;
   if (softness <= 0) {
-    // Hard nearest: argmin
-    let best = 0, bestDist = Infinity;
-    for (let c = 0; c < k; c++) {
-      const d = distances[base + c];
-      if (d < bestDist) { bestDist = d; best = c; }
+    // Hard path: argmin per pixel.
+    for (let i = 0; i < pxCount; i++) {
+      const base = i * k;
+      if (distances[base] === Infinity) { out[i] = 0; continue; }
+      let best = 0, bestDist = Infinity;
+      for (let c = 0; c < k; c++) {
+        const d = distances[base + c];
+        if (d < bestDist) { bestDist = d; best = c; }
+      }
+      out[i] = weights[best];
     }
-    return weights[best];
+    return out;
   }
+  // Soft path: Lorentzian blend.
   const sigma2 = (softness / 100) * (softness / 100) * SIGMA_BASE_2;
-  let sumG = 0, sumWG = 0;
-  // Subtract minimum distance for numerical stability before exp().
-  let minD = Infinity;
-  for (let c = 0; c < k; c++) { const d = distances[base + c]; if (d < minD) minD = d; }
-  for (let c = 0; c < k; c++) {
-    const d = distances[base + c];
-    const g = Math.exp(-(d - minD) / sigma2);
-    sumG += g;
-    sumWG += g * weights[c];
+  const invS2 = 1 / sigma2;
+  for (let i = 0; i < pxCount; i++) {
+    const base = i * k;
+    if (distances[base] === Infinity) { out[i] = 0; continue; }
+    let minD = Infinity;
+    for (let c = 0; c < k; c++) { const d = distances[base + c]; if (d < minD) minD = d; }
+    let sumG = 0, sumWG = 0;
+    for (let c = 0; c < k; c++) {
+      // Lorentzian: 1 / (1 + (d - minD) × invS2). minD-subtraction keeps the
+      // dominator's contribution at 1 and others scale relative to it.
+      const g = 1 / (1 + (distances[base + c] - minD) * invS2);
+      sumG += g;
+      sumWG += g * weights[c];
+    }
+    out[i] = sumG > 0 ? sumWG / sumG : 0;
   }
-  return sumG > 0 ? sumWG / sumG : 0;
+  return out;
 }
 
 // Deterministic pseudo-random in [0,1) keyed on pixel index. Replaces Math.random()
@@ -242,39 +261,27 @@ function softWeightAt(
 // no shimmer, no flicker. Knuth multiplicative hash, 32-bit unsigned.
 const hash01 = (i: number) => ((Math.imul(i + 1, 2654435761) >>> 0) / 4294967296);
 
-// Synthesize a weighted source buffer from precomputed cluster distances +
-// weights. Each pixel emits `floor(effectiveWeight)` copies plus 1 more if its
-// deterministic threshold hash falls below the fractional part, where
-// effectiveWeight is the soft-blended weight from softWeightAt. Heavy clusters
-// → pixels appear multiple times → contribute more to histograms.
+// Synthesize a weighted source buffer from precomputed per-pixel effective
+// weights. Each pixel emits `floor(effectiveWeights[i])` copies plus 1 more
+// if its deterministic threshold hash falls below the fractional part. Heavy
+// clusters → pixels appear multiple times → contribute more to histograms.
 //
-// At softness=0 the blend collapses to nearest-cluster (matches v1.7 behavior
-// bit-for-bit when softness defaults to 0). At softness>0, pixels between
-// clusters get weights interpolated across all clusters.
-//
-// Weights at length k must align positionally with the swatches that produced
-// the distances.
+// The effectiveWeights buffer comes from precomputeEffectiveWeights, which
+// handles the hard-vs-soft branching once. This function stays a tight emit
+// loop with no per-pixel cluster math.
 export function synthesizeWeightedSource(
   rgba: Uint8Array,
-  distances: Float32Array,
-  weights: number[],
-  softness: number = 0,
+  effectiveWeights: Float32Array,
+  isNeutral: boolean,
 ): Uint8Array {
-  const k = weights.length;
-  if (k === 0) return rgba;
-  // Fast path: weights all ≈ 1 (neutral). Softness has no effect when all
-  // weights are equal, so we can return the original buffer unchanged.
-  let isNeutral = true;
-  for (let i = 0; i < k; i++) if (Math.abs(weights[i] - 1) > 0.01) { isNeutral = false; break; }
   if (isNeutral) return rgba;
 
   const pxCount = rgba.length / 4;
   let total = 0;
   const emitCount = new Uint8Array(pxCount);
   for (let i = 0; i < pxCount; i++) {
-    const base = i * k;
-    if (distances[base] === Infinity) continue; // masked-out
-    const w = Math.max(0, softWeightAt(distances, base, k, weights, softness));
+    const w = Math.max(0, effectiveWeights[i]);
+    if (w === 0) continue;
     const floor = Math.floor(w);
     const frac = w - floor;
     const extra = hash01(i) < frac ? 1 : 0;
