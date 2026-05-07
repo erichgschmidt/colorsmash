@@ -986,11 +986,11 @@ export function MatchTab() {
           [doc dropdown] [layer dropdown] [refresh]. Kept compact (no list, no thumbnail)
           because the preview pane itself shows the target via the Before/After badge. */}
       <div style={{ marginTop: 6, display: "flex", gap: 4, alignItems: "center" }}>
-        <select key={`tgtdoc-${docsKey}`} style={{ ...sel, flex: 1, minWidth: 0 }} value={tgtDocId ?? ""} onChange={e => onSwitchTgtDoc(Number(e.target.value))}
+        <select key={`tgtdoc-${docsKey}-${tgtLayersKey}`} style={{ ...sel, flex: 1, minWidth: 0 }} value={tgtDocId ?? ""} onChange={e => onSwitchTgtDoc(Number(e.target.value))}
           title="Target document — where the new Curves layer will land. Independent of the source doc.">
           {docs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
         </select>
-        <select key={`tgtlayer-${tgtLayersKey}`} style={{ ...sel, flex: 1, minWidth: 0 }} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}
+        <select key={`tgtlayer-${docsKey}-${tgtLayersKey}`} style={{ ...sel, flex: 1, minWidth: 0 }} value={targetId ?? ""} onChange={e => setTargetId(Number(e.target.value))}
           title="Target layer — the layer the Curves adjustment will be clipped to.">
           {tgtLayers.length === 0 && <option value="">— none —</option>}
           {tgtLayers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}

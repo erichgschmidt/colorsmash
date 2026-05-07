@@ -60,7 +60,7 @@ export function SourceSelector(props: SourceSelectorProps) {
   // Right-of-doc widget changes per mode. Layer mode → layer dropdown. Selection mode →
   // the auto/merge/lock toggle cluster. Browsed-file mode → sticky filename label.
   const rightWidget = srcMode === "layer" ? (
-    <select key={`srclayer-${props.layersKey ?? ""}`} style={{ ...selStyle, flex: 1, minWidth: 0 }} value={sourceId ?? ""} onChange={e => setSourceId(Number(e.target.value))}
+    <select key={`srclayer-${props.docsKey ?? ""}-${props.layersKey ?? ""}`} style={{ ...selStyle, flex: 1, minWidth: 0 }} value={sourceId ?? ""} onChange={e => setSourceId(Number(e.target.value))}
       title="Source layer — pixels are read from this layer in the source document.">
       {layers.length === 0 && <option value="">— none —</option>}
       {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
@@ -95,7 +95,7 @@ export function SourceSelector(props: SourceSelectorProps) {
       {/* Single horizontal row: source/doc, then mode-specific widget, then refresh.
           Same pattern as the target row above the preview so the two read as a pair. */}
       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-        <select key={`srcdoc-${props.docsKey ?? ""}`} style={{ ...selStyle, flex: 1, minWidth: 0 }}
+        <select key={`srcdoc-${props.docsKey ?? ""}-${props.layersKey ?? ""}`} style={{ ...selStyle, flex: 1, minWidth: 0 }}
           title="Source — an open document (pick a layer at right), the active selection, or an image file from disk."
           value={
             srcMode === "folder" ? "__file__" :
