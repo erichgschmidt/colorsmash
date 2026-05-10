@@ -221,16 +221,33 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
   // 1. Generate cube text (same generator the Export LUT button uses).
   const cubeText = generateLutCube(params.curves, params.preset, size, "Color Smash");
 
-  // 2. Write to UXP plugin DATA folder (not temp). Diagnostic in v1.11.7
-  //    showed PS accepts a path-based set descriptor but FAILS TO READ from
-  //    the temp folder (LUT3DFileName came back empty). The temp folder lives
-  //    under AppData\Local\Temp\Adobe\UXP\PluginsStorage\... — PS's process
-  //    appears to lack read access there. The data folder lives under
-  //    AppData\Roaming\Adobe\UXP\... which is typically PS-readable.
+  // 2. Write to user's Documents/Color Smash/LUTs/ folder. Diagnostics in
+  //    v1.11.7-v1.11.9 confirmed PS proper cannot read from ANY UXP-managed
+  //    plugin storage location (temp + data, both Local + Roaming variants
+  //    are sandbox-blocked) regardless of descriptor shape. The user's own
+  //    Documents folder is outside the sandbox and PS reads it normally.
   //
-  //    Trade-off vs temp: data folder is persistent. The cleanup pass on
-  //    plugin start should prune older colorsmash_*.cube files (TODO).
-  const tempFolder = await uxp.storage.localFileSystem.getDataFolder();
+  //    Requires manifest `localFileSystem: fullAccess` permission (set in
+  //    v1.12.0). On first plugin load this prompts the user once for broad
+  //    file-system access. Without that permission this getFolder call
+  //    throws — caught and surfaced as a clear error.
+  const fs = require("uxp").storage;
+  let lutFolder: any;
+  try {
+    const docs = await fs.localFileSystem.getFolder(fs.domains.userDocuments);
+    let csFolder: any;
+    try { csFolder = await docs.getEntry("Color Smash"); }
+    catch { csFolder = await docs.createFolder("Color Smash"); }
+    try { lutFolder = await csFolder.getEntry("LUTs"); }
+    catch { lutFolder = await csFolder.createFolder("LUTs"); }
+  } catch (e: any) {
+    throw new Error(
+      `Could not access Documents folder for LUT storage: ${e?.message ?? e}. ` +
+      `If you see a permission prompt from Photoshop, allow it; otherwise check ` +
+      `that the plugin manifest has localFileSystem: fullAccess.`,
+    );
+  }
+  const tempFolder = lutFolder;
   const stamp = Date.now();
   const presetTag = params.preset === "color" ? "full"
                   : params.preset === "hue" ? "color"
