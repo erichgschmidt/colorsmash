@@ -85,21 +85,59 @@ function findLayerById(layers: any[], id: number): any | null {
  * Using btoa() works because .cube files are pure ASCII text.
  */
 function cubeToBase64(cubeText: string): string {
-  // btoa is provided in UXP webview. Fall back to manual encode if missing
-  // (shouldn't happen on supported PS versions, but defensive).
-  if (typeof btoa === "function") return btoa(cubeText);
-  // Manual base64 encode for ASCII strings.
+  // btoa() only accepts Latin-1 — it throws InvalidCharacterError on any
+  // codepoint > 0xFF. The .cube generator may emit non-ASCII characters in
+  // comment headers (e.g. em-dashes, unicode quotes), so we first UTF-8
+  // encode the string to a byte array, then base64 the bytes. This is the
+  // canonical "btoa for unicode" pattern.
+  const bytes = typeof TextEncoder !== "undefined"
+    ? new TextEncoder().encode(cubeText)
+    : utf8EncodeFallback(cubeText);
+
+  // Build a Latin-1 string from the bytes. btoa accepts that.
+  // (A single big String.fromCharCode.apply call risks call-stack limits on
+  // large inputs — chunk to 0x8000 bytes per call.)
+  let latin1 = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    const slice = bytes.subarray(i, Math.min(i + CHUNK, bytes.length));
+    latin1 += String.fromCharCode.apply(null, Array.from(slice));
+  }
+  if (typeof btoa === "function") return btoa(latin1);
+  return base64EncodeLatin1Fallback(latin1);
+}
+
+/** UTF-8 encode without TextEncoder (defensive — should never be needed in UXP). */
+function utf8EncodeFallback(s: string): Uint8Array {
+  const bytes: number[] = [];
+  for (let i = 0; i < s.length; i++) {
+    let c = s.charCodeAt(i);
+    if (c < 0x80) bytes.push(c);
+    else if (c < 0x800) { bytes.push(0xc0 | (c >> 6), 0x80 | (c & 0x3f)); }
+    else if (c < 0xd800 || c >= 0xe000) { bytes.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f)); }
+    else {
+      // surrogate pair
+      i++;
+      c = 0x10000 + (((c & 0x3ff) << 10) | (s.charCodeAt(i) & 0x3ff));
+      bytes.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 0x3f), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f));
+    }
+  }
+  return new Uint8Array(bytes);
+}
+
+/** Base64-encode a Latin-1 string (one char per byte). Fallback if no btoa. */
+function base64EncodeLatin1Fallback(s: string): string {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   let out = "";
-  for (let i = 0; i < cubeText.length; i += 3) {
-    const a = cubeText.charCodeAt(i);
-    const b = i + 1 < cubeText.length ? cubeText.charCodeAt(i + 1) : 0;
-    const c = i + 2 < cubeText.length ? cubeText.charCodeAt(i + 2) : 0;
+  for (let i = 0; i < s.length; i += 3) {
+    const a = s.charCodeAt(i);
+    const b = i + 1 < s.length ? s.charCodeAt(i + 1) : 0;
+    const c = i + 2 < s.length ? s.charCodeAt(i + 2) : 0;
     const trip = (a << 16) | (b << 8) | c;
     out += chars[(trip >> 18) & 0x3f];
     out += chars[(trip >> 12) & 0x3f];
-    out += i + 1 < cubeText.length ? chars[(trip >> 6) & 0x3f] : "=";
-    out += i + 2 < cubeText.length ? chars[trip & 0x3f] : "=";
+    out += i + 1 < s.length ? chars[(trip >> 6) & 0x3f] : "=";
+    out += i + 2 < s.length ? chars[trip & 0x3f] : "=";
   }
   return out;
 }
