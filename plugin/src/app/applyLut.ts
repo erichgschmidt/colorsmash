@@ -159,46 +159,46 @@ function base64EncodeLatin1Fallback(s: string): string {
  * field is a result, not an input.
  */
 async function tryLoadLutIntoActiveLayer(
-  nativePath: string,
+  cubeText: string, displayName: string,
 ): Promise<{ ok: boolean; lastErr: any }> {
-  // Diagnostic in v1.11.7-v1.11.8 showed: PS accepts a plain-string `name`
-  // and stores it, but does NOT trigger a file read — LUT3DFileName comes
-  // back empty regardless of which UXP storage location we wrote to (temp/
-  // data both blocked by sandbox). The plain-string form may be a metadata
-  // setter only.
+  // Diagnostic dump of a working manual-load layer (v1.12.1) revealed:
+  //   - LUT3DFileData is an ArrayBuffer holding the RAW BYTES of the original
+  //     .cube/.look file (NOT a base64 string — that's why v1.11.3-v1.11.4
+  //     silently failed; we passed a string where PS expects binary)
+  //   - profile is an ICC DeviceLink color profile (PS's parsed internal form)
+  //   - name is the file path/label
+  //   - LUTFormat tells PS which parser to use
   //
-  // Try the `_path` reference form which is how PS internally represents
-  // file paths in descriptors. This may engage a different code path that
-  // actually reads the file.
-  //
-  // Both shapes are attempted in order; whichever PS accepts first wins.
-  const setDescPath = {
+  // Provide LUT3DFileData as ArrayBuffer + LUTFormat. PS parses it directly,
+  // populates `profile` itself, and the LUT applies — no file read required.
+  // This is the load mechanism PS's menu uses internally; the file path was
+  // a red herring.
+  const cubeBytes = new TextEncoder().encode(cubeText);
+  // Build a fresh ArrayBuffer with the exact byte length (TextEncoder().encode
+  // returns a Uint8Array view that may share an over-allocated buffer; the
+  // batchPlay descriptor wants a tight ArrayBuffer of the exact bytes).
+  const cubeAB = new ArrayBuffer(cubeBytes.byteLength);
+  new Uint8Array(cubeAB).set(cubeBytes);
+
+  const setDesc = {
     _obj: "set",
     _target: [{ _ref: "adjustmentLayer", _enum: "ordinal", _value: "targetEnum" }],
     to: {
       _obj: "colorLookup",
       lookupType: { _enum: "colorLookupType", _value: "3DLUT" },
-      name: { _path: nativePath, _kind: "local" },
+      LUT3DFileData: cubeAB,
+      LUTFormat: { _enum: "LUTFormatType", _value: "LUTFormatCUBE" },
+      LUT3DFileName: displayName,
+      name: displayName,
     },
   };
-  const setDescString = {
-    _obj: "set",
-    _target: [{ _ref: "adjustmentLayer", _enum: "ordinal", _value: "targetEnum" }],
-    to: {
-      _obj: "colorLookup",
-      lookupType: { _enum: "colorLookupType", _value: "3DLUT" },
-      name: nativePath,
-    },
-  };
-  let lastErr: any = null;
-  for (const desc of [setDescPath, setDescString]) {
-    try {
-      const result = await action.batchPlay([desc as any], {});
-      if (result && result[0] && !result[0].error) return { ok: true, lastErr: null };
-      lastErr = result?.[0]?.error;
-    } catch (e) { lastErr = e; }
+  try {
+    const result = await action.batchPlay([setDesc as any], {});
+    if (result && result[0] && !result[0].error) return { ok: true, lastErr: null };
+    return { ok: false, lastErr: result?.[0]?.error };
+  } catch (e) {
+    return { ok: false, lastErr: e };
   }
-  return { ok: false, lastErr };
 }
 
 /**
@@ -279,7 +279,7 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
             makeVisible: false,
           }], {});
         } catch { /* ignore */ }
-        const { ok, lastErr } = await tryLoadLutIntoActiveLayer(file.nativePath);
+        const { ok, lastErr } = await tryLoadLutIntoActiveLayer(cubeText, fileName);
         if (!ok) throw new Error(`Live LUT update failed: ${lastErr?.message ?? lastErr ?? "unknown"}`);
         // Keep the name in sync (preset may have changed since creation).
         try { existing.name = layerName; } catch { /* ignore */ }
@@ -325,7 +325,7 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
     }
 
     // Step 2: load the 3D LUT into the new layer.
-    const { ok, lastErr } = await tryLoadLutIntoActiveLayer(file.nativePath);
+    const { ok, lastErr } = await tryLoadLutIntoActiveLayer(cubeText, file.name);
     // Diagnostic: query the layer back and dump its descriptor so we can see
     // what fields PS actually populated. If LUT data is missing, the dump will
     // show which keys are empty — and comparing this to a manually-loaded LUT
