@@ -159,6 +159,15 @@ export function MatchTab() {
   const [deselectOnApply, setDeselectOnApply] = useState(true);
   const [overwriteOnApply, setOverwriteOnApply] = useState(true);
   const [remember, setRemember] = useState(false);
+
+  // Live LUT mode: when ON, every state commit (debounced) re-bakes the .cube
+  // and replaces the LUT data inside the existing Match LUT layer instead of
+  // waiting for the user to hit Apply LUT. Mirrors ChromaWarp's "every change
+  // updates the layer in real-time" workflow. Off by default — opt-in because
+  // it modifies a PS layer continuously while the user adjusts sliders, which
+  // is a stronger contract than the one-shot Apply button.
+  const [liveLut, setLiveLut] = useState(false);
+  const liveLutLayerIdRef = useRef<number | null>(null);
   // (liveUpdates and stale state declared above, before the hooks that consume them.)
 
   const [openSection, setOpenSection] = useState<"basic" | "dims" | "zones" | "envelope" | null>(null);
@@ -829,18 +838,77 @@ export function MatchTab() {
     if (!curves) { setStatus("Compute a match first."); return; }
     setStatus("Applying LUT...");
     try {
-      const layerName = await applyLutAsAdjustmentLayer({
+      const result = await applyLutAsAdjustmentLayer({
         curves,
         preset: activePreset,
         size: 33,
         targetLayerId: targetId === MERGED_LAYER_ID ? null : targetId,
         overwritePrior: overwriteOnApply,
       });
-      setStatus(`Applied "${layerName}" (33³ LUT).`);
+      // Track the new layer's id so toggling Live LUT later updates THIS layer
+      // instead of creating yet another one.
+      liveLutLayerIdRef.current = result.layerId;
+      setStatus(`Applied "${result.layerName}" (33³ LUT).`);
     } catch (e: any) {
-      setStatus(`Apply LUT failed: ${e?.message ?? e} — try Export LUT and load manually via Image → Adjustments → Color Lookup.`);
+      setStatus(`Apply LUT failed: ${e?.message ?? e} — try Save LUT and load manually via Image → Adjustments → Color Lookup.`);
     }
   };
+
+  // ─── Live LUT auto-update ────────────────────────────────────────────────
+  // When Live LUT is on, every change to renderedCurves / preset triggers a
+  // debounced re-bake into the existing Match LUT layer. Debounce ~300ms so
+  // rapid slider drags coalesce into a single PS update — without it, every
+  // intermediate value would queue its own modal scope, which serializes and
+  // freezes the UI.
+  //
+  // Sequencing notes:
+  //   - We don't fire on mount even if liveLut starts true; waits for an
+  //     actual curve update so we don't spuriously create a layer at startup.
+  //   - If liveLut turns OFF, we cancel the pending timer and leave the
+  //     layer in whatever state it's in (frozen — predictable).
+  //   - If a re-bake fails silently (PS modal busy, doc closed mid-drag), we
+  //     surface a brief status message but don't disable Live LUT — the next
+  //     successful commit recovers state.
+  const liveBakeTimerRef = useRef<any>(null);
+  const liveBakeFirstRunSkippedRef = useRef(false);
+  useEffect(() => {
+    if (!liveLut) {
+      // Cancel any pending fire when toggling off.
+      if (liveBakeTimerRef.current) { clearTimeout(liveBakeTimerRef.current); liveBakeTimerRef.current = null; }
+      liveBakeFirstRunSkippedRef.current = false;
+      return;
+    }
+    // First effect run after enabling: skip — don't auto-create on toggle.
+    // The user must either drag a slider OR hit Apply LUT once to seed the layer.
+    if (!liveBakeFirstRunSkippedRef.current) {
+      liveBakeFirstRunSkippedRef.current = true;
+      return;
+    }
+    if (!renderedCurves) return;
+    if (liveBakeTimerRef.current) clearTimeout(liveBakeTimerRef.current);
+    liveBakeTimerRef.current = setTimeout(async () => {
+      liveBakeTimerRef.current = null;
+      try {
+        const result = await applyLutAsAdjustmentLayer({
+          curves: renderedCurves,
+          preset: activePreset,
+          size: 33,
+          targetLayerId: targetId === MERGED_LAYER_ID ? null : targetId,
+          overwritePrior: false, // never delete in live mode — we update in place
+          updateExistingLayerId: liveLutLayerIdRef.current,
+        });
+        liveLutLayerIdRef.current = result.layerId;
+      } catch (e: any) {
+        // Don't spam status during live drag — only show if persistent.
+        // (If the user wants to know why it's not updating they can hit
+        // Apply LUT manually and see the full error.)
+        setStatus(`Live LUT update skipped: ${e?.message ?? e}`);
+      }
+    }, 300);
+    return () => {
+      if (liveBakeTimerRef.current) { clearTimeout(liveBakeTimerRef.current); liveBakeTimerRef.current = null; }
+    };
+  }, [liveLut, renderedCurves, activePreset, targetId]);
 
   const onApply = async () => {
     if (targetId == null) { setStatus("Pick target layer."); return; }
@@ -1441,7 +1509,26 @@ export function MatchTab() {
         {/* @ts-ignore Spectrum web component */}
         <sp-button variant="secondary" onClick={onApplyLut}
           style={{ flex: "1 1 0", minWidth: 0, overflow: "hidden", whiteSpace: "nowrap" }}
-          title="Bake the staged preset into a Color Lookup adjustment layer in the [Color Smash] group — no file dialog, automatic. The LUT captures Color/Luminosity blend behavior a plain Curves layer can't express. Note: 33³ quantization is slightly coarser than a Curves layer; for perfect single-curve precision use Apply.">Apply LUT</sp-button>
+          title="Create a Color Lookup adjustment layer in the [Color Smash] group, loaded with the staged preset as a 33³ 3D LUT. Non-destructive (toggle/delete the layer to revert) but frozen — unlike Curves, you can't tweak the transform after Apply. Use this when the preset uses non-separable Color/Hue/Saturation/Luminosity blend math a Curves layer can't fully express, or for a portable look (the Color Lookup layer can be copied to other docs or replaced with a .cube in Premiere/Resolve). For editable curves, use Apply instead.">Apply LUT</sp-button>
+        {/* Live LUT toggle: when on, every state change re-bakes the LUT into
+            the existing Match LUT layer (debounced ~300ms). Off by default —
+            the contract is stronger than one-shot Apply LUT, so we make it opt-in.
+            Match the visual style of the small mode-toggle pills used elsewhere
+            (palette mask, adapt, count) — dim when off, soft amber when on. */}
+        <div onClick={() => setLiveLut(v => !v)}
+          title={liveLut
+            ? "Live LUT ON — slider changes auto-update the Match LUT layer in real-time (debounced 300ms). Click Apply LUT once to seed the layer if none exists yet, then changes propagate automatically."
+            : "Live LUT OFF — the Match LUT layer is frozen until you hit Apply LUT again. Click to enable: every change auto-bakes into the existing layer."}
+          style={{
+            padding: "1px 6px", fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
+            background: "transparent",
+            color: liveLut ? "#d8b87a" : "#5a4a3a",
+            border: `1px solid ${liveLut ? "#d8b87a" : "#5a4a3a"}`,
+            borderRadius: 2, cursor: "pointer", userSelect: "none",
+            display: "flex", alignItems: "center",
+            height: 28, lineHeight: "26px", boxSizing: "border-box",
+            flex: "0 0 auto",
+          }}>LIVE</div>
         {/* @ts-ignore Spectrum web component */}
         <sp-button variant="secondary" onClick={onExportLut}
           style={{ flex: "1 1 0", minWidth: 0, overflow: "hidden", whiteSpace: "nowrap" }}
