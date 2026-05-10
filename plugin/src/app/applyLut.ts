@@ -103,48 +103,72 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
       } catch { /* ignore — fall back to current selection */ }
     }
 
-    // Build the descriptor. PS expects the .cube path via either a native path
-    // string or a UXP session token. We try session token first (cleanest under
-    // the UXP sandbox), then a raw nativePath fallback if the descriptor errors.
+    // ─── Two-step pattern: make → set ──────────────────────────────────────
+    // PS's `make adjustmentLayer` with `using.type.colorLookup` creates a
+    // DEFAULT (identity) Color Lookup layer — the profile/file fields inside
+    // `using.type` are typically ignored. The actual LUT load is a separate
+    // `set` descriptor on the just-created layer, mirroring the menu action
+    // "Layer → New Adjustment Layer → Color Lookup… → Load 3D LUT".
     const layerName = `${LUT_LAYER_PREFIX} [${presetTag}]`;
     const sessionToken = await uxp.storage.localFileSystem.createSessionToken(file);
 
-    const makeDescriptor = (profileValue: any) => ({
+    // Step 1: make the empty (identity) Color Lookup layer.
+    const makeResult = await action.batchPlay([{
       _obj: "make",
       _target: [{ _ref: "adjustmentLayer" }],
       using: {
         _obj: "adjustmentLayer",
-        type: {
-          _obj: "colorLookup",
-          lookupType: { _enum: "colorLookupType", _value: "lookup3DLUT" },
-          // Both keys are tried — PS versions vary on which it reads.
-          lookup3DLUTName: file.name,
-          profile: profileValue,
-        },
+        type: { _obj: "colorLookup" },
+      },
+    }], {});
+    if (!makeResult || !makeResult[0] || makeResult[0].error) {
+      throw new Error(`make adjustmentLayer (colorLookup) failed: ${makeResult?.[0]?.error ?? "unknown"}`);
+    }
+
+    // Step 2: load the 3D LUT into the active (newly-created) layer. Try
+    // multiple profile-field shapes since PS versions vary on which it accepts
+    // for `_path` token / native string / file token.
+    const setDescriptor = (profileValue: any) => ({
+      _obj: "set",
+      _target: [{ _ref: "adjustmentLayer", _enum: "ordinal", _value: "targetEnum" }],
+      to: {
+        _obj: "colorLookup",
+        lookupType: { _enum: "colorLookupType", _value: "lookup3DLUT" },
+        lookup3DLUTName: file.name,
+        profile: profileValue,
       },
     });
-
-    let lastErr: any = null;
     const attempts = [
-      // Most common shape on recent PS: profile = file token
-      makeDescriptor(sessionToken),
-      // Fallback: { _path: nativePath, _kind: "local" } descriptor object
-      makeDescriptor({ _path: file.nativePath, _kind: "local" }),
-      // Final fallback: raw native path string
-      makeDescriptor(file.nativePath),
+      setDescriptor({ _path: sessionToken, _kind: "local" }),
+      setDescriptor({ _path: file.nativePath, _kind: "local" }),
+      setDescriptor(sessionToken),
+      setDescriptor(file.nativePath),
     ];
-    let made = false;
+    let loaded = false;
+    let lastErr: any = null;
     for (const desc of attempts) {
       try {
         const result = await action.batchPlay([desc as any], {});
-        if (result && result[0] && !result[0].error) { made = true; break; }
+        if (result && result[0] && !result[0].error) { loaded = true; break; }
+        lastErr = result?.[0]?.error;
       } catch (e) { lastErr = e; }
     }
-    if (!made) {
-      throw new Error(`Color Lookup descriptor failed across all shapes: ${lastErr?.message ?? lastErr}`);
+    if (!loaded) {
+      // Don't leave an identity layer behind — clean it up so the user isn't
+      // confused by an apparently-empty Color Lookup layer.
+      try {
+        const stray = doc.activeLayers?.[0];
+        if (stray && typeof stray.delete === "function") await stray.delete();
+      } catch { /* ignore */ }
+      throw new Error(`Could not load 3D LUT into Color Lookup layer: ${lastErr?.message ?? lastErr ?? "unknown"}`);
     }
 
     // The new layer is the active layer. Rename + move into the group.
+    // NOTE: PS adjustment layers inside a Pass-Through group affect everything
+    // below the GROUP in the stack. The [Color Smash] group is created/found
+    // at the doc root (top by default for new groups), so the LUT inside it
+    // affects layers below — which should include the target. If the user has
+    // moved the group elsewhere, the LUT only affects what's below the group.
     const newLayer = doc.activeLayers?.[0] ?? doc.layers?.[0];
     if (newLayer) {
       try { newLayer.name = layerName; } catch { /* ignore */ }
