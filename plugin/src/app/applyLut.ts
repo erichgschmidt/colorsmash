@@ -202,10 +202,16 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
   // 1. Generate cube text (same generator the Export LUT button uses).
   const cubeText = generateLutCube(params.curves, params.preset, size, "Color Smash");
 
-  // 2. Write to UXP plugin temp folder. Unique filename per call so PS reads
-  //    fresh data each time — unique name avoids any caching of the previous
-  //    LUT contents under the same path.
-  const tempFolder = await uxp.storage.localFileSystem.getTemporaryFolder();
+  // 2. Write to UXP plugin DATA folder (not temp). Diagnostic in v1.11.7
+  //    showed PS accepts a path-based set descriptor but FAILS TO READ from
+  //    the temp folder (LUT3DFileName came back empty). The temp folder lives
+  //    under AppData\Local\Temp\Adobe\UXP\PluginsStorage\... — PS's process
+  //    appears to lack read access there. The data folder lives under
+  //    AppData\Roaming\Adobe\UXP\... which is typically PS-readable.
+  //
+  //    Trade-off vs temp: data folder is persistent. The cleanup pass on
+  //    plugin start should prune older colorsmash_*.cube files (TODO).
+  const tempFolder = await uxp.storage.localFileSystem.getDataFolder();
   const stamp = Date.now();
   const presetTag = params.preset === "color" ? "full"
                   : params.preset === "hue" ? "color"
