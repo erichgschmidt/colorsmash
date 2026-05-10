@@ -29,6 +29,7 @@ import { EnvelopeEditor } from "./EnvelopeEditor";
 import { loadSettings, makeDebouncedSaver, clearSettings, PersistedSettings } from "./persistence";
 import { uxpInfo } from "./uxpInfo";
 import { applyMatch } from "../app/applyMatch";
+import { applyLutAsAdjustmentLayer } from "../app/applyLut";
 import {
   app, action as psAction, readLayerPixels, executeAsModal, getActiveDoc, getSelectionBounds,
 } from "../services/photoshop";
@@ -818,6 +819,29 @@ export function MatchTab() {
     } catch (e: any) { setStatus(`LUT export error: ${e?.message ?? e}`); }
   };
 
+  // Apply LUT — bake the staged preset into a Color Lookup adjustment layer
+  // automatically, no file dialog. The .cube goes to the plugin's temp folder
+  // (PS references it from there) and the layer lands in the [Color Smash]
+  // group. If batchPlay descriptor fails on this PS version, falls back to
+  // surfacing a diagnostic — user can still hit Export LUT for the file flow.
+  const onApplyLut = async () => {
+    const curves = renderedCurves;
+    if (!curves) { setStatus("Compute a match first."); return; }
+    setStatus("Applying LUT...");
+    try {
+      const layerName = await applyLutAsAdjustmentLayer({
+        curves,
+        preset: activePreset,
+        size: 33,
+        targetLayerId: targetId === MERGED_LAYER_ID ? null : targetId,
+        overwritePrior: overwriteOnApply,
+      });
+      setStatus(`Applied "${layerName}" (33³ LUT).`);
+    } catch (e: any) {
+      setStatus(`Apply LUT failed: ${e?.message ?? e} — try Export LUT and load manually via Image → Adjustments → Color Lookup.`);
+    }
+  };
+
   const onApply = async () => {
     if (targetId == null) { setStatus("Pick target layer."); return; }
     if (srcMode === "layer" && sourceId == null) { setStatus("Pick source layer."); return; }
@@ -1415,9 +1439,13 @@ export function MatchTab() {
             ? "Multi: creates 3 stacked Curves layers (shadow/mid/highlight) with band limiting via mask and/or Blend If. Each editable independently in PS."
             : "Create a new Curves adjustment layer in the target document, clipped to the target layer. Honors Replace and Deselect toggles below."}>Apply</sp-button>
         {/* @ts-ignore Spectrum web component */}
+        <sp-button variant="secondary" onClick={onApplyLut}
+          style={{ flex: "1 1 0", minWidth: 0, overflow: "hidden", whiteSpace: "nowrap" }}
+          title="Bake the staged preset into a Color Lookup adjustment layer in the [Color Smash] group — no file dialog, automatic. The LUT captures Color/Luminosity blend behavior a plain Curves layer can't express. Note: 33³ quantization is slightly coarser than a Curves layer; for perfect single-curve precision use Apply.">Apply LUT</sp-button>
+        {/* @ts-ignore Spectrum web component */}
         <sp-button variant="secondary" onClick={onExportLut}
           style={{ flex: "1 1 0", minWidth: 0, overflow: "hidden", whiteSpace: "nowrap" }}
-          title="Export the staged preset as a portable 33³ .CUBE 3D LUT. Loadable in Photoshop (Color Lookup layer), Premiere, Resolve, etc. The LUT bakes the full preset including Color/Luminosity blend behavior that a plain Curves layer can't express.">Export LUT</sp-button>
+          title="Export the staged preset as a portable 33³ .CUBE 3D LUT to disk. Loadable in Photoshop, Premiere, Resolve, etc. Use Apply LUT instead if you just want it in this PS doc.">Save LUT…</sp-button>
       </div>
 
       {/* Curves graph below Apply */}
