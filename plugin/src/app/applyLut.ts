@@ -292,6 +292,29 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
 
     // Step 2: load the 3D LUT into the new layer.
     const { ok, lastErr } = await tryLoadLutIntoActiveLayer(cubeText, file.name);
+    // Diagnostic: query the layer back and dump its descriptor so we can see
+    // what fields PS actually populated. If LUT data is missing, the dump will
+    // show which keys are empty — and comparing this to a manually-loaded LUT
+    // layer (via diagnoseActiveLayerColorLookup below) reveals the right field
+    // names. Logged to UXP console; user can open Plugin Manager → Color Smash
+    // → DevTools to inspect.
+    try {
+      const probe = await action.batchPlay([{
+        _obj: "get",
+        _target: [{ _ref: "adjustmentLayer", _enum: "ordinal", _value: "targetEnum" }],
+      }], {});
+      // eslint-disable-next-line no-console
+      console.log("[ColorSmash][LUT diag] post-set layer descriptor:", probe?.[0]);
+      // Pull out just the colorLookup adjustment subtree if present.
+      const adj = probe?.[0]?.adjustment?.[0];
+      // eslint-disable-next-line no-console
+      console.log("[ColorSmash][LUT diag] adjustment[0] keys:", adj ? Object.keys(adj) : "<none>");
+      // eslint-disable-next-line no-console
+      console.log("[ColorSmash][LUT diag] adjustment[0] full:", adj);
+    } catch (probeErr) {
+      // eslint-disable-next-line no-console
+      console.log("[ColorSmash][LUT diag] probe failed:", probeErr);
+    }
     if (!ok) {
       // Don't leave an identity layer behind.
       try {
@@ -313,3 +336,33 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
     return { layerName, layerId: newLayerId };
   });
 }
+
+/**
+ * Diagnostic helper — get the current active layer's full descriptor and
+ * dump it to console. Use this on a manually-loaded Color Lookup layer
+ * (one where the user picked a .cube via the menu) to see the exact field
+ * shape PS uses internally. Compare to the post-set dump from Apply LUT to
+ * find the field name our descriptor is missing.
+ */
+export async function diagnoseActiveLayerColorLookup(): Promise<string> {
+  return await executeAsModal("Color Smash diagnose layer", async () => {
+    const probe = await action.batchPlay([{
+      _obj: "get",
+      _target: [{ _ref: "adjustmentLayer", _enum: "ordinal", _value: "targetEnum" }],
+    }], {});
+    const layer = probe?.[0];
+    const adj = layer?.adjustment?.[0];
+    // eslint-disable-next-line no-console
+    console.log("[ColorSmash][LUT diag] === MANUAL REFERENCE LAYER ===");
+    // eslint-disable-next-line no-console
+    console.log("[ColorSmash][LUT diag] full layer descriptor:", layer);
+    // eslint-disable-next-line no-console
+    console.log("[ColorSmash][LUT diag] adjustment[0] keys:", adj ? Object.keys(adj) : "<none>");
+    // eslint-disable-next-line no-console
+    console.log("[ColorSmash][LUT diag] adjustment[0] full:", adj);
+    if (!adj) return "Selected layer has no adjustment descriptor — pick an adjustment layer.";
+    const keys = Object.keys(adj).join(", ");
+    return `Diagnosed. Adjustment keys: ${keys}. Full dump in DevTools console.`;
+  });
+}
+
