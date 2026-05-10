@@ -174,31 +174,44 @@ async function tryLoadLutIntoActiveLayer(
   // This is the load mechanism PS's menu uses internally; the file path was
   // a red herring.
   const cubeBytes = new TextEncoder().encode(cubeText);
-  // Build a fresh ArrayBuffer with the exact byte length (TextEncoder().encode
-  // returns a Uint8Array view that may share an over-allocated buffer; the
-  // batchPlay descriptor wants a tight ArrayBuffer of the exact bytes).
   const cubeAB = new ArrayBuffer(cubeBytes.byteLength);
   new Uint8Array(cubeAB).set(cubeBytes);
+  // Build BOTH ArrayBuffer and Uint8Array variants of the payload — batchPlay
+  // may accept one but not the other.
+  const cubeU8 = new Uint8Array(cubeAB);
 
-  const setDesc = {
+  const mkSet = (data: any) => ({
     _obj: "set",
     _target: [{ _ref: "adjustmentLayer", _enum: "ordinal", _value: "targetEnum" }],
     to: {
       _obj: "colorLookup",
       lookupType: { _enum: "colorLookupType", _value: "3DLUT" },
-      LUT3DFileData: cubeAB,
+      LUT3DFileData: data,
       LUTFormat: { _enum: "LUTFormatType", _value: "LUTFormatCUBE" },
       LUT3DFileName: displayName,
       name: displayName,
     },
-  };
-  try {
-    const result = await action.batchPlay([setDesc as any], {});
-    if (result && result[0] && !result[0].error) return { ok: true, lastErr: null };
-    return { ok: false, lastErr: result?.[0]?.error };
-  } catch (e) {
-    return { ok: false, lastErr: e };
+  });
+  // Diagnostic: log each attempt so we can see if the result keys change.
+  const attempts: Array<{ label: string; desc: any }> = [
+    { label: "ArrayBuffer", desc: mkSet(cubeAB) },
+    { label: "Uint8Array",  desc: mkSet(cubeU8) },
+  ];
+  let lastErr: any = null;
+  for (const { label, desc } of attempts) {
+    try {
+      const result = await action.batchPlay([desc as any], {});
+      // eslint-disable-next-line no-console
+      console.log(`[ColorSmash][LUT load attempt: ${label}] result:`, result?.[0]);
+      if (result && result[0] && !result[0].error) return { ok: true, lastErr: null };
+      lastErr = result?.[0]?.error;
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.log(`[ColorSmash][LUT load attempt: ${label}] threw:`, e);
+      lastErr = e;
+    }
   }
+  return { ok: false, lastErr };
 }
 
 /**
