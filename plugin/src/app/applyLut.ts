@@ -161,12 +161,15 @@ function base64EncodeLatin1Fallback(s: string): string {
 async function tryLoadLutIntoActiveLayer(
   nativePath: string,
 ): Promise<{ ok: boolean; lastErr: any }> {
+  // NOTE: enum value is "3DLUT" not "lookup3DLUT". The diagnostic dump in
+  // v1.11.5 showed PS uses "3DLUT" internally; passing "lookup3DLUT" caused
+  // PS to silently reject the entire set descriptor (no error returned).
   const setDesc = {
     _obj: "set",
     _target: [{ _ref: "adjustmentLayer", _enum: "ordinal", _value: "targetEnum" }],
     to: {
       _obj: "colorLookup",
-      lookupType: { _enum: "colorLookupType", _value: "lookup3DLUT" },
+      lookupType: { _enum: "colorLookupType", _value: "3DLUT" },
       name: nativePath,
     },
   };
