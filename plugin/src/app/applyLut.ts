@@ -84,9 +84,6 @@ function findLayerById(layers: any[], id: number): any | null {
  *
  * Using btoa() works because .cube files are pure ASCII text.
  */
-// @ts-ignore — kept for possible future inline-LUT path; unused after v1.11.6
-// switched to file-path loading.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function cubeToBase64(cubeText: string): string {
   // btoa() only accepts Latin-1 — it throws InvalidCharacterError on any
   // codepoint > 0xFF. The .cube generator may emit non-ASCII characters in
@@ -173,45 +170,43 @@ async function tryLoadLutIntoActiveLayer(
   // populates `profile` itself, and the LUT applies — no file read required.
   // This is the load mechanism PS's menu uses internally; the file path was
   // a red herring.
-  const cubeBytes = new TextEncoder().encode(cubeText);
-  const cubeAB = new ArrayBuffer(cubeBytes.byteLength);
-  new Uint8Array(cubeAB).set(cubeBytes);
-  // Build BOTH ArrayBuffer and Uint8Array variants of the payload — batchPlay
-  // may accept one but not the other.
-  const cubeU8 = new Uint8Array(cubeAB);
-
-  const mkSet = (data: any) => ({
+  // Action Recording → Copy as JavaScript (PS's own emitted descriptor) revealed
+  // the correct binary-data wrapper: PS expects an object with shape
+  //   { _data: "<base64-encoded bytes>", _rawData: "base64" }
+  // NOT a raw ArrayBuffer or Uint8Array (those silently fail in batchPlay's
+  // serializer — explains every previous attempt). The wrapper signals to
+  // PS's descriptor engine that the field is a binary payload encoded as
+  // base64 in JSON.
+  //
+  // The recorded action also includes a `profile` field with PS's parsed ICC
+  // DeviceLink form. We only send `LUT3DFileData` (raw cube text bytes)
+  // and let PS parse it itself — if PS regenerates `profile` from the cube
+  // data, we're done; if it requires the profile to be pre-baked too, we'd
+  // need to generate ICC DeviceLink bytes (next iteration).
+  const cubeB64 = cubeToBase64(cubeText);
+  const setDesc = {
     _obj: "set",
     _target: [{ _ref: "adjustmentLayer", _enum: "ordinal", _value: "targetEnum" }],
     to: {
       _obj: "colorLookup",
       lookupType: { _enum: "colorLookupType", _value: "3DLUT" },
-      LUT3DFileData: data,
+      LUT3DFileData: { _data: cubeB64, _rawData: "base64" },
       LUTFormat: { _enum: "LUTFormatType", _value: "LUTFormatCUBE" },
       LUT3DFileName: displayName,
       name: displayName,
     },
-  });
-  // Diagnostic: log each attempt so we can see if the result keys change.
-  const attempts: Array<{ label: string; desc: any }> = [
-    { label: "ArrayBuffer", desc: mkSet(cubeAB) },
-    { label: "Uint8Array",  desc: mkSet(cubeU8) },
-  ];
-  let lastErr: any = null;
-  for (const { label, desc } of attempts) {
-    try {
-      const result = await action.batchPlay([desc as any], {});
-      // eslint-disable-next-line no-console
-      console.log(`[ColorSmash][LUT load attempt: ${label}] result:`, result?.[0]);
-      if (result && result[0] && !result[0].error) return { ok: true, lastErr: null };
-      lastErr = result?.[0]?.error;
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.log(`[ColorSmash][LUT load attempt: ${label}] threw:`, e);
-      lastErr = e;
-    }
+  };
+  try {
+    const result = await action.batchPlay([setDesc as any], {});
+    // eslint-disable-next-line no-console
+    console.log("[ColorSmash][LUT load _data wrapper] result:", result?.[0]);
+    if (result && result[0] && !result[0].error) return { ok: true, lastErr: null };
+    return { ok: false, lastErr: result?.[0]?.error };
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.log("[ColorSmash][LUT load _data wrapper] threw:", e);
+    return { ok: false, lastErr: e };
   }
-  return { ok: false, lastErr };
 }
 
 /**
