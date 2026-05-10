@@ -76,28 +76,71 @@ function findLayerById(layers: any[], id: number): any | null {
 }
 
 /**
- * Try the make-then-set sequence to load a 3D LUT file. Tries multiple
- * profile-field descriptor shapes. Returns true on first success.
+ * Encode the cube text as base64. PS's set descriptor accepts the full LUT
+ * payload INLINE via the `LUT3DFileData` field — no file path resolution,
+ * no UXP sandbox boundary issues. This is what PS itself emits to its action
+ * journal when the user picks "Load 3D LUT" from the menu: the file is read
+ * once, embedded as base64, and the layer carries the data internally.
+ *
+ * Using btoa() works because .cube files are pure ASCII text.
+ */
+function cubeToBase64(cubeText: string): string {
+  // btoa is provided in UXP webview. Fall back to manual encode if missing
+  // (shouldn't happen on supported PS versions, but defensive).
+  if (typeof btoa === "function") return btoa(cubeText);
+  // Manual base64 encode for ASCII strings.
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let out = "";
+  for (let i = 0; i < cubeText.length; i += 3) {
+    const a = cubeText.charCodeAt(i);
+    const b = i + 1 < cubeText.length ? cubeText.charCodeAt(i + 1) : 0;
+    const c = i + 2 < cubeText.length ? cubeText.charCodeAt(i + 2) : 0;
+    const trip = (a << 16) | (b << 8) | c;
+    out += chars[(trip >> 18) & 0x3f];
+    out += chars[(trip >> 12) & 0x3f];
+    out += i + 1 < cubeText.length ? chars[(trip >> 6) & 0x3f] : "=";
+    out += i + 2 < cubeText.length ? chars[trip & 0x3f] : "=";
+  }
+  return out;
+}
+
+/**
+ * Set the active adjustment layer to be a 3D LUT with cube data embedded
+ * inline as base64. Mirrors the descriptor PS itself records when the user
+ * loads a .cube via the menu — `LUT3DFileData` carries the payload, the
+ * filename is just a cosmetic label shown in the layer properties panel.
  */
 async function tryLoadLutIntoActiveLayer(
-  file: any, sessionToken: string,
+  cubeText: string, displayName: string,
 ): Promise<{ ok: boolean; lastErr: any }> {
-  const setDescriptor = (profileValue: any) => ({
+  const b64 = cubeToBase64(cubeText);
+  // Primary descriptor: LUT3DFileData + LUTFormat. Most PS versions accept
+  // this shape — it's what Listener records for "Load 3D LUT" menu action.
+  const primary = {
     _obj: "set",
     _target: [{ _ref: "adjustmentLayer", _enum: "ordinal", _value: "targetEnum" }],
     to: {
       _obj: "colorLookup",
       lookupType: { _enum: "colorLookupType", _value: "lookup3DLUT" },
-      lookup3DLUTName: file.name,
-      profile: profileValue,
+      lookup3DLUTName: displayName,
+      LUT3DFileData: b64,
+      LUTFormat: ".cube",
     },
-  });
-  const attempts = [
-    setDescriptor({ _path: sessionToken, _kind: "local" }),
-    setDescriptor({ _path: file.nativePath, _kind: "local" }),
-    setDescriptor(sessionToken),
-    setDescriptor(file.nativePath),
-  ];
+  };
+  // Variant: lower-case 'lut3DFileData' / no leading dot in format. Some PS
+  // versions normalize differently — try both if primary fails.
+  const variant1 = {
+    _obj: "set",
+    _target: [{ _ref: "adjustmentLayer", _enum: "ordinal", _value: "targetEnum" }],
+    to: {
+      _obj: "colorLookup",
+      lookupType: { _enum: "colorLookupType", _value: "lookup3DLUT" },
+      lookup3DLUTName: displayName,
+      lut3DFileData: b64,
+      LUTFormat: "cube",
+    },
+  };
+  const attempts = [primary, variant1];
   let lastErr: any = null;
   for (const desc of attempts) {
     try {
@@ -147,7 +190,6 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
     const doc = app.activeDocument;
     if (!doc) throw new Error("No active document.");
 
-    const sessionToken = await uxp.storage.localFileSystem.createSessionToken(file);
     const layerName = `${LUT_LAYER_PREFIX} [${presetTag}]`;
 
     // ─── Update-in-place path (Live LUT) ───────────────────────────────────
@@ -165,7 +207,7 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
             makeVisible: false,
           }], {});
         } catch { /* ignore */ }
-        const { ok, lastErr } = await tryLoadLutIntoActiveLayer(file, sessionToken);
+        const { ok, lastErr } = await tryLoadLutIntoActiveLayer(cubeText, file.name);
         if (!ok) throw new Error(`Live LUT update failed: ${lastErr?.message ?? lastErr ?? "unknown"}`);
         // Keep the name in sync (preset may have changed since creation).
         try { existing.name = layerName; } catch { /* ignore */ }
@@ -211,7 +253,7 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
     }
 
     // Step 2: load the 3D LUT into the new layer.
-    const { ok, lastErr } = await tryLoadLutIntoActiveLayer(file, sessionToken);
+    const { ok, lastErr } = await tryLoadLutIntoActiveLayer(cubeText, file.name);
     if (!ok) {
       // Don't leave an identity layer behind.
       try {
