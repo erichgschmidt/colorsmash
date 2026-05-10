@@ -161,10 +161,27 @@ function base64EncodeLatin1Fallback(s: string): string {
 async function tryLoadLutIntoActiveLayer(
   nativePath: string,
 ): Promise<{ ok: boolean; lastErr: any }> {
-  // NOTE: enum value is "3DLUT" not "lookup3DLUT". The diagnostic dump in
-  // v1.11.5 showed PS uses "3DLUT" internally; passing "lookup3DLUT" caused
-  // PS to silently reject the entire set descriptor (no error returned).
-  const setDesc = {
+  // Diagnostic in v1.11.7-v1.11.8 showed: PS accepts a plain-string `name`
+  // and stores it, but does NOT trigger a file read — LUT3DFileName comes
+  // back empty regardless of which UXP storage location we wrote to (temp/
+  // data both blocked by sandbox). The plain-string form may be a metadata
+  // setter only.
+  //
+  // Try the `_path` reference form which is how PS internally represents
+  // file paths in descriptors. This may engage a different code path that
+  // actually reads the file.
+  //
+  // Both shapes are attempted in order; whichever PS accepts first wins.
+  const setDescPath = {
+    _obj: "set",
+    _target: [{ _ref: "adjustmentLayer", _enum: "ordinal", _value: "targetEnum" }],
+    to: {
+      _obj: "colorLookup",
+      lookupType: { _enum: "colorLookupType", _value: "3DLUT" },
+      name: { _path: nativePath, _kind: "local" },
+    },
+  };
+  const setDescString = {
     _obj: "set",
     _target: [{ _ref: "adjustmentLayer", _enum: "ordinal", _value: "targetEnum" }],
     to: {
@@ -173,13 +190,15 @@ async function tryLoadLutIntoActiveLayer(
       name: nativePath,
     },
   };
-  try {
-    const result = await action.batchPlay([setDesc as any], {});
-    if (result && result[0] && !result[0].error) return { ok: true, lastErr: null };
-    return { ok: false, lastErr: result?.[0]?.error };
-  } catch (e) {
-    return { ok: false, lastErr: e };
+  let lastErr: any = null;
+  for (const desc of [setDescPath, setDescString]) {
+    try {
+      const result = await action.batchPlay([desc as any], {});
+      if (result && result[0] && !result[0].error) return { ok: true, lastErr: null };
+      lastErr = result?.[0]?.error;
+    } catch (e) { lastErr = e; }
   }
+  return { ok: false, lastErr };
 }
 
 /**
