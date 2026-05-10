@@ -84,6 +84,9 @@ function findLayerById(layers: any[], id: number): any | null {
  *
  * Using btoa() works because .cube files are pure ASCII text.
  */
+// @ts-ignore — kept for possible future inline-LUT path; unused after v1.11.6
+// switched to file-path loading.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function cubeToBase64(cubeText: string): string {
   // btoa() only accepts Latin-1 — it throws InvalidCharacterError on any
   // codepoint > 0xFF. The .cube generator may emit non-ASCII characters in
@@ -143,51 +146,37 @@ function base64EncodeLatin1Fallback(s: string): string {
 }
 
 /**
- * Set the active adjustment layer to be a 3D LUT with cube data embedded
- * inline as base64. Mirrors the descriptor PS itself records when the user
- * loads a .cube via the menu — `LUT3DFileData` carries the payload, the
- * filename is just a cosmetic label shown in the layer properties panel.
+ * Set the active adjustment layer to load a 3D LUT from a file path.
+ *
+ * Diagnostic comparison (v1.11.5) showed: PS's manual "Load 3D LUT" menu
+ * action stores `name` as the full native path, and PS internally reads
+ * the file from that path and populates `profile` (parsed binary LUT) +
+ * `LUT3DFileData` (raw cube bytes) afterward.
+ *
+ * The trigger is therefore `name: <native path>` in the set descriptor.
+ * PS reads the file when it sees that field and self-populates the rest.
+ * Inline-data approaches (LUT3DFileData base64) don't work because that
+ * field is a result, not an input.
  */
 async function tryLoadLutIntoActiveLayer(
-  cubeText: string, displayName: string,
+  nativePath: string,
 ): Promise<{ ok: boolean; lastErr: any }> {
-  const b64 = cubeToBase64(cubeText);
-  // Primary descriptor: LUT3DFileData + LUTFormat. Most PS versions accept
-  // this shape — it's what Listener records for "Load 3D LUT" menu action.
-  const primary = {
+  const setDesc = {
     _obj: "set",
     _target: [{ _ref: "adjustmentLayer", _enum: "ordinal", _value: "targetEnum" }],
     to: {
       _obj: "colorLookup",
       lookupType: { _enum: "colorLookupType", _value: "lookup3DLUT" },
-      lookup3DLUTName: displayName,
-      LUT3DFileData: b64,
-      LUTFormat: ".cube",
+      name: nativePath,
     },
   };
-  // Variant: lower-case 'lut3DFileData' / no leading dot in format. Some PS
-  // versions normalize differently — try both if primary fails.
-  const variant1 = {
-    _obj: "set",
-    _target: [{ _ref: "adjustmentLayer", _enum: "ordinal", _value: "targetEnum" }],
-    to: {
-      _obj: "colorLookup",
-      lookupType: { _enum: "colorLookupType", _value: "lookup3DLUT" },
-      lookup3DLUTName: displayName,
-      lut3DFileData: b64,
-      LUTFormat: "cube",
-    },
-  };
-  const attempts = [primary, variant1];
-  let lastErr: any = null;
-  for (const desc of attempts) {
-    try {
-      const result = await action.batchPlay([desc as any], {});
-      if (result && result[0] && !result[0].error) return { ok: true, lastErr: null };
-      lastErr = result?.[0]?.error;
-    } catch (e) { lastErr = e; }
+  try {
+    const result = await action.batchPlay([setDesc as any], {});
+    if (result && result[0] && !result[0].error) return { ok: true, lastErr: null };
+    return { ok: false, lastErr: result?.[0]?.error };
+  } catch (e) {
+    return { ok: false, lastErr: e };
   }
-  return { ok: false, lastErr };
 }
 
 /**
@@ -245,7 +234,7 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
             makeVisible: false,
           }], {});
         } catch { /* ignore */ }
-        const { ok, lastErr } = await tryLoadLutIntoActiveLayer(cubeText, file.name);
+        const { ok, lastErr } = await tryLoadLutIntoActiveLayer(file.nativePath);
         if (!ok) throw new Error(`Live LUT update failed: ${lastErr?.message ?? lastErr ?? "unknown"}`);
         // Keep the name in sync (preset may have changed since creation).
         try { existing.name = layerName; } catch { /* ignore */ }
@@ -291,7 +280,7 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
     }
 
     // Step 2: load the 3D LUT into the new layer.
-    const { ok, lastErr } = await tryLoadLutIntoActiveLayer(cubeText, file.name);
+    const { ok, lastErr } = await tryLoadLutIntoActiveLayer(file.nativePath);
     // Diagnostic: query the layer back and dump its descriptor so we can see
     // what fields PS actually populated. If LUT data is missing, the dump will
     // show which keys are empty — and comparing this to a manually-loaded LUT
