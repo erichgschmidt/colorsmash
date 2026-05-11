@@ -72,6 +72,50 @@ export function renameHistoryEntry(
   return found ? next : history.slice();
 }
 
+/** v1.20.11 — remap recipe weights onto a live palette by Lab nearest-neighbor.
+ *
+ *  History recipes were originally stored against a specific source image's
+ *  cluster centroids. Reusing a recipe on a DIFFERENT source means cluster
+ *  indices don't carry meaning anymore — "weight #3" pointed at the recipe's
+ *  third cluster (e.g. a teal), but the new source's third cluster may be a
+ *  brown. We solve this by aligning by perceptual similarity: for each
+ *  cluster in the live palette, find the nearest recipe cluster in Lab space
+ *  and inherit its weight. Liveswatches without a stored Lab field get a
+ *  neutral 1.0 fallback (preserves the recipe's structure where possible,
+ *  doesn't crash on partial data).
+ *
+ *  Both `liveSwatches` and `recipeSwatches` are typed loosely so callers
+ *  (PaletteSwatch from the live extractor, SerializedSwatch from XMP) don't
+ *  need to be normalized first — we just read `.labL/labA/labB` defensively. */
+export function remapWeightsByLabNearestNeighbor(
+  recipeSwatches: any[] | undefined,
+  recipeWeights: number[] | undefined,
+  liveSwatches: any[],
+): number[] {
+  if (!liveSwatches || liveSwatches.length === 0) return [];
+  if (!recipeSwatches || recipeSwatches.length === 0 || !recipeWeights || recipeWeights.length === 0) {
+    return liveSwatches.map(() => 1);
+  }
+  const labOf = (s: any): [number, number, number] => [
+    typeof s?.labL === "number" ? s.labL : 50,
+    typeof s?.labA === "number" ? s.labA : 0,
+    typeof s?.labB === "number" ? s.labB : 0,
+  ];
+  return liveSwatches.map(live => {
+    const [l1, a1, b1] = labOf(live);
+    let bestIdx = 0;
+    let bestD = Infinity;
+    for (let i = 0; i < recipeSwatches.length; i++) {
+      const [l2, a2, b2] = labOf(recipeSwatches[i]);
+      const dL = l1 - l2, dA = a1 - a2, dB = b1 - b2;
+      const d = dL * dL + dA * dA + dB * dB;
+      if (d < bestD) { bestD = d; bestIdx = i; }
+    }
+    const w = recipeWeights[bestIdx];
+    return typeof w === "number" && Number.isFinite(w) ? w : 1;
+  });
+}
+
 /** Clamp a numeric byte channel to 0..255. */
 function clampByte(n: number): number {
   if (!Number.isFinite(n)) return 0;

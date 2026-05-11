@@ -35,6 +35,7 @@ import { updateMatchCurvesLayerInPlace } from "../app/liveCurvesUpdate";
 import { LutLayerState, readLutLayerState, stampState } from "../app/lutXmp";
 import {
   HistoryEntry, makeHistoryEntry, pushHistoryEntry, pruneHistory, togglePinnedEntry, renameHistoryEntry,
+  remapWeightsByLabNearestNeighbor,
 } from "../app/recentHistory";
 import { lutGradientCSS } from "../app/historyThumbnail";
 import { syncOutputVisibilityToMode, repositionGroupAboveTarget } from "../app/outputVisibility";
@@ -1048,7 +1049,7 @@ export function MatchTab() {
   // including Color/Luminosity blend emulation that a Curves layer alone can't
   // express, so the file is a complete, portable representation of the look.
   const onExportLut = async () => {
-    const curves = renderedCurves;
+    const curves = renderedCurves ?? curvesPendingRef.current;
     if (!curves) { setStatus("Compute a match first."); return; }
     setStatus("Exporting LUT...");
     try {
@@ -1121,9 +1122,36 @@ export function MatchTab() {
   // Click handler for a history thumbnail — restores panel state from the
   // entry's saved snapshot. Does NOT auto-Apply (predictable: user picks
   // history, panel updates, user hits Apply if they want to bake again).
+  // v1.20.11 — apply a history recipe to whatever live source is currently
+  // focused. Extract the live palette at the recipe's swatch count, then
+  // remap the recipe's weights onto those clusters via Lab nearest-neighbor.
+  // This makes recipes portable: weight #3 stays semantically aligned with
+  // the closest perceptual match in the new source's clusters instead of
+  // pointing at "whatever cluster happens to be index 3."
   const applyHistoryEntry = (entry: HistoryEntry): void => {
-    applyStateToPanel(entry.state, "recipe");
-    setStatus(`Loaded recipe from history (${entry.label}). Source palette overridden — click Refresh to use live source.`);
+    const recipeCount = entry.state.paletteCount ?? 5;
+    const recipeSwatches = entry.state.sourcePaletteSwatches ?? [];
+    const recipeWeights = entry.state.sourcePaletteWeights ?? [];
+    // Use the LIVE source's palette extracted at the recipe's count for
+    // the remap target. Falls back to recipe swatches as-is when no live
+    // source is loaded (cold-start case).
+    let remappedWeights: number[] | undefined;
+    if (srcSnap) {
+      const liveSwatches = extractPalette(srcSnap.data, srcSnap.width, srcSnap.height, recipeCount);
+      remappedWeights = remapWeightsByLabNearestNeighbor(recipeSwatches, recipeWeights, liveSwatches);
+    } else {
+      remappedWeights = recipeWeights.slice();
+    }
+    const adaptedState: LutLayerState = {
+      ...entry.state,
+      sourcePaletteWeights: remappedWeights,
+    };
+    applyStateToPanel(adaptedState, "recipe");
+    setStatus(
+      srcSnap
+        ? `Loaded recipe (${entry.label}). Weights remapped to current source clusters by perceptual similarity.`
+        : `Loaded recipe (${entry.label}).`,
+    );
   };
 
   // Shared restore implementation — pulled out of the manual onRestoreFromLayer
@@ -1256,7 +1284,13 @@ export function MatchTab() {
   // group. If batchPlay descriptor fails on this PS version, falls back to
   // surfacing a diagnostic — user can still hit Export LUT for the file flow.
   const onApplyLut = async () => {
-    const curves = renderedCurves;
+    // v1.20.11 — prefer renderedCurves but fall back to curvesPendingRef when
+    // the React state hasn't caught up yet (100ms debounce window). Previously,
+    // hitting Apply LUT immediately after a source/target layer change would
+    // silently bail with "Compute a match first" because renderedCurves was
+    // briefly null while the preview re-ran. Users perceived this as "history
+    // stopped recording after I changed a layer" — Apply itself wasn't firing.
+    const curves = renderedCurves ?? curvesPendingRef.current;
     if (!curves) { setStatus("Compute a match first."); return; }
 
     const targetPalette = targetPaletteSwatches.length > 0 ? {
