@@ -161,6 +161,19 @@ export function MatchTab() {
   const [overwriteOnApply, setOverwriteOnApply] = useState(true);
   const [remember, setRemember] = useState(false);
 
+  // Auto-restore: when ON, selecting any Match LUT layer in PS's Layers
+  // panel auto-rehydrates the panel state from that layer's XMP. Mirrors
+  // ChromaWarp's "click the layer to keep editing where you left off"
+  // model. Off by default — opt-in because it can clobber in-progress
+  // edits if the user is mid-tweak and clicks a different layer to inspect.
+  const [autoRestore, setAutoRestore] = useState(false);
+  // Suppress auto-restore for a short window after we ourselves wrote a
+  // layer's XMP. Apply LUT creates the layer → PS fires a select event for
+  // it → without suppression we'd immediately restore from the layer we
+  // just wrote (no-op visually, but adds a redundant modal scope + status
+  // line). The ref holds the timestamp of the last self-write.
+  const lastSelfWriteRef = useRef<number>(0);
+
   // Live LUT mode: when ON, every state commit (debounced) re-bakes the .cube
   // and replaces the LUT data inside the existing Match LUT layer instead of
   // waiting for the user to hit Apply LUT. Mirrors ChromaWarp's "every change
@@ -851,6 +864,77 @@ export function MatchTab() {
     sourceLayerId: sourceId,
   }, "1.14.0");
 
+  // Shared restore implementation — pulled out of the manual onRestoreFromLayer
+  // handler so the auto-restore listener can use the same code path. Takes a
+  // layer id so the listener can target the just-selected layer specifically
+  // (vs the manual button which uses whatever is active). Returns true if it
+  // applied a restore, false if the layer had no Color Smash XMP.
+  const restoreFromLayerId = async (layerId: number): Promise<boolean> => {
+    const state = await readLutLayerState(layerId);
+    if (!state) return false;
+    if (state.preset) setActivePreset(state.preset as any);
+    if (state.matchMode) setMatchMode(state.matchMode as MatchMode);
+    if (state.colorSpace === "rgb" || state.colorSpace === "lab") setColorSpace(state.colorSpace);
+    if (state.paletteCount === 3 || state.paletteCount === 5 || state.paletteCount === 7) {
+      setPaletteCount(state.paletteCount);
+    }
+    if (state.sourcePaletteWeights && Array.isArray(state.sourcePaletteWeights)) {
+      setPaletteWeights(state.sourcePaletteWeights);
+    }
+    if (state.targetPaletteWeights && Array.isArray(state.targetPaletteWeights)) {
+      setTargetPaletteWeights(state.targetPaletteWeights);
+    }
+    if (typeof state.sourceSoftness === "number") setSourceSoftness(state.sourceSoftness);
+    if (typeof state.targetSoftness === "number") setTargetSoftness(state.targetSoftness);
+    if (state.paletteAdaptive != null) setPaletteAdaptive(!!state.paletteAdaptive);
+    if (state.multiZone != null) setMultiZone(!!state.multiZone);
+    if (state.dimensions) {
+      dimsRef.current = { ...DEFAULT_DIMENSIONS, ...state.dimensions } as DimensionOpts;
+      setDimsLabel(dimsRef.current);
+    }
+    if (state.zones) {
+      zonesRef.current = { ...DEFAULT_ZONES, ...state.zones } as ZoneOpts;
+      setZonesLabel(zonesRef.current);
+    }
+    if (state.envelope && Array.isArray(state.envelope) && state.envelope.length > 0) {
+      envelopeRef.current = state.envelope as EnvelopePoint[];
+      setEnvelopeLabel(state.envelope as EnvelopePoint[]);
+    }
+    return true;
+  };
+
+  // Auto-restore listener — when AUTO is on, watch for layer-selection
+  // events. If the newly-active layer is one we authored (has Color Smash
+  // XMP), rehydrate the panel state from it. Suppressed for ~1.5s after
+  // every self-write to avoid the Apply LUT → select fires → restore from
+  // the layer we just wrote echo loop.
+  useEffect(() => {
+    if (!autoRestore) return;
+    const ps = require("photoshop");
+    const psAction = ps.action;
+    let scheduled: any = null;
+    const onSelect = () => {
+      // Coalesce — PS often fires multiple select notifications per click.
+      if (scheduled) clearTimeout(scheduled);
+      scheduled = setTimeout(async () => {
+        scheduled = null;
+        if (Date.now() - lastSelfWriteRef.current < 1500) return; // self-write suppression
+        try {
+          const doc = ps.app.activeDocument;
+          const layer = doc?.activeLayers?.[0];
+          if (!layer) return;
+          const ok = await restoreFromLayerId(layer.id);
+          if (ok) setStatus(`Auto-restored from "${layer.name}".`);
+        } catch { /* ignore */ }
+      }, 80);
+    };
+    psAction.addNotificationListener(["select"], onSelect);
+    return () => {
+      if (scheduled) clearTimeout(scheduled);
+      try { psAction.removeNotificationListener?.(["select"], onSelect); } catch { /* ignore */ }
+    };
+  }, [autoRestore]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Restore — read the active layer's XMP and push every captured value
   // back into the panel. Useful when the user clicked a previously-authored
   // Match LUT layer and wants to resume editing where they left off.
@@ -862,42 +946,10 @@ export function MatchTab() {
       const doc = ps.app.activeDocument;
       const activeLayer = doc?.activeLayers?.[0];
       if (!activeLayer) { setStatus("No layer selected."); return; }
-      const state = await readLutLayerState(activeLayer.id);
-      if (!state) {
-        setStatus("Selected layer has no Color Smash metadata.");
-        return;
-      }
-      // Apply every field that's present. Each setter is idempotent so
-      // partial restores (older xmpVersion) don't break.
-      if (state.preset) setActivePreset(state.preset as any);
-      if (state.matchMode) setMatchMode(state.matchMode as MatchMode);
-      if (state.colorSpace === "rgb" || state.colorSpace === "lab") setColorSpace(state.colorSpace);
-      if (state.paletteCount === 3 || state.paletteCount === 5 || state.paletteCount === 7) {
-        setPaletteCount(state.paletteCount);
-      }
-      if (state.sourcePaletteWeights && Array.isArray(state.sourcePaletteWeights)) {
-        setPaletteWeights(state.sourcePaletteWeights);
-      }
-      if (state.targetPaletteWeights && Array.isArray(state.targetPaletteWeights)) {
-        setTargetPaletteWeights(state.targetPaletteWeights);
-      }
-      if (typeof state.sourceSoftness === "number") setSourceSoftness(state.sourceSoftness);
-      if (typeof state.targetSoftness === "number") setTargetSoftness(state.targetSoftness);
-      if (state.paletteAdaptive != null) setPaletteAdaptive(!!state.paletteAdaptive);
-      if (state.multiZone != null) setMultiZone(!!state.multiZone);
-      if (state.dimensions) {
-        dimsRef.current = { ...DEFAULT_DIMENSIONS, ...state.dimensions } as DimensionOpts;
-        setDimsLabel(dimsRef.current);
-      }
-      if (state.zones) {
-        zonesRef.current = { ...DEFAULT_ZONES, ...state.zones } as ZoneOpts;
-        setZonesLabel(zonesRef.current);
-      }
-      if (state.envelope && Array.isArray(state.envelope) && state.envelope.length > 0) {
-        envelopeRef.current = state.envelope as EnvelopePoint[];
-        setEnvelopeLabel(state.envelope as EnvelopePoint[]);
-      }
-      setStatus(`Restored panel state from "${activeLayer.name}" (saved ${state.timestamp ? new Date(state.timestamp).toLocaleString() : "unknown time"}).`);
+      const ok = await restoreFromLayerId(activeLayer.id);
+      setStatus(ok
+        ? `Restored panel state from "${activeLayer.name}".`
+        : "Selected layer has no Color Smash metadata.");
     } catch (e: any) {
       setStatus(`Restore failed: ${e?.message ?? e}`);
     }
@@ -930,6 +982,7 @@ export function MatchTab() {
       // Track the new layer's id so toggling Live LUT later updates THIS layer
       // instead of creating yet another one.
       liveLutLayerIdRef.current = result.layerId;
+      lastSelfWriteRef.current = Date.now();
       setStatus(`Applied "${result.layerName}" (33³ LUT).`);
     } catch (e: any) {
       setStatus(`Apply LUT failed: ${e?.message ?? e} — try Save LUT and load manually via Image → Adjustments → Color Lookup.`);
@@ -986,6 +1039,7 @@ export function MatchTab() {
           } : undefined,
         });
         liveLutLayerIdRef.current = result.layerId;
+        lastSelfWriteRef.current = Date.now();
       } catch (e: any) {
         // Don't spam status during live drag — only show if persistent.
         // (If the user wants to know why it's not updating they can hit
@@ -1635,6 +1689,24 @@ export function MatchTab() {
             height: 28, lineHeight: "26px", boxSizing: "border-box",
             flex: "0 0 auto",
           }}>RESTORE</div>
+        {/* AUTO — when on, clicking a Match LUT layer in the Layers panel
+            triggers the same restore action automatically. Off by default
+            (opt-in) because it can clobber in-progress edits if the user
+            inspects an old layer mid-tweak. */}
+        <div onClick={() => setAutoRestore(v => !v)}
+          title={autoRestore
+            ? "Auto-restore ON — clicking any Match LUT layer in the Layers panel auto-rehydrates the panel state from its XMP. Click to disable."
+            : "Auto-restore OFF — Match LUT layers don't affect the panel when selected. Click to enable: clicks on Match LUT layers will pop panel state back to what produced them."}
+          style={{
+            padding: "1px 6px", fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
+            background: "transparent",
+            color: autoRestore ? "#7aa8d8" : "#3a5060",
+            border: `1px solid ${autoRestore ? "#7aa8d8" : "#3a5060"}`,
+            borderRadius: 2, cursor: "pointer", userSelect: "none",
+            display: "flex", alignItems: "center",
+            height: 28, lineHeight: "26px", boxSizing: "border-box",
+            flex: "0 0 auto",
+          }}>AUTO</div>
         {/* @ts-ignore Spectrum web component */}
         <sp-button variant="secondary" onClick={onExportLut}
           style={{ flex: "1 1 0", minWidth: 0, overflow: "hidden", whiteSpace: "nowrap" }}
