@@ -843,7 +843,13 @@ export function MatchTab() {
         preset: activePreset,
         size: 33,
         targetLayerId: targetId === MERGED_LAYER_ID ? null : targetId,
+        targetIsMerged: targetId === MERGED_LAYER_ID,
         overwritePrior: overwriteOnApply,
+        targetPalette: targetPaletteSwatches.length > 0 ? {
+          swatches: targetPaletteSwatches,
+          weights: targetPaletteWeights.slice(),
+          softness: targetSoftness,
+        } : undefined,
       });
       // Track the new layer's id so toggling Live LUT later updates THIS layer
       // instead of creating yet another one.
@@ -894,8 +900,14 @@ export function MatchTab() {
           preset: activePreset,
           size: 33,
           targetLayerId: targetId === MERGED_LAYER_ID ? null : targetId,
+          targetIsMerged: targetId === MERGED_LAYER_ID,
           overwritePrior: false, // never delete in live mode — we update in place
           updateExistingLayerId: liveLutLayerIdRef.current,
+          targetPalette: targetPaletteSwatches.length > 0 ? {
+            swatches: targetPaletteSwatches,
+            weights: targetPaletteWeights.slice(),
+            softness: targetSoftness,
+          } : undefined,
         });
         liveLutLayerIdRef.current = result.layerId;
       } catch (e: any) {
@@ -908,7 +920,7 @@ export function MatchTab() {
     return () => {
       if (liveBakeTimerRef.current) { clearTimeout(liveBakeTimerRef.current); liveBakeTimerRef.current = null; }
     };
-  }, [liveLut, renderedCurves, activePreset, targetId]);
+  }, [liveLut, renderedCurves, activePreset, targetId, targetPaletteWeights, targetSoftness]);
 
   const onApply = async () => {
     if (targetId == null) { setStatus("Pick target layer."); return; }

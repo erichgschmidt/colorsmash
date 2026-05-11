@@ -14,9 +14,14 @@
 // the path to the user.
 
 import { ChannelCurves, generateLutCube, Preset } from "../core/histogramMatch";
-import { GROUP_NAME, action, app } from "../services/photoshop";
-import { executeAsModal } from "../services/photoshop";
+import {
+  GROUP_NAME, action, app,
+  executeAsModal, readLayerPixels, setClippingMask, PixelBuffer,
+} from "../services/photoshop";
 import { generateIccDeviceLinkBase64 } from "./iccGen";
+import {
+  TargetPaletteSpec, targetWeightsActive, applyTargetPaletteMaskToLayer,
+} from "./targetMask";
 
 const LUT_LAYER_PREFIX = "Match LUT";
 
@@ -32,6 +37,14 @@ export interface ApplyLutParams {
       If the layer no longer exists (deleted by user, doc switched, etc.) we
       fall back to creating a new one and the caller should update its ref. */
   updateExistingLayerId?: number | null;
+  /** Target palette weights → grayscale mask attached to the LUT layer.
+      When any weight is non-1, build the same Lorentzian-soft Lab cluster
+      mask the Curves Apply path uses and attach via imaging.putLayerMask.
+      Skipped when target is Merged (no layer bounds to align the mask). */
+  targetPalette?: TargetPaletteSpec;
+  /** True when target is the Merged-document sentinel — skips both clipping
+      and per-cluster masking since neither has a meaningful spatial anchor. */
+  targetIsMerged?: boolean;
 }
 
 export interface ApplyLutResult {
@@ -246,17 +259,45 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
   const stamp = Date.now();
   const fileName = `colorsmash_${presetTag}_${stamp}.cube`;
 
+  // Decide whether the target-palette mask is needed. Skipped on merged
+  // target (no layer-bounds-aligned buffer to attach against) and when all
+  // weights are ≈1 (no attenuation = no point burning CPU on the mask).
+  const wantMask = !!(
+    params.targetPalette
+    && !params.targetIsMerged
+    && params.targetLayerId != null
+    && targetWeightsActive(params.targetPalette)
+  );
+
   return await executeAsModal("Color Smash apply LUT", async () => {
     const doc = app.activeDocument;
     if (!doc) throw new Error("No active document.");
 
     const layerName = `${LUT_LAYER_PREFIX} [${presetTag}]`;
 
+    // Read target pixels once if we'll need the mask. Same readLayerPixels
+    // call applyMatch.ts uses, so the mask is computed against the same
+    // full-resolution buffer either path produces.
+    let targetBuf: PixelBuffer | null = null;
+    if (wantMask) {
+      const targetLayer = findLayerById(doc.layers ?? [], params.targetLayerId!);
+      if (targetLayer) {
+        try {
+          targetBuf = await readLayerPixels(targetLayer, undefined, doc.id);
+        } catch { /* mask becomes a no-op if read fails */ }
+      }
+    }
+
+    // Single helper for "attach the mask to layer X" so create and update
+    // paths share it. Silently no-op if the buffer isn't available.
+    const attachMaskIfRequested = async (layerId: number) => {
+      if (!wantMask || !targetBuf || !params.targetPalette) return;
+      try {
+        await applyTargetPaletteMaskToLayer(doc.id, layerId, targetBuf, params.targetPalette);
+      } catch { /* non-fatal; layer still works without the mask */ }
+    };
+
     // ─── Update-in-place path (Live LUT) ───────────────────────────────────
-    // If a target layer ID was passed AND it still exists, just select it and
-    // re-issue the same `set` descriptor — PS replaces the LUT data inside
-    // the existing Color Lookup layer. No make, no move, no flicker, layer
-    // identity preserved across many rapid updates.
     if (params.updateExistingLayerId != null) {
       const existing = findLayerById(doc.layers ?? [], params.updateExistingLayerId);
       if (existing) {
@@ -269,16 +310,14 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
         } catch { /* ignore */ }
         const { ok, lastErr } = await tryLoadLutIntoActiveLayer(cubeText, fileName, params.curves);
         if (!ok) throw new Error(`Live LUT update failed: ${lastErr?.message ?? lastErr ?? "unknown"}`);
-        // Keep the name in sync (preset may have changed since creation).
         try { existing.name = layerName; } catch { /* ignore */ }
+        // Refresh the mask too — weights may have changed between commits.
+        await attachMaskIfRequested(existing.id);
         return { layerName, layerId: existing.id };
       }
-      // Fall through to create path if the layer was deleted/missing —
-      // caller will pick up the new id from the result.
     }
 
-    // ─── Create path (Apply LUT button, or fallback from missing live layer) ──
-    // Reuse / create [Color Smash] group; clean up prior Match LUT layers.
+    // ─── Create path ──────────────────────────────────────────────────────
     const group = await getOrCreateColorSmashGroup(doc);
     if (params.overwritePrior !== false) {
       const prior: any[] = [];
@@ -288,7 +327,7 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
       }
     }
 
-    // If we have a target layer, select it so the new adjustment lands above it.
+    // Select the target layer so the new adjustment lands above it.
     if (params.targetLayerId != null) {
       try {
         await action.batchPlay([{
@@ -315,7 +354,6 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
     // Step 2: load the 3D LUT into the new layer.
     const { ok, lastErr } = await tryLoadLutIntoActiveLayer(cubeText, fileName, params.curves);
     if (!ok) {
-      // Don't leave an identity layer behind.
       try {
         const stray = doc.activeLayers?.[0];
         if (stray && typeof stray.delete === "function") await stray.delete();
@@ -323,13 +361,20 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
       throw new Error(`Could not load 3D LUT into Color Lookup layer: ${lastErr?.message ?? lastErr ?? "unknown"}`);
     }
 
-    // Rename + move into the group, capture the layer id for caller (Live LUT).
+    // Step 3: clip to the target layer (skipped for merged target — clipping
+    // would do nothing since there's no specific layer underneath).
     const newLayer = doc.activeLayers?.[0] ?? doc.layers?.[0];
+    if (newLayer && params.targetLayerId != null && !params.targetIsMerged) {
+      try { await setClippingMask(newLayer, true); } catch { /* ignore */ }
+    }
+
+    // Rename + move into the group, capture id, attach mask if needed.
     let newLayerId: number | null = null;
     if (newLayer) {
       try { newLayer.name = layerName; } catch { /* ignore */ }
       try { await newLayer.move(group, "placeInside"); } catch { /* ignore */ }
       try { newLayerId = newLayer.id; } catch { /* ignore */ }
+      if (newLayerId != null) await attachMaskIfRequested(newLayerId);
     }
 
     return { layerName, layerId: newLayerId };
