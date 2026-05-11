@@ -207,13 +207,9 @@ async function tryLoadLutIntoActiveLayer(
   };
   try {
     const result = await action.batchPlay([setDesc as any], {});
-    // eslint-disable-next-line no-console
-    console.log("[ColorSmash][LUT load _data wrapper] result:", result?.[0]);
     if (result && result[0] && !result[0].error) return { ok: true, lastErr: null };
     return { ok: false, lastErr: result?.[0]?.error };
   } catch (e) {
-    // eslint-disable-next-line no-console
-    console.log("[ColorSmash][LUT load _data wrapper] threw:", e);
     return { ok: false, lastErr: e };
   }
 }
@@ -232,48 +228,23 @@ async function tryLoadLutIntoActiveLayer(
  * an empty Color Lookup layer alongside the error.
  */
 export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise<ApplyLutResult> {
-  const uxp = require("uxp");
   const size = params.size ?? 33;
 
-  // 1. Generate cube text (same generator the Export LUT button uses).
+  // Generate the cube text + ICC profile entirely in memory. Both ride inside
+  // the batchPlay descriptor (LUT3DFileData carries the cube bytes,
+  // profile carries the ICC DeviceLink) so no file ever touches disk and no
+  // folder picker prompts. PS reads everything out of the descriptor itself.
   const cubeText = generateLutCube(params.curves, params.preset, size, "Color Smash");
-
-  // 2. Write to user's Documents/Color Smash/LUTs/ folder. Diagnostics in
-  //    v1.11.7-v1.11.9 confirmed PS proper cannot read from ANY UXP-managed
-  //    plugin storage location (temp + data, both Local + Roaming variants
-  //    are sandbox-blocked) regardless of descriptor shape. The user's own
-  //    Documents folder is outside the sandbox and PS reads it normally.
-  //
-  //    Requires manifest `localFileSystem: fullAccess` permission (set in
-  //    v1.12.0). On first plugin load this prompts the user once for broad
-  //    file-system access. Without that permission this getFolder call
-  //    throws — caught and surfaced as a clear error.
-  const fs = require("uxp").storage;
-  let lutFolder: any;
-  try {
-    const docs = await fs.localFileSystem.getFolder(fs.domains.userDocuments);
-    let csFolder: any;
-    try { csFolder = await docs.getEntry("Color Smash"); }
-    catch { csFolder = await docs.createFolder("Color Smash"); }
-    try { lutFolder = await csFolder.getEntry("LUTs"); }
-    catch { lutFolder = await csFolder.createFolder("LUTs"); }
-  } catch (e: any) {
-    throw new Error(
-      `Could not access Documents folder for LUT storage: ${e?.message ?? e}. ` +
-      `If you see a permission prompt from Photoshop, allow it; otherwise check ` +
-      `that the plugin manifest has localFileSystem: fullAccess.`,
-    );
-  }
-  const tempFolder = lutFolder;
-  const stamp = Date.now();
   const presetTag = params.preset === "color" ? "full"
                   : params.preset === "hue" ? "color"
                   : params.preset === "hueOnly" ? "hue"
                   : params.preset === "saturationOnly" ? "saturation"
                   : "contrast";
+  // Cosmetic label shown in the layer's Properties panel — purely descriptive,
+  // not a real file path. Including the preset + timestamp keeps each baked
+  // LUT identifiable in the descriptor inspector.
+  const stamp = Date.now();
   const fileName = `colorsmash_${presetTag}_${stamp}.cube`;
-  const file = await tempFolder.createFile(fileName, { overwrite: true });
-  await file.write(cubeText, { format: uxp.storage.formats.utf8 });
 
   return await executeAsModal("Color Smash apply LUT", async () => {
     const doc = app.activeDocument;
@@ -342,30 +313,7 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
     }
 
     // Step 2: load the 3D LUT into the new layer.
-    const { ok, lastErr } = await tryLoadLutIntoActiveLayer(cubeText, file.name, params.curves);
-    // Diagnostic: query the layer back and dump its descriptor so we can see
-    // what fields PS actually populated. If LUT data is missing, the dump will
-    // show which keys are empty — and comparing this to a manually-loaded LUT
-    // layer (via diagnoseActiveLayerColorLookup below) reveals the right field
-    // names. Logged to UXP console; user can open Plugin Manager → Color Smash
-    // → DevTools to inspect.
-    try {
-      const probe = await action.batchPlay([{
-        _obj: "get",
-        _target: [{ _ref: "adjustmentLayer", _enum: "ordinal", _value: "targetEnum" }],
-      }], {});
-      // eslint-disable-next-line no-console
-      console.log("[ColorSmash][LUT diag] post-set layer descriptor:", probe?.[0]);
-      // Pull out just the colorLookup adjustment subtree if present.
-      const adj = probe?.[0]?.adjustment?.[0];
-      // eslint-disable-next-line no-console
-      console.log("[ColorSmash][LUT diag] adjustment[0] keys:", adj ? Object.keys(adj) : "<none>");
-      // eslint-disable-next-line no-console
-      console.log("[ColorSmash][LUT diag] adjustment[0] full:", adj);
-    } catch (probeErr) {
-      // eslint-disable-next-line no-console
-      console.log("[ColorSmash][LUT diag] probe failed:", probeErr);
-    }
+    const { ok, lastErr } = await tryLoadLutIntoActiveLayer(cubeText, fileName, params.curves);
     if (!ok) {
       // Don't leave an identity layer behind.
       try {
@@ -388,78 +336,4 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
   });
 }
 
-/**
- * Diagnostic helper — get the current active layer's full descriptor and
- * dump it to console + persist the binary `profile` ArrayBuffer to disk so
- * we can study the file format byte-by-byte. Use this on a manually-loaded
- * Color Lookup layer (one where the user picked a .cube via the menu).
- *
- * The dumped binary lands in Documents/Color Smash/diag/profile_<ts>.bin —
- * inspect with a hex viewer (e.g. `xxd profile_*.bin | head`) to figure out
- * the layout. Once we know it, we can construct it in code and pass via
- * `profile` in the set descriptor, bypassing PS's file-read entirely.
- */
-export async function diagnoseActiveLayerColorLookup(): Promise<string> {
-  return await executeAsModal("Color Smash diagnose layer", async () => {
-    const uxp = require("uxp");
-    const probe = await action.batchPlay([{
-      _obj: "get",
-      _target: [{ _ref: "adjustmentLayer", _enum: "ordinal", _value: "targetEnum" }],
-    }], {});
-    const layer = probe?.[0];
-    const adj = layer?.adjustment?.[0];
-    // eslint-disable-next-line no-console
-    console.log("[ColorSmash][LUT diag] === MANUAL REFERENCE LAYER ===");
-    // eslint-disable-next-line no-console
-    console.log("[ColorSmash][LUT diag] full layer descriptor:", layer);
-    // eslint-disable-next-line no-console
-    console.log("[ColorSmash][LUT diag] adjustment[0] keys:", adj ? Object.keys(adj) : "<none>");
-    // eslint-disable-next-line no-console
-    console.log("[ColorSmash][LUT diag] adjustment[0] full:", adj);
-    if (!adj) return "Selected layer has no adjustment descriptor — pick an adjustment layer.";
-
-    // If profile / LUT3DFileData are ArrayBuffers, write them to disk for hex
-    // inspection. ArrayBuffers can't be serialized via console.log usefully.
-    let dumpedPaths: string[] = [];
-    try {
-      const fs = uxp.storage;
-      const docs = await fs.localFileSystem.getFolder(fs.domains.userDocuments);
-      let csFolder: any;
-      try { csFolder = await docs.getEntry("Color Smash"); }
-      catch { csFolder = await docs.createFolder("Color Smash"); }
-      let diagFolder: any;
-      try { diagFolder = await csFolder.getEntry("diag"); }
-      catch { diagFolder = await csFolder.createFolder("diag"); }
-      const ts = Date.now();
-
-      const tryDump = async (key: string, value: any) => {
-        if (!value) return;
-        // Detect ArrayBuffer-like (proper ArrayBuffer or any Typed Array view).
-        const ab: ArrayBuffer | null =
-          value instanceof ArrayBuffer ? value
-          : (value && typeof value.byteLength === "number" && value.buffer instanceof ArrayBuffer) ? value.buffer
-          : null;
-        if (!ab) return;
-        const f = await diagFolder.createFile(`${key}_${ts}.bin`, { overwrite: true });
-        // UXP file.write accepts ArrayBuffer when format = binary.
-        await f.write(ab, { format: fs.formats.binary });
-        dumpedPaths.push(`${key}_${ts}.bin (${ab.byteLength} bytes)`);
-        // eslint-disable-next-line no-console
-        console.log(`[ColorSmash][LUT diag] dumped ${key}: ${ab.byteLength} bytes → ${f.nativePath}`);
-      };
-
-      await tryDump("profile", adj.profile);
-      await tryDump("LUT3DFileData", adj.LUT3DFileData);
-    } catch (e: any) {
-      // eslint-disable-next-line no-console
-      console.log("[ColorSmash][LUT diag] binary dump failed:", e?.message ?? e);
-    }
-
-    const keys = Object.keys(adj).join(", ");
-    const dumpMsg = dumpedPaths.length > 0
-      ? ` Binary dumped: ${dumpedPaths.join(", ")} in Documents/Color Smash/diag/.`
-      : " (No binary fields found.)";
-    return `Diagnosed. Keys: ${keys}.${dumpMsg}`;
-  });
-}
 

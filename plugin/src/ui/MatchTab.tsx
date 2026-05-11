@@ -29,7 +29,7 @@ import { EnvelopeEditor } from "./EnvelopeEditor";
 import { loadSettings, makeDebouncedSaver, clearSettings, PersistedSettings } from "./persistence";
 import { uxpInfo } from "./uxpInfo";
 import { applyMatch } from "../app/applyMatch";
-import { applyLutAsAdjustmentLayer, diagnoseActiveLayerColorLookup } from "../app/applyLut";
+import { applyLutAsAdjustmentLayer } from "../app/applyLut";
 import {
   app, action as psAction, readLayerPixels, executeAsModal, getActiveDoc, getSelectionBounds,
 } from "../services/photoshop";
@@ -828,18 +828,6 @@ export function MatchTab() {
     } catch (e: any) { setStatus(`LUT export error: ${e?.message ?? e}`); }
   };
 
-  // Diagnose the currently-selected layer in PS. Used to compare a manually-
-  // loaded Color Lookup layer's descriptor against what our Apply LUT produces,
-  // so we can find the field name PS expects for inline LUT data. Output goes
-  // to UXP DevTools console; status bar shows a one-line summary.
-  const onDiagnoseLut = async () => {
-    try {
-      setStatus("Diagnosing selected layer (see DevTools console)...");
-      const summary = await diagnoseActiveLayerColorLookup();
-      setStatus(summary);
-    } catch (e: any) { setStatus(`Diagnose failed: ${e?.message ?? e}`); }
-  };
-
   // Apply LUT — bake the staged preset into a Color Lookup adjustment layer
   // automatically, no file dialog. The .cube goes to the plugin's temp folder
   // (PS references it from there) and the layer lands in the [Color Smash]
@@ -1541,23 +1529,6 @@ export function MatchTab() {
             height: 28, lineHeight: "26px", boxSizing: "border-box",
             flex: "0 0 auto",
           }}>LIVE</div>
-        {/* Diagnostic button — temporary tooling for figuring out the right
-            descriptor field name for inline LUT data. Click on a Color Lookup
-            layer that you manually loaded a .cube into via the menu, then click
-            DIAG to dump its descriptor. Compare with Apply LUT's post-set dump
-            in the same console. Will be removed once the right field is found. */}
-        <div onClick={onDiagnoseLut}
-          title="Diagnostic: dump the currently-selected layer's full descriptor to DevTools console. Use to compare a manually-loaded LUT layer against an Apply-LUT-created layer and find the right inline-data field name."
-          style={{
-            padding: "1px 6px", fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
-            background: "transparent",
-            color: "#7aa8d8",
-            border: "1px solid #7aa8d8",
-            borderRadius: 2, cursor: "pointer", userSelect: "none",
-            display: "flex", alignItems: "center",
-            height: 28, lineHeight: "26px", boxSizing: "border-box",
-            flex: "0 0 auto",
-          }}>DIAG</div>
         {/* @ts-ignore Spectrum web component */}
         <sp-button variant="secondary" onClick={onExportLut}
           style={{ flex: "1 1 0", minWidth: 0, overflow: "hidden", whiteSpace: "nowrap" }}
