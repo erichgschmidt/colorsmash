@@ -436,15 +436,11 @@ export async function applyMultiZoneLutAsLayers(
                   : params.preset === "saturationOnly" ? "saturation"
                   : "contrast";
 
-  // Same blend-mode mapping single-LUT uses + applyMatch's Curves multi-zone
-  // path. Keeps preset behavior consistent across all four output combinations
-  // (single-Curves, single-LUT, multi-Curves, multi-LUT).
-  const presetBlend =
-    params.preset === "hue" ? "color" :
-    params.preset === "hueOnly" ? "hue" :
-    params.preset === "saturationOnly" ? "saturation" :
-    params.preset === "contrast" ? "luminosity" :
-    null;
+  // (presetBlend used to be set here per band, but LUT-mode bakes preset math
+  // into the LUT bytes themselves via applyPresetPostprocess in generateLutCube —
+  // setting a layer blendMode would double-apply. Curves multi-zone in
+  // applyMatch.ts handles preset blend modes because Curves CAN'T represent
+  // non-separable math without them.)
 
   // Pre-generate cube + ICC for each band on the worker side so we don't sit
   // inside the modal scope doing CPU work. Each is ~200KB so the three combined
@@ -496,11 +492,17 @@ export async function applyMultiZoneLutAsLayers(
     }
 
     // 3. Read the target composite for band masks + palette mask.
-    const targetBounds = targetLayer?.bounds
-      ? { left: targetLayer.bounds.left, top: targetLayer.bounds.top,
-          right: targetLayer.bounds.right, bottom: targetLayer.bounds.bottom }
-      : { left: 0, top: 0, right: doc.width, bottom: doc.height };
-    const { composite, dispose } = await readCompositeForBands(doc.id, targetBounds);
+    //    readCompositeForBands reads the FULL document composite (matches
+    //    applyMatch's Curves multi-zone path). All masks we build live in
+    //    that composite coordinate system, so putLayerMask must use the
+    //    composite's full extent as targetBounds — using the target layer's
+    //    smaller bounds here would tell PS to squeeze a doc-sized mask into
+    //    a layer-sized rect, producing an askew/cropped result.
+    const { composite, dispose } = await readCompositeForBands(doc.id, undefined);
+    const compositeBounds = {
+      left: 0, top: 0,
+      right: composite.width, bottom: composite.height,
+    };
     try {
       // 4. Adjusted peaks + extents + the 3 band triangle masks.
       const range = clampBandRange(
@@ -574,14 +576,17 @@ export async function applyMultiZoneLutAsLayers(
         if (!bandLayer) continue;
         try { bandLayer.name = layerName; } catch { /* ignore */ }
 
-        // 6d. Apply preset blend mode (Hue / Color / Sat / Luminosity / Normal).
-        if (presetBlend) {
-          try { (bandLayer as any).blendMode = presetBlend; } catch { /* ignore */ }
-        }
+        // 6d. Blend mode stays Normal in LUT mode. The preset's blend math
+        //     (Color / Hue / Saturation / Luminosity) was baked into the
+        //     LUT bytes by generateLutCube → applyPresetPostprocess. Setting
+        //     the layer's blendMode here would double-apply the effect.
+        //     Curves mode is the inverse: blend mode does the work because
+        //     Curves can't represent non-separable transforms.
 
         // 6e. Attach the band luma mask. Done BEFORE moving into the sub-group
         //     because mask attachment can fail on a freshly-moved layer in some
-        //     PS versions (race on layer DB state). Single-LUT-mask code path.
+        //     PS versions (race on layer DB state). targetBounds uses the
+        //     composite's full extent — the mask buffer is doc-sized.
         try {
           const { imaging } = require("photoshop");
           const maskImageData = await imaging.createImageDataFromBuffer(mask, {
@@ -592,7 +597,7 @@ export async function applyMultiZoneLutAsLayers(
             documentID: doc.id,
             layerID: bandLayer.id,
             imageData: maskImageData,
-            targetBounds: targetBounds,
+            targetBounds: compositeBounds,
             replace: true,
           });
           if (maskImageData.dispose) maskImageData.dispose();
@@ -605,13 +610,14 @@ export async function applyMultiZoneLutAsLayers(
       }
 
       // 7. Attach target-palette mask to the sub-group itself if requested.
-      //    PixelBuffer shape for applyTargetPaletteMaskToLayer expects
-      //    { data, width, height, bounds } — pull from the composite buffer.
+      //    Same composite-bounds note as the band masks above: the mask
+      //    buffer is doc-sized, so its targetBounds must be the composite's
+      //    full extent, NOT the (possibly smaller) target layer's bounds.
       if (wantPaletteMask && params.targetPalette && bandContainer?.id != null) {
         try {
           const t = {
             data: composite.data, width: composite.width, height: composite.height,
-            bounds: targetBounds,
+            bounds: compositeBounds,
           };
           await applyTargetPaletteMaskToLayer(doc.id, bandContainer.id, t, params.targetPalette);
         } catch { /* non-fatal */ }
