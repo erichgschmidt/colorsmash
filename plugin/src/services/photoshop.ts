@@ -207,4 +207,72 @@ export async function readSelectionMaskBytes(
   }
 }
 
+/**
+ * v1.20.26 — delete the layer mask channel from the given layer (or no-op
+ * if there isn't one). Used to strip the auto-applied selection-as-mask
+ * that Photoshop attaches to a freshly-created adjustment layer when a
+ * marquee is active — the plugin manages masking explicitly at the sub-
+ * group level, so the inner layer's auto-mask is always wrong (either
+ * redundant with our group mask, or contradicting it in exclude mode).
+ */
+export async function deleteLayerMask(layerId: number): Promise<void> {
+  try {
+    await action.batchPlay([{
+      _obj: "delete",
+      _target: [
+        { _ref: "channel", _enum: "channel", _value: "mask" },
+        { _ref: "layer", _id: layerId },
+      ],
+    }], {});
+  } catch { /* layer may have had no mask; ignore */ }
+}
+
+/**
+ * v1.20.26 — save the current marquee into a temporary alpha channel so it
+ * survives operations that would otherwise consume or modify it (notably
+ * PS auto-applying selection-as-mask on adjustment-layer creation). Returns
+ * the saved channel name, or null if there's no selection. Pair with
+ * restoreSelectionFromChannel + deleteChannel for the full round-trip.
+ */
+const SEL_SNAPSHOT_NAME = "__cs_sel_snapshot__";
+export async function snapshotSelectionToChannel(): Promise<string | null> {
+  const sel = getSelectionBounds();
+  if (!sel) return null;
+  try {
+    await action.batchPlay([{
+      _obj: "duplicate",
+      _target: [{ _ref: "channel", _property: "selection" }],
+      name: SEL_SNAPSHOT_NAME,
+    }], {});
+    return SEL_SNAPSHOT_NAME;
+  } catch { return null; }
+}
+
+/**
+ * v1.20.26 — re-load a saved alpha channel back into the active marquee
+ * selection. No-op if the channel doesn't exist.
+ */
+export async function restoreSelectionFromChannel(name: string): Promise<void> {
+  try {
+    await action.batchPlay([{
+      _obj: "set",
+      _target: [{ _ref: "channel", _property: "selection" }],
+      to: { _ref: "channel", _name: name },
+    }], {});
+  } catch { /* ignore */ }
+}
+
+/**
+ * v1.20.26 — delete a named alpha channel. Cleanup pair for
+ * snapshotSelectionToChannel.
+ */
+export async function deleteChannel(name: string): Promise<void> {
+  try {
+    await action.batchPlay([{
+      _obj: "delete",
+      _target: [{ _ref: "channel", _name: name }],
+    }], {});
+  } catch { /* ignore */ }
+}
+
 export { action, app };

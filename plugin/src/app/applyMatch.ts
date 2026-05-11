@@ -5,6 +5,7 @@ import {
   readLayerPixels, executeAsModal, statsRectForLayer,
   makeCurvesLayer, setClippingMask, GROUP_NAME, action, app,
   readSelectionMaskBytes,
+  deleteLayerMask, snapshotSelectionToChannel, restoreSelectionFromChannel, deleteChannel,
 } from "../services/photoshop";
 import { composeWithSelection, fullMask } from "./targetMask";
 import { downsampleToMaxEdge } from "../core/downsample";
@@ -283,6 +284,9 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     // read later in the same flow. Users wanted their marquee preserved so
     // the mask path could honor it; they can Ctrl+D manually if they want
     // the marching ants gone after a bake.
+    // v1.20.26 — snapshot the marquee so PS can't consume it during
+    // adjustment-layer creation. Restored at the end of the bake.
+    const scSelSnapshot = await snapshotSelectionToChannel();
 
     // ─── Multi-zone branch: emit 3 stacked Curves layers + luminosity masks ──────
     if (multiZoneFit) {
@@ -685,6 +689,9 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     //   contrast        → "luminosity" blend  (L only from curves, target keeps H+S)
     //   color           → Normal              (full per-channel transfer — labelled "Full" in the UI)
     if (presetBlend) { try { curveLayer.blendMode = presetBlend; } catch { /* ignore */ } }
+    // v1.20.26 — strip auto-applied selection-as-mask from the inner
+    // layer. The sub-group below carries the mask we actually want.
+    try { if (curveLayer?.id != null) await deleteLayerMask(curveLayer.id); } catch { /* ignore */ }
     // v1.20.24 — wrap the single Curves layer in a sub-group inside
     // [Color Smash], matching the multi-zone bandContainer structure.
     // Mask attaches to the SUB-GROUP rather than the layer, so palette +
@@ -814,6 +821,13 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
         });
         if (maskImageData.dispose) maskImageData.dispose();
       } catch { /* mask attach is best-effort; if it fails, the curves still apply unmasked */ }
+    }
+
+    // v1.20.26 — restore the marquee that PS consumed during the
+    // adjustment-layer creation, then drop the temp alpha channel.
+    if (scSelSnapshot) {
+      await restoreSelectionFromChannel(scSelSnapshot);
+      await deleteChannel(scSelSnapshot);
     }
 
     const tags = [`amt ${Math.round(params.amount * 100)}%`];

@@ -18,6 +18,7 @@ import {
   GROUP_NAME, action, app,
   executeAsModal, readLayerPixels, setClippingMask, PixelBuffer,
   readSelectionMaskBytes,
+  deleteLayerMask, snapshotSelectionToChannel, restoreSelectionFromChannel, deleteChannel,
 } from "../services/photoshop";
 import { generateIccDeviceLinkBase64 } from "./iccGen";
 import {
@@ -420,6 +421,14 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
       } catch { /* ignore */ }
     }
 
+    // v1.20.26 — snapshot the active marquee before the adjustment-layer
+    // make. PS auto-applies any active selection as the new layer's mask,
+    // which both consumes the selection (it's no longer visible) AND
+    // produces a mask we don't want at the layer level. We restore the
+    // selection after the layer + mask cleanup, so the user's marquee
+    // survives the bake regardless of selectionMode.
+    const selSnapshot = await snapshotSelectionToChannel();
+
     // Step 1: make the empty (identity) Color Lookup layer.
     const makeResult = await action.batchPlay([{
       _obj: "make",
@@ -461,6 +470,10 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
     if (newLayer) {
       try { newLayer.name = layerName; } catch { /* ignore */ }
       try { newLayerId = newLayer.id; } catch { /* ignore */ }
+      // v1.20.26 — strip the auto-applied selection-as-mask. We manage
+      // masking explicitly at the sub-group level, so the inner layer's
+      // PS-attached mask is always wrong.
+      if (newLayerId != null) await deleteLayerMask(newLayerId);
       const subName = params.overwritePrior !== false
         ? layerName
         : `${layerName} ${new Date().toTimeString().slice(0, 8)}`;
@@ -474,6 +487,13 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
         }
         try { await writeLutLayerState(subGroup.id, params.xmpState); } catch { /* non-fatal */ }
       }
+    }
+
+    // v1.20.26 — restore the marquee that PS consumed during adjustment-
+    // layer creation, then drop the temp alpha channel we used to ferry it.
+    if (selSnapshot) {
+      await restoreSelectionFromChannel(selSnapshot);
+      await deleteChannel(selSnapshot);
     }
 
     return { layerName, layerId: newLayerId };
