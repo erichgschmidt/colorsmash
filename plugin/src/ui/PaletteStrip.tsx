@@ -46,6 +46,13 @@ interface PaletteStripProps {
   // is hidden in that case.
   maskEnabled?: boolean;
   setMaskEnabled?: (b: boolean) => void;
+  // v1.20.44 — when true, segment opacity fades with the user weight: a
+  // cluster at weight=0 renders nearly transparent (with a dim checker
+  // background bleeding through), weight=1 fully opaque. Communicates
+  // visually that the slider is acting AS A MASK — drag down and the
+  // color "fades out" instead of just shrinking. Used by the target bar
+  // where weight literally is mask alpha.
+  fadeWithWeight?: boolean;
 }
 
 // Per-preset display transform on a swatch's RGB. Cluster math is unchanged.
@@ -80,7 +87,7 @@ const HANDLE_HALF_WIDTH = 6;       // each handle's clickable half-width in px
 const MIN_VISUAL_WIDTH_PCT = 1.5;  // smallest visible segment so a weight=0 cluster stays grabbable
 
 export function PaletteStrip(props: PaletteStripProps) {
-  const { swatches, weights, setWeights, preset, count, setCount } = props;
+  const { swatches, weights, setWeights, preset, count, setCount, fadeWithWeight } = props;
   const adaptive = !!props.adaptive;
   const setAdaptive = props.setAdaptive;
   const propsSoftness = Math.max(0, Math.min(100, props.softness ?? 0));
@@ -362,7 +369,19 @@ export function PaletteStrip(props: PaletteStripProps) {
           We use position:relative on the outer + absolute children so the handle
           sit exactly at boundary edges without flex math drifting. */}
       <div ref={barRef}
-        style={{ position: "relative", height: BAR_HEIGHT, width: "100%", userSelect: "none" }}
+        style={{
+          position: "relative", height: BAR_HEIGHT, width: "100%", userSelect: "none",
+          // v1.20.44 — checkerboard background visible BEHIND faded
+          // segments when fadeWithWeight is on (target bar). Standard
+          // PS-mask visual convention: transparent = masked out.
+          ...(fadeWithWeight ? {
+            backgroundImage:
+              "linear-gradient(45deg, #2a2a2a 25%, transparent 25%, transparent 75%, #2a2a2a 75%)," +
+              "linear-gradient(45deg, #2a2a2a 25%, #1a1a1a 25%, #1a1a1a 75%, #2a2a2a 75%)",
+            backgroundSize: "8px 8px",
+            backgroundPosition: "0 0, 4px 4px",
+          } : {}),
+        }}
         title={`Source palette — ${tipForPreset} ${adaptive ? "(drag swatch body — others rebalance)" : "(drag handles to weight)"}`}>
         {/* Segments. With softness=0 each segment is a solid color block, so
             adjacent segments meet at hard boundaries (the existing v1.7
@@ -409,7 +428,13 @@ export function PaletteStrip(props: PaletteStripProps) {
                 background: bg,
                 border: softness > 0 ? "none" : "1px solid #333",
                 borderRadius: 2,
-                opacity: w < 0.02 ? 0.35 : 1,
+                // v1.20.44 — fadeWithWeight (target bar) makes opacity track
+                // the user multiplier linearly, so reducing the slider FEELS
+                // like masking the color out. A small floor keeps the
+                // segment grabbable even at weight=0.
+                opacity: fadeWithWeight
+                  ? Math.max(0.18, Math.min(1, w))
+                  : (w < 0.02 ? 0.35 : 1),
                 cursor: adaptive ? "ew-resize" : "default",
                 touchAction: adaptive ? "none" : "auto",
               }}
