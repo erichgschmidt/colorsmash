@@ -2034,10 +2034,12 @@ export function MatchTab() {
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           <span onClick={(e: any) => { e.stopPropagation(); setEnColor(!enColor); }}
             title={enColor ? "Color section ENABLED — click to disable (revert all Color params to defaults)" : "Color section DISABLED — click to enable"}
-            style={{ width: 10, height: 10, borderRadius: "50%", flexShrink: 0,
-                     background: enColor ? "#5fd16a" : "#555",
-                     border: enColor ? "1px solid #2d8a36" : "1px solid #333",
-                     cursor: "pointer" }} />
+            style={{ width: 11, height: 11, borderRadius: 2, flexShrink: 0,
+                     background: enColor ? "#3a3a3a" : "transparent",
+                     border: `1px solid ${enColor ? "#888" : "#555"}`,
+                     display: "inline-flex", alignItems: "center", justifyContent: "center",
+                     fontSize: 10, fontWeight: 700, color: "#ddd", lineHeight: 1,
+                     cursor: "pointer", userSelect: "none" }}>{enColor ? "✓" : ""}</span>
           <Icon name={openSection === "basic" ? "chevronDown" : "chevronRight"} size={11} /> Color
         </span>
         <span onClick={(e: any) => { e.stopPropagation(); void uxpInfo("Color — what each control does", [
@@ -2098,10 +2100,12 @@ export function MatchTab() {
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           <span onClick={(e: any) => { e.stopPropagation(); setEnTone(!enTone); }}
             title={enTone ? "Tone section ENABLED — click to disable" : "Tone section DISABLED — click to enable"}
-            style={{ width: 10, height: 10, borderRadius: "50%", flexShrink: 0,
-                     background: enTone ? "#5fd16a" : "#555",
-                     border: enTone ? "1px solid #2d8a36" : "1px solid #333",
-                     cursor: "pointer" }} />
+            style={{ width: 11, height: 11, borderRadius: 2, flexShrink: 0,
+                     background: enTone ? "#3a3a3a" : "transparent",
+                     border: `1px solid ${enTone ? "#888" : "#555"}`,
+                     display: "inline-flex", alignItems: "center", justifyContent: "center",
+                     fontSize: 10, fontWeight: 700, color: "#ddd", lineHeight: 1,
+                     cursor: "pointer", userSelect: "none" }}>{enTone ? "✓" : ""}</span>
           <Icon name={openSection === "dims" ? "chevronDown" : "chevronRight"} size={11} /> Tone
         </span>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
@@ -2157,10 +2161,12 @@ export function MatchTab() {
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           <span onClick={(e: any) => { e.stopPropagation(); setEnZones(!enZones); }}
             title={enZones ? "Zones section ENABLED — click to disable" : "Zones section DISABLED — click to enable"}
-            style={{ width: 10, height: 10, borderRadius: "50%", flexShrink: 0,
-                     background: enZones ? "#5fd16a" : "#555",
-                     border: enZones ? "1px solid #2d8a36" : "1px solid #333",
-                     cursor: "pointer" }} />
+            style={{ width: 11, height: 11, borderRadius: 2, flexShrink: 0,
+                     background: enZones ? "#3a3a3a" : "transparent",
+                     border: `1px solid ${enZones ? "#888" : "#555"}`,
+                     display: "inline-flex", alignItems: "center", justifyContent: "center",
+                     fontSize: 10, fontWeight: 700, color: "#ddd", lineHeight: 1,
+                     cursor: "pointer", userSelect: "none" }}>{enZones ? "✓" : ""}</span>
           <Icon name={openSection === "zones" ? "chevronDown" : "chevronRight"} size={11} /> Zones
         </span>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
@@ -2250,10 +2256,12 @@ export function MatchTab() {
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           <span onClick={(e: any) => { e.stopPropagation(); setEnEnvelope(!enEnvelope); }}
             title={enEnvelope ? "Envelope section ENABLED — click to disable" : "Envelope section DISABLED — click to enable"}
-            style={{ width: 10, height: 10, borderRadius: "50%", flexShrink: 0,
-                     background: enEnvelope ? "#5fd16a" : "#555",
-                     border: enEnvelope ? "1px solid #2d8a36" : "1px solid #333",
-                     cursor: "pointer" }} />
+            style={{ width: 11, height: 11, borderRadius: 2, flexShrink: 0,
+                     background: enEnvelope ? "#3a3a3a" : "transparent",
+                     border: `1px solid ${enEnvelope ? "#888" : "#555"}`,
+                     display: "inline-flex", alignItems: "center", justifyContent: "center",
+                     fontSize: 10, fontWeight: 700, color: "#ddd", lineHeight: 1,
+                     cursor: "pointer", userSelect: "none" }}>{enEnvelope ? "✓" : ""}</span>
           <Icon name={openSection === "envelope" ? "chevronDown" : "chevronRight"} size={11} /> Envelope{envelopeLabel.length > 0 && <span style={{ fontSize: 9, fontWeight: 400, opacity: 0.7, marginLeft: 6 }}>· {envelopeLabel.length} pt{envelopeLabel.length === 1 ? "" : "s"}</span>}
         </span>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
@@ -2454,7 +2462,7 @@ export function MatchTab() {
                     title={subDisabled
                       ? "Blend If is only meaningful when Multi is on for this tab."
                       : `Blend If (${label}): use Blending Options sliders instead of layer masks for the 3 band layers.`}>
-                    BLEND IF
+                    BLEND
                   </div>
                 </div>
               </div>
