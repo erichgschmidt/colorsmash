@@ -127,6 +127,10 @@ export function MatchTab() {
 
   const [srcMode, setSrcMode] = useState<SrcMode>("layer");
   const [srcOverride, setSrcOverride] = useState<SourceSnap | null>(null);
+  // v1.20.13 — recipe-synthesized source snapshot, declared early so the
+  // srcSnap derivation below can reference it. See the long comment near
+  // the recipeMode state for the full rationale.
+  const [recipeSrcSnap, setRecipeSrcSnap] = useState<SourceSnap | null>(null);
   const [autoUpdate, setAutoUpdate] = useState(true);
   const [sampleMerged, setSampleMerged] = useState(false);
   const [sampleLock, setSampleLock] = useState(false);
@@ -548,7 +552,11 @@ export function MatchTab() {
 
   const src = useLayerPreview(srcDocId, srcMode === "layer" ? sourceId : null);
   const tgt = useLayerPreview(tgtDocId, targetId);
-  const srcSnap = srcOverride ?? src.snap;
+  // v1.20.13 — recipe-synthesized source wins over both selection-mode
+  // override and live src.snap. The recipe's swatch+weight distribution
+  // IS the source while a recipe is active. Cleared automatically on
+  // refocus events.
+  const srcSnap = recipeSrcSnap ?? srcOverride ?? src.snap;
 
   // ─── Selection mode: snapshot from active marquee on active layer ───────
   const snapshotSelectionInner = async (): Promise<SourceSnap> => {
@@ -678,6 +686,12 @@ export function MatchTab() {
   // whatever the live source layer happens to extract. Auto-clears on any
   // refocus event: source layer change, source mode change, Refresh button.
   const [recipeMode, setRecipeMode] = useState(false);
+  // recipeSrcSnap is declared earlier (near srcOverride) because the srcSnap
+  // derivation references it. It holds the synthesized source pixel buffer
+  // reconstructed from a recipe's swatches + weights, routing BEFORE
+  // srcOverride so histogram match / palette extraction / curve derivation
+  // all operate on the recipe's color distribution rather than the live
+  // source layer's pixels.
 
   // Palette extraction lives at the parent level so weights can be wired into both
   // the PaletteStrip UI and the synthesized-weighted-source path that drives the
@@ -709,6 +723,7 @@ export function MatchTab() {
     if (recipeMode) {
       setRecipeMode(false);
       setSavedSourceSwatches(null);
+      setRecipeSrcSnap(null);
     }
     // Intentionally excludes recipeMode — we only want refocus events to
     // trigger the auto-clear, not the recipe-load itself.
@@ -1150,14 +1165,61 @@ export function MatchTab() {
   // Click handler for a history thumbnail — restores panel state from the
   // entry's saved snapshot. Does NOT auto-Apply (predictable: user picks
   // history, panel updates, user hits Apply if they want to bake again).
-  // v1.20.12 — apply a history recipe by activating its stored palette as
-  // the source. The recipe's swatches + weights take over until the user
-  // refocuses (changes source layer / mode, or clicks Refresh). This is
-  // what makes recipes portable: the engine renders against the recipe's
-  // actual clusters, the sliders show the recipe's weights aligned to the
-  // recipe's swatch chips, and Apply bakes the visible state.
+  // v1.20.13 — synthesize a fake source image from a recipe's swatches +
+  // weights so the engine (histogram match, palette extraction, curve
+  // derivation) all operate on the recipe's color distribution. Pixels
+  // per cluster are proportional to displayValue = clusterPrevalence ×
+  // userMultiplier, exactly mirroring PaletteStrip's bar widths. 64×64
+  // is plenty for k-means + histogram work.
+  const synthesizeRecipeSource = (
+    swatches: any[],
+    weights: number[],
+  ): SourceSnap => {
+    const W = 64, H = 64;
+    const total = W * H;
+    const dv = swatches.map((s, i) => {
+      const w = typeof weights[i] === "number" ? Math.max(0, weights[i]) : 1;
+      const p = typeof s?.weight === "number" ? Math.max(0, s.weight) : 1;
+      return w * p;
+    });
+    const sum = dv.reduce((a, b) => a + b, 0) || 1;
+    const data = new Uint8Array(total * 4);
+    let pIdx = 0;
+    for (let i = 0; i < swatches.length && pIdx < total; i++) {
+      const count = Math.max(1, Math.round((dv[i] / sum) * total));
+      const s = swatches[i];
+      for (let j = 0; j < count && pIdx < total; j++) {
+        data[pIdx * 4]     = s.r | 0;
+        data[pIdx * 4 + 1] = s.g | 0;
+        data[pIdx * 4 + 2] = s.b | 0;
+        data[pIdx * 4 + 3] = 255;
+        pIdx++;
+      }
+    }
+    // Pad remainder with first swatch (rounding remainder pixels).
+    if (pIdx < total && swatches.length > 0) {
+      const s = swatches[0];
+      while (pIdx < total) {
+        data[pIdx * 4]     = s.r | 0;
+        data[pIdx * 4 + 1] = s.g | 0;
+        data[pIdx * 4 + 2] = s.b | 0;
+        data[pIdx * 4 + 3] = 255;
+        pIdx++;
+      }
+    }
+    return { width: W, height: H, data, name: "Recipe" };
+  };
+
+  // v1.20.13 — apply a history recipe by both activating its palette AND
+  // synthesizing a source pixel buffer from it. This makes the recipe truly
+  // portable: histogram match, palette extraction, and Apply all run against
+  // the recipe's color distribution rather than whatever live source layer
+  // happens to be focused. Auto-escapes on source-layer change, srcMode
+  // change, or Refresh — see effects + onRefreshAll.
   const applyHistoryEntry = (entry: HistoryEntry): void => {
-    const recipeSwatches = (entry.state.sourcePaletteSwatches ?? []).map((s: any) => ({
+    const recipeSerialized = entry.state.sourcePaletteSwatches ?? [];
+    const recipeWeights = entry.state.sourcePaletteWeights ?? [];
+    const recipeSwatches = recipeSerialized.map((s: any) => ({
       r: s.r, g: s.g, b: s.b,
       weight: typeof s.weight === "number" ? s.weight : 1,
       labL: typeof s.labL === "number" ? s.labL : 50,
@@ -1166,10 +1228,11 @@ export function MatchTab() {
     })) as PaletteSwatch[];
     if (recipeSwatches.length > 0) {
       setSavedSourceSwatches(recipeSwatches);
+      setRecipeSrcSnap(synthesizeRecipeSource(recipeSerialized, recipeWeights));
       setRecipeMode(true);
     }
     applyStateToPanel(entry.state, "recipe");
-    setStatus(`Loaded recipe (${entry.label}). Change source layer or click Refresh to return to live extraction.`);
+    setStatus(`Loaded recipe (${entry.label}). Source synthesized from recipe — change source layer or click Refresh to return to live extraction.`);
   };
 
   // Shared restore implementation — pulled out of the manual onRestoreFromLayer
@@ -1588,6 +1651,7 @@ export function MatchTab() {
     setSavedSourceSwatches(null);
     setSavedTargetSwatches(null);
     setRecipeMode(false);
+    setRecipeSrcSnap(null);
     refreshSrcLayers();
     refreshTgtLayers();
     src.refresh();
@@ -1648,7 +1712,7 @@ export function MatchTab() {
                 />
                 {recipeMode && (
                   <div
-                    onClick={() => { setRecipeMode(false); setSavedSourceSwatches(null); }}
+                    onClick={() => { setRecipeMode(false); setSavedSourceSwatches(null); setRecipeSrcSnap(null); }}
                     title="Recipe palette is active. Click to drop the recipe and use the live source extraction instead."
                     style={{
                       marginTop: 4, display: "flex", alignItems: "center", justifyContent: "space-between",
