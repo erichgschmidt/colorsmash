@@ -676,9 +676,15 @@ export function MatchTab() {
   // the PaletteStrip UI and the synthesized-weighted-source path that drives the
   // histogram match. Recomputes when source pixels or count change. Falls back
   // to a restored-from-XMP cached swatch list when no live source is available.
+  // v1.20.9 — when a history recipe is active, its source swatches take
+  // precedence over live extraction so the recipe's weights index meaningful
+  // clusters (otherwise weight #3 = "the teal cluster" at save-time becomes
+  // weight #3 = "whatever the new source's 3rd cluster happens to be").
+  // Cleared by Refresh, by re-extracting from a new live source, or by
+  // explicitly opting out.
   const paletteSwatches = useMemo(() => {
-    if (srcSnap) return extractPalette(srcSnap.data, srcSnap.width, srcSnap.height, paletteCount);
     if (savedSourceSwatches && savedSourceSwatches.length > 0) return savedSourceSwatches;
+    if (srcSnap) return extractPalette(srcSnap.data, srcSnap.width, srcSnap.height, paletteCount);
     return [];
   }, [srcSnap, paletteCount, savedSourceSwatches]);
 
@@ -1115,7 +1121,7 @@ export function MatchTab() {
   // history, panel updates, user hits Apply if they want to bake again).
   const applyHistoryEntry = (entry: HistoryEntry): void => {
     applyStateToPanel(entry.state, "recipe");
-    setStatus(`Restored recipe from history (${entry.label}). Target settings preserved.`);
+    setStatus(`Loaded recipe from history (${entry.label}). Source palette overridden — click Refresh to use live source.`);
   };
 
   // Shared restore implementation — pulled out of the manual onRestoreFromLayer
@@ -1521,6 +1527,12 @@ export function MatchTab() {
 
   const onRefreshAll = async () => {
     setStale(false);
+    // v1.20.9 — drop any recipe-restored swatches so live extraction wins
+    // again on this refresh. Otherwise a previously-clicked history entry
+    // would keep dominating the palette even after the user explicitly
+    // asks for a re-sync.
+    setSavedSourceSwatches(null);
+    setSavedTargetSwatches(null);
     refreshSrcLayers();
     refreshTgtLayers();
     src.refresh();

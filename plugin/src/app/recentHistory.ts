@@ -157,7 +157,17 @@ export function dedupKey(state: LutLayerState): string {
     .join(",");
   const ss = state.sourceSoftness ?? 0;
   const ts = state.targetSoftness ?? 0;
-  return `${mode}|${preset}|${multi}|${n}|${srcW}|${tgtW}|${ss}|${ts}`;
+  // v1.20.9 — include source + target swatch identities so re-Applying
+  // the same recipe against a DIFFERENT source/target image creates a new
+  // history entry. Without this the dedupe key matched and the second
+  // Apply was silently dropped from history.
+  const srcSig = (state.sourcePaletteSwatches || [])
+    .map((s: any) => `${s?.r ?? 0},${s?.g ?? 0},${s?.b ?? 0}`)
+    .join(";");
+  const tgtSig = (state.targetPaletteSwatches || [])
+    .map((s: any) => `${s?.r ?? 0},${s?.g ?? 0},${s?.b ?? 0}`)
+    .join(";");
+  return `${mode}|${preset}|${multi}|${n}|${srcW}|${tgtW}|${ss}|${ts}|${srcSig}|${tgtSig}`;
 }
 
 /** Push a new entry onto the front of the history. Dedupes against the
