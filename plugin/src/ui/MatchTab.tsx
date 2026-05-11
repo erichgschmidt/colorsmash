@@ -589,19 +589,30 @@ export function MatchTab() {
   // there's no snap.
   useEffect(() => {
     const snap = tgt.snap;
-    if (effectiveSelectionMode === "off" || !snap || !snap.bounds || tgtDocId == null) {
+    if (effectiveSelectionMode === "off" || !snap || tgtDocId == null) {
       setSelectionPreviewMask(null);
       return;
     }
-    const bounds = snap.bounds;
     let cancelled = false;
     (async () => {
       try {
+        // Prefer the snap's canvas-space bounds (so the selection mask
+        // aligns with the exact pixels the preview is showing). Fall back
+        // to the active doc's bounds if the snap was created by an older
+        // useLayerPreview version that didn't return bounds.
+        let bounds = snap.bounds;
+        if (!bounds) {
+          try {
+            const doc = (app.documents ?? []).find((d: any) => d.id === tgtDocId);
+            if (doc) bounds = { left: 0, top: 0, right: doc.width, bottom: doc.height };
+          } catch { /* ignore */ }
+        }
+        if (!bounds) { setSelectionPreviewMask(null); return; }
         const full = await readSelectionMaskBytes(tgtDocId, bounds);
         if (cancelled) return;
         if (!full) { setSelectionPreviewMask(null); return; }
-        const srcW = bounds.right - bounds.left;
-        const srcH = bounds.bottom - bounds.top;
+        const srcW = (bounds.right - bounds.left) | 0;
+        const srcH = (bounds.bottom - bounds.top) | 0;
         const dstW = snap.width;
         const dstH = snap.height;
         if (srcW <= 0 || srcH <= 0 || dstW <= 0 || dstH <= 0) {
@@ -2343,6 +2354,33 @@ export function MatchTab() {
                     lineHeight: "16px", boxSizing: "border-box",
                   }}>{label}</div>
               ))}
+            </div>
+            {/* v1.20.20 — manual refresh + status indicator for the marquee
+                preview mask. Shows whether the selection is currently being
+                captured (and at what coverage). Click ↻ to force a re-read
+                if the PS 'set' notification was missed. */}
+            <div
+              onClick={() => setSelectionTick(t => t + 1)}
+              title={(() => {
+                if (marqueeDisabled) return disabledTip;
+                if (effectiveSelectionMode === "off") return "Marquee mode is OFF — preview ignores any active selection. Click to force a selection re-read.";
+                if (!selectionPreviewMask) return "No selection detected for the target preview (or the snap has no bounds yet). Draw a marquee on the target and click ↻ to retry.";
+                let inside = 0;
+                for (let i = 0; i < selectionPreviewMask.length; i++) if (selectionPreviewMask[i] > 127) inside++;
+                const pct = ((inside / selectionPreviewMask.length) * 100).toFixed(1);
+                return `Selection captured: ${inside}/${selectionPreviewMask.length} preview pixels inside (${pct}%). Click ↻ to refresh.`;
+              })()}
+              style={{
+                width: 18, height: 18, marginLeft: 2,
+                display: "inline-flex", alignItems: "center", justifyContent: "center",
+                background: "transparent",
+                color: selectionPreviewMask ? "#7ad87a" : "#888",
+                border: `1px solid ${selectionPreviewMask ? "#7ad87a" : "#555"}`,
+                borderRadius: 2, cursor: marqueeDisabled ? "default" : "pointer",
+                fontSize: 11, userSelect: "none",
+                opacity: marqueeDisabled ? 0.3 : 1,
+              }}>
+              <span style={{ marginTop: -1, lineHeight: 1 }}>↻</span>
             </div>
           </div>
         );
