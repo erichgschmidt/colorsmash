@@ -2063,10 +2063,12 @@ export function MatchTab() {
         <div style={{
           flex: "1 1 0", minWidth: 0, height: 28,
           display: "flex", flexDirection: "row",
-          // Outer shell: rounded pill, border, clipped content. Both inner
-          // zones inherit the silhouette without needing their own corners.
+          // Outer shell: rounded pill, neutral gray border always. The
+          // red armed state is communicated through the arm's own
+          // background (and divider) — outer border stays classic so the
+          // widget reads as a familiar Spectrum button at a glance.
           borderRadius: 4,
-          border: `1px solid ${overwriteOnApply ? "#c4423a" : "#888"}`,
+          border: "1px solid #888",
           overflow: "hidden",
           boxSizing: "border-box",
         }}>
