@@ -428,16 +428,6 @@ export function PaletteStrip(props: PaletteStripProps) {
                 background: bg,
                 border: softness > 0 ? "none" : "1px solid #333",
                 borderRadius: 2,
-                // v1.20.48 — quadratic opacity falloff so the fade is
-                // *visible* across the whole drag range, not just at the
-                // extreme low end. opacity = w² + 0.04 floor:
-                //   w=1   → 1.00 (full)
-                //   w=0.75→ 0.60
-                //   w=0.5 → 0.29
-                //   w=0.25→ 0.10
-                //   w=0   → 0.04 (just barely visible — grabbable)
-                // Combined with grayscale(1 - w), even small slider drags
-                // produce a clear "this is fading toward transparent" feel.
                 opacity: fadeWithWeight
                   ? Math.max(0.04, Math.min(1, w * w))
                   : (w < 0.02 ? 0.35 : 1),
@@ -448,7 +438,22 @@ export function PaletteStrip(props: PaletteStripProps) {
                 touchAction: adaptive ? "none" : "auto",
               }}
               title={`rgb(${s.r}, ${s.g}, ${s.b}) — natural ${naturalPct}% · current ${currentPct}% · ${multiplierStr}`}
-            />
+            >
+              {/* v1.20.49 — belt-and-suspenders fade: an inner dark veil
+                  that grows opaque as weight drops. CSS `opacity` on the
+                  parent + this veil's own alpha multiply, so even if some
+                  UXP-Chromium quirk swallowed the parent opacity, this
+                  always renders a visible dim/wash. */}
+              {fadeWithWeight && (
+                <div style={{
+                  position: "absolute", inset: 0,
+                  background: "#1a1a1a",
+                  opacity: Math.max(0, Math.min(1, 1 - w * w)) * 0.7,
+                  pointerEvents: "none",
+                  borderRadius: 2,
+                }} />
+              )}
+            </div>
           );
         })}
         {/* Boundary markers between cluster segments. In handle mode these
