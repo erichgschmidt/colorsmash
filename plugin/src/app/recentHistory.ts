@@ -39,6 +39,11 @@ export interface HistoryEntry {
   state: LutLayerState;
   /** Palette colors + weights for the thumbnail strip. */
   signature: PaletteSignature;
+  /** v1.20.1 — when true, this entry is preserved across ring-buffer evictions.
+   *  Pinned entries sort to the front of the list and stay regardless of the
+   *  `max` cap (they count toward total length but the cap protects them
+   *  from being trimmed). */
+  pinned?: boolean;
 }
 
 /** Clamp a numeric byte channel to 0..255. */
@@ -130,7 +135,14 @@ export function dedupKey(state: LutLayerState): string {
 }
 
 /** Push a new entry onto the front of the history. Dedupes against the
- *  most recent entry only. Returns a NEW array (immutable). */
+ *  most recent entry only. Returns a NEW array (immutable).
+ *
+ *  v1.20.1 — pinned entries are preserved across cap-trim: when the buffer
+ *  would overflow, only non-pinned entries from the tail are evicted.
+ *  Pinned entries can themselves grow past `max` (the cap only governs
+ *  non-pinned recents). The first non-duplicate top entry of either kind
+ *  triggers the dedupe check.
+ */
 export function pushHistoryEntry(
   history: HistoryEntry[],
   entry: HistoryEntry,
@@ -138,17 +150,40 @@ export function pushHistoryEntry(
 ): HistoryEntry[] {
   const cap = clampMax(max);
   const cur = Array.isArray(history) ? history : [];
-  if (cur.length > 0) {
-    const top = cur[0];
-    if (top && top.state && dedupKey(top.state) === dedupKey(entry.state)) {
-      // Immediate duplicate — skip push, return the existing array reference
-      // unchanged in content but as a new array (immutable contract).
-      return cur.slice(0, cap);
-    }
+  // Dedupe against the most-recent NON-pinned entry — pinned items can sit
+  // at the top of the list (sorted to front by the UI), but they shouldn't
+  // block a new bake from being recorded.
+  const firstNonPinned = cur.find(e => !e?.pinned);
+  if (
+    firstNonPinned &&
+    firstNonPinned.state &&
+    dedupKey(firstNonPinned.state) === dedupKey(entry.state)
+  ) {
+    return cur.slice();
   }
+  // Insert new entry at the front. Then trim the NON-pinned suffix to the cap.
   const next = [entry, ...cur];
-  if (next.length > cap) next.length = cap;
-  return next;
+  const pinned = next.filter(e => e?.pinned);
+  const recents = next.filter(e => !e?.pinned).slice(0, cap);
+  // Preserve relative order: pinned first (already sorted by recency), then
+  // recents. The UI re-sorts visually but the underlying array order is
+  // pinned→recent for predictable persistence.
+  return [...pinned, ...recents];
+}
+
+/** Toggle the pinned state on a single entry, addressed by id. Returns a
+ *  NEW array; missing ids leave the array unchanged. */
+export function togglePinnedEntry(history: HistoryEntry[], id: string): HistoryEntry[] {
+  if (!Array.isArray(history)) return [];
+  let found = false;
+  const next = history.map(e => {
+    if (e && e.id === id) {
+      found = true;
+      return { ...e, pinned: !e.pinned };
+    }
+    return e;
+  });
+  return found ? next : history.slice();
 }
 
 /** Generate a short unique id for a history entry. */
@@ -180,14 +215,14 @@ function isValidEntry(v: any): v is HistoryEntry {
   return true;
 }
 
-/** Defensive clamp — used when loading from PersistedSettings. */
+/** Defensive clamp — used when loading from PersistedSettings.
+ *  v1.20.1 — keeps ALL valid pinned entries regardless of cap; only the
+ *  non-pinned tail is trimmed. */
 export function pruneHistory(history: any, max: number = DEFAULT_MAX): HistoryEntry[] {
   const cap = clampMax(max);
   if (!Array.isArray(history)) return [];
-  const out: HistoryEntry[] = [];
-  for (const v of history) {
-    if (isValidEntry(v)) out.push(v);
-    if (out.length >= cap) break;
-  }
-  return out;
+  const valid = history.filter(isValidEntry);
+  const pinned = valid.filter(e => e.pinned);
+  const recents = valid.filter(e => !e.pinned).slice(0, cap);
+  return [...pinned, ...recents];
 }

@@ -34,7 +34,7 @@ import { applyLutAsAdjustmentLayer, applyMultiZoneLutAsLayers } from "../app/app
 import { updateMatchCurvesLayerInPlace } from "../app/liveCurvesUpdate";
 import { LutLayerState, readLutLayerState, stampState } from "../app/lutXmp";
 import {
-  HistoryEntry, makeHistoryEntry, pushHistoryEntry, pruneHistory,
+  HistoryEntry, makeHistoryEntry, pushHistoryEntry, pruneHistory, togglePinnedEntry,
 } from "../app/recentHistory";
 import { syncOutputVisibilityToMode, repositionGroupAboveTarget } from "../app/outputVisibility";
 import {
@@ -215,7 +215,9 @@ export function MatchTab() {
   // Stored in PersistedSettings so the history survives panel reloads.
   const HISTORY_MAX = 5;
   const [recentHistory, setRecentHistory] = useState<HistoryEntry[]>([]);
-  const [historyOpen, setHistoryOpen] = useState(false);
+  // Default open in v1.20.1 — feedback was that the collapsed disclosure
+  // was easy to miss, and the strip is small enough to live exposed.
+  const [historyOpen, setHistoryOpen] = useState(true);
   // Effective value used by Apply pipeline + buildXmpState. When source
   // mode is "selection," force "off" so the source marquee isn't double-
   // duty as an output mask. The raw `selectionMode` state preserves the
@@ -2200,43 +2202,72 @@ export function MatchTab() {
           </div>
           {historyOpen && (
             <div style={{ display: "flex", flexDirection: "row", gap: 4, marginTop: 4, flexWrap: "wrap" }}>
-              {recentHistory.map(entry => (
-                <div key={entry.id} onClick={() => applyHistoryEntry(entry)}
-                  title={`${entry.label}\nSaved ${new Date(entry.timestamp).toLocaleString()}\nClick to restore.`}
+              {/* Sort pinned entries to the FRONT (visually) so favorites are
+                  always immediately reachable. Pinned entries have a gold
+                  border + visible star icon; recents have a plain border and
+                  a hidden star that appears on hover. */}
+              {[...recentHistory].sort((a, b) => {
+                const ap = a.pinned ? 1 : 0;
+                const bp = b.pinned ? 1 : 0;
+                return bp - ap; // pinned-first
+              }).map(entry => (
+                <div key={entry.id}
+                  title={`${entry.label}\nSaved ${new Date(entry.timestamp).toLocaleString()}\nClick to restore. ${entry.pinned ? "★ Pinned — won't be evicted from history." : "Shift-click the star to pin."}`}
                   style={{
                     width: 60, height: 16, padding: 0,
-                    display: "flex", flexDirection: "row",
-                    border: "1px solid #555", borderRadius: 2,
-                    cursor: "pointer", userSelect: "none",
+                    display: "flex", flexDirection: "row", position: "relative",
+                    border: `1px solid ${entry.pinned ? "#c19a3a" : "#555"}`,
+                    borderRadius: 2,
+                    userSelect: "none",
                     overflow: "hidden", flexShrink: 0,
                   }}>
-                  {/* Palette signature: horizontal segments sized by weight,
-                      colored by the swatch RGB. The strip reads as a visual
-                      "fingerprint" of the bake at a glance. */}
-                  {entry.signature.colors.length > 0
-                    ? entry.signature.colors.map((c, i) => {
-                        const r = (c >> 16) & 0xff;
-                        const g = (c >> 8) & 0xff;
-                        const b = c & 0xff;
-                        const w = entry.signature.weights[i] ?? 0;
-                        const total = entry.signature.weights.reduce((s, x) => s + (x || 0), 0) || 1;
-                        return (
-                          <div key={i} style={{
-                            flex: `${Math.max(1, w)} 1 0`,
-                            background: `rgb(${r},${g},${b})`,
-                            minWidth: 0,
-                            // total used to normalize widths — referenced via the flex weighting above
-                            // (kept here for the comment context, no functional use)
-                          }} title={`rgb(${r},${g},${b}) · ${((w / total) * 100).toFixed(0)}%`} />
-                        );
-                      })
-                    : <div style={{ flex: 1, background: "#444" }} />
-                  }
+                  {/* Palette signature segments — click anywhere on the strip
+                      to restore. Star button stops propagation. */}
+                  <div onClick={() => applyHistoryEntry(entry)}
+                    style={{ flex: 1, display: "flex", flexDirection: "row", cursor: "pointer", overflow: "hidden" }}>
+                    {entry.signature.colors.length > 0
+                      ? entry.signature.colors.map((c, i) => {
+                          const r = (c >> 16) & 0xff;
+                          const g = (c >> 8) & 0xff;
+                          const b = c & 0xff;
+                          const w = entry.signature.weights[i] ?? 0;
+                          const total = entry.signature.weights.reduce((s, x) => s + (x || 0), 0) || 1;
+                          return (
+                            <div key={i} style={{
+                              flex: `${Math.max(1, w)} 1 0`,
+                              background: `rgb(${r},${g},${b})`,
+                              minWidth: 0,
+                            }} title={`rgb(${r},${g},${b}) · ${((w / total) * 100).toFixed(0)}%`} />
+                          );
+                        })
+                      : <div style={{ flex: 1, background: "#444" }} />
+                    }
+                  </div>
+                  {/* Pin star — top-right corner overlay. Solid when pinned,
+                      outline when not. Click toggles pinned state without
+                      triggering the restore handler. */}
+                  <div onClick={e => {
+                    e.stopPropagation();
+                    setRecentHistory(prev => togglePinnedEntry(prev, entry.id));
+                  }}
+                    title={entry.pinned ? "Pinned — click to unpin" : "Click to pin (preserves this entry from being evicted)"}
+                    style={{
+                      position: "absolute", top: -1, right: -1,
+                      width: 12, height: 12, display: "flex",
+                      alignItems: "center", justifyContent: "center",
+                      fontSize: 9, lineHeight: 1,
+                      background: entry.pinned ? "#c19a3a" : "rgba(20,20,20,0.7)",
+                      color: entry.pinned ? "#fff" : "#aaa",
+                      border: `1px solid ${entry.pinned ? "#c19a3a" : "#555"}`,
+                      borderRadius: 2,
+                      cursor: "pointer", userSelect: "none",
+                    }}>{entry.pinned ? "★" : "☆"}</div>
                 </div>
               ))}
-              {/* Clear-history affordance — small × at the end of the row. */}
-              <div onClick={() => setRecentHistory([])}
-                title="Clear recent history"
+              {/* Clear-history — only nukes the non-pinned recents; pinned
+                  stay. Tooltip explains the distinction. */}
+              <div onClick={() => setRecentHistory(prev => prev.filter(e => e.pinned))}
+                title="Clear recent history. Pinned entries are preserved."
                 style={{
                   width: 16, height: 16, display: "flex",
                   alignItems: "center", justifyContent: "center",
