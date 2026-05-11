@@ -277,11 +277,12 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       if (top) await action.batchPlay([{ _obj: "select", _target: [{ _ref: "layer", _id: top.id }], makeVisible: false }], {});
     }
 
-    // Optionally deselect (so curves apply to the full target, not masked to the marquee).
-    if (params.deselectFirst !== false) {
-      try { await action.batchPlay([{ _obj: "set", _target: [{ _ref: "channel", _property: "selection" }], to: { _enum: "ordinal", _value: "none" } }], {}); }
-      catch { /* ignore */ }
-    }
+    // v1.20.25 — removed auto-deselect-before-Apply. The previous behavior
+    // dropped the active marquee before the bake ran, which destroyed the
+    // selection that the selectionMode (focus/exclude) compositor needs to
+    // read later in the same flow. Users wanted their marquee preserved so
+    // the mask path could honor it; they can Ctrl+D manually if they want
+    // the marching ants gone after a bake.
 
     // ─── Multi-zone branch: emit 3 stacked Curves layers + luminosity masks ──────
     if (multiZoneFit) {

@@ -10,8 +10,6 @@ import { uxpConfirm } from "./uxpConfirm";
 // Exclude, Multi/Blend If/Adaptive).
 
 export interface BottomActionBarProps {
-  deselectOnApply: boolean;
-  setDeselectOnApply: (b: boolean) => void;
   remember: boolean;
   setRemember: (b: boolean) => void;
   onRefreshAll: () => void;
@@ -20,8 +18,7 @@ export interface BottomActionBarProps {
 }
 
 export function BottomActionBar(props: BottomActionBarProps) {
-  const { deselectOnApply, setDeselectOnApply,
-          remember, setRemember,
+  const { remember, setRemember,
           onRefreshAll, onResetAll, stale } = props;
 
   const handleResetClick = async () => {
@@ -48,15 +45,10 @@ export function BottomActionBar(props: BottomActionBarProps) {
       height: 18, lineHeight: "18px", overflow: "hidden", gap: 4,
       width: "100%", minWidth: 0,
     }}>
-      <div onClick={() => setDeselectOnApply(!deselectOnApply)}
-        style={pillStyle(deselectOnApply)}
-        title="Deselect — drop the active marquee before creating the layer so curves/LUT apply to the full target. Independent of the marquee Focus/Exclude tristate above the Apply button.">
-        DESELECT
-      </div>
-      {/* REPLACE moved to the left of the Apply button in v1.19.3 — it
-          reads more naturally as a direct modifier of the Apply action
-          ("Apply, replacing the prior") than as a settings-row toggle.
-          See MatchTab.tsx for the relocated pill. */}
+      {/* v1.20.25 — removed DESELECT pill. The auto-deselect-before-Apply
+          behavior was destroying the marquee that the new selection-mask
+          mask path needs to read. Users can press Ctrl+D manually after a
+          bake if they want the marching ants gone. */}
       <div onClick={() => setRemember(!remember)}
         style={pillStyle(remember)}
         title="Save — persist all panel settings across reloads (sliders, zones, envelope, toggles, output mode, LUT options).">

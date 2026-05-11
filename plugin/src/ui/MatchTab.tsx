@@ -306,7 +306,7 @@ export function MatchTab() {
   const onSwapMode = () => {
     setOutputMode(prev => prev === "lut" ? lastCurvesModeRef.current : "lut");
   };
-  const [deselectOnApply, setDeselectOnApply] = useState(true);
+  // v1.20.25 — deselectOnApply removed. See applyMatch.ts for context.
   const [overwriteOnApply, setOverwriteOnApply] = useState(true);
   const [remember, setRemember] = useState(false);
 
@@ -391,7 +391,7 @@ export function MatchTab() {
         if (Array.isArray(s.recentHistory)) {
           setRecentHistory(pruneHistory(s.recentHistory, HISTORY_MAX));
         }
-        if (s.deselectOnApply != null) setDeselectOnApply(s.deselectOnApply);
+        // deselectOnApply removed in v1.20.25 — ignore any old persisted value.
         if (s.overwriteOnApply != null) setOverwriteOnApply(s.overwriteOnApply);
         if (s.openSection !== undefined) setOpenSection(s.openSection);
         if (s.zones) { zonesRef.current = { ...DEFAULT_ZONES, ...s.zones }; setZonesLabel({ ...DEFAULT_ZONES, ...s.zones }); }
@@ -414,7 +414,7 @@ export function MatchTab() {
       remember,
       amount: amountLabel, smooth: smoothLabel, stretch: stretchLabel,
       anchorStretchToHist, chromaOnly, colorSpace, outputMode, lutStrength, lutGrid, lutDither, selectionMode, matchMode, multiZone, multiZoneLimit, adaptiveBands,
-      deselectOnApply, overwriteOnApply,
+      overwriteOnApply,
       openSection,
       zones: zonesLabel, lockZoneTotal,
       dimensions: dimsLabel,
@@ -428,7 +428,7 @@ export function MatchTab() {
     };
     saveDebouncedRef.current!(snapshot);
   }, [remember, matchMode, multiZone, multiZoneLimit, adaptiveBands, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
-      colorSpace, outputMode, lutStrength, lutGrid, lutDither, selectionMode, deselectOnApply, overwriteOnApply, openSection,
+      colorSpace, outputMode, lutStrength, lutGrid, lutDither, selectionMode, overwriteOnApply, openSection,
       zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel, paletteCount, paletteAdaptive, sourceSoftness, targetSoftness, targetMaskEnabled, recentHistory]);
 
   const [docs, setDocs] = useState<{ id: number; name: string }[]>([]);
@@ -1758,7 +1758,8 @@ export function MatchTab() {
         })(),
         sourceLabel: srcOverride?.name,
         colorSpace,
-        deselectFirst: deselectOnApply,
+        // v1.20.25 — deselectFirst no longer passed; applyMatch never
+        // deselects now so the marquee survives into the mask path.
         overwritePrior: overwriteOnApply,
         preset: activePreset,
         // Target-palette weighting → layer mask on the Curves adjustment.
@@ -1803,7 +1804,6 @@ export function MatchTab() {
     setMultiZoneLimit("mask");
     setAdaptiveBands(true);
     setOutputMode("rgb");
-    setDeselectOnApply(true);
     setOverwriteOnApply(true);
     setOpenSection(null);
     zonesRef.current = { ...DEFAULT_ZONES }; setZonesLabel({ ...DEFAULT_ZONES });
@@ -2240,7 +2240,6 @@ export function MatchTab() {
       )}
 
       <BottomActionBar
-        deselectOnApply={deselectOnApply} setDeselectOnApply={setDeselectOnApply}
         remember={remember} setRemember={setRemember}
         onRefreshAll={onRefreshAll}
         onResetAll={onResetAll}
