@@ -12,8 +12,6 @@ import { uxpConfirm } from "./uxpConfirm";
 export interface BottomActionBarProps {
   deselectOnApply: boolean;
   setDeselectOnApply: (b: boolean) => void;
-  overwriteOnApply: boolean;
-  setOverwriteOnApply: (b: boolean) => void;
   remember: boolean;
   setRemember: (b: boolean) => void;
   onRefreshAll: () => void;
@@ -22,7 +20,7 @@ export interface BottomActionBarProps {
 }
 
 export function BottomActionBar(props: BottomActionBarProps) {
-  const { deselectOnApply, setDeselectOnApply, overwriteOnApply, setOverwriteOnApply,
+  const { deselectOnApply, setDeselectOnApply,
           remember, setRemember,
           onRefreshAll, onResetAll, stale } = props;
 
@@ -55,11 +53,10 @@ export function BottomActionBar(props: BottomActionBarProps) {
         title="Deselect — drop the active marquee before creating the layer so curves/LUT apply to the full target. Independent of the marquee Focus/Exclude tristate above the Apply button.">
         DESELECT
       </div>
-      <div onClick={() => setOverwriteOnApply(!overwriteOnApply)}
-        style={pillStyle(overwriteOnApply)}
-        title="Replace — on: overwrite the prior Match Curves/LUT layer in [Color Smash] on Apply. Off: keep prior layers (hidden) so you can stack alternatives.">
-        REPLACE
-      </div>
+      {/* REPLACE moved to the left of the Apply button in v1.19.3 — it
+          reads more naturally as a direct modifier of the Apply action
+          ("Apply, replacing the prior") than as a settings-row toggle.
+          See MatchTab.tsx for the relocated pill. */}
       <div onClick={() => setRemember(!remember)}
         style={pillStyle(remember)}
         title="Save — persist all panel settings across reloads (sliders, zones, envelope, toggles, output mode, LUT options).">

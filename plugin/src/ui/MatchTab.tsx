@@ -194,13 +194,23 @@ export function MatchTab() {
   // (palette × selection) before Apply, without manually inspecting masks.
   const [showMask, setShowMask] = useState(false);
 
-  // Selection tristate (v1.18.0). At Apply time, if a marquee selection is
-  // active in PS and mode is Focus/Exclude, the marquee gets attached as the
-  // layer mask (multiplied with the target-palette mask if both are active).
-  //   off:     ignore selection, full-image apply
-  //   focus:   layer applies only inside the marquee
-  //   exclude: layer applies only outside the marquee
+  // Selection / marquee tristate (v1.18.0). At Apply time, if a marquee is
+  // active in PS and mode is Focus/Exclude, the marquee becomes the layer
+  // mask (composed with the target-palette mask if both are active).
+  //
+  // Mutual exclusion (v1.19.3): when srcMode === "selection", the marquee
+  // is being used as the SOURCE pixel input — reusing it as an OUTPUT mask
+  // simultaneously creates an ambiguous mental model. We auto-treat the
+  // marquee tristate as "off" while source mode is selection (no UI lock
+  // — just an effective override), and the pill row visually dims to
+  // signal it's inactive.
   const [selectionMode, setSelectionMode] = useState<"off" | "focus" | "exclude">("off");
+  // Effective value used by Apply pipeline + buildXmpState. When source
+  // mode is "selection," force "off" so the source marquee isn't double-
+  // duty as an output mask. The raw `selectionMode` state preserves the
+  // user's last choice for when they switch source mode away from selection.
+  const effectiveSelectionMode: "off" | "focus" | "exclude" =
+    srcMode === "selection" ? "off" : selectionMode;
 
   // Remember the last Curves-flavor mode so the SWAP pill can flip between
   // LUT and the user's preferred Curves space (RGB or Lab). Toggling out of
@@ -1054,7 +1064,7 @@ export function MatchTab() {
     lutStrength,
     lutGrid,
     lutDither,
-    selectionMode,
+    selectionMode: effectiveSelectionMode,
   }, "1.19.0");
 
   // Shared restore implementation — pulled out of the manual onRestoreFromLayer
@@ -1218,7 +1228,7 @@ export function MatchTab() {
           gridSize: lutGrid,
           strength: lutStrength / 100,
           dither: lutDither,
-          selectionMode,
+          selectionMode: effectiveSelectionMode,
           targetLayerId: targetId === MERGED_LAYER_ID ? null : targetId,
           targetIsMerged: targetId === MERGED_LAYER_ID,
           overwritePrior: overwriteOnApply,
@@ -1415,7 +1425,7 @@ export function MatchTab() {
             softness: targetSoftness,
           };
         })(),
-        selectionMode,
+        selectionMode: effectiveSelectionMode,
       }));
     } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
   };
@@ -1843,92 +1853,12 @@ export function MatchTab() {
 
       <BottomActionBar
         deselectOnApply={deselectOnApply} setDeselectOnApply={setDeselectOnApply}
-        overwriteOnApply={overwriteOnApply} setOverwriteOnApply={setOverwriteOnApply}
         remember={remember} setRemember={setRemember}
         onRefreshAll={onRefreshAll}
         onResetAll={onResetAll}
         stale={stale}
       />
 
-      {/* Single row: [☐ Multi] [☐ Mask] [☐ Blend If] [☐ Adaptive]. Same pattern as the
-          bottom action bar — checkboxes flex-shrink:0 (always visible + clickable),
-          text spans flex-shrink:1 with overflow:hidden + no ellipsis (silently clip
-          under adjacent toggles when the panel narrows). Sub-toggles grayed when Multi
-          is off. */}
-      {(() => {
-        const subDisabled = !multiZone;
-        // Mirrors BottomActionBar exactly: flush-left flex row with consistent 6px gap,
-        // items shrink to toggle width only (labels clip silently behind next item).
-        // flex-wrap:nowrap + height:18 + overflow:hidden = row CANNOT jump under any
-        // panel width. Trailing (?) icon stays in place flush left, no marginLeft:auto.
-        const ROW_GAP = 4;
-        // Pill toggle factory — same visual language as RGB/Lab/LUT and
-        // Off/Focus/Exclude segmented controls (v1.18.x). Each Multi-zone
-        // option becomes a flex-1 pill, filled when on, dimmed when off or
-        // disabled. Replaced the checkbox+label row for tighter visuals.
-        const pillStyle = (active: boolean, disabled: boolean): React.CSSProperties => ({
-          flex: 1, height: 18, padding: 0,
-          display: "flex", alignItems: "center", justifyContent: "center",
-          fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
-          background: active ? "#3a3a3a" : "transparent",
-          // Disabled state keeps text legible against the panel background —
-          // earlier #555 × 0.5 opacity made the label nearly invisible. Now
-          // disabled uses #777 (inactive-ish gray) at 0.75 opacity so the
-          // label still reads as "muted but present."
-          color: disabled ? "#777" : (active ? "#dddddd" : "#888"),
-          border: `1px solid ${disabled ? "#3a3a3a" : (active ? "#888" : "#444")}`,
-          borderRadius: 2, cursor: disabled ? "default" : "pointer", userSelect: "none",
-          lineHeight: "16px", boxSizing: "border-box",
-          opacity: disabled ? 0.75 : 1,
-        });
-        return (
-          <div style={{
-            display: "flex", flexWrap: "nowrap", alignItems: "center",
-            marginTop: 8, fontSize: 11,
-            color: multiZone ? "#dddddd" : "#aaaaaa",
-            height: 18, lineHeight: "18px", overflow: "hidden", gap: ROW_GAP,
-            width: "100%", minWidth: 0,
-          }}>
-            <div onClick={() => setMultiZone(!multiZone)}
-              style={pillStyle(multiZone, false)}
-              title="Multi: emit 3 stacked Curves layers (shadows / mids / highlights), each limited to its luminance band. Adapts spatially across mixed-lighting scenes.">
-              MULTI
-            </div>
-            <div onClick={() => { if (!subDisabled) setMultiZoneLimit(multiZoneLimit === "blendIf" ? "mask" : "blendIf"); }}
-              style={pillStyle(multiZoneLimit === "blendIf" && !subDisabled, subDisabled)}
-              title="Blend If: limit each band layer with the underlying-luma sliders (Layer Style → Blending Options) instead of a luminosity mask. When OFF, a paintable mask is exported instead. May not work in all PS versions.">
-              BLEND IF
-            </div>
-            <div onClick={() => { if (!subDisabled) setAdaptiveBands(!adaptiveBands); }}
-              style={pillStyle(adaptiveBands && !subDisabled, subDisabled)}
-              title={`Adaptive: shift band peaks + extents to the target histogram's percentiles (P10/P50/P90) instead of fixed 0/128/255. ${multiZone && lumaBins ? `Current peaks: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""}`}>
-              ADAPTIVE
-            </div>
-            {/* Trailing (?) info icon — flush left like everything else (no auto margin). */}
-            <span style={{ display: "inline-flex", alignItems: "center", flexShrink: 0 }}>
-              <span onClick={(e: any) => { e.stopPropagation(); e.preventDefault(); void uxpInfo("Multi-zone Curves — what each toggle does", [
-                { heading: "Multi",
-                  body: "Apply emits three stacked Curves layers (Shadows, Mids, Highlights) instead of one. Each curve is fitted from ONLY the pixels whose luma falls in its band. The three layers land in the [Color Smash] group, clipped to the target, and stay independently editable in Photoshop afterwards. Useful for mixed-lighting scenes where a single global curve over- or under-corrects." },
-                { heading: "Band limiting (default = Mask)",
-                  body: "By default each band layer gets a paintable luminosity layer mask — visible thumbnail in the Layers panel, fully editable (paint to localize, blur to feather). This is the cleanest separation and what you want most of the time." },
-                { heading: "Blend If toggle",
-                  body: "Turn ON to use the underlying-luma sliders (Layer Style → Blending Options) instead of a mask. Lighter than a mask (no mask data) and editable from the Blending Options dialog. Mutually exclusive with the mask — turning Blend If on disables mask export. May not work reliably in all Photoshop versions." },
-                { heading: "Adaptive",
-                  body: "When ON, the band peaks shift to the target histogram's P10 / P50 / P90 luma percentiles, and the outer extents follow the histogram's actual min/max — so each band gets a meaningful pixel sample even on low-key or high-key images. When OFF, peaks are fixed at 0 / 128 / 255. Default ON; turn off only when you want a strict 0/128/255 partition for a specific look." },
-                { heading: "Replace",
-                  body: "When Replace is on, re-applying overwrites the prior multi-zone trio rather than stacking another set on top." },
-                { heading: "Export LUT (next to Apply)",
-                  body: "Bakes the currently STAGED preset (Full / Color / Contrast — the swatch you clicked above the preview) into a 33³ Adobe .CUBE 3D LUT and writes it to a path you pick. The LUT captures the full preset including non-separable Color and Luminosity blend math that a plain Curves layer cannot represent. Loadable in Photoshop's Color Lookup layer, Premiere, Resolve, or any LUT-aware host. Use this when you want a portable look you can apply outside this plugin or share between docs/projects. Note: Export LUT bakes the staged single-curve preset; multi-zone output is Apply Curves only." },
-              ]); }}
-                title="What does Multi do? Click for details."
-                style={{ marginLeft: 6, cursor: "help", fontSize: 10, opacity: 0.7, flexShrink: 0,
-                         border: "1px solid #888", borderRadius: 8, width: 12, height: 12,
-                         display: "inline-flex", alignItems: "center", justifyContent: "center",
-                         lineHeight: 1, userSelect: "none" }}>?</span>
-            </span>
-          </div>
-        );
-      })()}
       {/* Apply (writes Curves layer to PS) and Export LUT (writes .CUBE to disk).
           50/50 split. flexWrap:nowrap + overflow:hidden + minWidth:0 on each cell
           guarantees the row stays single-line at any panel width — labels clip
@@ -1969,37 +1899,134 @@ export function MatchTab() {
         </div>
       </div>
 
-      {/* Selection tristate (v1.18.0). At Apply, if a marquee is active in PS:
-            - Focus:   layer applies only inside the marquee
-            - Exclude: layer applies only outside the marquee
-            - Off:     ignore the marquee (full-image apply)
-          Composes with the target-palette mask if both are active —
-          mask × selection (focus) or mask × (255 - selection) (exclude).
-          Visible in all output modes (RGB / Lab / LUT). */}
-      <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 4, height: 18, lineHeight: "16px" }}>
-        <span style={{ fontSize: 9, opacity: 0.5, width: 38 }}>marquee</span>
-        <div style={{ display: "flex", flex: 1, gap: 2 }}>
-          {([
-            ["off",     "Off",     "Ignore the active marquee — full-image apply (current default behavior). The marquee is preserved on the doc; toggle to Focus/Exclude to use it as a layer mask."],
-            ["focus",   "Focus",   "Use the active marquee as the layer mask — the Curves/LUT only applies INSIDE the selected region. Multiplied with the target-palette mask if both are active. No-op if no marquee is active."],
-            ["exclude", "Exclude", "Use the INVERSE of the active marquee as the layer mask — the Curves/LUT applies everywhere OUTSIDE the selected region. Useful for protecting a chosen area."],
-          ] as Array<["off" | "focus" | "exclude", string, string]>).map(([val, label, tip]) => (
-            <div key={val} onClick={() => setSelectionMode(val)} title={tip}
-              style={{
-                flex: 1, height: 18, padding: 0,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
-                background: selectionMode === val ? "#3a3a3a" : "transparent",
-                color: selectionMode === val ? "#dddddd" : "#888",
-                border: `1px solid ${selectionMode === val ? "#888" : "#444"}`,
-                borderRadius: 2, cursor: "pointer", userSelect: "none",
-                lineHeight: "16px", boxSizing: "border-box",
-              }}>{label}</div>
-          ))}
-        </div>
-      </div>
+      {/* Multi-zone toggles (v1.19.3: moved below the Output mode row).
+          Multi splits the bake into 3 stacked Shadow/Mid/Highlight layers
+          with band-luma masks. Blend If swaps the mask for Blending Options
+          sliders. Adaptive shifts band peaks to the target histogram's
+          P10/P50/P90. Sub-toggles dim when Multi is off (labels stay
+          legible — see v1.19.2 fix). */}
+      {(() => {
+        const subDisabled = !multiZone;
+        const ROW_GAP = 4;
+        const pillStyle = (active: boolean, disabled: boolean): React.CSSProperties => ({
+          flex: 1, height: 18, padding: 0,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
+          background: active ? "#3a3a3a" : "transparent",
+          color: disabled ? "#777" : (active ? "#dddddd" : "#888"),
+          border: `1px solid ${disabled ? "#3a3a3a" : (active ? "#888" : "#444")}`,
+          borderRadius: 2, cursor: disabled ? "default" : "pointer", userSelect: "none",
+          lineHeight: "16px", boxSizing: "border-box",
+          opacity: disabled ? 0.75 : 1,
+        });
+        return (
+          <div style={{
+            display: "flex", flexWrap: "nowrap", alignItems: "center",
+            marginTop: 6, fontSize: 11,
+            color: multiZone ? "#dddddd" : "#aaaaaa",
+            height: 18, lineHeight: "18px", overflow: "hidden", gap: ROW_GAP,
+            width: "100%", minWidth: 0,
+          }}>
+            <div onClick={() => setMultiZone(!multiZone)}
+              style={pillStyle(multiZone, false)}
+              title="Multi: emit 3 stacked Curves layers (shadows / mids / highlights), each limited to its luminance band. Adapts spatially across mixed-lighting scenes.">
+              MULTI
+            </div>
+            <div onClick={() => { if (!subDisabled) setMultiZoneLimit(multiZoneLimit === "blendIf" ? "mask" : "blendIf"); }}
+              style={pillStyle(multiZoneLimit === "blendIf" && !subDisabled, subDisabled)}
+              title="Blend If: limit each band layer with the underlying-luma sliders (Layer Style → Blending Options) instead of a luminosity mask. When OFF, a paintable mask is exported instead. May not work in all PS versions.">
+              BLEND IF
+            </div>
+            <div onClick={() => { if (!subDisabled) setAdaptiveBands(!adaptiveBands); }}
+              style={pillStyle(adaptiveBands && !subDisabled, subDisabled)}
+              title={`Adaptive: shift band peaks + extents to the target histogram's percentiles (P10/P50/P90) instead of fixed 0/128/255. ${multiZone && lumaBins ? `Current peaks: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""}`}>
+              ADAPTIVE
+            </div>
+            <span style={{ display: "inline-flex", alignItems: "center", flexShrink: 0 }}>
+              <span onClick={(e: any) => { e.stopPropagation(); e.preventDefault(); void uxpInfo("Multi-zone Curves — what each toggle does", [
+                { heading: "Multi",
+                  body: "Apply emits three stacked Curves layers (Shadows, Mids, Highlights) instead of one. Each curve is fitted from ONLY the pixels whose luma falls in its band. The three layers land in the [Color Smash] group, clipped to the target, and stay independently editable in Photoshop afterwards. Useful for mixed-lighting scenes where a single global curve over- or under-corrects." },
+                { heading: "Band limiting (default = Mask)",
+                  body: "By default each band layer gets a paintable luminosity layer mask — visible thumbnail in the Layers panel, fully editable (paint to localize, blur to feather). This is the cleanest separation and what you want most of the time." },
+                { heading: "Blend If toggle",
+                  body: "Turn ON to use the underlying-luma sliders (Layer Style → Blending Options) instead of a mask. Lighter than a mask (no mask data) and editable from the Blending Options dialog. Mutually exclusive with the mask — turning Blend If on disables mask export. May not work reliably in all Photoshop versions." },
+                { heading: "Adaptive",
+                  body: "When ON, the band peaks shift to the target histogram's P10 / P50 / P90 luma percentiles, and the outer extents follow the histogram's actual min/max — so each band gets a meaningful pixel sample even on low-key or high-key images. When OFF, peaks are fixed at 0 / 128 / 255. Default ON; turn off only when you want a strict 0/128/255 partition for a specific look." },
+                { heading: "Replace",
+                  body: "When Replace is on, re-applying overwrites the prior multi-zone trio rather than stacking another set on top." },
+              ]); }}
+                title="What does Multi do? Click for details."
+                style={{ marginLeft: 6, cursor: "help", fontSize: 10, opacity: 0.7, flexShrink: 0,
+                         border: "1px solid #888", borderRadius: 8, width: 12, height: 12,
+                         display: "inline-flex", alignItems: "center", justifyContent: "center",
+                         lineHeight: 1, userSelect: "none" }}>?</span>
+            </span>
+          </div>
+        );
+      })()}
+
+      {/* Marquee tristate (v1.18.0 / v1.19.3 mutual-exclusion). At Apply
+          time, the active PS marquee can be used as the OUTPUT layer mask:
+            - Off:     ignore marquee, full-image apply
+            - Focus:   marquee shape becomes the layer mask (apply inside only)
+            - Exclude: inverse marquee becomes the layer mask (apply outside only)
+          Auto-disabled (dimmed, click no-op) when source mode is
+          "selection" because the marquee is already in use as source pixels —
+          can't be source AND output mask simultaneously. */}
+      {(() => {
+        const marqueeDisabled = srcMode === "selection";
+        const disabledTip = "Disabled because the source is using the active marquee. Switch source to a layer or browsed image to use the marquee as an output mask.";
+        return (
+          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 4, height: 18, lineHeight: "16px" }}>
+            <span style={{ fontSize: 9, opacity: marqueeDisabled ? 0.3 : 0.5, width: 38 }}>marquee</span>
+            <div style={{ display: "flex", flex: 1, gap: 2, opacity: marqueeDisabled ? 0.55 : 1 }}>
+              {([
+                ["off",     "Off",     "Ignore the marquee — full-image apply (default). The marquee stays on the doc."],
+                ["focus",   "Focus",   "Use the active marquee as the layer mask — the Curves/LUT applies ONLY inside the marquee. Multiplied with the target-palette mask if both are active."],
+                ["exclude", "Exclude", "Use the INVERSE of the active marquee as the layer mask — the Curves/LUT applies everywhere OUTSIDE the marquee. Useful for protecting a chosen area."],
+              ] as Array<["off" | "focus" | "exclude", string, string]>).map(([val, label, tip]) => (
+                <div key={val}
+                  onClick={() => { if (!marqueeDisabled) setSelectionMode(val); }}
+                  title={marqueeDisabled ? disabledTip : tip}
+                  style={{
+                    flex: 1, height: 18, padding: 0,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
+                    background: !marqueeDisabled && selectionMode === val ? "#3a3a3a" : "transparent",
+                    color: !marqueeDisabled && selectionMode === val ? "#dddddd" : "#888",
+                    border: `1px solid ${!marqueeDisabled && selectionMode === val ? "#888" : "#444"}`,
+                    borderRadius: 2,
+                    cursor: marqueeDisabled ? "default" : "pointer",
+                    userSelect: "none",
+                    lineHeight: "16px", boxSizing: "border-box",
+                  }}>{label}</div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
 
       <div style={{ display: "flex", flexWrap: "nowrap", gap: 4, marginTop: 6, width: "100%" }}>
+        {/* REPLACE — moved next to Apply (v1.19.3) so it reads as a direct
+            modifier of the Apply action: "Apply, replacing the prior layer."
+            Was previously in the BottomActionBar pill row; now lives here.
+            Filled when on (default) — overwrites the prior Match Curves/LUT
+            layer on Apply. Off — keeps prior layers (hidden) so users can
+            stack alternatives for comparison. */}
+        <div onClick={() => setOverwriteOnApply(!overwriteOnApply)}
+          title={overwriteOnApply
+            ? "Replace ON — Apply will overwrite the prior Match Curves/LUT layer in [Color Smash]. Click to keep prior layers (they'll hide so the new one is visible)."
+            : "Replace OFF — Apply stacks alongside prior layers (prior layers hidden). Click to enable Replace: prior layer is deleted on each Apply."}
+          style={{
+            padding: "1px 8px", fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
+            background: overwriteOnApply ? "#3a3a3a" : "transparent",
+            color: overwriteOnApply ? "#dddddd" : "#888",
+            border: `1px solid ${overwriteOnApply ? "#888" : "#444"}`,
+            borderRadius: 2, cursor: "pointer", userSelect: "none",
+            display: "flex", alignItems: "center",
+            height: 28, lineHeight: "26px", boxSizing: "border-box",
+            flex: "0 0 auto",
+          }}>REPLACE</div>
         {/* Single mode-aware Apply button (v1.15.0). The output-mode selector
             above the Apply row decides which adjustment layer this produces:
               RGB / Lab → Curves layer (continuous, editable; honors Multi)
