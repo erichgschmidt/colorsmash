@@ -30,6 +30,7 @@ import { loadSettings, makeDebouncedSaver, clearSettings, PersistedSettings } fr
 import { uxpInfo } from "./uxpInfo";
 import { applyMatch } from "../app/applyMatch";
 import { applyLutAsAdjustmentLayer, applyMultiZoneLutAsLayers } from "../app/applyLut";
+import { updateMatchCurvesLayerInPlace } from "../app/liveCurvesUpdate";
 import { LutLayerState, readLutLayerState, stampState } from "../app/lutXmp";
 import { syncOutputVisibilityToMode, repositionGroupAboveTarget } from "../app/outputVisibility";
 import {
@@ -1208,39 +1209,46 @@ export function MatchTab() {
       return;
     }
     if (!renderedCurves) return;
-    // eslint-disable-next-line no-console
-    console.log("[ColorSmash][LIVE] dep changed → schedule bake (preset=" + activePreset + ")");
     if (liveBakeTimerRef.current) clearTimeout(liveBakeTimerRef.current);
     liveBakeTimerRef.current = setTimeout(async () => {
       liveBakeTimerRef.current = null;
       try {
-        const result = await applyLutAsAdjustmentLayer({
-          curves: renderedCurves,
-          preset: activePreset,
-          size: 33,
-          targetLayerId: targetId === MERGED_LAYER_ID ? null : targetId,
-          targetIsMerged: targetId === MERGED_LAYER_ID,
-          overwritePrior: false, // never delete in live mode — we update in place
-          updateExistingLayerId: liveLutLayerIdRef.current,
-          targetPalette: targetPaletteSwatches.length > 0 ? {
-            swatches: targetPaletteSwatches,
-            weights: targetPaletteWeights.slice(),
-            softness: targetSoftness,
-          } : undefined,
-        });
-        liveLutLayerIdRef.current = result.layerId;
-        lastSelfWriteRef.current = Date.now();
+        // Mode-aware dispatch (v1.16.4). LIVE used to only handle LUT mode —
+        // in RGB/Lab mode it was creating Color Lookup layers, which is wrong
+        // (those modes produce Curves layers). Branch by outputMode so LIVE
+        // works for whatever output the user has selected.
+        if (outputMode === "lut") {
+          const result = await applyLutAsAdjustmentLayer({
+            curves: renderedCurves,
+            preset: activePreset,
+            size: 33,
+            targetLayerId: targetId === MERGED_LAYER_ID ? null : targetId,
+            targetIsMerged: targetId === MERGED_LAYER_ID,
+            overwritePrior: false, // update-in-place handles the existing layer
+            updateExistingLayerId: liveLutLayerIdRef.current,
+            targetPalette: targetPaletteSwatches.length > 0 ? {
+              swatches: targetPaletteSwatches,
+              weights: targetPaletteWeights.slice(),
+              softness: targetSoftness,
+            } : undefined,
+          });
+          liveLutLayerIdRef.current = result.layerId;
+          lastSelfWriteRef.current = Date.now();
+        } else {
+          // RGB / Lab modes: update the existing Match Curves adjustment layer's
+          // curves descriptor + blend mode in place. No-op if user hasn't hit
+          // Apply yet (no layer to update); they need to seed one first.
+          const result = await updateMatchCurvesLayerInPlace(renderedCurves, activePreset);
+          if (result.ok) lastSelfWriteRef.current = Date.now();
+        }
       } catch (e: any) {
-        // Don't spam status during live drag — only show if persistent.
-        // (If the user wants to know why it's not updating they can hit
-        // Apply LUT manually and see the full error.)
-        setStatus(`Live LUT update skipped: ${e?.message ?? e}`);
+        setStatus(`Live update skipped: ${e?.message ?? e}`);
       }
     }, 300);
     return () => {
       if (liveBakeTimerRef.current) { clearTimeout(liveBakeTimerRef.current); liveBakeTimerRef.current = null; }
     };
-  }, [liveLut, renderedCurves, activePreset, targetId, targetPaletteWeights, targetSoftness, multiZone]);
+  }, [liveLut, renderedCurves, activePreset, targetId, targetPaletteWeights, targetSoftness, multiZone, outputMode]);
 
   const onApply = async () => {
     if (targetId == null) { setStatus("Pick target layer."); return; }
