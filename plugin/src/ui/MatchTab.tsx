@@ -676,15 +676,17 @@ export function MatchTab() {
   // the PaletteStrip UI and the synthesized-weighted-source path that drives the
   // histogram match. Recomputes when source pixels or count change. Falls back
   // to a restored-from-XMP cached swatch list when no live source is available.
-  // v1.20.9 — when a history recipe is active, its source swatches take
-  // precedence over live extraction so the recipe's weights index meaningful
-  // clusters (otherwise weight #3 = "the teal cluster" at save-time becomes
-  // weight #3 = "whatever the new source's 3rd cluster happens to be").
-  // Cleared by Refresh, by re-extracting from a new live source, or by
-  // explicitly opting out.
+  // v1.20.10 — live srcSnap ALWAYS wins. Whatever the user is focusing on
+  // (current source layer / selection) is the functional source. Recipe
+  // loaded from history seeds weights/preset but lets the live source's
+  // natural clusters drive synthesis — so re-focusing the panel (picking
+  // a layer, refreshing, dragging a marquee) immediately takes effect
+  // instead of being trapped behind a sticky recipe override.
+  // savedSourceSwatches is only the cold-start fallback when no live
+  // source exists yet (panel just opened against an XMP-tagged layer).
   const paletteSwatches = useMemo(() => {
-    if (savedSourceSwatches && savedSourceSwatches.length > 0) return savedSourceSwatches;
     if (srcSnap) return extractPalette(srcSnap.data, srcSnap.width, srcSnap.height, paletteCount);
+    if (savedSourceSwatches && savedSourceSwatches.length > 0) return savedSourceSwatches;
     return [];
   }, [srcSnap, paletteCount, savedSourceSwatches]);
 

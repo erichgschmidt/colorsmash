@@ -189,10 +189,18 @@ export function pushHistoryEntry(
   // Dedupe against the most-recent NON-pinned entry — pinned items can sit
   // at the top of the list (sorted to front by the UI), but they shouldn't
   // block a new bake from being recorded.
+  // v1.20.10 — dedupe is now a SHORT TIME WINDOW (2s) against the most-recent
+  // non-pinned entry. Previously dedupKey covered only a subset of state
+  // fields (preset/weights/softness/swatches) so Applying with different
+  // dimensions/zones/envelope/LUT options still matched the previous key
+  // and was silently rejected — users saw "only 2 entries ever save."
+  // Time-window dedupe protects against double-click spam without trying
+  // to keep an exhaustive field list in sync forever.
   const firstNonPinned = cur.find(e => !e?.pinned);
   if (
     firstNonPinned &&
     firstNonPinned.state &&
+    entry.timestamp - firstNonPinned.timestamp < 2000 &&
     dedupKey(firstNonPinned.state) === dedupKey(entry.state)
   ) {
     return cur.slice();
