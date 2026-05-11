@@ -284,6 +284,22 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     // read later in the same flow. Users wanted their marquee preserved so
     // the mask path could honor it; they can Ctrl+D manually if they want
     // the marching ants gone after a bake.
+    // v1.20.32 — capture selection mask bytes EAGERLY while the marquee
+    // is still live, so the compose blocks below don't depend on
+    // mid-flow restoreSelectionFromChannel succeeding (which was
+    // silently failing on some PS versions due to the malformed Save
+    // Selection descriptor — making focus and exclude both fall through
+    // to the base mask = all-white = adjustment everywhere). Parity
+    // with applyLut.ts which already eager-captures at its top.
+    const eagerSelBytesHolder: { value: Uint8Array | null } = { value: null };
+    if (params.selectionMode === "focus" || params.selectionMode === "exclude") {
+      try {
+        if (!targetIsMerged && t && t.bounds) {
+          eagerSelBytesHolder.value = await readSelectionMaskBytes(doc.id, t.bounds);
+        }
+      } catch { /* ignore */ }
+    }
+
     // v1.20.26 — snapshot the marquee so PS can't consume it during
     // adjustment-layer creation. Restored at the end of the bake.
     const scSelSnapshot = await snapshotSelectionToChannel();
@@ -636,16 +652,10 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
             tpMask = fullMask(pxCount);
           }
           // Compose marquee selection (focus or exclude) — parity with applyLut.
-          // v1.20.27 — re-load the selection from the snapshot channel; the
-          // band layers' creation consumed the active marquee earlier.
-          if (useSelectionMask) {
-            if (scSelSnapshot) {
-              try { await restoreSelectionFromChannel(scSelSnapshot); } catch { /* ignore */ }
-            }
-            const selBytes = await readSelectionMaskBytes(doc.id, t.bounds);
-            if (selBytes) {
-              tpMask = composeWithSelection(tpMask, selBytes, selectionMode);
-            }
+          // v1.20.32 — use the eager-captured bytes; reliable across PS
+          // versions (some silently drop the mid-flow restoreSelection).
+          if (useSelectionMask && eagerSelBytesHolder.value && eagerSelBytesHolder.value.length === pxCount) {
+            tpMask = composeWithSelection(tpMask, eagerSelBytesHolder.value, selectionMode);
           }
           const tpMaskImageData = await imaging.createImageDataFromBuffer(tpMask, {
             width: t.width, height: t.height, components: 1, chunky: true,
@@ -815,20 +825,10 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
           mask = fullMask(pxCount);
         }
         // Compose marquee selection (focus or exclude) — parity with applyLut.
-        // v1.20.27 — by this point the makeCurvesLayer call has already
-        // consumed the active marquee (PS uses it as the auto-applied mask
-        // we strip below). readSelectionMaskBytes would return null here.
-        // Briefly re-load the selection from the snapshot channel so the
-        // imaging.getSelection call has something to return; final restore
-        // still happens at the end of the modal block.
-        if (scUseSelection) {
-          if (scSelSnapshot) {
-            try { await restoreSelectionFromChannel(scSelSnapshot); } catch { /* ignore */ }
-          }
-          const selBytes = await readSelectionMaskBytes(doc.id, t.bounds);
-          if (selBytes) {
-            mask = composeWithSelection(mask, selBytes, scSelectionMode);
-          }
+        // v1.20.32 — use the eager-captured bytes (live marquee snapshotted
+        // before makeCurvesLayer consumed it).
+        if (scUseSelection && eagerSelBytesHolder.value && eagerSelBytesHolder.value.length === pxCount) {
+          mask = composeWithSelection(mask, eagerSelBytesHolder.value, scSelectionMode);
         }
         const { imaging } = require("photoshop");
         const maskImageData = await imaging.createImageDataFromBuffer(mask, {
