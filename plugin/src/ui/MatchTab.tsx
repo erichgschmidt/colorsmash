@@ -2395,7 +2395,8 @@ export function MatchTab() {
           <>
           <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 4, height: 18, lineHeight: "16px" }}>
             {/* v1.20.38 — row order: marquee | MASK | Off | Focus | Exclude | ↻ */}
-            <span style={{ fontSize: 9, opacity: marqueeDisabled ? 0.3 : 0.5, width: 38 }}>marquee</span>
+            {/* v1.20.42 — "marquee" label removed; MASK pill now leads the row.
+                The Off/Focus/Exclude pill labels are self-descriptive enough. */}
             <div onClick={() => setShowMask(v => !v)}
               title={showMask
                 ? "Show Mask ON — protected regions painted red on the matched preview (palette × selection composition). Click to disable."
