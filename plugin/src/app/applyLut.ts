@@ -563,6 +563,12 @@ export async function applyMultiZoneLutAsLayers(
     const doc = app.activeDocument;
     if (!doc) throw new Error("No active document.");
 
+    // v1.20.27 — snapshot the active marquee BEFORE the bands are created.
+    // PS consumes the selection on each adjustment-layer make, so by the
+    // time we need to read the selection mask for the sub-group's mask we
+    // need to re-load it from this channel.
+    const mzSelSnapshot = await snapshotSelectionToChannel();
+
     // 1. Find or create [Color Smash] group + clean up any prior Match LUT.
     const group = await getOrCreateColorSmashGroup(doc);
     if (params.overwritePrior !== false) {
@@ -725,7 +731,12 @@ export async function applyMultiZoneLutAsLayers(
             : fullMask(px);
           // Compose with selection if active. Selection mask is read at
           // composite bounds so the byte arrays align.
+          // v1.20.27 — restore from snapshot first; band creates consumed
+          // the live marquee.
           if (wantSelectionMask) {
+            if (mzSelSnapshot) {
+              try { await restoreSelectionFromChannel(mzSelSnapshot); } catch { /* ignore */ }
+            }
             const sel = await readSelectionMaskBytes(doc.id, compositeBounds);
             if (sel) mask = composeWithSelection(mask, sel, selectionMode);
           }
@@ -745,6 +756,12 @@ export async function applyMultiZoneLutAsLayers(
       if (params.xmpState && bandLayerIds.length > 0) {
         try { await writeLutLayerState(bandLayerIds[0], params.xmpState); }
         catch { /* non-fatal */ }
+      }
+
+      // v1.20.27 — restore marquee + clean up snapshot channel.
+      if (mzSelSnapshot) {
+        await restoreSelectionFromChannel(mzSelSnapshot);
+        await deleteChannel(mzSelSnapshot);
       }
 
       return { layerName: subName, layerId: bandContainer.id ?? null };

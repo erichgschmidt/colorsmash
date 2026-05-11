@@ -633,7 +633,12 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
             tpMask = fullMask(pxCount);
           }
           // Compose marquee selection (focus or exclude) — parity with applyLut.
+          // v1.20.27 — re-load the selection from the snapshot channel; the
+          // band layers' creation consumed the active marquee earlier.
           if (useSelectionMask) {
+            if (scSelSnapshot) {
+              try { await restoreSelectionFromChannel(scSelSnapshot); } catch { /* ignore */ }
+            }
             const selBytes = await readSelectionMaskBytes(doc.id, t.bounds);
             if (selBytes) {
               tpMask = composeWithSelection(tpMask, selBytes, selectionMode);
@@ -659,6 +664,12 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       if (params.amount && params.amount < 1) tags.push(`amt ${Math.round(params.amount * 100)}%`);
       if (params.chromaOnly) tags.push("hue-only");
       if (params.sourceLabel) tags.unshift(`src "${params.sourceLabel}"`);
+      // v1.20.27 — multi-zone returns here; restore the snapshot selection
+      // and clean up the temp alpha channel before exiting the modal block.
+      if (scSelSnapshot) {
+        await restoreSelectionFromChannel(scSelSnapshot);
+        await deleteChannel(scSelSnapshot);
+      }
       if (failures.length > 0) {
         // Surface the failure to the user instead of silently returning success.
         return `Matched (PARTIAL) · ${tags.join(" · ")} · ⚠ ${failures.length}/${bands.length} band(s) lack mask: ${failures.join("; ")}`;
@@ -801,7 +812,16 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
           mask = fullMask(pxCount);
         }
         // Compose marquee selection (focus or exclude) — parity with applyLut.
+        // v1.20.27 — by this point the makeCurvesLayer call has already
+        // consumed the active marquee (PS uses it as the auto-applied mask
+        // we strip below). readSelectionMaskBytes would return null here.
+        // Briefly re-load the selection from the snapshot channel so the
+        // imaging.getSelection call has something to return; final restore
+        // still happens at the end of the modal block.
         if (scUseSelection) {
+          if (scSelSnapshot) {
+            try { await restoreSelectionFromChannel(scSelSnapshot); } catch { /* ignore */ }
+          }
           const selBytes = await readSelectionMaskBytes(doc.id, t.bounds);
           if (selBytes) {
             mask = composeWithSelection(mask, selBytes, scSelectionMode);
