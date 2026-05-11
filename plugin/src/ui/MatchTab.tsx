@@ -1472,37 +1472,6 @@ export function MatchTab() {
         />
       </div>
 
-      {/* Output mode 3-way control. Lives below the target softness slider
-          because the selected mode drives both the PREVIEW (what you see in
-          the matched-preview window) and the Apply BAKE (Curves vs Color
-          Lookup adjustment layer). Mode change is instant — preview
-          re-renders, Apply button does the right thing.
-
-          - RGB: separable per-channel curves → Curves layer (continuous, editable)
-          - Lab: perceptual L*a*b* match, projected back to RGB curves → Curves layer
-          - LUT: 33³ 3D transform with preset blend math baked in → Color Lookup layer */}
-      <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 4 }}>
-        <span style={{ fontSize: 9, opacity: 0.5, width: 38 }}>output</span>
-        <div style={{ display: "flex", flex: 1, gap: 2 }}>
-          {([
-            ["rgb", "RGB", "Output mode: RGB — separable per-channel curves fit in RGB space. Creates a Curves adjustment layer; continuously editable in PS."],
-            ["lab", "Lab", "Output mode: Lab — perceptual L*a*b* histogram match (curves projected to per-channel RGB). Creates a Curves adjustment layer."],
-            ["lut", "LUT", "Output mode: LUT — 33³ 3D Color Lookup with preset blend math (Color/Hue/Saturation/Luminosity) baked in. Creates a Color Lookup adjustment layer that captures non-separable transforms a Curves layer can't represent. Preview shows the quantized LUT result so what you see matches what bakes."],
-          ] as Array<["rgb" | "lab" | "lut", string, string]>).map(([val, label, tip]) => (
-            <div key={val} onClick={() => setOutputMode(val)} title={tip}
-              style={{
-                flex: 1, height: 18, padding: 0,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
-                background: outputMode === val ? "#3a3a3a" : "transparent",
-                color: outputMode === val ? "#dddddd" : "#888",
-                border: `1px solid ${outputMode === val ? "#888" : "#444"}`,
-                borderRadius: 2, cursor: "pointer", userSelect: "none",
-                lineHeight: "16px", boxSizing: "border-box",
-              }}>{label}</div>
-          ))}
-        </div>
-      </div>
 
       {/* Accordion controls */}
       <div style={{ borderTop: "1px solid #444", margin: "6px 0 0" }} />
@@ -1870,10 +1839,44 @@ export function MatchTab() {
           guarantees the row stays single-line at any panel width — labels clip
           silently inside their own button instead of wrapping the buttons to two
           rows. Sp-button's internal text gets nowrap + overflow:hidden too. */}
+      {/* Output mode 3-way control. v1.15.0 placed this under the target
+          softness slider; v1.16.5 moved it above the Apply button row,
+          directly below the Multi / Blend If / Adaptive toggles — sits with
+          the other "what happens when I Apply" decisions instead of
+          floating between palette UI and the apply cluster. Mode change is
+          instant: preview re-renders to match the bake, Apply dispatches
+          to the right path (Curves vs Color Lookup), visibility sync
+          toggles existing outputs.
+
+          - RGB: separable per-channel curves → Curves layer (continuous, editable)
+          - Lab: perceptual L*a*b* match, projected back to RGB curves → Curves layer
+          - LUT: 33³ 3D transform with preset blend math baked in → Color Lookup layer */}
+      <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 4 }}>
+        <span style={{ fontSize: 9, opacity: 0.5, width: 38 }}>output</span>
+        <div style={{ display: "flex", flex: 1, gap: 2 }}>
+          {([
+            ["rgb", "RGB", "Output mode: RGB — separable per-channel curves fit in RGB space. Creates a Curves adjustment layer; continuously editable in PS."],
+            ["lab", "Lab", "Output mode: Lab — perceptual L*a*b* histogram match (curves projected to per-channel RGB). Creates a Curves adjustment layer."],
+            ["lut", "LUT", "Output mode: LUT — 33³ 3D Color Lookup with preset blend math (Color/Hue/Saturation/Luminosity) baked in. Creates a Color Lookup adjustment layer that captures non-separable transforms a Curves layer can't represent. Preview shows the quantized LUT result so what you see matches what bakes."],
+          ] as Array<["rgb" | "lab" | "lut", string, string]>).map(([val, label, tip]) => (
+            <div key={val} onClick={() => setOutputMode(val)} title={tip}
+              style={{
+                flex: 1, height: 18, padding: 0,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
+                background: outputMode === val ? "#3a3a3a" : "transparent",
+                color: outputMode === val ? "#dddddd" : "#888",
+                border: `1px solid ${outputMode === val ? "#888" : "#444"}`,
+                borderRadius: 2, cursor: "pointer", userSelect: "none",
+                lineHeight: "16px", boxSizing: "border-box",
+              }}>{label}</div>
+          ))}
+        </div>
+      </div>
+
       <div style={{ display: "flex", flexWrap: "nowrap", gap: 4, marginTop: 6, width: "100%" }}>
         {/* Single mode-aware Apply button (v1.15.0). The output-mode selector
-            below the target palette decides which adjustment layer this
-            produces:
+            above the Apply row decides which adjustment layer this produces:
               RGB / Lab → Curves layer (continuous, editable; honors Multi)
               LUT       → Color Lookup layer (non-separable transform; not
                           continuously editable but captures Color/Hue/Sat/
