@@ -2329,7 +2329,16 @@ export function MatchTab() {
       {(() => {
         const marqueeDisabled = srcMode === "selection";
         const disabledTip = "Disabled because the source is using the active marquee. Switch source to a layer or browsed image to use the marquee as an output mask.";
+        // v1.20.21 — clear hint text appears below the row when the user
+        // has selected focus/exclude but no marquee is captured. Tells them
+        // exactly what's missing instead of leaving them wondering why the
+        // preview didn't change.
+        const showNoSelectionHint =
+          !marqueeDisabled &&
+          selectionMode !== "off" &&
+          !selectionPreviewMask;
         return (
+          <>
           <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 4, height: 18, lineHeight: "16px" }}>
             <span style={{ fontSize: 9, opacity: marqueeDisabled ? 0.3 : 0.5, width: 38 }}>marquee</span>
             <div style={{ display: "flex", flex: 1, gap: 2, opacity: marqueeDisabled ? 0.55 : 1 }}>
@@ -2383,6 +2392,27 @@ export function MatchTab() {
               <span style={{ marginTop: -1, lineHeight: 1 }}>↻</span>
             </div>
           </div>
+          {showNoSelectionHint && (
+            <div style={{
+              marginTop: 2, padding: "2px 6px",
+              fontSize: 9, color: "#d8b87a",
+              background: "transparent", border: "1px solid #5a4a2a", borderRadius: 2,
+              lineHeight: 1.3,
+            }}>
+              Marquee mode is <b>{selectionMode}</b> but no selection was captured. Draw a marquee on the target document, then click ↻ to refresh.
+            </div>
+          )}
+          {marqueeDisabled && (
+            <div style={{
+              marginTop: 2, padding: "2px 6px",
+              fontSize: 9, color: "#888",
+              background: "transparent", border: "1px solid #444", borderRadius: 2,
+              lineHeight: 1.3,
+            }}>
+              Disabled because your <b>source mode is "selection"</b> — the marquee is in use as source pixels. Switch source mode to "layer" to use the marquee here as an output mask.
+            </div>
+          )}
+        </>
         );
       })()}
 
