@@ -428,13 +428,19 @@ export function PaletteStrip(props: PaletteStripProps) {
                 background: bg,
                 border: softness > 0 ? "none" : "1px solid #333",
                 borderRadius: 2,
-                // v1.20.44 — fadeWithWeight (target bar) makes opacity track
-                // the user multiplier linearly, so reducing the slider FEELS
-                // like masking the color out. A small floor keeps the
-                // segment grabbable even at weight=0.
+                // v1.20.47 — target bar fade is now much more dramatic:
+                // opacity tracks weight with a near-zero floor, AND we
+                // desaturate the color toward gray via grayscale filter
+                // proportional to (1 - weight). So weight=0 reads as a
+                // washed-out near-transparent strip on the checker
+                // background — looks unambiguously "masked." Source bar
+                // keeps the v1.7 behavior (low-weight just dims slightly).
                 opacity: fadeWithWeight
-                  ? Math.max(0.18, Math.min(1, w))
+                  ? Math.max(0.06, Math.min(1, w))
                   : (w < 0.02 ? 0.35 : 1),
+                filter: fadeWithWeight
+                  ? `grayscale(${Math.max(0, Math.min(1, 1 - w))})`
+                  : undefined,
                 cursor: adaptive ? "ew-resize" : "default",
                 touchAction: adaptive ? "none" : "auto",
               }}
