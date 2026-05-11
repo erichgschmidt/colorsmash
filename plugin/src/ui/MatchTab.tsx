@@ -31,6 +31,7 @@ import { uxpInfo } from "./uxpInfo";
 import { applyMatch } from "../app/applyMatch";
 import { applyLutAsAdjustmentLayer } from "../app/applyLut";
 import { LutLayerState, readLutLayerState, stampState } from "../app/lutXmp";
+import { syncOutputVisibilityToMode } from "../app/outputVisibility";
 import {
   app, action as psAction, readLayerPixels, executeAsModal, getActiveDoc, getSelectionBounds,
 } from "../services/photoshop";
@@ -168,6 +169,35 @@ export function MatchTab() {
   // pair (fitByMode, applyMatch's colorSpace param). LUT mode fits in RGB since
   // the curves are then trilinearly sampled into a 3D LUT regardless.
   const colorSpace: "rgb" | "lab" = outputMode === "lut" ? "rgb" : outputMode;
+
+  // Remember the last Curves-flavor mode so the SWAP pill can flip between
+  // LUT and the user's preferred Curves space (RGB or Lab). Toggling out of
+  // LUT goes back to whichever Curves mode was last active.
+  const lastCurvesModeRef = useRef<"rgb" | "lab">("rgb");
+  useEffect(() => {
+    if (outputMode === "rgb" || outputMode === "lab") {
+      lastCurvesModeRef.current = outputMode;
+    }
+  }, [outputMode]);
+
+  // Mode-switch visibility sync (v1.15.1). When outputMode flips, walk the
+  // [Color Smash] group and toggle Match Curves vs Match LUT layer visibility
+  // so what's showing in PS matches what the panel is editing — no manual
+  // eye-icon clicking. Skips first run to avoid spurious modal scopes on
+  // panel mount. The effect runs INSIDE executeAsModal already (helper
+  // wraps), so the React effect just kicks it off without await ceremony.
+  const visSyncFirstRunRef = useRef(false);
+  useEffect(() => {
+    if (!visSyncFirstRunRef.current) { visSyncFirstRunRef.current = true; return; }
+    syncOutputVisibilityToMode(outputMode).catch(() => { /* non-fatal */ });
+  }, [outputMode]);
+
+  // SWAP — single-click A/B between LUT and the last Curves mode. Useful for
+  // quick comparison: stage a match, hit SWAP a few times to compare the
+  // Curves layer's continuous output against the LUT's quantized version.
+  const onSwapMode = () => {
+    setOutputMode(prev => prev === "lut" ? lastCurvesModeRef.current : "lut");
+  };
   const [deselectOnApply, setDeselectOnApply] = useState(true);
   const [overwriteOnApply, setOverwriteOnApply] = useState(true);
   const [remember, setRemember] = useState(false);
@@ -1795,6 +1825,25 @@ export function MatchTab() {
             height: 28, lineHeight: "26px", boxSizing: "border-box",
             flex: "0 0 auto",
           }}>LIVE</div>
+        {/* SWAP — 1-click A/B between LUT and the last Curves mode (RGB or
+            Lab, whichever the user touched last). Also fires the visibility
+            sync via the outputMode effect, so the Color Smash group shows
+            whichever output the new mode points at. Useful for fast
+            comparison without dropping the mouse into the 3-way toggle. */}
+        <div onClick={onSwapMode}
+          title={outputMode === "lut"
+            ? `Swap to ${lastCurvesModeRef.current.toUpperCase()} mode (Curves). Hides Match LUT layers, shows Match Curves layers in PS.`
+            : `Swap to LUT mode. Hides Match Curves layers, shows Match LUT layers in PS.`}
+          style={{
+            padding: "1px 6px", fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
+            background: "transparent",
+            color: "#aab07a",
+            border: "1px solid #aab07a",
+            borderRadius: 2, cursor: "pointer", userSelect: "none",
+            display: "flex", alignItems: "center",
+            height: 28, lineHeight: "26px", boxSizing: "border-box",
+            flex: "0 0 auto",
+          }}>SWAP</div>
         {/* Restore: hydrate the panel UI from the selected Match LUT layer's
             XMP. Click on a previously-authored Match LUT layer in PS's
             Layers panel, then click RESTORE here — every captured slider /
