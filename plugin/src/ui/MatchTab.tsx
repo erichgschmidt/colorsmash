@@ -1208,6 +1208,8 @@ export function MatchTab() {
       return;
     }
     if (!renderedCurves) return;
+    // eslint-disable-next-line no-console
+    console.log("[ColorSmash][LIVE] dep changed → schedule bake (preset=" + activePreset + ")");
     if (liveBakeTimerRef.current) clearTimeout(liveBakeTimerRef.current);
     liveBakeTimerRef.current = setTimeout(async () => {
       liveBakeTimerRef.current = null;
