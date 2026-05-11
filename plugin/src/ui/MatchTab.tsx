@@ -187,6 +187,14 @@ export function MatchTab() {
   const [lutDither, setLutDither] = useState(true);
   const [lutAdvancedOpen, setLutAdvancedOpen] = useState(false);
 
+  // Selection tristate (v1.18.0). At Apply time, if a marquee selection is
+  // active in PS and mode is Focus/Exclude, the marquee gets attached as the
+  // layer mask (multiplied with the target-palette mask if both are active).
+  //   off:     ignore selection, full-image apply
+  //   focus:   layer applies only inside the marquee
+  //   exclude: layer applies only outside the marquee
+  const [selectionMode, setSelectionMode] = useState<"off" | "focus" | "exclude">("off");
+
   // Remember the last Curves-flavor mode so the SWAP pill can flip between
   // LUT and the user's preferred Curves space (RGB or Lab). Toggling out of
   // LUT goes back to whichever Curves mode was last active.
@@ -305,6 +313,9 @@ export function MatchTab() {
         if (typeof s.lutStrength === "number") setLutStrength(Math.max(0, Math.min(100, s.lutStrength)));
         if (s.lutGrid === 17 || s.lutGrid === 33 || s.lutGrid === 65) setLutGrid(s.lutGrid);
         if (typeof s.lutDither === "boolean") setLutDither(s.lutDither);
+        if (s.selectionMode === "off" || s.selectionMode === "focus" || s.selectionMode === "exclude") {
+          setSelectionMode(s.selectionMode);
+        }
         if (s.deselectOnApply != null) setDeselectOnApply(s.deselectOnApply);
         if (s.overwriteOnApply != null) setOverwriteOnApply(s.overwriteOnApply);
         if (s.openSection !== undefined) setOpenSection(s.openSection);
@@ -327,7 +338,7 @@ export function MatchTab() {
     const snapshot: PersistedSettings = {
       remember,
       amount: amountLabel, smooth: smoothLabel, stretch: stretchLabel,
-      anchorStretchToHist, chromaOnly, colorSpace, outputMode, lutStrength, lutGrid, lutDither, matchMode, multiZone, multiZoneLimit, adaptiveBands,
+      anchorStretchToHist, chromaOnly, colorSpace, outputMode, lutStrength, lutGrid, lutDither, selectionMode, matchMode, multiZone, multiZoneLimit, adaptiveBands,
       deselectOnApply, overwriteOnApply,
       openSection,
       zones: zonesLabel, lockZoneTotal,
@@ -341,7 +352,7 @@ export function MatchTab() {
     };
     saveDebouncedRef.current!(snapshot);
   }, [remember, matchMode, multiZone, multiZoneLimit, adaptiveBands, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
-      colorSpace, outputMode, lutStrength, lutGrid, lutDither, deselectOnApply, overwriteOnApply, openSection,
+      colorSpace, outputMode, lutStrength, lutGrid, lutDither, selectionMode, deselectOnApply, overwriteOnApply, openSection,
       zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel, paletteCount, paletteAdaptive, sourceSoftness, targetSoftness, targetMaskEnabled]);
 
   const [docs, setDocs] = useState<{ id: number; name: string }[]>([]);
@@ -1151,6 +1162,7 @@ export function MatchTab() {
           gridSize: lutGrid,
           strength: lutStrength / 100,
           dither: lutDither,
+          selectionMode,
           targetLayerId: targetId === MERGED_LAYER_ID ? null : targetId,
           targetIsMerged: targetId === MERGED_LAYER_ID,
           overwritePrior: overwriteOnApply,
@@ -1976,6 +1988,36 @@ export function MatchTab() {
           </div>
         </div>
       )}
+
+      {/* Selection tristate (v1.18.0). At Apply, if a marquee is active in PS:
+            - Focus:   layer applies only inside the marquee
+            - Exclude: layer applies only outside the marquee
+            - Off:     ignore the marquee (full-image apply)
+          Composes with the target-palette mask if both are active —
+          mask × selection (focus) or mask × (255 - selection) (exclude).
+          Visible in all output modes (RGB / Lab / LUT). */}
+      <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 4, height: 18, lineHeight: "16px" }}>
+        <span style={{ fontSize: 9, opacity: 0.5, width: 38 }}>marquee</span>
+        <div style={{ display: "flex", flex: 1, gap: 2 }}>
+          {([
+            ["off",     "Off",     "Ignore the active marquee — full-image apply (current default behavior). The marquee is preserved on the doc; toggle to Focus/Exclude to use it as a layer mask."],
+            ["focus",   "Focus",   "Use the active marquee as the layer mask — the Curves/LUT only applies INSIDE the selected region. Multiplied with the target-palette mask if both are active. No-op if no marquee is active."],
+            ["exclude", "Exclude", "Use the INVERSE of the active marquee as the layer mask — the Curves/LUT applies everywhere OUTSIDE the selected region. Useful for protecting a chosen area."],
+          ] as Array<["off" | "focus" | "exclude", string, string]>).map(([val, label, tip]) => (
+            <div key={val} onClick={() => setSelectionMode(val)} title={tip}
+              style={{
+                flex: 1, height: 18, padding: 0,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
+                background: selectionMode === val ? "#3a3a3a" : "transparent",
+                color: selectionMode === val ? "#dddddd" : "#888",
+                border: `1px solid ${selectionMode === val ? "#888" : "#444"}`,
+                borderRadius: 2, cursor: "pointer", userSelect: "none",
+                lineHeight: "16px", boxSizing: "border-box",
+              }}>{label}</div>
+          ))}
+        </div>
+      </div>
 
       <div style={{ display: "flex", flexWrap: "nowrap", gap: 4, marginTop: 6, width: "100%" }}>
         {/* Single mode-aware Apply button (v1.15.0). The output-mode selector

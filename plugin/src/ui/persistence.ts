@@ -23,6 +23,7 @@ export interface PersistedSettings {
   lutStrength?: number;   // 0..100 — bake-time blend toward identity LUT
   lutGrid?: 17 | 33 | 65; // 3D LUT grid points per axis
   lutDither?: boolean;    // PS colorLookup.dither field
+  selectionMode?: "off" | "focus" | "exclude"; // v1.18.0 — marquee → layer mask
   // Apply behavior
   deselectOnApply?: boolean;
   overwriteOnApply?: boolean;

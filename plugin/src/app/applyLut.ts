@@ -17,10 +17,12 @@ import { ChannelCurves, generateLutCube, Preset, lerpCurvesTowardIdentity } from
 import {
   GROUP_NAME, action, app,
   executeAsModal, readLayerPixels, setClippingMask, PixelBuffer,
+  readSelectionMaskBytes,
 } from "../services/photoshop";
 import { generateIccDeviceLinkBase64 } from "./iccGen";
 import {
-  TargetPaletteSpec, targetWeightsActive, applyTargetPaletteMaskToLayer,
+  TargetPaletteSpec, targetWeightsActive,
+  buildTargetPaletteMaskBytes, attachLayerMask, composeWithSelection, fullMask,
 } from "./targetMask";
 import { LutLayerState, writeLutLayerState } from "./lutXmp";
 
@@ -55,6 +57,11 @@ export interface ApplyLutParams {
   /** True when target is the Merged-document sentinel — skips both clipping
       and per-cluster masking since neither has a meaningful spatial anchor. */
   targetIsMerged?: boolean;
+  /** Marquee → layer mask (v1.18.0). When "focus", attach the active
+      selection as the layer mask (LUT only applies inside marquee). When
+      "exclude", attach the inverse. Composes with the target-palette mask
+      when both are active. No-op when "off" or no selection exists. */
+  selectionMode?: "off" | "focus" | "exclude";
   /** Panel state to embed in the layer's XMP metadata. When present, the
       layer carries enough info for the Restore button to rehydrate the
       panel UI from this layer later. Optional — apply works without it. */
@@ -302,15 +309,21 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
   const stamp = Date.now();
   const fileName = `colorsmash_${presetTag}_${stamp}.cube`;
 
-  // Decide whether the target-palette mask is needed. Skipped on merged
-  // target (no layer-bounds-aligned buffer to attach against) and when all
-  // weights are ≈1 (no attenuation = no point burning CPU on the mask).
-  const wantMask = !!(
+  // Decide whether to attach a layer mask. Three independent inputs:
+  //   - target-palette weights (when non-neutral → cluster-soft mask)
+  //   - selection tristate (focus / exclude → marquee → mask)
+  //   - target is real layer (not Merged — no spatial anchor otherwise)
+  // Composed as: cluster_mask × selection_factor.
+  // Skipped entirely when target is Merged.
+  const selectionMode = params.selectionMode ?? "off";
+  const wantPaletteMask = !!(
     params.targetPalette
     && !params.targetIsMerged
     && params.targetLayerId != null
     && targetWeightsActive(params.targetPalette)
   );
+  const wantSelectionMask = selectionMode !== "off" && !params.targetIsMerged && params.targetLayerId != null;
+  const wantAnyMask = wantPaletteMask || wantSelectionMask;
 
   return await executeAsModal("Color Smash apply LUT", async () => {
     const doc = app.activeDocument;
@@ -322,22 +335,42 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
     // call applyMatch.ts uses, so the mask is computed against the same
     // full-resolution buffer either path produces.
     let targetBuf: PixelBuffer | null = null;
-    if (wantMask) {
+    let selectionMaskBytes: Uint8Array | null = null;
+    if (wantAnyMask) {
       const targetLayer = findLayerById(doc.layers ?? [], params.targetLayerId!);
       if (targetLayer) {
         try {
           targetBuf = await readLayerPixels(targetLayer, undefined, doc.id);
         } catch { /* mask becomes a no-op if read fails */ }
       }
+      if (wantSelectionMask && targetBuf) {
+        selectionMaskBytes = await readSelectionMaskBytes(doc.id, targetBuf.bounds);
+        // Null means no marquee active or imaging API rejected — treat as
+        // mode = off for this bake. (Don't surface as an error; the user
+        // may have deselected by now.)
+      }
     }
 
     // Single helper for "attach the mask to layer X" so create and update
-    // paths share it. Silently no-op if the buffer isn't available.
+    // paths share it. Builds the appropriate mask (palette × selection)
+    // and attaches via imaging.putLayerMask.
     const attachMaskIfRequested = async (layerId: number) => {
-      if (!wantMask || !targetBuf || !params.targetPalette) return;
+      if (!wantAnyMask || !targetBuf) return;
+      const px = targetBuf.width * targetBuf.height;
+      // Start from the target-palette mask if active, otherwise a full mask.
+      let mask: Uint8Array;
+      if (wantPaletteMask && params.targetPalette) {
+        mask = buildTargetPaletteMaskBytes(targetBuf, params.targetPalette);
+      } else {
+        mask = fullMask(px);
+      }
+      // Compose with selection if active.
+      if (selectionMaskBytes && selectionMode !== "off") {
+        mask = composeWithSelection(mask, selectionMaskBytes, selectionMode);
+      }
       try {
-        await applyTargetPaletteMaskToLayer(doc.id, layerId, targetBuf, params.targetPalette);
-      } catch { /* non-fatal; layer still works without the mask */ }
+        await attachLayerMask(doc.id, layerId, mask, targetBuf.width, targetBuf.height, targetBuf.bounds);
+      } catch { /* non-fatal */ }
     };
 
     // ─── Update-in-place path (Live LUT) ───────────────────────────────────
@@ -480,15 +513,18 @@ export async function applyMultiZoneLutAsLayers(
     return { key, cubeText, cubeB64, profileB64 };
   });
 
-  // Need the target's PixelBuffer for the target-palette-mask path (same as
-  // single-LUT). Read it once + reuse for both band-mask sub-group attachment
-  // and palette-mask sub-group attachment.
+  // Sub-group mask composition: target-palette mask × selection mask (focus
+  // or exclude). Same flags as single-LUT, just attached to the sub-group
+  // instead of a single layer.
+  const selectionMode = params.selectionMode ?? "off";
   const wantPaletteMask = !!(
     params.targetPalette
     && !params.targetIsMerged
     && params.targetLayerId != null
     && targetWeightsActive(params.targetPalette)
   );
+  const wantSelectionMask = selectionMode !== "off" && !params.targetIsMerged && params.targetLayerId != null;
+  const wantSubGroupMask = wantPaletteMask || wantSelectionMask;
 
   return await executeAsModal("Color Smash apply multi-zone LUT", async () => {
     const doc = app.activeDocument;
@@ -641,13 +677,26 @@ export async function applyMultiZoneLutAsLayers(
       //    Same composite-bounds note as the band masks above: the mask
       //    buffer is doc-sized, so its targetBounds must be the composite's
       //    full extent, NOT the (possibly smaller) target layer's bounds.
-      if (wantPaletteMask && params.targetPalette && bandContainer?.id != null) {
+      if (wantSubGroupMask && bandContainer?.id != null) {
         try {
           const t = {
             data: composite.data, width: composite.width, height: composite.height,
             bounds: compositeBounds,
           };
-          await applyTargetPaletteMaskToLayer(doc.id, bandContainer.id, t, params.targetPalette);
+          const px = t.width * t.height;
+          // Build the base mask: target-palette cluster mask if active,
+          // otherwise a full-intensity (255) array so selection mode alone
+          // can still mask the sub-group.
+          let mask = (wantPaletteMask && params.targetPalette)
+            ? buildTargetPaletteMaskBytes(t, params.targetPalette)
+            : fullMask(px);
+          // Compose with selection if active. Selection mask is read at
+          // composite bounds so the byte arrays align.
+          if (wantSelectionMask) {
+            const sel = await readSelectionMaskBytes(doc.id, compositeBounds);
+            if (sel) mask = composeWithSelection(mask, sel, selectionMode);
+          }
+          await attachLayerMask(doc.id, bandContainer.id, mask, t.width, t.height, t.bounds);
         } catch { /* non-fatal */ }
       }
 

@@ -130,4 +130,47 @@ export async function setClippingMask(layer: any, clip: boolean): Promise<void> 
   ], {});
 }
 
+/**
+ * Read the active selection's per-pixel mask values as a Uint8Array sized to
+ * the given bounds rect. Each byte = 0..255 (0 = fully outside selection, 255
+ * = fully inside, intermediate values for feathered / anti-aliased edges).
+ *
+ * Returns null when there's no active selection or the imaging API rejects
+ * the request — callers should treat null as "no selection mask available."
+ *
+ * Used by the Selection tristate (v1.18.0) to attach the marquee as a layer
+ * mask at Apply time, optionally multiplied with the target-palette mask.
+ */
+export async function readSelectionMaskBytes(
+  documentId: number,
+  bounds: Rect,
+): Promise<Uint8Array | null> {
+  if (!imaging || !imaging.getSelection) return null;
+  const width = bounds.right - bounds.left;
+  const height = bounds.bottom - bounds.top;
+  if (width <= 0 || height <= 0) return null;
+  try {
+    const sel = await imaging.getSelection({
+      documentID: documentId,
+      sourceBounds: bounds,
+      kind: "selection",
+    });
+    // imaging.getSelection returns ImageData with 1-component grayscale.
+    const raw = await sel.imageData.getData();
+    const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
+    // Detach the imaging buffer so we don't leak it. Some PS versions expose
+    // .dispose() on the ImageData.
+    try { sel.imageData.dispose?.(); } catch { /* ignore */ }
+    // Expected byte length = width × height (one byte per pixel).
+    if (bytes.length === width * height) return new Uint8Array(bytes);
+    // Fallback: copy out what's there and clamp to expected size.
+    const out = new Uint8Array(width * height);
+    out.set(bytes.subarray(0, Math.min(out.length, bytes.length)));
+    return out;
+  } catch {
+    // No selection / unsupported / out of bounds — all treated the same.
+    return null;
+  }
+}
+
 export { action, app };

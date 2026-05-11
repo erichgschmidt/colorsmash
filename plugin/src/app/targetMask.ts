@@ -149,6 +149,48 @@ export async function attachLayerMask(
   }
 }
 
+/**
+ * Composite a target-palette mask with an optional selection mask. Both
+ * arrays must be the same length (one byte per pixel). When selection mode is:
+ *   - "focus":   out = mask × selection / 255     (apply only inside selection)
+ *   - "exclude": out = mask × (255 - selection) / 255  (apply only outside)
+ *   - "off":     out = mask                       (no selection compositing)
+ *
+ * Selection mask byte 0 = fully outside selection, 255 = fully inside. Feathered
+ * edges interpolate. The base `mask` is the target-palette mask if active, or
+ * a constant-255 array (treat-as-no-mask) when target palette is neutral but
+ * selection is set.
+ */
+export type SelectionMode = "off" | "focus" | "exclude";
+
+export function composeWithSelection(
+  mask: Uint8Array,
+  selection: Uint8Array | null,
+  mode: SelectionMode,
+): Uint8Array {
+  if (!selection || mode === "off") return mask;
+  if (selection.length !== mask.length) return mask; // bounds mismatch — bail
+  const out = new Uint8Array(mask.length);
+  if (mode === "focus") {
+    for (let i = 0; i < mask.length; i++) {
+      out[i] = (mask[i] * selection[i] + 127) >> 8; // /255 with rounding ≈ × 257 >> 16
+    }
+  } else { // exclude
+    for (let i = 0; i < mask.length; i++) {
+      out[i] = (mask[i] * (255 - selection[i]) + 127) >> 8;
+    }
+  }
+  return out;
+}
+
+/** Build a constant-255 mask of the given length — used when no target-palette
+ *  mask exists but a selection mask should still drive layer masking. */
+export function fullMask(byteLength: number): Uint8Array {
+  const out = new Uint8Array(byteLength);
+  out.fill(255);
+  return out;
+}
+
 /** Convenience: build + attach mask in one call. */
 export async function applyTargetPaletteMaskToLayer(
   docId: number,
