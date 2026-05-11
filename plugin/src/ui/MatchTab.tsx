@@ -2183,13 +2183,25 @@ export function MatchTab() {
           title="Export the staged preset as a portable 33³ .CUBE 3D LUT to disk. Loadable in Photoshop, Premiere, Resolve, etc. Use Apply LUT instead if you just want it in this PS doc.">Save LUT…</sp-button>
       </div>
 
-      {/* Recent history (v1.20.0). Collapsible — only takes vertical space
-          when the user expands it. Header is a thin row with a chevron +
-          "history" label + count badge. Body renders palette-signature
-          thumbnails (one per entry). Click a thumbnail → restore state.
-          When the ring buffer is empty (no Applies yet this session AND no
-          saved history), the whole section is hidden. */}
-      {recentHistory.length > 0 && (
+      {/* Recent history (v1.20.0). Always rendered — empty buffer shows
+          dim placeholder slots (v1.20.2) so the user discovers the feature
+          even before their first Apply. As entries come in, placeholders
+          get replaced from the left until the buffer fills. Pinned entries
+          push placeholders out of the row. */}
+      {(() => {
+        // Sort pinned entries to the FRONT (visually) so favorites are
+        // always immediately reachable. Pinned entries have a gold border
+        // and a visible star icon; recents have plain border + outline star.
+        const sorted = [...recentHistory].sort((a, b) => {
+          const ap = a.pinned ? 1 : 0;
+          const bp = b.pinned ? 1 : 0;
+          return bp - ap;
+        });
+        // Pad with placeholders up to HISTORY_MAX so the row always shows
+        // the same visual capacity. Each placeholder slot is rendered as a
+        // dim outlined rectangle below.
+        const placeholderCount = Math.max(0, HISTORY_MAX - sorted.length);
+        return (
         <div style={{ marginTop: 6 }}>
           <div onClick={() => setHistoryOpen(o => !o)}
             style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, opacity: 0.65,
@@ -2202,15 +2214,7 @@ export function MatchTab() {
           </div>
           {historyOpen && (
             <div style={{ display: "flex", flexDirection: "row", gap: 4, marginTop: 4, flexWrap: "wrap" }}>
-              {/* Sort pinned entries to the FRONT (visually) so favorites are
-                  always immediately reachable. Pinned entries have a gold
-                  border + visible star icon; recents have a plain border and
-                  a hidden star that appears on hover. */}
-              {[...recentHistory].sort((a, b) => {
-                const ap = a.pinned ? 1 : 0;
-                const bp = b.pinned ? 1 : 0;
-                return bp - ap; // pinned-first
-              }).map(entry => (
+              {sorted.map(entry => (
                 <div key={entry.id}
                   title={`${entry.label}\nSaved ${new Date(entry.timestamp).toLocaleString()}\nClick to restore. ${entry.pinned ? "★ Pinned — won't be evicted from history." : "Shift-click the star to pin."}`}
                   style={{
@@ -2264,21 +2268,42 @@ export function MatchTab() {
                     }}>{entry.pinned ? "★" : "☆"}</div>
                 </div>
               ))}
+              {/* Placeholder slots (v1.20.2) — fill out the row to
+                  HISTORY_MAX so the user discovers the feature even
+                  before their first Apply. Each placeholder is a thin
+                  dashed-outline rectangle with a faint "—" centered.
+                  Non-interactive (no click handler). */}
+              {Array.from({ length: placeholderCount }).map((_, i) => (
+                <div key={`ph-${i}`}
+                  title="Empty history slot — Apply a match to fill."
+                  style={{
+                    width: 60, height: 16, padding: 0,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    border: "1px dashed #3a3a3a", borderRadius: 2,
+                    background: "transparent",
+                    color: "#3a3a3a", fontSize: 9, lineHeight: 1,
+                    userSelect: "none", flexShrink: 0,
+                  }}>—</div>
+              ))}
               {/* Clear-history — only nukes the non-pinned recents; pinned
-                  stay. Tooltip explains the distinction. */}
-              <div onClick={() => setRecentHistory(prev => prev.filter(e => e.pinned))}
-                title="Clear recent history. Pinned entries are preserved."
-                style={{
-                  width: 16, height: 16, display: "flex",
-                  alignItems: "center", justifyContent: "center",
-                  fontSize: 10, color: "#888", border: "1px solid #444",
-                  borderRadius: 2, cursor: "pointer", userSelect: "none",
-                  flexShrink: 0,
-                }}>×</div>
+                  stay. Tooltip explains the distinction. Hidden when there
+                  are no non-pinned entries to clear (avoid dead affordance). */}
+              {recentHistory.some(e => !e.pinned) && (
+                <div onClick={() => setRecentHistory(prev => prev.filter(e => e.pinned))}
+                  title="Clear recent history. Pinned entries are preserved."
+                  style={{
+                    width: 16, height: 16, display: "flex",
+                    alignItems: "center", justifyContent: "center",
+                    fontSize: 10, color: "#888", border: "1px solid #444",
+                    borderRadius: 2, cursor: "pointer", userSelect: "none",
+                    flexShrink: 0,
+                  }}>×</div>
+              )}
             </div>
           )}
         </div>
-      )}
+        );
+      })()}
 
       {/* LUT-specific knobs (v1.17.0; relocated below the Apply row in v1.18.x
           so the Apply cluster reads as the primary action — knobs are
