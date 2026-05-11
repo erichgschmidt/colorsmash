@@ -2374,9 +2374,8 @@ export function MatchTab() {
         return (
           <>
           <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 4, height: 18, lineHeight: "16px" }}>
-            {/* v1.20.37 — MASK pill leads the row so users see the mask
-                visualization toggle FIRST, then the marquee tristate
-                immediately to its right. */}
+            {/* v1.20.38 — row order: marquee | MASK | Off | Focus | Exclude | ↻ */}
+            <span style={{ fontSize: 9, opacity: marqueeDisabled ? 0.3 : 0.5, width: 38 }}>marquee</span>
             <div onClick={() => setShowMask(v => !v)}
               title={showMask
                 ? "Show Mask ON — protected regions painted red on the matched preview (palette × selection composition). Click to disable."
@@ -2392,7 +2391,6 @@ export function MatchTab() {
                 height: 18, lineHeight: "16px", boxSizing: "border-box",
                 flexShrink: 0,
               }}>MASK</div>
-            <span style={{ fontSize: 9, opacity: marqueeDisabled ? 0.3 : 0.5, width: 38 }}>marquee</span>
             <div style={{ display: "flex", flex: 1, gap: 2, opacity: marqueeDisabled ? 0.55 : 1 }}>
               {([
                 ["off",     "Off",     "Ignore the marquee — full-image apply (default). The marquee stays on the doc."],
