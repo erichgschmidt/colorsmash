@@ -1105,8 +1105,8 @@ export function MatchTab() {
   // entry's saved snapshot. Does NOT auto-Apply (predictable: user picks
   // history, panel updates, user hits Apply if they want to bake again).
   const applyHistoryEntry = (entry: HistoryEntry): void => {
-    applyStateToPanel(entry.state);
-    setStatus(`Restored panel state from history (${entry.label}).`);
+    applyStateToPanel(entry.state, "recipe");
+    setStatus(`Restored recipe from history (${entry.label}). Target settings preserved.`);
   };
 
   // Shared restore implementation — pulled out of the manual onRestoreFromLayer
@@ -1114,10 +1114,17 @@ export function MatchTab() {
   // layer id so the listener can target the just-selected layer specifically
   // (vs the manual button which uses whatever is active). Returns true if it
   // applied a restore, false if the layer had no Color Smash XMP.
-  // Apply a LutLayerState to all the panel setters. Shared by the XMP-
-  // restore path (restoreFromLayerId) and the history-click path
-  // (applyHistoryEntry) so both rehydrate the panel identically.
-  const applyStateToPanel = (state: LutLayerState): void => {
+  // Apply a LutLayerState to the panel setters.
+  //   mode === "full":   restores EVERYTHING including target-side state.
+  //                      Used by RESTORE/AUTO on XMP — "continue editing
+  //                      this Match layer" is the right semantic there.
+  //   mode === "recipe": skips target-side fields (targetPaletteWeights,
+  //                      targetSoftness, targetPaletteSwatches, selectionMode).
+  //                      Used by history click so the user can apply an old
+  //                      RECIPE to their CURRENT target without losing their
+  //                      target-side tuning. History becomes a preset library
+  //                      instead of an undo timeline.
+  const applyStateToPanel = (state: LutLayerState, mode: "full" | "recipe" = "full"): void => {
     if (state.preset) setActivePreset(state.preset as any);
     if (state.matchMode) setMatchMode(state.matchMode as MatchMode);
     if (state.outputMode === "rgb" || state.outputMode === "lab" || state.outputMode === "lut") {
@@ -1133,11 +1140,11 @@ export function MatchTab() {
     if (state.sourcePaletteWeights && Array.isArray(state.sourcePaletteWeights)) {
       setPaletteWeights(state.sourcePaletteWeights);
     }
-    if (state.targetPaletteWeights && Array.isArray(state.targetPaletteWeights)) {
+    if (mode === "full" && state.targetPaletteWeights && Array.isArray(state.targetPaletteWeights)) {
       setTargetPaletteWeights(state.targetPaletteWeights);
     }
     if (typeof state.sourceSoftness === "number") setSourceSoftness(state.sourceSoftness);
-    if (typeof state.targetSoftness === "number") setTargetSoftness(state.targetSoftness);
+    if (mode === "full" && typeof state.targetSoftness === "number") setTargetSoftness(state.targetSoftness);
     if (state.paletteAdaptive != null) setPaletteAdaptive(!!state.paletteAdaptive);
     if (state.multiZone != null) setMultiZone(!!state.multiZone);
     if (state.dimensions) {
@@ -1155,13 +1162,13 @@ export function MatchTab() {
     if (Array.isArray(state.sourcePaletteSwatches) && state.sourcePaletteSwatches.length > 0) {
       setSavedSourceSwatches(state.sourcePaletteSwatches as PaletteSwatch[]);
     }
-    if (Array.isArray(state.targetPaletteSwatches) && state.targetPaletteSwatches.length > 0) {
+    if (mode === "full" && Array.isArray(state.targetPaletteSwatches) && state.targetPaletteSwatches.length > 0) {
       setSavedTargetSwatches(state.targetPaletteSwatches as PaletteSwatch[]);
     }
     if (typeof state.lutStrength === "number") setLutStrength(Math.max(0, Math.min(100, state.lutStrength)));
     if (state.lutGrid === 17 || state.lutGrid === 33 || state.lutGrid === 65) setLutGrid(state.lutGrid);
     if (typeof state.lutDither === "boolean") setLutDither(state.lutDither);
-    if (state.selectionMode === "off" || state.selectionMode === "focus" || state.selectionMode === "exclude") {
+    if (mode === "full" && (state.selectionMode === "off" || state.selectionMode === "focus" || state.selectionMode === "exclude")) {
       setSelectionMode(state.selectionMode);
     }
   };
