@@ -187,6 +187,13 @@ export function MatchTab() {
   const [lutDither, setLutDither] = useState(true);
   const [lutAdvancedOpen, setLutAdvancedOpen] = useState(false);
 
+  // Show Mask overlay (v1.18.x). When ON, the matched preview paints
+  // protected regions (where the mask is LOW = LUT/Curves WON'T apply) with
+  // a semi-transparent red wash. Convention matches PS's Quick Mask: red =
+  // protected, clear = affected. Lets users SEE the composed mask
+  // (palette × selection) before Apply, without manually inspecting masks.
+  const [showMask, setShowMask] = useState(false);
+
   // Selection tristate (v1.18.0). At Apply time, if a marquee selection is
   // active in PS and mode is Focus/Exclude, the marquee gets attached as the
   // layer mask (multiplied with the target-palette mask if both are active).
@@ -910,7 +917,35 @@ export function MatchTab() {
       }
       out = lutOut;
     }
-    matchedHandleRef.current.setPixels(out, tgtBuf.width, tgtBuf.height);
+    // Show Mask overlay (v1.18.x). When toggled on, red-wash regions where
+    // the composed mask is LOW (LUT/Curves will NOT apply there). Convention
+    // matches PS Quick Mask: red = protected. Currently shows the target-
+    // palette mask only — selection compositing in the preview is a future
+    // increment (would need a per-render selection read at preview bounds).
+    if (showMask && targetWeightsActive && targetEffectiveWeights) {
+      const ew = targetEffectiveWeights;
+      // Mutate a fresh copy so the cached `out` for resultPendingRef stays
+      // the un-overlaid version (matters if user toggles showMask off — we
+      // shouldn't have to recompute the curves to redraw).
+      const overlaid = new Uint8Array(out);
+      for (let i = 0, p = 0; i < overlaid.length; i += 4, p++) {
+        const w = Math.max(0, Math.min(1, ew[p]));
+        // protectAmount = 1 - mask. 0 = fully applied (no red). 1 = fully
+        // protected (max red).
+        const protectAmount = 1 - w;
+        if (protectAmount < 0.01) continue;
+        // Lerp toward red (255, 40, 40) by 0.55 × protectAmount. Strong
+        // enough to be visible against most images, not so strong that the
+        // underlying preview is invisible.
+        const wash = protectAmount * 0.55;
+        overlaid[i]     = Math.round(overlaid[i]     * (1 - wash) + 255 * wash);
+        overlaid[i + 1] = Math.round(overlaid[i + 1] * (1 - wash) + 40  * wash);
+        overlaid[i + 2] = Math.round(overlaid[i + 2] * (1 - wash) + 40  * wash);
+      }
+      matchedHandleRef.current.setPixels(overlaid, tgtBuf.width, tgtBuf.height);
+    } else {
+      matchedHandleRef.current.setPixels(out, tgtBuf.width, tgtBuf.height);
+    }
     // Also push the unmodified target pixels so the preview's Before/After badge
     // can swap to the original on click/hold without a round-trip to the parent.
     matchedHandleRef.current.setBefore(tgtBuf.data, tgtBuf.width, tgtBuf.height);
@@ -948,7 +983,7 @@ export function MatchTab() {
     // triggers a redraw with the fresh per-pixel weights.
     // targetMaskEnabled also in deps so toggling the mask gate redraws the
     // preview between masked and uniform application.
-  }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, multiZoneExtents, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope, activePreset, targetEffectiveWeights, targetMaskEnabled]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, multiZoneExtents, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope, activePreset, targetEffectiveWeights, targetMaskEnabled, showMask, outputMode, lutStrength, lutGrid]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Export the staged preset as a 33-grid 3D LUT in .CUBE format. Sidesteps the
   // unreliable PS Color Lookup API entirely — user picks a save location, we write
@@ -1917,78 +1952,6 @@ export function MatchTab() {
         </div>
       </div>
 
-      {/* LUT-specific knobs (v1.17.0). Only rendered when LUT mode is active —
-          in RGB/Lab modes these settings don't apply (Curves layers don't
-          quantize, can be tweaked in PS afterwards). Strength + Quality
-          surfaced inline; Dither tucked behind an Advanced disclosure since
-          the default (on) is what 99% of users want. */}
-      {outputMode === "lut" && (
-        <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
-          {/* Strength slider — lerps LUT toward identity before bake.
-              Differs from PS layer opacity because the lerp is baked INTO
-              the LUT, so .cube exports carry the dialed-back look. */}
-          <div style={{ display: "flex", alignItems: "center", gap: 4, height: 14, lineHeight: "14px" }}
-            title={`LUT strength: ${lutStrength}% — blends the generated 3D LUT toward an identity LUT before bake. 100% = full match, 0% = identity (no transform). The lerp is baked into the LUT bytes, so portable .cube exports carry the dialed-back look (PS layer opacity wouldn't survive .cube export).`}>
-            <span style={{ fontSize: 9, opacity: 0.5, width: 38 }}>strength</span>
-            <input type="range" min={0} max={100} step={1} value={lutStrength}
-              onChange={e => setLutStrength(parseInt((e.target as HTMLInputElement).value, 10))}
-              style={{ flex: 1, margin: 0, cursor: "pointer" }} />
-            <span style={{ fontSize: 9, opacity: 0.7, width: 28, textAlign: "right" }}>{lutStrength}%</span>
-          </div>
-          {/* Grid quality 3-way. 17³ draft / 33³ standard / 65³ high.
-              Bigger grids = less banding in subtle gradients + bigger .cube
-              files. 33³ default matches the long-standing Color Smash LUT
-              size + PS Color Lookup default. */}
-          <div style={{ display: "flex", alignItems: "center", gap: 4, height: 18, lineHeight: "16px" }}>
-            <span style={{ fontSize: 9, opacity: 0.5, width: 38 }}>quality</span>
-            <div style={{ display: "flex", flex: 1, gap: 2 }}>
-              {([
-                [17 as const, "Draft 17³",   "Draft quality: 17³ grid (~50KB). Fastest to bake, visible banding in subtle gradients. Good for quick previews / iterative editing."],
-                [33 as const, "Standard 33³", "Standard quality: 33³ grid (~430KB). Default. Matches PS Color Lookup's native default. Good for most photographic work."],
-                [65 as const, "High 65³",    "High quality: 65³ grid (~3.3MB). Smoothest result, larger files. Useful for video-grading / log-LUT workflows where 33³ shows banding."],
-              ] as Array<[17 | 33 | 65, string, string]>).map(([val, label, tip]) => (
-                <div key={val} onClick={() => setLutGrid(val)} title={tip}
-                  style={{
-                    flex: 1, height: 18, padding: 0,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
-                    background: lutGrid === val ? "#3a3a3a" : "transparent",
-                    color: lutGrid === val ? "#dddddd" : "#888",
-                    border: `1px solid ${lutGrid === val ? "#888" : "#444"}`,
-                    borderRadius: 2, cursor: "pointer", userSelect: "none",
-                    lineHeight: "16px", boxSizing: "border-box",
-                  }}>{label}</div>
-              ))}
-            </div>
-          </div>
-          {/* Advanced disclosure (collapsed by default) housing the Dither
-              toggle. The PS Color Lookup adjustment layer has a `dither`
-              field that injects noise to hide banding — defaults on
-              (matches PS UI). Tucked away because 99% of users won't touch
-              it but power users want it available. */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            <div onClick={() => setLutAdvancedOpen(o => !o)}
-              style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, opacity: 0.5, cursor: "pointer", userSelect: "none", height: 14, lineHeight: "14px" }}
-              title="Advanced LUT options">
-              <span style={{ width: 8, display: "inline-block", textAlign: "center" }}>
-                {lutAdvancedOpen ? "▾" : "▸"}
-              </span>
-              <span>advanced</span>
-            </div>
-            {lutAdvancedOpen && (
-              <div onClick={() => setLutDither(!lutDither)}
-                style={{ display: "flex", alignItems: "center", gap: 6, paddingLeft: 14, fontSize: 9, color: "#cccccc", cursor: "pointer", height: 14, lineHeight: "14px" }}
-                title="Dither: PS Color Lookup's noise-injection field that hides quantization banding at 33³ grid resolution. Default ON, matches PS's own default. Turn off if you want a bit-exact LUT result and accept visible banding in subtle gradients.">
-                <input type="checkbox" checked={lutDither}
-                  onChange={e => setLutDither(e.target.checked)}
-                  style={{ margin: 0, width: 12, height: 12 }} />
-                <span>dither</span>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
       {/* Selection tristate (v1.18.0). At Apply, if a marquee is active in PS:
             - Focus:   layer applies only inside the marquee
             - Exclude: layer applies only outside the marquee
@@ -2076,6 +2039,26 @@ export function MatchTab() {
             height: 28, lineHeight: "26px", boxSizing: "border-box",
             flex: "0 0 auto",
           }}>SWAP</div>
+        {/* SHOW MASK — toggles a red-wash overlay on the matched preview
+            showing where the LUT/Curves WILL NOT apply (protected by the
+            target-palette mask). Convention: red = protected, clear =
+            affected (matches PS Quick Mask). Useful to verify your masking
+            composition before Apply, especially when palette weights +
+            selection compose into a non-obvious shape. */}
+        <div onClick={() => setShowMask(v => !v)}
+          title={showMask
+            ? "Show Mask ON — protected regions painted red on the matched preview. Click to disable."
+            : "Show Mask OFF — preview shows pure transform output. Click to enable: protected regions (where the LUT/Curves won't apply due to palette mask) will paint red on the matched preview."}
+          style={{
+            padding: "1px 6px", fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
+            background: "transparent",
+            color: showMask ? "#d87a7a" : "#5a3a3a",
+            border: `1px solid ${showMask ? "#d87a7a" : "#5a3a3a"}`,
+            borderRadius: 2, cursor: "pointer", userSelect: "none",
+            display: "flex", alignItems: "center",
+            height: 28, lineHeight: "26px", boxSizing: "border-box",
+            flex: "0 0 auto",
+          }}>MASK</div>
         {/* Restore: hydrate the panel UI from the selected Match LUT layer's
             XMP. Click on a previously-authored Match LUT layer in PS's
             Layers panel, then click RESTORE here — every captured slider /
@@ -2117,6 +2100,70 @@ export function MatchTab() {
           style={{ flex: "1 1 0", minWidth: 0, overflow: "hidden", whiteSpace: "nowrap" }}
           title="Export the staged preset as a portable 33³ .CUBE 3D LUT to disk. Loadable in Photoshop, Premiere, Resolve, etc. Use Apply LUT instead if you just want it in this PS doc.">Save LUT…</sp-button>
       </div>
+
+      {/* LUT-specific knobs (v1.17.0; relocated below the Apply row in v1.18.x
+          so the Apply cluster reads as the primary action — knobs are
+          contextual settings for that action, not pre-actions). Only rendered
+          when LUT mode is active. */}
+      {outputMode === "lut" && (
+        <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+          {/* Strength slider — lerps LUT toward identity before bake.
+              Differs from PS layer opacity because the lerp is baked INTO
+              the LUT, so .cube exports carry the dialed-back look. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 4, height: 14, lineHeight: "14px" }}
+            title={`LUT strength: ${lutStrength}% — blends the generated 3D LUT toward an identity LUT before bake. 100% = full match, 0% = identity (no transform). The lerp is baked into the LUT bytes, so portable .cube exports carry the dialed-back look (PS layer opacity wouldn't survive .cube export).`}>
+            <span style={{ fontSize: 9, opacity: 0.5, width: 38 }}>strength</span>
+            <input type="range" min={0} max={100} step={1} value={lutStrength}
+              onChange={e => setLutStrength(parseInt((e.target as HTMLInputElement).value, 10))}
+              style={{ flex: 1, margin: 0, cursor: "pointer" }} />
+            <span style={{ fontSize: 9, opacity: 0.7, width: 28, textAlign: "right" }}>{lutStrength}%</span>
+          </div>
+          {/* Grid quality 3-way. 17³ draft / 33³ standard / 65³ high. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 4, height: 18, lineHeight: "16px" }}>
+            <span style={{ fontSize: 9, opacity: 0.5, width: 38 }}>quality</span>
+            <div style={{ display: "flex", flex: 1, gap: 2 }}>
+              {([
+                [17 as const, "Draft 17³",   "Draft quality: 17³ grid (~50KB). Fastest to bake, visible banding in subtle gradients. Good for quick previews / iterative editing."],
+                [33 as const, "Standard 33³", "Standard quality: 33³ grid (~430KB). Default. Matches PS Color Lookup's native default. Good for most photographic work."],
+                [65 as const, "High 65³",    "High quality: 65³ grid (~3.3MB). Smoothest result, larger files. Useful for video-grading / log-LUT workflows where 33³ shows banding."],
+              ] as Array<[17 | 33 | 65, string, string]>).map(([val, label, tip]) => (
+                <div key={val} onClick={() => setLutGrid(val)} title={tip}
+                  style={{
+                    flex: 1, height: 18, padding: 0,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
+                    background: lutGrid === val ? "#3a3a3a" : "transparent",
+                    color: lutGrid === val ? "#dddddd" : "#888",
+                    border: `1px solid ${lutGrid === val ? "#888" : "#444"}`,
+                    borderRadius: 2, cursor: "pointer", userSelect: "none",
+                    lineHeight: "16px", boxSizing: "border-box",
+                  }}>{label}</div>
+              ))}
+            </div>
+          </div>
+          {/* Advanced disclosure (collapsed by default) housing the Dither toggle. */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <div onClick={() => setLutAdvancedOpen(o => !o)}
+              style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, opacity: 0.5, cursor: "pointer", userSelect: "none", height: 14, lineHeight: "14px" }}
+              title="Advanced LUT options">
+              <span style={{ width: 8, display: "inline-block", textAlign: "center" }}>
+                {lutAdvancedOpen ? "▾" : "▸"}
+              </span>
+              <span>advanced</span>
+            </div>
+            {lutAdvancedOpen && (
+              <div onClick={() => setLutDither(!lutDither)}
+                style={{ display: "flex", alignItems: "center", gap: 6, paddingLeft: 14, fontSize: 9, color: "#cccccc", cursor: "pointer", height: 14, lineHeight: "14px" }}
+                title="Dither: PS Color Lookup's noise-injection field that hides quantization banding. Default ON, matches PS's own default. Turn off for a bit-exact LUT result and accept visible banding in subtle gradients.">
+                <input type="checkbox" checked={lutDither}
+                  onChange={e => setLutDither(e.target.checked)}
+                  style={{ margin: 0, width: 12, height: 12 }} />
+                <span>dither</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Curves graph below Apply */}
       <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7 }}>Fitted curves (R G B)</div>
