@@ -134,23 +134,36 @@ function clampMax(max: number | undefined): number {
 
 /** Build a palette signature from the SerializedSwatch array used in
  *  LutLayerState.sourcePaletteSwatches. Falls back to a 1-color #888 signature
- *  if swatches is empty/undefined (so the thumbnail still renders something). */
+ *  if swatches is empty/undefined (so the thumbnail still renders something).
+ *
+ *  v1.20.15 — accepts the user's per-cluster weight multipliers
+ *  (`userWeights`, from state.sourcePaletteWeights). The signature's bar
+ *  widths are now `clusterPrevalence × userMultiplier`, mirroring exactly
+ *  what PaletteStrip renders in the live UI. Without the multipliers, all
+ *  thumbnails looked like the default k-means prevalence regardless of how
+ *  the user had dragged the sliders before Apply — so users perceived the
+ *  history as "not baking my ratio changes." */
 export function buildPaletteSignature(
   swatches: SerializedSwatch[] | undefined,
+  userWeights?: number[],
 ): PaletteSignature {
   if (!swatches || !Array.isArray(swatches) || swatches.length === 0) {
     return { colors: [0x888888], weights: [100] };
   }
   const colors: number[] = [];
   const weights: number[] = [];
-  for (const s of swatches) {
+  for (let i = 0; i < swatches.length; i++) {
+    const s = swatches[i];
     if (!s || typeof s !== "object") continue;
     const r = clampByte((s as any).r);
     const g = clampByte((s as any).g);
     const b = clampByte((s as any).b);
     colors.push((r << 16) | (g << 8) | b);
-    const w = typeof s.weight === "number" && Number.isFinite(s.weight) ? s.weight : 0;
-    weights.push(Math.round(w * 100));
+    const prevalence = typeof s.weight === "number" && Number.isFinite(s.weight) ? s.weight : 0;
+    const mult = userWeights && typeof userWeights[i] === "number" && Number.isFinite(userWeights[i])
+      ? Math.max(0, userWeights[i])
+      : 1;
+    weights.push(Math.round(prevalence * mult * 100));
   }
   if (colors.length === 0) {
     return { colors: [0x888888], weights: [100] };
@@ -286,7 +299,7 @@ export function makeHistoryEntry(state: LutLayerState): HistoryEntry {
     timestamp: Date.now(),
     label: buildHistoryLabel(state),
     state,
-    signature: buildPaletteSignature(state.sourcePaletteSwatches),
+    signature: buildPaletteSignature(state.sourcePaletteSwatches, state.sourcePaletteWeights),
   };
 }
 

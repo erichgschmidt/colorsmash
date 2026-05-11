@@ -2441,20 +2441,17 @@ export function MatchTab() {
                     userSelect: "none",
                     overflow: "hidden", flexShrink: 0,
                   }}>
-                  {/* Thumbnail body (v1.20.4) — top half: LUT-applied-to-
-                      gradient preview (visual signature of the transform).
-                      Bottom half: palette-segment signature (sized by weights,
-                      colored by swatch RGB). Together they read as both
-                      "what palette" and "what the LUT does." Click anywhere
-                      to restore. Star button stops propagation. */}
+                  {/* Thumbnail body (v1.20.15) — top half: SOURCE palette
+                      signature (sized by clusterPrevalence × userMultiplier,
+                      colored by swatch RGB). Bottom half: transform preview
+                      (LUT-applied gradient — visual signature of what the
+                      recipe DOES). Reads naturally as source → output, top
+                      to bottom. Click anywhere to load the recipe. Star
+                      button stops propagation. */}
                   <div onClick={() => applyHistoryEntry(entry)}
                     style={{ flex: 1, display: "flex", flexDirection: "column", cursor: "pointer", overflow: "hidden" }}>
-                    {/* LUT-applied gradient strip — agent-built helper renders
-                        a 32-stop CSS gradient pre-transformed by the entry's
-                        curves + preset. Takes ~half the thumbnail height. */}
-                    <div style={{ flex: 1, background: lutGradientCSS(entry.state), minHeight: 0 }} />
-                    {/* Palette signature — sized by weights, colored by
-                        swatch RGB. Takes the other half. */}
+                    {/* Source palette signature on TOP — segments sized by
+                        prevalence × user weight, colored by swatch RGB. */}
                     <div style={{ flex: 1, display: "flex", flexDirection: "row", minHeight: 0 }}>
                       {entry.signature.colors.length > 0
                         ? entry.signature.colors.map((c, i) => {
@@ -2474,6 +2471,9 @@ export function MatchTab() {
                         : <div style={{ flex: 1, background: "#444" }} />
                       }
                     </div>
+                    {/* Transform-preview gradient on BOTTOM — 32-stop CSS
+                        gradient pre-transformed by the entry's curves + preset. */}
+                    <div style={{ flex: 1, background: lutGradientCSS(entry.state), minHeight: 0 }} />
                   </div>
                   {/* Pin star — top-right corner overlay. Solid when pinned,
                       outline when not. Click toggles pinned state without
