@@ -4,7 +4,9 @@
 import {
   readLayerPixels, executeAsModal, statsRectForLayer,
   makeCurvesLayer, setClippingMask, GROUP_NAME, action, app,
+  readSelectionMaskBytes,
 } from "../services/photoshop";
+import { composeWithSelection, fullMask } from "./targetMask";
 import { downsampleToMaxEdge } from "../core/downsample";
 import {
   sampleControlPoints, processChannelCurves, applyDimensions,
@@ -75,6 +77,14 @@ export interface ApplyMatchParams {
     // >0 = gaussian-soft blend across all clusters (smooth gradients).
     softness?: number;
   };
+  // Marquee selection tristate — parity with the LUT path. When "focus", the
+  // current PS marquee is composed into the layer mask so the Curves layer
+  // applies only inside the selection. When "exclude", the inverse — Curves
+  // applies outside the selection. Composed multiplicatively with the
+  // target-palette mask when both are active; when palette is neutral, a
+  // constant-255 base mask is used so selection alone drives the mask.
+  // Skipped when target is Merged (no spatial anchor).
+  selectionMode?: "off" | "focus" | "exclude";
 }
 
 export async function fitMatchCurves(params: ApplyMatchParams): Promise<ChannelCurves> {
@@ -328,7 +338,12 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       // leaving orphaned band layers next to the new sub-group. When non-neutral target
       // weights are active, the palette mask is attached to this sub-group below.
       const tp = params.targetPalette;
+      const selectionMode = params.selectionMode ?? "off";
       const useTargetMask = !!(tp && tp.weights.some(w => Math.abs(w - 1) > 0.01) && !targetIsMerged);
+      // Selection alone also justifies the sub-group + group mask (parity with
+      // the LUT path's wantSelectionMask gate).
+      const useSelectionMask = selectionMode !== "off" && !targetIsMerged;
+      const wantSubGroupMask = useTargetMask || useSelectionMask;
       let bandContainer: any = group;
       try {
         // selectNoLayers so the new group isn't created inside whatever's currently
@@ -340,7 +355,7 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
         bandContainer = await doc.createLayerGroup({ name: subName });
         await bandContainer.move(group, "placeInside");
       } catch { bandContainer = group; /* fallback to flat layout if group creation fails */ }
-      const useTargetSubGroup = useTargetMask && bandContainer !== group;
+      const useTargetSubGroup = wantSubGroupMask && bandContainer !== group;
 
       for (const band of bands) {
         const baseName = `${RESULT_LAYER_NAME} [${band.suffix}]`;
@@ -536,8 +551,11 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       // the mask on the GROUP rather than per-band-layer is what the user wants:
       // each band keeps its luma limiter, the group mask attenuates the whole
       // multi-zone composite by per-cluster color weight.
-      if (useTargetSubGroup && bandContainer !== group && tp && t && t.data) {
+      if (useTargetSubGroup && bandContainer !== group && t && t.data) {
         try {
+          const pxCount = t.width * t.height;
+          let tpMask: Uint8Array;
+          if (useTargetMask && tp) {
           const k = tp.swatches.length;
           const softness = Math.max(0, Math.min(100, tp.softness ?? 0));
           const useSoft = softness > 0;
@@ -555,8 +573,7 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
             cents[i * 3 + 1] = tp.swatches[i].labA;
             cents[i * 3 + 2] = tp.swatches[i].labB;
           }
-          const pxCount = t.width * t.height;
-          const tpMask = new Uint8Array(pxCount);
+          tpMask = new Uint8Array(pxCount);
           const srgbToLinear = (c: number) => {
             const x = c / 255;
             return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
@@ -603,6 +620,18 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
               }
               const wf = sumG > 0 ? sumWG / sumG : 1;
               tpMask[i] = Math.max(0, Math.min(255, Math.round(wf * 255)));
+            }
+          }
+          } else {
+            // Palette neutral but selection is set — start from constant-255
+            // so the selection mask alone drives the sub-group's masking.
+            tpMask = fullMask(pxCount);
+          }
+          // Compose marquee selection (focus or exclude) — parity with applyLut.
+          if (useSelectionMask) {
+            const selBytes = await readSelectionMaskBytes(doc.id, t.bounds);
+            if (selBytes) {
+              tpMask = composeWithSelection(tpMask, selBytes, selectionMode);
             }
           }
           const tpMaskImageData = await imaging.createImageDataFromBuffer(tpMask, {
@@ -664,9 +693,15 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     // nearest cluster centroid (Lab distance) — same math the preview uses,
     // just at full resolution. Skipped on merged-target since we don't have
     // a layer-bounds-aligned full-res buffer in that path.
-    if (params.targetPalette && !targetIsMerged && t && t.data) {
+    const scSelectionMode = params.selectionMode ?? "off";
+    const scUseSelection = scSelectionMode !== "off" && !targetIsMerged;
+    const scUsePalette = !!(params.targetPalette && !targetIsMerged && t && t.data);
+    if ((scUsePalette || scUseSelection) && !targetIsMerged && t && t.data) {
       const tp = params.targetPalette;
       try {
+        const pxCount = t.width * t.height;
+        let mask: Uint8Array;
+        if (scUsePalette && tp) {
         const k = tp.swatches.length;
         const softness = Math.max(0, Math.min(100, tp.softness ?? 0));
         const useSoft = softness > 0;
@@ -686,8 +721,7 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
           cents[i * 3 + 1] = tp.swatches[i].labA;
           cents[i * 3 + 2] = tp.swatches[i].labB;
         }
-        const pxCount = t.width * t.height;
-        const mask = new Uint8Array(pxCount);
+        mask = new Uint8Array(pxCount);
         const srgbToLinear = (c: number) => {
           const x = c / 255;
           return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
@@ -742,6 +776,18 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
             }
             const wf = sumG > 0 ? sumWG / sumG : 1;
             mask[i] = Math.max(0, Math.min(255, Math.round(wf * 255)));
+          }
+        }
+        } else {
+          // Palette neutral but selection is set — constant-255 base so the
+          // selection mask alone drives the layer's masking.
+          mask = fullMask(pxCount);
+        }
+        // Compose marquee selection (focus or exclude) — parity with applyLut.
+        if (scUseSelection) {
+          const selBytes = await readSelectionMaskBytes(doc.id, t.bounds);
+          if (selBytes) {
+            mask = composeWithSelection(mask, selBytes, scSelectionMode);
           }
         }
         const { imaging } = require("photoshop");

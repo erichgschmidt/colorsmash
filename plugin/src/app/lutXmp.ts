@@ -41,6 +41,15 @@ export interface LutLayerState {
   paletteAdaptive?: boolean;
   // Apply-time toggles
   multiZone?: boolean;
+  // LUT-output knobs (v1.17.0). Only meaningful when outputMode is "lut".
+  // Restored RGB/Lab layers carry these too (harmlessly), so a user who
+  // first authored as LUT and later switched to Curves doesn't lose their
+  // LUT preferences when toggling back.
+  lutStrength?: number;     // 0..100 — bake-time identity-lerp
+  lutGrid?: 17 | 33 | 65;   // 3D LUT grid points per axis
+  lutDither?: boolean;      // PS colorLookup.dither field
+  // Marquee → layer mask selector (v1.18.0).
+  selectionMode?: "off" | "focus" | "exclude";
   // Detailed parameter sections (kept opaque — full restore round-trips
   // the literal objects without us having to know their internals).
   dimensions?: Record<string, any>;

@@ -1048,7 +1048,14 @@ export function MatchTab() {
       r: s.r, g: s.g, b: s.b, weight: s.weight,
       labL: s.labL, labA: s.labA, labB: s.labB,
     })),
-  }, "1.14.2");
+    // v1.19.0 — LUT-output knobs + marquee selector saved in XMP. RESTORE
+    // pulls these back so the panel re-creates the exact bake conditions
+    // (grid, strength, dither, marquee mode) that produced this layer.
+    lutStrength,
+    lutGrid,
+    lutDither,
+    selectionMode,
+  }, "1.19.0");
 
   // Shared restore implementation — pulled out of the manual onRestoreFromLayer
   // handler so the auto-restore listener can use the same code path. Takes a
@@ -1103,6 +1110,15 @@ export function MatchTab() {
     }
     if (Array.isArray(state.targetPaletteSwatches) && state.targetPaletteSwatches.length > 0) {
       setSavedTargetSwatches(state.targetPaletteSwatches as PaletteSwatch[]);
+    }
+    // v1.19.0 — LUT-output knobs + marquee selector. Each is idempotent
+    // and only fires when the field is present in the saved state (so
+    // pre-v1.19 layers don't reset these to defaults).
+    if (typeof state.lutStrength === "number") setLutStrength(Math.max(0, Math.min(100, state.lutStrength)));
+    if (state.lutGrid === 17 || state.lutGrid === 33 || state.lutGrid === 65) setLutGrid(state.lutGrid);
+    if (typeof state.lutDither === "boolean") setLutDither(state.lutDither);
+    if (state.selectionMode === "off" || state.selectionMode === "focus" || state.selectionMode === "exclude") {
+      setSelectionMode(state.selectionMode);
     }
     return true;
   };
@@ -1399,6 +1415,7 @@ export function MatchTab() {
             softness: targetSoftness,
           };
         })(),
+        selectionMode,
       }));
     } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
   };
