@@ -1783,6 +1783,9 @@ export function MatchTab() {
           };
         })(),
         selectionMode: effectiveSelectionMode,
+        // v1.20.40 — embed the panel-state snapshot so RESTORE / AUTO can
+        // round-trip a Curves bake the same way LUT bakes already do.
+        xmpState: buildXmpState(),
       }));
       pushCurrentToHistory();
     } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
@@ -2264,7 +2267,25 @@ export function MatchTab() {
           - Lab: perceptual L*a*b* match, projected back to RGB curves → Curves layer
           - LUT: 33³ 3D transform with preset blend math baked in → Color Lookup layer */}
       <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 4 }}>
-        <span style={{ fontSize: 9, opacity: 0.5, width: 38 }}>output</span>
+        {/* v1.20.40 — SWAP relocated here from the apply row. Lives in the
+            "output label" slot of the RGB/Lab/LUT row because that's
+            literally what it does — flip between LUT and the last Curves
+            mode without dragging the mouse to the tristate. Pill is
+            18px-tall to match the RGB/Lab/LUT pills next to it. */}
+        <div onClick={onSwapMode}
+          title={outputMode === "lut"
+            ? `Swap to ${lastCurvesModeRef.current.toUpperCase()} mode (Curves). Hides Match LUT layers, shows Match Curves layers in PS.`
+            : `Swap to LUT mode. Hides Match Curves layers, shows Match LUT layers in PS.`}
+          style={{
+            width: 38, height: 18, padding: 0,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
+            background: "transparent",
+            color: "#aab07a",
+            border: "1px solid #aab07a",
+            borderRadius: 2, cursor: "pointer", userSelect: "none",
+            lineHeight: "16px", boxSizing: "border-box", flexShrink: 0,
+          }}>SWAP</div>
         <div style={{ display: "flex", flex: 1, gap: 2 }}>
           {([
             ["rgb", "RGB", "Output mode: RGB — separable per-channel curves fit in RGB space. Creates a Curves adjustment layer; continuously editable in PS."],
@@ -2548,25 +2569,7 @@ export function MatchTab() {
             height: 28, lineHeight: "26px", boxSizing: "border-box",
             flex: "0 0 auto",
           }}>LIVE</div>
-        {/* SWAP — 1-click A/B between LUT and the last Curves mode (RGB or
-            Lab, whichever the user touched last). Also fires the visibility
-            sync via the outputMode effect, so the Color Smash group shows
-            whichever output the new mode points at. Useful for fast
-            comparison without dropping the mouse into the 3-way toggle. */}
-        <div onClick={onSwapMode}
-          title={outputMode === "lut"
-            ? `Swap to ${lastCurvesModeRef.current.toUpperCase()} mode (Curves). Hides Match LUT layers, shows Match Curves layers in PS.`
-            : `Swap to LUT mode. Hides Match Curves layers, shows Match LUT layers in PS.`}
-          style={{
-            padding: "1px 6px", fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
-            background: "transparent",
-            color: "#aab07a",
-            border: "1px solid #aab07a",
-            borderRadius: 2, cursor: "pointer", userSelect: "none",
-            display: "flex", alignItems: "center",
-            height: 28, lineHeight: "26px", boxSizing: "border-box",
-            flex: "0 0 auto",
-          }}>SWAP</div>
+        {/* v1.20.40 — SWAP relocated up to the output-mode row label slot. */}
         {/* v1.20.36 — MASK pill moved up to the marquee row (it's a mask
             visualization, and that's where masking lives in the panel). */}
         {/* Restore: hydrate the panel UI from the selected Match LUT layer's

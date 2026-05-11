@@ -18,6 +18,7 @@ import {
   fitMultiZoneByMode, processMultiZoneFit,
 } from "../core/histogramMatch";
 import { clampBandRange, readCompositeForBands, buildLumaBandMasks } from "./multiZoneCommon";
+import { writeLutLayerState } from "./lutXmp";
 
 const STATS_MAX_EDGE = 512;
 const CONTROL_POINTS = 12;
@@ -86,6 +87,12 @@ export interface ApplyMatchParams {
   // constant-255 base mask is used so selection alone drives the mask.
   // Skipped when target is Merged (no spatial anchor).
   selectionMode?: "off" | "focus" | "exclude";
+  // v1.20.40 — XMP state snapshot for RESTORE / AUTO round-trip. When set,
+  // a serialized panel-state blob is embedded as metadata on the outer
+  // sub-group and inner Curves layer (parity with applyLut). Without this,
+  // clicking a Curves bake and pressing RESTORE was a no-op — only LUT
+  // bakes ever round-tripped.
+  xmpState?: import("./lutXmp").LutLayerState;
 }
 
 export async function fitMatchCurves(params: ApplyMatchParams): Promise<ChannelCurves> {
@@ -736,6 +743,17 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       if (params.amount && params.amount < 1) tags.push(`amt ${Math.round(params.amount * 100)}%`);
       if (params.chromaOnly) tags.push("hue-only");
       if (params.sourceLabel) tags.unshift(`src "${params.sourceLabel}"`);
+      // v1.20.40 — XMP for RESTORE/AUTO. Write to outer group + inner
+      // bandContainer + the three band layers so clicking ANY of them
+      // restores the panel state.
+      if (params.xmpState) {
+        if (outerGroup?.id != null && outerGroup !== group) {
+          try { await writeLutLayerState(outerGroup.id, params.xmpState); } catch { /* non-fatal */ }
+        }
+        if (bandContainer?.id != null && bandContainer !== group) {
+          try { await writeLutLayerState(bandContainer.id, params.xmpState); } catch { /* non-fatal */ }
+        }
+      }
       // v1.20.27 — multi-zone returns here; restore the snapshot selection
       // and clean up the temp alpha channel before exiting the modal block.
       if (scSelSnapshot) {
@@ -922,6 +940,16 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
           if (selImageData.dispose) selImageData.dispose();
         }
       } catch { /* mask attach is best-effort; if it fails, the curves still apply unmasked */ }
+    }
+
+    // v1.20.40 — write XMP for RESTORE / AUTO round-trip. Parity with
+    // applyLut. Written to BOTH the inner Curves layer and the outer sub-
+    // group so clicking either restores the panel state.
+    if (params.xmpState) {
+      try { await writeLutLayerState(curveLayer.id, params.xmpState); } catch { /* non-fatal */ }
+      if (scSubGroup?.id != null) {
+        try { await writeLutLayerState(scSubGroup.id, params.xmpState); } catch { /* non-fatal */ }
+      }
     }
 
     // v1.20.26 — restore the marquee that PS consumed during the
