@@ -16,7 +16,7 @@ import { BottomActionBar } from "./BottomActionBar";
 import { BasicSlider, DimSlider, matchStyles } from "./MatchSliders";
 import { ChannelCurves } from "../core/histogramMatch";
 import {
-  processChannelCurves, applyChannelCurvesToRgba, applyChannelCurvesToRgbaWeighted, applyChromaOnly,
+  processChannelCurves, applyChannelCurvesToRgba, applyChannelCurvesToRgbaWeighted, applyChromaOnly, applyLutPreviewToRgba,
   applyDimensions, applyZoneAndEnvelopeToChannels, MERGED_LAYER_ID,
   transformCurvesForPreset, applyPresetPostprocess, generateLutCube,
   DimensionOpts, DEFAULT_DIMENSIONS, ZoneOpts, DEFAULT_ZONES,
@@ -156,7 +156,18 @@ export function MatchTab() {
       setStatus(`Source = ${file.name}`);
     } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
   };
-  const [colorSpace, setColorSpace] = useState<"rgb" | "lab">("rgb");
+  // Output mode — the unified successor to the old colorSpace toggle.
+  // - "rgb": separable per-channel R/G/B curves → Curves adjustment layer
+  // - "lab": perceptual L*a*b* histogram match (curves projected to R/G/B) → Curves layer
+  // - "lut": non-separable 3D transform with preset blend math baked in → Color Lookup layer
+  // The 3-way control lives under the target palette softness slider so the
+  // selector sits next to the destination it modifies. Apply button dispatches
+  // to either applyMatch (RGB/Lab) or applyLutAsAdjustmentLayer (LUT) based on mode.
+  const [outputMode, setOutputMode] = useState<"rgb" | "lab" | "lut">("rgb");
+  // Derived alias for places that still operate on the legacy "rgb" | "lab"
+  // pair (fitByMode, applyMatch's colorSpace param). LUT mode fits in RGB since
+  // the curves are then trilinearly sampled into a 3D LUT regardless.
+  const colorSpace: "rgb" | "lab" = outputMode === "lut" ? "rgb" : outputMode;
   const [deselectOnApply, setDeselectOnApply] = useState(true);
   const [overwriteOnApply, setOverwriteOnApply] = useState(true);
   const [remember, setRemember] = useState(false);
@@ -223,7 +234,13 @@ export function MatchTab() {
         if (typeof s.targetSoftness === "number") setTargetSoftness(Math.max(0, Math.min(100, s.targetSoftness)));
         if (typeof s.targetMaskEnabled === "boolean") setTargetMaskEnabled(s.targetMaskEnabled);
         if (s.chromaOnly != null) setChromaOnly(s.chromaOnly);
-        if (s.colorSpace) setColorSpace(s.colorSpace);
+        // Back-compat: pre-v1.15.0 settings stored `colorSpace: "rgb" | "lab"`.
+        // Newer settings store `outputMode` (one of "rgb" | "lab" | "lut").
+        if (s.outputMode === "rgb" || s.outputMode === "lab" || s.outputMode === "lut") {
+          setOutputMode(s.outputMode);
+        } else if (s.colorSpace === "rgb" || s.colorSpace === "lab") {
+          setOutputMode(s.colorSpace);
+        }
         if (s.deselectOnApply != null) setDeselectOnApply(s.deselectOnApply);
         if (s.overwriteOnApply != null) setOverwriteOnApply(s.overwriteOnApply);
         if (s.openSection !== undefined) setOpenSection(s.openSection);
@@ -246,7 +263,7 @@ export function MatchTab() {
     const snapshot: PersistedSettings = {
       remember,
       amount: amountLabel, smooth: smoothLabel, stretch: stretchLabel,
-      anchorStretchToHist, chromaOnly, colorSpace, matchMode, multiZone, multiZoneLimit, adaptiveBands,
+      anchorStretchToHist, chromaOnly, colorSpace, outputMode, matchMode, multiZone, multiZoneLimit, adaptiveBands,
       deselectOnApply, overwriteOnApply,
       openSection,
       zones: zonesLabel, lockZoneTotal,
@@ -260,7 +277,7 @@ export function MatchTab() {
     };
     saveDebouncedRef.current!(snapshot);
   }, [remember, matchMode, multiZone, multiZoneLimit, adaptiveBands, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
-      colorSpace, deselectOnApply, overwriteOnApply, openSection,
+      colorSpace, outputMode, deselectOnApply, overwriteOnApply, openSection,
       zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel, paletteCount, paletteAdaptive, sourceSoftness, targetSoftness, targetMaskEnabled]);
 
   const [docs, setDocs] = useState<{ id: number; name: string }[]>([]);
@@ -788,6 +805,31 @@ export function MatchTab() {
         : applyChannelCurvesToRgba(tgtBuf.data, cP);
       out = applyPresetPostprocess(tgtBuf.data, mapped, activePreset);
     }
+    // LUT-mode preview override (v1.15.0). When the output mode is LUT, what
+    // the user will see in the baked Color Lookup adjustment layer differs
+    // from the Curves preview above by 33³ quantization + trilinear interpolation.
+    // applyLutPreviewToRgba samples each target pixel through the same in-memory
+    // grid generateLutCube would write, so the preview matches the bake.
+    // Target-weight attenuation is preserved by lerping toward the original.
+    if (outputMode === "lut" && curvesForGraph) {
+      const lutOut = applyLutPreviewToRgba(tgtBuf.data, curvesForGraph, activePreset, 33);
+      if (targetWeightsActive && targetEffectiveWeights) {
+        const orig = tgtBuf.data;
+        const ew = targetEffectiveWeights;
+        for (let i = 0, p = 0; i < lutOut.length; i += 4, p++) {
+          const w = Math.max(0, Math.min(1, ew[p]));
+          if (w >= 0.999) continue;
+          if (w <= 0.001) {
+            lutOut[i] = orig[i]; lutOut[i + 1] = orig[i + 1]; lutOut[i + 2] = orig[i + 2];
+            continue;
+          }
+          lutOut[i]     = Math.round(orig[i]     + (lutOut[i]     - orig[i])     * w);
+          lutOut[i + 1] = Math.round(orig[i + 1] + (lutOut[i + 1] - orig[i + 1]) * w);
+          lutOut[i + 2] = Math.round(orig[i + 2] + (lutOut[i + 2] - orig[i + 2]) * w);
+        }
+      }
+      out = lutOut;
+    }
     matchedHandleRef.current.setPixels(out, tgtBuf.width, tgtBuf.height);
     // Also push the unmodified target pixels so the preview's Before/After badge
     // can swap to the original on click/hold without a round-trip to the parent.
@@ -861,6 +903,7 @@ export function MatchTab() {
     preset: activePreset,
     matchMode,
     colorSpace,
+    outputMode,
     paletteCount,
     sourcePaletteWeights: paletteWeights.slice(),
     targetPaletteWeights: targetPaletteWeights.slice(),
@@ -897,7 +940,15 @@ export function MatchTab() {
     if (!state) return false;
     if (state.preset) setActivePreset(state.preset as any);
     if (state.matchMode) setMatchMode(state.matchMode as MatchMode);
-    if (state.colorSpace === "rgb" || state.colorSpace === "lab") setColorSpace(state.colorSpace);
+    // v1.15.0+: prefer outputMode; fall back to legacy colorSpace.
+    if (state.outputMode === "rgb" || state.outputMode === "lab" || state.outputMode === "lut") {
+      setOutputMode(state.outputMode);
+    } else if (state.colorSpace === "rgb" || state.colorSpace === "lab") {
+      setOutputMode(state.colorSpace);
+    } else {
+      // Restored from a Match LUT layer without explicit mode → it WAS a LUT.
+      setOutputMode("lut");
+    }
     if (state.paletteCount === 3 || state.paletteCount === 5 || state.paletteCount === 7) {
       setPaletteCount(state.paletteCount);
     }
@@ -1170,7 +1221,7 @@ export function MatchTab() {
     setMultiZone(false);
     setMultiZoneLimit("mask");
     setAdaptiveBands(true);
-    setColorSpace(() => "rgb");
+    setOutputMode("rgb");
     setDeselectOnApply(true);
     setOverwriteOnApply(true);
     setOpenSection(null);
@@ -1305,6 +1356,38 @@ export function MatchTab() {
           maskEnabled={targetMaskEnabled}
           setMaskEnabled={setTargetMaskEnabled}
         />
+      </div>
+
+      {/* Output mode 3-way control. Lives below the target softness slider
+          because the selected mode drives both the PREVIEW (what you see in
+          the matched-preview window) and the Apply BAKE (Curves vs Color
+          Lookup adjustment layer). Mode change is instant — preview
+          re-renders, Apply button does the right thing.
+
+          - RGB: separable per-channel curves → Curves layer (continuous, editable)
+          - Lab: perceptual L*a*b* match, projected back to RGB curves → Curves layer
+          - LUT: 33³ 3D transform with preset blend math baked in → Color Lookup layer */}
+      <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 4 }}>
+        <span style={{ fontSize: 9, opacity: 0.5, width: 38 }}>output</span>
+        <div style={{ display: "flex", flex: 1, gap: 2 }}>
+          {([
+            ["rgb", "RGB", "Output mode: RGB — separable per-channel curves fit in RGB space. Creates a Curves adjustment layer; continuously editable in PS."],
+            ["lab", "Lab", "Output mode: Lab — perceptual L*a*b* histogram match (curves projected to per-channel RGB). Creates a Curves adjustment layer."],
+            ["lut", "LUT", "Output mode: LUT — 33³ 3D Color Lookup with preset blend math (Color/Hue/Saturation/Luminosity) baked in. Creates a Color Lookup adjustment layer that captures non-separable transforms a Curves layer can't represent. Preview shows the quantized LUT result so what you see matches what bakes."],
+          ] as Array<["rgb" | "lab" | "lut", string, string]>).map(([val, label, tip]) => (
+            <div key={val} onClick={() => setOutputMode(val)} title={tip}
+              style={{
+                flex: 1, height: 18, padding: 0,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
+                background: outputMode === val ? "#3a3a3a" : "transparent",
+                color: outputMode === val ? "#dddddd" : "#888",
+                border: `1px solid ${outputMode === val ? "#888" : "#444"}`,
+                borderRadius: 2, cursor: "pointer", userSelect: "none",
+                lineHeight: "16px", boxSizing: "border-box",
+              }}>{label}</div>
+          ))}
+        </div>
       </div>
 
       {/* Accordion controls */}
@@ -1579,7 +1662,6 @@ export function MatchTab() {
         deselectOnApply={deselectOnApply} setDeselectOnApply={setDeselectOnApply}
         overwriteOnApply={overwriteOnApply} setOverwriteOnApply={setOverwriteOnApply}
         remember={remember} setRemember={setRemember}
-        colorSpace={colorSpace} setColorSpace={setColorSpace}
         onRefreshAll={onRefreshAll}
         onResetAll={onResetAll}
         stale={stale}
@@ -1675,16 +1757,25 @@ export function MatchTab() {
           silently inside their own button instead of wrapping the buttons to two
           rows. Sp-button's internal text gets nowrap + overflow:hidden too. */}
       <div style={{ display: "flex", flexWrap: "nowrap", gap: 4, marginTop: 6, width: "100%" }}>
+        {/* Single mode-aware Apply button (v1.15.0). The output-mode selector
+            below the target palette decides which adjustment layer this
+            produces:
+              RGB / Lab → Curves layer (continuous, editable; honors Multi)
+              LUT       → Color Lookup layer (non-separable transform; not
+                          continuously editable but captures Color/Hue/Sat/
+                          Luminosity blend math a Curves layer cannot)
+            Save LUT… (right of the pills) always exports a portable .cube
+            regardless of mode. */}
         {/* @ts-ignore Spectrum web component */}
-        <sp-button variant="secondary" onClick={onApply}
+        <sp-button variant="secondary" onClick={outputMode === "lut" ? onApplyLut : onApply}
           style={{ flex: "1 1 0", minWidth: 0, overflow: "hidden", whiteSpace: "nowrap" }}
-          title={multiZone
-            ? "Multi: creates 3 stacked Curves layers (shadow/mid/highlight) with band limiting via mask and/or Blend If. Each editable independently in PS."
-            : "Create a new Curves adjustment layer in the target document, clipped to the target layer. Honors Replace and Deselect toggles below."}>Apply</sp-button>
-        {/* @ts-ignore Spectrum web component */}
-        <sp-button variant="secondary" onClick={onApplyLut}
-          style={{ flex: "1 1 0", minWidth: 0, overflow: "hidden", whiteSpace: "nowrap" }}
-          title="Create a Color Lookup adjustment layer in the [Color Smash] group, loaded with the staged preset as a 33³ 3D LUT. Non-destructive (toggle/delete the layer to revert) but frozen — unlike Curves, you can't tweak the transform after Apply. Use this when the preset uses non-separable Color/Hue/Saturation/Luminosity blend math a Curves layer can't fully express, or for a portable look (the Color Lookup layer can be copied to other docs or replaced with a .cube in Premiere/Resolve). For editable curves, use Apply instead.">Apply LUT</sp-button>
+          title={
+            outputMode === "lut"
+              ? "Create a Color Lookup adjustment layer in [Color Smash] loaded with a 33³ 3D LUT. Captures non-separable preset blend math (Color/Hue/Saturation/Luminosity) a Curves layer can't represent. Use LIVE for real-time updates, RESTORE/AUTO to round-trip via the layer's XMP."
+              : multiZone
+                ? "Multi: creates 3 stacked Curves layers (shadow/mid/highlight) with band limiting via mask and/or Blend If. Each editable independently in PS."
+                : "Create a new Curves adjustment layer in the target document, clipped to the target layer. Honors Replace and Deselect toggles below."
+          }>Apply</sp-button>
         {/* Live LUT toggle: when on, every state change re-bakes the LUT into
             the existing Match LUT layer (debounced ~300ms). Off by default —
             the contract is stronger than one-shot Apply LUT, so we make it opt-in.

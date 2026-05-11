@@ -11,8 +11,6 @@ export interface BottomActionBarProps {
   setOverwriteOnApply: (b: boolean) => void;
   remember: boolean;
   setRemember: (b: boolean) => void;
-  colorSpace: "rgb" | "lab";
-  setColorSpace: (updater: (c: "rgb" | "lab") => "rgb" | "lab") => void;
   onRefreshAll: () => void;
   onResetAll: () => void;
   stale: boolean;
@@ -21,7 +19,7 @@ export interface BottomActionBarProps {
 export function BottomActionBar(props: BottomActionBarProps) {
   const { deselectOnApply, setDeselectOnApply, overwriteOnApply, setOverwriteOnApply,
           remember, setRemember,
-          colorSpace, setColorSpace, onRefreshAll, onResetAll, stale } = props;
+          onRefreshAll, onResetAll, stale } = props;
 
   // Single-click destructive reset. Opens a UXP modal dialog (window.confirm doesn't
   // exist in UXP — see uxpConfirm.ts for the dialog implementation).
@@ -93,15 +91,9 @@ export function BottomActionBar(props: BottomActionBarProps) {
                  border: "none", borderRadius: 3, cursor: "pointer", boxSizing: "border-box", flexShrink: 0 }}>
         <span style={{ marginTop: -1 }}>✕</span>
       </button>
-      <div onClick={() => setColorSpace(c => c === "rgb" ? "lab" : "rgb")}
-        title="Toggle color space — RGB matches per-channel histograms; Lab matches in perceptual space."
-        style={{ height: 16, padding: "0 2px", display: "inline-flex", alignItems: "center", justifyContent: "center",
-                 fontSize: 9, fontWeight: 600, color: "#dddddd",
-                 border: "1px solid #888", borderRadius: 3, cursor: "pointer", boxSizing: "border-box", flexShrink: 0, userSelect: "none" }}>
-        <span style={{ marginTop: 0, lineHeight: 1 }}>{colorSpace.toUpperCase()}</span>
-      </div>
-      {/* Extra marginLeft so the visual gap from RGB→⟳ matches the gap from ✕→RGB.
-          Without it, RGB's wider footprint makes the right gap look tighter. */}
+      {/* The RGB/Lab/LUT 3-way control moved to the target palette area in
+          v1.15.0 — output mode now lives next to the destination it modifies,
+          not in the bottom action bar. */}
       <div onClick={onRefreshAll}
         title={stale
           ? "Photoshop changed since last refresh — click to resync"

@@ -17,7 +17,8 @@ export interface PersistedSettings {
   stretch?: number;
   anchorStretchToHist?: boolean;
   chromaOnly?: boolean;
-  colorSpace?: "rgb" | "lab";
+  colorSpace?: "rgb" | "lab"; // legacy (pre-v1.15.0); kept for back-compat reads
+  outputMode?: "rgb" | "lab" | "lut"; // v1.15.0+: unified RGB/Lab/LUT selector
   // Apply behavior
   deselectOnApply?: boolean;
   overwriteOnApply?: boolean;

@@ -28,6 +28,10 @@ export interface LutLayerState {
   preset: string;
   matchMode?: string;
   colorSpace?: string;
+  /** v1.15.0+ — unified output-mode selector ("rgb" | "lab" | "lut").
+   *  Restored layers default to "lut" if missing (since they came from a
+   *  Color Lookup layer). For pre-v1.15.0 layers, fallback to colorSpace. */
+  outputMode?: string;
   // Source/target weights & softness (palette region modulation)
   paletteCount: number;
   sourcePaletteWeights?: number[];

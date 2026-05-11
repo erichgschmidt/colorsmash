@@ -936,6 +936,131 @@ export function applyChannelCurvesToRgba(rgba: Uint8Array, c: ChannelCurves): Ui
   return out;
 }
 
+/**
+ * LUT-mode preview: simulate the output of a freshly-generated 33³ Color
+ * Lookup adjustment layer applied to the target pixels. Mirrors what
+ * generateLutCube + PS's CLUT renderer will produce, so the preview matches
+ * the bake.
+ *
+ * Pipeline per pixel:
+ *   1. Pre-fold preset blend math via applyPresetPostprocess (same as
+ *      generateLutCube does for each grid point).
+ *   2. Build the 33³ grid lookup result via trilinear interpolation over
+ *      the pre-folded grid samples.
+ *
+ * Returns a fresh Uint8Array. Alpha is passed through unchanged.
+ */
+export function applyLutPreviewToRgba(
+  rgba: Uint8Array,
+  curves: ChannelCurves,
+  preset: Preset,
+  size: number = 33,
+): Uint8Array {
+  // Contrast preset collapses to a single luma curve before the LUT bake —
+  // mirror generateLutCube's finalCurves derivation exactly.
+  const finalCurves = preset === "contrast" ? averageChannelCurves(curves) : curves;
+
+  // ── Step 1: pre-compute the size³ grid in the same byte layout as
+  // generateLutCube (R fastest, then G, then B). For each grid input,
+  // run curves → applyPresetPostprocess so the blend math is baked in.
+  const stride = size * size * size;
+  const grid = new Uint8Array(stride * 3);
+  const orig = new Uint8Array(4);
+  const mapped = new Uint8Array(4);
+  orig[3] = 255; mapped[3] = 255;
+  const sm1 = size - 1;
+  for (let bi = 0; bi < size; bi++) {
+    for (let gi = 0; gi < size; gi++) {
+      for (let ri = 0; ri < size; ri++) {
+        const r = Math.round((ri / sm1) * 255);
+        const g = Math.round((gi / sm1) * 255);
+        const b = Math.round((bi / sm1) * 255);
+        orig[0] = r; orig[1] = g; orig[2] = b;
+        mapped[0] = finalCurves.r[r];
+        mapped[1] = finalCurves.g[g];
+        mapped[2] = finalCurves.b[b];
+        const out = applyPresetPostprocess(orig, mapped, preset);
+        const idx = ((bi * size + gi) * size + ri) * 3;
+        grid[idx]     = out[0];
+        grid[idx + 1] = out[1];
+        grid[idx + 2] = out[2];
+      }
+    }
+  }
+
+  // ── Step 2: per-pixel trilinear interpolation over the grid. Tight loop,
+  // no allocations — all scratch (gx/i0/fx/etc.) lives in stack locals.
+  const out = new Uint8Array(rgba.length);
+  const rowStride = size;            // stride between successive gi at fixed bi (in grid entries)
+  const planeStride = size * size;   // stride between successive bi planes (in grid entries)
+  const scale = sm1 / 255;
+  for (let i = 0; i < rgba.length; i += 4) {
+    // Clamp inputs defensively (Uint8Array values are already 0..255, but
+    // be explicit so callers passing wider buffers don't blow up index math).
+    const r = rgba[i]     < 0 ? 0 : rgba[i]     > 255 ? 255 : rgba[i];
+    const g = rgba[i + 1] < 0 ? 0 : rgba[i + 1] > 255 ? 255 : rgba[i + 1];
+    const b = rgba[i + 2] < 0 ? 0 : rgba[i + 2] > 255 ? 255 : rgba[i + 2];
+
+    const gx = r * scale;
+    const gy = g * scale;
+    const gz = b * scale;
+    let i0 = gx | 0; if (i0 < 0) i0 = 0; else if (i0 > sm1) i0 = sm1;
+    let j0 = gy | 0; if (j0 < 0) j0 = 0; else if (j0 > sm1) j0 = sm1;
+    let k0 = gz | 0; if (k0 < 0) k0 = 0; else if (k0 > sm1) k0 = sm1;
+    const i1 = i0 < sm1 ? i0 + 1 : sm1;
+    const j1 = j0 < sm1 ? j0 + 1 : sm1;
+    const k1 = k0 < sm1 ? k0 + 1 : sm1;
+    const fx = gx - i0;
+    const fy = gy - j0;
+    const fz = gz - k0;
+
+    // 8 corner base indices into grid (each times 3 for channel offset).
+    const b000 = (k0 * planeStride + j0 * rowStride + i0) * 3;
+    const b100 = (k0 * planeStride + j0 * rowStride + i1) * 3;
+    const b010 = (k0 * planeStride + j1 * rowStride + i0) * 3;
+    const b110 = (k0 * planeStride + j1 * rowStride + i1) * 3;
+    const b001 = (k1 * planeStride + j0 * rowStride + i0) * 3;
+    const b101 = (k1 * planeStride + j0 * rowStride + i1) * 3;
+    const b011 = (k1 * planeStride + j1 * rowStride + i0) * 3;
+    const b111 = (k1 * planeStride + j1 * rowStride + i1) * 3;
+
+    const w000 = (1 - fx) * (1 - fy) * (1 - fz);
+    const w100 = fx       * (1 - fy) * (1 - fz);
+    const w010 = (1 - fx) * fy       * (1 - fz);
+    const w110 = fx       * fy       * (1 - fz);
+    const w001 = (1 - fx) * (1 - fy) * fz;
+    const w101 = fx       * (1 - fy) * fz;
+    const w011 = (1 - fx) * fy       * fz;
+    const w111 = fx       * fy       * fz;
+
+    const orV =
+      grid[b000]     * w000 + grid[b100]     * w100 +
+      grid[b010]     * w010 + grid[b110]     * w110 +
+      grid[b001]     * w001 + grid[b101]     * w101 +
+      grid[b011]     * w011 + grid[b111]     * w111;
+    const ogV =
+      grid[b000 + 1] * w000 + grid[b100 + 1] * w100 +
+      grid[b010 + 1] * w010 + grid[b110 + 1] * w110 +
+      grid[b001 + 1] * w001 + grid[b101 + 1] * w101 +
+      grid[b011 + 1] * w011 + grid[b111 + 1] * w111;
+    const obV =
+      grid[b000 + 2] * w000 + grid[b100 + 2] * w100 +
+      grid[b010 + 2] * w010 + grid[b110 + 2] * w110 +
+      grid[b001 + 2] * w001 + grid[b101 + 2] * w101 +
+      grid[b011 + 2] * w011 + grid[b111 + 2] * w111;
+
+    let or = (orV + 0.5) | 0; if (or < 0) or = 0; else if (or > 255) or = 255;
+    let og = (ogV + 0.5) | 0; if (og < 0) og = 0; else if (og > 255) og = 255;
+    let ob = (obV + 0.5) | 0; if (ob < 0) ob = 0; else if (ob > 255) ob = 255;
+    out[i]     = or;
+    out[i + 1] = og;
+    out[i + 2] = ob;
+    out[i + 3] = rgba[i + 3];
+  }
+
+  return out;
+}
+
 // Per-pixel weighted curve application using a precomputed effective-weight
 // buffer (one Float32 per pixel). The cluster math (hard argmin or soft blend)
 // happens once in palette.precomputeEffectiveWeights and is cached at the

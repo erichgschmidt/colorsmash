@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  applyLutPreviewToRgba,
   fitHistogramCurves,
   fitHistogramCurvesLab,
   processChannelCurves,
@@ -355,5 +356,37 @@ describe("applyZoneAndEnvelopeToChannels", () => {
     expect(maxAbsDiff(out.r, raw.r)).toBeLessThanOrEqual(1);
     expect(maxAbsDiff(out.g, raw.g)).toBeLessThanOrEqual(1);
     expect(maxAbsDiff(out.b, raw.b)).toBeLessThanOrEqual(1);
+  });
+});
+
+describe("applyLutPreviewToRgba", () => {
+  const identityCurves = (): ChannelCurves => {
+    const r = new Uint8Array(256), g = new Uint8Array(256), b = new Uint8Array(256);
+    for (let i = 0; i < 256; i++) { r[i] = i; g[i] = i; b[i] = i; }
+    return { r, g, b };
+  };
+
+  it("identity curves + 'color' preset reproduces grid-point colors exactly", () => {
+    const size = 33;
+    const curves = identityCurves();
+    // Build a buffer of grid-point colors: R=round(N/32*255) for N=0..32, replicated.
+    const pixels: number[] = [];
+    for (let n = 0; n < size; n++) {
+      const v = Math.round((n / (size - 1)) * 255);
+      pixels.push(v, v, v, 255);
+    }
+    const rgba = new Uint8Array(pixels);
+    const out = applyLutPreviewToRgba(rgba, curves, "color", size);
+    for (let i = 0; i < rgba.length; i++) {
+      expect(out[i]).toBe(rgba[i]);
+    }
+  });
+
+  it("preserves alpha unchanged", () => {
+    const curves = identityCurves();
+    const rgba = new Uint8Array([100, 150, 200, 42, 0, 0, 0, 7]);
+    const out = applyLutPreviewToRgba(rgba, curves, "color", 33);
+    expect(out[3]).toBe(42);
+    expect(out[7]).toBe(7);
   });
 });
