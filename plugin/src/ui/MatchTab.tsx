@@ -11,7 +11,7 @@ import { MatchedPreview, MatchedPreviewHandle } from "./MatchedPreview";
 import { SourceSelector } from "./SourceSelector";
 import { PresetStrip } from "./PresetStrip";
 import { PaletteStrip, PaletteCount } from "./PaletteStrip";
-import { extractPalette, synthesizeWeightedSource, computeClusterDistances, precomputeEffectiveWeights } from "../core/palette";
+import { extractPalette, synthesizeWeightedSource, computeClusterDistances, precomputeEffectiveWeights, PaletteSwatch } from "../core/palette";
 import { BottomActionBar } from "./BottomActionBar";
 import { BasicSlider, DimSlider, matchStyles } from "./MatchSliders";
 import { ChannelCurves } from "../core/histogramMatch";
@@ -531,13 +531,23 @@ export function MatchTab() {
     if (m === "layer") { setSrcOverride(null); setBrowsedFile(""); }
   };
 
+  // Saved-swatch fallback state (Phase 2c). When RESTORE pulls palette
+  // swatches from a Match LUT layer's XMP, we stash them here so the palette
+  // strips can show what the user was working with even when the original
+  // source/target docs aren't open. Live srcSnap/tgt.snap always wins —
+  // these only kick in when there's no live data.
+  const [savedSourceSwatches, setSavedSourceSwatches] = useState<PaletteSwatch[] | null>(null);
+  const [savedTargetSwatches, setSavedTargetSwatches] = useState<PaletteSwatch[] | null>(null);
+
   // Palette extraction lives at the parent level so weights can be wired into both
   // the PaletteStrip UI and the synthesized-weighted-source path that drives the
-  // histogram match. Recomputes when source pixels or count change.
+  // histogram match. Recomputes when source pixels or count change. Falls back
+  // to a restored-from-XMP cached swatch list when no live source is available.
   const paletteSwatches = useMemo(() => {
-    if (!srcSnap) return [];
-    return extractPalette(srcSnap.data, srcSnap.width, srcSnap.height, paletteCount);
-  }, [srcSnap, paletteCount]);
+    if (srcSnap) return extractPalette(srcSnap.data, srcSnap.width, srcSnap.height, paletteCount);
+    if (savedSourceSwatches && savedSourceSwatches.length > 0) return savedSourceSwatches;
+    return [];
+  }, [srcSnap, paletteCount, savedSourceSwatches]);
 
   // Reset weights to all-1 (neutral) whenever the palette identity changes. Stale
   // weights from a previous source's clusters would be meaningless against a fresh
@@ -567,9 +577,10 @@ export function MatchTab() {
   // (full match everywhere) so the existing behavior is preserved when the
   // user hasn't touched the target bar.
   const targetPaletteSwatches = useMemo(() => {
-    if (!tgt.snap) return [];
-    return extractPalette(tgt.snap.data, tgt.snap.width, tgt.snap.height, paletteCount);
-  }, [tgt.snap, paletteCount]);
+    if (tgt.snap) return extractPalette(tgt.snap.data, tgt.snap.width, tgt.snap.height, paletteCount);
+    if (savedTargetSwatches && savedTargetSwatches.length > 0) return savedTargetSwatches;
+    return [];
+  }, [tgt.snap, paletteCount, savedTargetSwatches]);
   const targetClusterDistances = useMemo(() => {
     if (!tgt.snap || targetPaletteSwatches.length === 0) return null;
     return computeClusterDistances(tgt.snap.data, targetPaletteSwatches);
@@ -862,7 +873,19 @@ export function MatchTab() {
     envelope: envelopeRef.current,
     sourceDocId: srcDocId,
     sourceLayerId: sourceId,
-  }, "1.14.0");
+    // Phase 2c source fingerprint — the actual k-means swatches at bake time.
+    // With these saved on the layer, RESTORE on a closed-source doc still
+    // shows the palette the user was working with, and weight changes can
+    // apply against saved swatches even when the source pixels are gone.
+    sourcePaletteSwatches: paletteSwatches.map(s => ({
+      r: s.r, g: s.g, b: s.b, weight: s.weight,
+      labL: s.labL, labA: s.labA, labB: s.labB,
+    })),
+    targetPaletteSwatches: targetPaletteSwatches.map(s => ({
+      r: s.r, g: s.g, b: s.b, weight: s.weight,
+      labL: s.labL, labA: s.labA, labB: s.labB,
+    })),
+  }, "1.14.2");
 
   // Shared restore implementation — pulled out of the manual onRestoreFromLayer
   // handler so the auto-restore listener can use the same code path. Takes a
@@ -899,6 +922,16 @@ export function MatchTab() {
     if (state.envelope && Array.isArray(state.envelope) && state.envelope.length > 0) {
       envelopeRef.current = state.envelope as EnvelopePoint[];
       setEnvelopeLabel(state.envelope as EnvelopePoint[]);
+    }
+    // Phase 2c: source/target palette swatches saved at bake time. Drop them
+    // into the saved-fallback state so the palette strips show the user's
+    // saved palette even when the source/target docs aren't currently open.
+    // Live snaps still take precedence when available.
+    if (Array.isArray(state.sourcePaletteSwatches) && state.sourcePaletteSwatches.length > 0) {
+      setSavedSourceSwatches(state.sourcePaletteSwatches as PaletteSwatch[]);
+    }
+    if (Array.isArray(state.targetPaletteSwatches) && state.targetPaletteSwatches.length > 0) {
+      setSavedTargetSwatches(state.targetPaletteSwatches as PaletteSwatch[]);
     }
     return true;
   };

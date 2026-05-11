@@ -45,9 +45,25 @@ export interface LutLayerState {
   // Identity hints for the editor — best-effort; null if unavailable.
   sourceDocId?: number | null;
   sourceLayerId?: number | null;
+  // Palette swatches — the actual cluster centroids from k-means at bake
+  // time. Storing these means the layer is self-contained: even if the
+  // source doc is closed/deleted, RESTORE can show the user the palette
+  // they were working with and re-apply weight tweaks against the saved
+  // swatches. Phase 2c (this version).
+  sourcePaletteSwatches?: SerializedSwatch[];
+  targetPaletteSwatches?: SerializedSwatch[];
   // Audit
   timestamp?: number;
   toolVersion?: string;
+}
+
+/** Minimal swatch record for XMP — drops anything derived (e.g. effective
+ *  weight after softness blending). r/g/b are 0..255; lab values are the
+ *  cluster centroid in CIE Lab. weight is the natural-prevalence fraction. */
+export interface SerializedSwatch {
+  r: number; g: number; b: number;
+  weight: number;
+  labL: number; labA: number; labB: number;
 }
 
 /** Wrap our JSON in a minimal XMP packet. PS reads the entire packet as a
