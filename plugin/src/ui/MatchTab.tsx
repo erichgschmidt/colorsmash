@@ -2374,6 +2374,24 @@ export function MatchTab() {
         return (
           <>
           <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 4, height: 18, lineHeight: "16px" }}>
+            {/* v1.20.37 — MASK pill leads the row so users see the mask
+                visualization toggle FIRST, then the marquee tristate
+                immediately to its right. */}
+            <div onClick={() => setShowMask(v => !v)}
+              title={showMask
+                ? "Show Mask ON — protected regions painted red on the matched preview (palette × selection composition). Click to disable."
+                : "Show Mask OFF — preview shows pure transform output. Click to enable: protected regions paint red."}
+              style={{
+                padding: "0 6px",
+                fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
+                display: "inline-flex", alignItems: "center", justifyContent: "center",
+                background: showMask ? "#3a2828" : "transparent",
+                color: showMask ? "#e87a7a" : "#5a3a3a",
+                border: `1px solid ${showMask ? "#d87a7a" : "#5a3a3a"}`,
+                borderRadius: 2, cursor: "pointer", userSelect: "none",
+                height: 18, lineHeight: "16px", boxSizing: "border-box",
+                flexShrink: 0,
+              }}>MASK</div>
             <span style={{ fontSize: 9, opacity: marqueeDisabled ? 0.3 : 0.5, width: 38 }}>marquee</span>
             <div style={{ display: "flex", flex: 1, gap: 2, opacity: marqueeDisabled ? 0.55 : 1 }}>
               {([
@@ -2425,24 +2443,6 @@ export function MatchTab() {
               }}>
               <span style={{ marginTop: -1, lineHeight: 1 }}>↻</span>
             </div>
-            {/* v1.20.36 — MASK toggle relocated from the apply row to the
-                marquee row. Same red-tinted pill style as before; matches
-                the height/font/border of the Off/Focus/Exclude pills here. */}
-            <div onClick={() => setShowMask(v => !v)}
-              title={showMask
-                ? "Show Mask ON — protected regions painted red on the matched preview (palette × selection composition). Click to disable."
-                : "Show Mask OFF — preview shows pure transform output. Click to enable: protected regions paint red."}
-              style={{
-                padding: "0 6px", marginLeft: 2,
-                fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
-                display: "inline-flex", alignItems: "center", justifyContent: "center",
-                background: showMask ? "#3a2828" : "transparent",
-                color: showMask ? "#e87a7a" : "#5a3a3a",
-                border: `1px solid ${showMask ? "#d87a7a" : "#5a3a3a"}`,
-                borderRadius: 2, cursor: "pointer", userSelect: "none",
-                height: 18, lineHeight: "16px", boxSizing: "border-box",
-                flexShrink: 0,
-              }}>MASK</div>
           </div>
           {showNoSelectionHint && (
             <div style={{
