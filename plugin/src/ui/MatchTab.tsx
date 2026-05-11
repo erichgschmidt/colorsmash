@@ -2050,60 +2050,64 @@ export function MatchTab() {
       })()}
 
       <div style={{ display: "flex", flexWrap: "nowrap", gap: 4, marginTop: 6, width: "100%" }}>
-        {/* Unified Apply + Replace-arm widget (v1.20.4). Two click zones
-            inside a single button shell:
-              - Left arm (~14px, angled notch): toggles overwriteOnApply.
-                Red when armed = "will replace prior layer." Dim gray when
-                disarmed = "will stack alongside priors."
-              - Right body: dispatches Apply (Curves or LUT per outputMode).
-            Same Apply behavior as before — only the visual is unified.
-            Pattern borrowed from DAW "arm for record" buttons: a small
-            stateful indicator embedded into the primary action button. */}
-        <div style={{ flex: "1 1 0", minWidth: 0, display: "flex", flexDirection: "row", height: 28 }}>
-          {/* Replace-arm — angled notch via clipPath. Stops propagation so
-              clicking the arm only toggles state, doesn't fire Apply. */}
+        {/* Unified Apply + Replace-arm widget (v1.20.4 / refined v1.20.5).
+            Outer container provides the rounded pill silhouette with
+            overflow:hidden so the two inner zones share the shape
+            cleanly — the red arm is INSIDE the pill, not protruding.
+            Inner zones:
+              - Left arm (16px): toggles overwriteOnApply. Red armed, dim
+                disarmed. White dot indicator.
+              - Right body: Apply action. Custom button styled to match
+                Spectrum secondary look without sp-button's own corners
+                fighting the outer container's rounded shape. */}
+        <div style={{
+          flex: "1 1 0", minWidth: 0, height: 28,
+          display: "flex", flexDirection: "row",
+          // Outer shell: rounded pill, border, clipped content. Both inner
+          // zones inherit the silhouette without needing their own corners.
+          borderRadius: 4,
+          border: `1px solid ${overwriteOnApply ? "#c4423a" : "#888"}`,
+          overflow: "hidden",
+          boxSizing: "border-box",
+        }}>
+          {/* Replace-arm. Plain rectangle inside the rounded shell; the
+              outer clip handles the left rounded corner. Vertical divider
+              between arm and Apply body via the Apply's borderLeft. */}
           <div onClick={e => { e.stopPropagation(); setOverwriteOnApply(!overwriteOnApply); }}
             title={overwriteOnApply
-              ? "REPLACE ARMED — Apply will overwrite the prior Match Curves/LUT layer in [Color Smash]. Click to disarm (Apply will stack alongside priors instead)."
+              ? "REPLACE ARMED — Apply will overwrite the prior Match Curves/LUT layer in [Color Smash]. Click to disarm (Apply will stack alongside priors)."
               : "Replace disarmed — Apply will stack alongside prior layers. Click to arm Replace: prior layer is deleted on each Apply."}
             style={{
-              width: 16, height: 28, padding: 0, flexShrink: 0,
+              width: 18, height: "100%", padding: 0, flexShrink: 0,
               background: overwriteOnApply ? "#c4423a" : "#2a2a2a",
-              color: overwriteOnApply ? "#fff" : "#5a5a5a",
-              border: `1px solid ${overwriteOnApply ? "#c4423a" : "#3a3a3a"}`,
-              borderRight: "none",
-              borderTopLeftRadius: 4, borderBottomLeftRadius: 4,
               display: "flex", alignItems: "center", justifyContent: "center",
-              fontSize: 11, fontWeight: 700, lineHeight: 1,
               cursor: "pointer", userSelect: "none",
               boxSizing: "border-box",
-              // Angled notch on the right edge — diagonal cut into the arm
-              // so it visually "tabs" into the Apply body. Clip-path is
-              // supported in UXP Chromium.
-              clipPath: "polygon(0 0, 100% 0, calc(100% - 6px) 100%, 0 100%)",
             }}>
-            {/* Small dot indicator — visible at any state, red-on-red vs
-                gray-on-dark gives subtle contrast cue. */}
             <span style={{
               width: 6, height: 6, borderRadius: "50%",
-              background: overwriteOnApply ? "#fff" : "#5a5a5a",
+              background: overwriteOnApply ? "#fff" : "#666",
               display: "inline-block",
             }} />
           </div>
-          {/* Apply body — the rest of the button. Reuses sp-button for
-              Spectrum hover/active styling. The clip-path on the arm cuts
-              into this area visually, so we add a small negative marginLeft
-              to overlap the notch boundary cleanly. */}
-          {/* @ts-ignore Spectrum web component */}
-          <sp-button variant="secondary" onClick={outputMode === "lut" ? onApplyLut : onApply}
-            style={{ flex: "1 1 0", minWidth: 0, overflow: "hidden", whiteSpace: "nowrap", marginLeft: -6 }}
+          {/* Apply body — custom button styled like Spectrum secondary. */}
+          <div onClick={outputMode === "lut" ? onApplyLut : onApply}
             title={
               outputMode === "lut"
                 ? "Create a Color Lookup adjustment layer in [Color Smash] loaded with a 33³ 3D LUT. Captures non-separable preset blend math (Color/Hue/Saturation/Luminosity) a Curves layer can't represent. Use LIVE for real-time updates, RESTORE/AUTO to round-trip via the layer's XMP."
                 : multiZone
                   ? "Multi: creates 3 stacked Curves layers (shadow/mid/highlight) with band limiting via mask and/or Blend If. Each editable independently in PS."
                   : "Create a new Curves adjustment layer in the target document, clipped to the target layer. The left arm toggles whether prior Match layers are replaced or stacked."
-            }>Apply</sp-button>
+            }
+            style={{
+              flex: "1 1 0", minWidth: 0, height: "100%",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              background: "#3a3a3a", color: "#eeeeee",
+              fontSize: 11, fontWeight: 600, letterSpacing: 0.3,
+              borderLeft: "1px solid #555",
+              cursor: "pointer", userSelect: "none",
+              overflow: "hidden", whiteSpace: "nowrap",
+            }}>Apply</div>
         </div>
         {/* Live LUT toggle: when on, every state change re-bakes the LUT into
             the existing Match LUT layer (debounced ~300ms). Off by default —
