@@ -14,6 +14,7 @@ import {
   fitByMode, MatchMode, Preset, transformCurvesForPreset,
   fitMultiZoneByMode, processMultiZoneFit,
 } from "../core/histogramMatch";
+import { clampBandRange, readCompositeForBands, buildLumaBandMasks } from "./multiZoneCommon";
 
 const STATS_MAX_EDGE = 512;
 const CONTROL_POINTS = 12;
@@ -284,60 +285,23 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
 
       const { imaging } = require("photoshop");
 
-      // Read full-res document composite for mask computation. Request 4-component output
-      // so we get alpha — needed to zero out mask values in transparent areas (otherwise
-      // the highlight mask reads outside-image pixels as full-white luma and ends up white
-      // in the border, applying the highlight Curves to nothing visible but polluting the
-      // mask thumbnail).
-      const compResult = await imaging.getPixels({ documentID: doc.id, componentSize: 8, applyAlpha: false });
-      const compId = compResult.imageData;
-      const compRaw = await compId.getData();
-      const compSrc = compRaw instanceof Uint8Array ? compRaw : new Uint8Array(compRaw);
-      const compW = compId.width, compH = compId.height;
-      const compComps = compId.components ?? (compSrc.length / (compW * compH));
-      const hasAlpha = compComps === 4;
+      // Read full-res document composite for mask computation (4-component when
+      // available so transparent pixels zero across all bands instead of polluting
+      // the highlight mask with white-luma border reads).
+      const { composite, dispose: disposeComposite } = await readCompositeForBands(doc.id);
+      const compW = composite.width, compH = composite.height;
 
       // Band peak luma positions + outer extents. Adaptive (from target histogram) when
       // caller passes them, fixed at 0/128/255 + 0/255 otherwise.
       const peaks = params.multiZonePeaks ?? { shadow: 0, mid: 128, highlight: 255 };
       const extents = params.multiZoneExtents ?? { min: 0, max: 255 };
-      const sP = Math.max(0, Math.min(253, peaks.shadow));
-      const mP = Math.max(sP + 1, Math.min(254, peaks.mid));
-      const hP = Math.max(mP + 1, Math.min(255, peaks.highlight));
-      const eMin = Math.max(0, Math.min(sP, extents.min));
-      const eMax = Math.max(hP, Math.min(255, extents.max));
+      const { sP, mP, hP, eMin, eMax } = clampBandRange(peaks, extents);
 
-      // Triangular band-weight masks (one byte per pixel = weight × 255). Multiplied by
-      // alpha when present so transparent pixels get mask value 0 across all bands.
-      // Pixels outside [eMin, eMax] get zero across all bands → identity passthrough.
-      const pxCount = compW * compH;
-      const shadowMask = new Uint8Array(pxCount);
-      const midMask = new Uint8Array(pxCount);
-      const highlightMask = new Uint8Array(pxCount);
-      for (let i = 0, j = 0; i < pxCount; i++, j += compComps) {
-        const a = hasAlpha ? compSrc[j + 3] / 255 : 1;
-        if (a < 1 / 255) {
-          shadowMask[i] = 0; midMask[i] = 0; highlightMask[i] = 0;
-          continue;
-        }
-        const r = compSrc[j], g = compSrc[j + 1], b = compSrc[j + 2];
-        const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        if (luma < eMin || luma > eMax) {
-          shadowMask[i] = 0; midMask[i] = 0; highlightMask[i] = 0;
-          continue;
-        }
-        // Linear ramps anchored at peaks AND extents (shadow ramps up from eMin to sP,
-        // highlight ramps down from hP to eMax — matches the visual histogram bounds).
-        const sw = luma <= sP ? (sP === eMin ? 1 : (luma - eMin) / (sP - eMin))
-                              : (luma <= mP ? (mP - luma) / (mP - sP) : 0);
-        const mw = luma <= sP ? 0 : (luma <= mP ? (luma - sP) / (mP - sP) : (luma <= hP ? (hP - luma) / (hP - mP) : 0));
-        const hw = luma <= mP ? 0 : (luma <= hP ? (luma - mP) / (hP - mP)
-                                                 : (eMax === hP ? 1 : (eMax - luma) / (eMax - hP)));
-        shadowMask[i]    = Math.max(0, Math.min(255, Math.round(a * sw * 255)));
-        midMask[i]       = Math.max(0, Math.min(255, Math.round(a * mw * 255)));
-        highlightMask[i] = Math.max(0, Math.min(255, Math.round(a * hw * 255)));
-      }
-      if (compId.dispose) compId.dispose();
+      // Triangular band-weight masks (one byte per pixel = weight × 255). See
+      // buildLumaBandMasks for the per-pixel ramp math.
+      const { shadow: shadowMask, mid: midMask, highlight: highlightMask } =
+        buildLumaBandMasks(composite, { sP, mP, hP, eMin, eMax });
+      disposeComposite();
 
       // Blend If fallback ranges — outer slider positions match the histogram extents
       // (eMin / eMax) instead of always 0 / 255, so the slider visualization is honest.

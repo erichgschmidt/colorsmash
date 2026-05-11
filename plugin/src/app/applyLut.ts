@@ -52,6 +52,22 @@ export interface ApplyLutParams {
   xmpState?: LutLayerState;
 }
 
+/** Multi-zone parameter bundle. Same shape applyMatch consumes — three
+ *  per-channel curve sets (shadow / mid / highlight) plus the band peak +
+ *  extent positions used to build the luma triangular masks at full target
+ *  resolution. */
+export interface ApplyMultiZoneLutParams extends Omit<ApplyLutParams, "curves"> {
+  /** Three already-fitted ChannelCurves, one per luma band. Caller computes
+   *  these upstream via fitMultiZoneByMode + processMultiZoneFit. */
+  multiZoneFit: {
+    shadow: ChannelCurves;
+    mid: ChannelCurves;
+    highlight: ChannelCurves;
+  };
+  multiZonePeaks?: { shadow: number; mid: number; highlight: number };
+  multiZoneExtents?: { min: number; max: number };
+}
+
 export interface ApplyLutResult {
   layerName: string;
   layerId: number | null;
@@ -396,4 +412,228 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
   });
 }
 
+// ─── Multi-zone LUT ─────────────────────────────────────────────────────────
+// When the user has Multi on + outputMode = LUT, emit 3 stacked Color Lookup
+// adjustment layers in a sub-group, each carrying one band's LUT (shadow /
+// mid / highlight) and the band's triangular luma weight mask. Mirrors the
+// Curves multi-zone structure but with LUT layers instead of Curves layers.
+// Target-palette mask, if active, attaches to the sub-group itself.
+//
+// Reuses multiZoneCommon helpers shared with applyMatch's Curves multi-zone
+// branch so the band-mask math stays in lockstep across both output modes.
 
+import {
+  clampBandRange, readCompositeForBands, buildLumaBandMasks,
+} from "./multiZoneCommon";
+
+export async function applyMultiZoneLutAsLayers(
+  params: ApplyMultiZoneLutParams,
+): Promise<ApplyLutResult> {
+  const size = params.size ?? 33;
+  const presetTag = params.preset === "color" ? "full"
+                  : params.preset === "hue" ? "color"
+                  : params.preset === "hueOnly" ? "hue"
+                  : params.preset === "saturationOnly" ? "saturation"
+                  : "contrast";
+
+  // Same blend-mode mapping single-LUT uses + applyMatch's Curves multi-zone
+  // path. Keeps preset behavior consistent across all four output combinations
+  // (single-Curves, single-LUT, multi-Curves, multi-LUT).
+  const presetBlend =
+    params.preset === "hue" ? "color" :
+    params.preset === "hueOnly" ? "hue" :
+    params.preset === "saturationOnly" ? "saturation" :
+    params.preset === "contrast" ? "luminosity" :
+    null;
+
+  // Pre-generate cube + ICC for each band on the worker side so we don't sit
+  // inside the modal scope doing CPU work. Each is ~200KB so the three combined
+  // are ~600KB of base64 — well within batchPlay limits.
+  const bandsData = (["shadow", "mid", "highlight"] as const).map(key => {
+    const curves = params.multiZoneFit[key];
+    const cubeText = generateLutCube(curves, params.preset, size, `Color Smash ${key}`);
+    const cubeB64 = cubeToBase64(cubeText);
+    const profileB64 = generateIccDeviceLinkBase64(curves);
+    return { key, cubeText, cubeB64, profileB64 };
+  });
+
+  // Need the target's PixelBuffer for the target-palette-mask path (same as
+  // single-LUT). Read it once + reuse for both band-mask sub-group attachment
+  // and palette-mask sub-group attachment.
+  const wantPaletteMask = !!(
+    params.targetPalette
+    && !params.targetIsMerged
+    && params.targetLayerId != null
+    && targetWeightsActive(params.targetPalette)
+  );
+
+  return await executeAsModal("Color Smash apply multi-zone LUT", async () => {
+    const doc = app.activeDocument;
+    if (!doc) throw new Error("No active document.");
+
+    // 1. Find or create [Color Smash] group + clean up any prior Match LUT.
+    const group = await getOrCreateColorSmashGroup(doc);
+    if (params.overwritePrior !== false) {
+      const prior: any[] = [];
+      collectMatches(group, LUT_LAYER_PREFIX, prior);
+      for (const p of prior) {
+        try { await p.delete(); } catch { /* ignore */ }
+      }
+    }
+
+    // 2. Determine target layer + select it so new layers stack above.
+    const targetLayer = params.targetLayerId != null
+      ? findLayerById(doc.layers ?? [], params.targetLayerId)
+      : null;
+    if (targetLayer) {
+      try {
+        await action.batchPlay([{
+          _obj: "select",
+          _target: [{ _ref: "layer", _id: targetLayer.id }],
+          makeVisible: false,
+        }], {});
+      } catch { /* ignore */ }
+    }
+
+    // 3. Read the target composite for band masks + palette mask.
+    const targetBounds = targetLayer?.bounds
+      ? { left: targetLayer.bounds.left, top: targetLayer.bounds.top,
+          right: targetLayer.bounds.right, bottom: targetLayer.bounds.bottom }
+      : { left: 0, top: 0, right: doc.width, bottom: doc.height };
+    const { composite, dispose } = await readCompositeForBands(doc.id, targetBounds);
+    try {
+      // 4. Adjusted peaks + extents + the 3 band triangle masks.
+      const range = clampBandRange(
+        params.multiZonePeaks ?? { shadow: 0, mid: 128, highlight: 255 },
+        params.multiZoneExtents ?? { min: 0, max: 255 },
+      );
+      const bandMasks = buildLumaBandMasks(composite, range);
+
+      // 5. Create the sub-group that will house the 3 band layers + carry the
+      //    optional target-palette mask. Names match Curves multi-zone:
+      //    sub-group "Match LUT" (timestamped if not overwriting) containing
+      //    "Match LUT [Shadows]", "Match LUT [Mids]", "Match LUT [Highlights]".
+      try {
+        await action.batchPlay([{ _obj: "selectNoLayers",
+          _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }] }], {});
+      } catch { /* ignore */ }
+      const subName = params.overwritePrior !== false
+        ? LUT_LAYER_PREFIX
+        : `${LUT_LAYER_PREFIX} ${new Date().toTimeString().slice(0, 8)}`;
+      const bandContainer = await doc.createLayerGroup({ name: subName });
+      try { await bandContainer.move(group, "placeInside"); } catch { /* ignore */ }
+
+      // 6. For each band: make Color Lookup → load LUT → attach band mask →
+      //    set blend mode → move into sub-group.
+      const bandSpecs = [
+        { key: "shadow"    as const, suffix: "Shadows",   mask: bandMasks.shadow },
+        { key: "mid"       as const, suffix: "Mids",      mask: bandMasks.mid },
+        { key: "highlight" as const, suffix: "Highlights", mask: bandMasks.highlight },
+      ];
+      const bandLayerIds: number[] = [];
+
+      for (const { key, suffix, mask } of bandSpecs) {
+        const layerName = `${LUT_LAYER_PREFIX} [${suffix}]`;
+        const data = bandsData.find(b => b.key === key)!;
+
+        // 6a. Make empty Color Lookup layer.
+        const makeResult = await action.batchPlay([{
+          _obj: "make",
+          _target: [{ _ref: "adjustmentLayer" }],
+          using: {
+            _obj: "adjustmentLayer",
+            type: { _obj: "colorLookup" },
+          },
+        }], {});
+        if (!makeResult || !makeResult[0] || makeResult[0].error) {
+          throw new Error(`make adjustmentLayer (${suffix}) failed: ${makeResult?.[0]?.error ?? "unknown"}`);
+        }
+
+        // 6b. Load the LUT — same { _data, _rawData } wrapper format
+        //     single-LUT uses, plus the ICC profile for actual rendering.
+        const setDesc = {
+          _obj: "set",
+          _target: [{ _ref: "adjustmentLayer", _enum: "ordinal", _value: "targetEnum" }],
+          to: {
+            _obj: "colorLookup",
+            lookupType: { _enum: "colorLookupType", _value: "3DLUT" },
+            LUT3DFileData: { _data: data.cubeB64, _rawData: "base64" },
+            LUTFormat: { _enum: "LUTFormatType", _value: "LUTFormatCUBE" },
+            LUT3DFileName: `colorsmash_${presetTag}_${key}.cube`,
+            name: `colorsmash_${presetTag}_${key}.cube`,
+            profile: { _data: data.profileB64, _rawData: "base64" },
+          },
+        };
+        const loadRes = await action.batchPlay([setDesc as any], {});
+        if (!loadRes || !loadRes[0] || loadRes[0].error) {
+          throw new Error(`LUT load (${suffix}) failed: ${loadRes?.[0]?.error ?? "unknown"}`);
+        }
+
+        // 6c. The new layer is the active layer. Capture it + rename.
+        const bandLayer = doc.activeLayers?.[0] ?? doc.layers?.[0];
+        if (!bandLayer) continue;
+        try { bandLayer.name = layerName; } catch { /* ignore */ }
+
+        // 6d. Apply preset blend mode (Hue / Color / Sat / Luminosity / Normal).
+        if (presetBlend) {
+          try { (bandLayer as any).blendMode = presetBlend; } catch { /* ignore */ }
+        }
+
+        // 6e. Attach the band luma mask. Done BEFORE moving into the sub-group
+        //     because mask attachment can fail on a freshly-moved layer in some
+        //     PS versions (race on layer DB state). Single-LUT-mask code path.
+        try {
+          const { imaging } = require("photoshop");
+          const maskImageData = await imaging.createImageDataFromBuffer(mask, {
+            width: composite.width, height: composite.height, components: 1,
+            chunky: true, colorProfile: "Gray Gamma 2.2", colorSpace: "Grayscale",
+          });
+          await imaging.putLayerMask({
+            documentID: doc.id,
+            layerID: bandLayer.id,
+            imageData: maskImageData,
+            targetBounds: targetBounds,
+            replace: true,
+          });
+          if (maskImageData.dispose) maskImageData.dispose();
+        } catch { /* non-fatal: layer still applies LUT, just unmasked */ }
+
+        // 6f. Move into the sub-group. Layer stays selected so the next make
+        //     stacks above it within the group.
+        try { await bandLayer.move(bandContainer, "placeInside"); } catch { /* ignore */ }
+        try { bandLayerIds.push(bandLayer.id); } catch { /* ignore */ }
+      }
+
+      // 7. Attach target-palette mask to the sub-group itself if requested.
+      //    PixelBuffer shape for applyTargetPaletteMaskToLayer expects
+      //    { data, width, height, bounds } — pull from the composite buffer.
+      if (wantPaletteMask && params.targetPalette && bandContainer?.id != null) {
+        try {
+          const t = {
+            data: composite.data, width: composite.width, height: composite.height,
+            bounds: targetBounds,
+          };
+          await applyTargetPaletteMaskToLayer(doc.id, bandContainer.id, t, params.targetPalette);
+        } catch { /* non-fatal */ }
+      }
+
+      // 8. Clip the sub-group to the target so the multi-zone trio only
+      //    affects the target layer (matches Curves multi-zone behavior).
+      if (targetLayer && !params.targetIsMerged && bandContainer) {
+        try { await setClippingMask(bandContainer, true); } catch { /* ignore */ }
+      }
+
+      // 9. XMP fingerprint on the first band layer (consumed by RESTORE on
+      //    any layer in the sub-group via shared prefix). For simplicity we
+      //    only stamp the topmost — Restore reads from whatever's active.
+      if (params.xmpState && bandLayerIds.length > 0) {
+        try { await writeLutLayerState(bandLayerIds[0], params.xmpState); }
+        catch { /* non-fatal */ }
+      }
+
+      return { layerName: subName, layerId: bandContainer.id ?? null };
+    } finally {
+      try { dispose(); } catch { /* ignore */ }
+    }
+  });
+}

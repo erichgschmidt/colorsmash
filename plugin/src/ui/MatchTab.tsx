@@ -29,7 +29,7 @@ import { EnvelopeEditor } from "./EnvelopeEditor";
 import { loadSettings, makeDebouncedSaver, clearSettings, PersistedSettings } from "./persistence";
 import { uxpInfo } from "./uxpInfo";
 import { applyMatch } from "../app/applyMatch";
-import { applyLutAsAdjustmentLayer } from "../app/applyLut";
+import { applyLutAsAdjustmentLayer, applyMultiZoneLutAsLayers } from "../app/applyLut";
 import { LutLayerState, readLutLayerState, stampState } from "../app/lutXmp";
 import { syncOutputVisibilityToMode } from "../app/outputVisibility";
 import {
@@ -1077,6 +1077,62 @@ export function MatchTab() {
   const onApplyLut = async () => {
     const curves = renderedCurves;
     if (!curves) { setStatus("Compute a match first."); return; }
+
+    const targetPalette = targetPaletteSwatches.length > 0 ? {
+      swatches: targetPaletteSwatches,
+      weights: targetPaletteWeights.slice(),
+      softness: targetSoftness,
+    } : undefined;
+
+    // Multi-zone LUT branch (v1.16.0). When Multi is on AND we have a fitted
+    // multi-zone result, emit 3 stacked Color Lookup layers in a sub-group
+    // (matches the Curves multi-zone structure). Each layer carries one
+    // band's LUT + a luma triangular mask. Falls back to single-LUT if
+    // multi-zone fit hasn't computed yet (e.g. no target snap).
+    if (multiZone && fittedMulti) {
+      setStatus("Applying multi-zone LUT...");
+      try {
+        // processMultiZoneFit normalizes the raw fit through curveOpts / dimOpts —
+        // same processing single-LUT applies via renderedCurves. Without this
+        // step the bands would carry pre-postprocess curves and the preset
+        // blend math would double-apply.
+        // curveOpts shape mirrors the preview pipeline (~line 746). enColor
+        // gate is applied implicitly here — caller already decided to Apply,
+        // so the Color section is honored at its current slider values.
+        const stretchRange = anchorStretchToHist && lumaBins ? lumaRange(lumaBins) : undefined;
+        const procFit = processMultiZoneFit(fittedMulti, {
+          amount: amountRef.current / 100,
+          smoothRadius: smoothRef.current,
+          maxStretch: stretchRef.current,
+          stretchRange,
+        }, dimsRef.current);
+        const result = await applyMultiZoneLutAsLayers({
+          multiZoneFit: procFit,
+          preset: activePreset,
+          size: 33,
+          targetLayerId: targetId === MERGED_LAYER_ID ? null : targetId,
+          targetIsMerged: targetId === MERGED_LAYER_ID,
+          overwritePrior: overwriteOnApply,
+          targetPalette,
+          multiZonePeaks,
+          multiZoneExtents,
+          xmpState: buildXmpState(),
+        });
+        // Live LUT is disabled for multi-zone (would require updating 3
+        // layers per commit + recomputing 3 ICC profiles — defer to a
+        // future increment). Track the sub-group id for the visibility-sync
+        // path so SWAP/AUTO can toggle the whole multi-zone trio at once.
+        liveLutLayerIdRef.current = result.layerId;
+        lastSelfWriteRef.current = Date.now();
+        setStatus(`Applied "${result.layerName}" (3× 33³ multi-zone LUT).`);
+        return;
+      } catch (e: any) {
+        setStatus(`Apply multi-zone LUT failed: ${e?.message ?? e}`);
+        return;
+      }
+    }
+
+    // Single-LUT branch.
     setStatus("Applying LUT...");
     try {
       const result = await applyLutAsAdjustmentLayer({
@@ -1086,11 +1142,7 @@ export function MatchTab() {
         targetLayerId: targetId === MERGED_LAYER_ID ? null : targetId,
         targetIsMerged: targetId === MERGED_LAYER_ID,
         overwritePrior: overwriteOnApply,
-        targetPalette: targetPaletteSwatches.length > 0 ? {
-          swatches: targetPaletteSwatches,
-          weights: targetPaletteWeights.slice(),
-          softness: targetSoftness,
-        } : undefined,
+        targetPalette,
         xmpState: buildXmpState(),
       });
       // Track the new layer's id so toggling Live LUT later updates THIS layer
@@ -1125,6 +1177,15 @@ export function MatchTab() {
       // Cancel any pending fire when toggling off.
       if (liveBakeTimerRef.current) { clearTimeout(liveBakeTimerRef.current); liveBakeTimerRef.current = null; }
       liveBakeFirstRunSkippedRef.current = false;
+      return;
+    }
+    // Multi-zone LUT incompatibility (v1.16.0): the multi-zone path creates 3
+    // Color Lookup layers in a sub-group, while Live LUT's update-in-place
+    // mechanism targets a single layer ID. Updating 3 layers per commit + re-
+    // baking 3 ICC profiles is a future-increment; for now skip live updates
+    // entirely when Multi is on. Apply still works (multi-zone bake).
+    if (multiZone) {
+      if (liveBakeTimerRef.current) { clearTimeout(liveBakeTimerRef.current); liveBakeTimerRef.current = null; }
       return;
     }
     // First effect run after enabling: skip — don't auto-create on toggle.
@@ -1164,7 +1225,7 @@ export function MatchTab() {
     return () => {
       if (liveBakeTimerRef.current) { clearTimeout(liveBakeTimerRef.current); liveBakeTimerRef.current = null; }
     };
-  }, [liveLut, renderedCurves, activePreset, targetId, targetPaletteWeights, targetSoftness]);
+  }, [liveLut, renderedCurves, activePreset, targetId, targetPaletteWeights, targetSoftness, multiZone]);
 
   const onApply = async () => {
     if (targetId == null) { setStatus("Pick target layer."); return; }
