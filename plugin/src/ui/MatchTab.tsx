@@ -243,6 +243,7 @@ export function MatchTab() {
   // Used to mask both the matched preview render AND the MASK overlay,
   // so users can see the focus/exclude effect before baking.
   const [selectionPreviewMask, setSelectionPreviewMask] = useState<Uint8Array | null>(null);
+  const [selectionMaskError, setSelectionMaskError] = useState<string>("");
   const [selectionTick, setSelectionTick] = useState(0);
   // Listen to PS 'set' notifications and bump the ticker — covers marquee
   // drag commits, deselect, modify selection, etc. Throttled to ~150ms so
@@ -607,10 +608,19 @@ export function MatchTab() {
             if (doc) bounds = { left: 0, top: 0, right: doc.width, bottom: doc.height };
           } catch { /* ignore */ }
         }
-        if (!bounds) { setSelectionPreviewMask(null); return; }
-        const full = await readSelectionMaskBytes(tgtDocId, bounds);
+        if (!bounds) { setSelectionPreviewMask(null); setSelectionMaskError("no target bounds available"); return; }
+        // v1.20.22 — imaging.getSelection requires executeAsModal. Apply
+        // already wraps its reads; the preview path didn't, so the call was
+        // throwing silently and selectionPreviewMask stayed null forever.
+        const full = await executeAsModal("Color Smash selection preview", async () => {
+          return await readSelectionMaskBytes(tgtDocId, bounds!);
+        });
         if (cancelled) return;
-        if (!full) { setSelectionPreviewMask(null); return; }
+        if (!full) {
+          setSelectionPreviewMask(null);
+          setSelectionMaskError("imaging.getSelection returned null (no marquee on target doc, or unsupported)");
+          return;
+        }
         const srcW = (bounds.right - bounds.left) | 0;
         const srcH = (bounds.bottom - bounds.top) | 0;
         const dstW = snap.width;
@@ -629,9 +639,12 @@ export function MatchTab() {
             out[y * dstW + x] = full[sy * srcW + sx];
           }
         }
-        if (!cancelled) setSelectionPreviewMask(out);
-      } catch {
-        if (!cancelled) setSelectionPreviewMask(null);
+        if (!cancelled) { setSelectionPreviewMask(out); setSelectionMaskError(""); }
+      } catch (e: any) {
+        if (!cancelled) {
+          setSelectionPreviewMask(null);
+          setSelectionMaskError(`error: ${e?.message ?? e}`);
+        }
       }
     })();
     return () => { cancelled = true; };
@@ -2399,7 +2412,7 @@ export function MatchTab() {
               background: "transparent", border: "1px solid #5a4a2a", borderRadius: 2,
               lineHeight: 1.3,
             }}>
-              Marquee mode is <b>{selectionMode}</b> but no selection was captured. Draw a marquee on the target document, then click ↻ to refresh.
+              Marquee mode is <b>{selectionMode}</b> but no selection was captured. Draw a marquee on the target document, then click ↻ to refresh.{selectionMaskError ? <><br/><span style={{ opacity: 0.7 }}>{selectionMaskError}</span></> : null}
             </div>
           )}
           {marqueeDisabled && (
