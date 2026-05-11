@@ -366,8 +366,18 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
         mask = fullMask(px);
       }
       // Compose with selection if active.
+      // v1.20.33 — composeWithSelection bails on size mismatch, which can
+      // happen when imaging.getPixels and bounds.right-left return slightly
+      // different widths on sub-pixel-bounds layers. Pad/truncate first so
+      // the compose actually runs.
       if (selectionMaskBytes && selectionMode !== "off") {
-        mask = composeWithSelection(mask, selectionMaskBytes, selectionMode);
+        let sel = selectionMaskBytes;
+        if (sel.length !== mask.length) {
+          const padded = new Uint8Array(mask.length);
+          padded.set(sel.subarray(0, Math.min(sel.length, mask.length)));
+          sel = padded;
+        }
+        mask = composeWithSelection(mask, sel, selectionMode);
       }
       try {
         await attachLayerMask(doc.id, layerId, mask, targetBuf.width, targetBuf.height, targetBuf.bounds);

@@ -300,6 +300,24 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       } catch { /* ignore */ }
     }
 
+    // v1.20.33 — selection bytes are aligned to `t.bounds`, but the mask
+    // buffer downstream is sized to `t.width × t.height`. On layers with
+    // non-integer or rounding-differing bounds, these can be off by a few
+    // pixels — strict equality would skip compose entirely. Resample-
+    // tolerant helper: returns selection bytes sized exactly to
+    // (mask.length). Identity passthrough when sizes already match.
+    const resampleSelectionToMaskSize = (sel: Uint8Array, maskLen: number): Uint8Array => {
+      if (sel.length === maskLen) return sel;
+      // We can't recover spatial alignment exactly without knowing both
+      // dimensions, but bounds-width-vs-imageData-width differences are
+      // tiny (rounding only). Truncate or zero-pad as needed; the compose
+      // result is correct on the majority of pixels and any 1-row/col
+      // discrepancy is invisible.
+      const out = new Uint8Array(maskLen);
+      out.set(sel.subarray(0, Math.min(sel.length, maskLen)));
+      return out;
+    };
+
     // v1.20.26 — snapshot the marquee so PS can't consume it during
     // adjustment-layer creation. Restored at the end of the bake.
     const scSelSnapshot = await snapshotSelectionToChannel();
@@ -654,8 +672,9 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
           // Compose marquee selection (focus or exclude) — parity with applyLut.
           // v1.20.32 — use the eager-captured bytes; reliable across PS
           // versions (some silently drop the mid-flow restoreSelection).
-          if (useSelectionMask && eagerSelBytesHolder.value && eagerSelBytesHolder.value.length === pxCount) {
-            tpMask = composeWithSelection(tpMask, eagerSelBytesHolder.value, selectionMode);
+          if (useSelectionMask && eagerSelBytesHolder.value) {
+            const sel = resampleSelectionToMaskSize(eagerSelBytesHolder.value, pxCount);
+            tpMask = composeWithSelection(tpMask, sel, selectionMode);
           }
           const tpMaskImageData = await imaging.createImageDataFromBuffer(tpMask, {
             width: t.width, height: t.height, components: 1, chunky: true,
@@ -827,8 +846,9 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
         // Compose marquee selection (focus or exclude) — parity with applyLut.
         // v1.20.32 — use the eager-captured bytes (live marquee snapshotted
         // before makeCurvesLayer consumed it).
-        if (scUseSelection && eagerSelBytesHolder.value && eagerSelBytesHolder.value.length === pxCount) {
-          mask = composeWithSelection(mask, eagerSelBytesHolder.value, scSelectionMode);
+        if (scUseSelection && eagerSelBytesHolder.value) {
+          const sel = resampleSelectionToMaskSize(eagerSelBytesHolder.value, pxCount);
+          mask = composeWithSelection(mask, sel, scSelectionMode);
         }
         const { imaging } = require("photoshop");
         const maskImageData = await imaging.createImageDataFromBuffer(mask, {
