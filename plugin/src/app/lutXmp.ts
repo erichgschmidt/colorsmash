@@ -58,6 +58,11 @@ export interface LutLayerState {
   // Identity hints for the editor — best-effort; null if unavailable.
   sourceDocId?: number | null;
   sourceLayerId?: number | null;
+  // v1.20.43 — also stash target doc + layer so RESTORE can put the panel
+  // back to the EXACT source/target pairing that produced the bake, not
+  // just the algorithm settings.
+  targetDocId?: number | null;
+  targetLayerId?: number | null;
   // Palette swatches — the actual cluster centroids from k-means at bake
   // time. Storing these means the layer is self-contained: even if the
   // source doc is closed/deleted, RESTORE can show the user the palette

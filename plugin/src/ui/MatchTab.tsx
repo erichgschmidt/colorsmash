@@ -12,7 +12,7 @@ import { SourceSelector } from "./SourceSelector";
 import { PresetStrip } from "./PresetStrip";
 import { PaletteStrip, PaletteCount } from "./PaletteStrip";
 import { extractPalette, synthesizeWeightedSource, computeClusterDistances, precomputeEffectiveWeights, PaletteSwatch } from "../core/palette";
-import { BottomActionBar } from "./BottomActionBar";
+import { uxpConfirm } from "./uxpConfirm";
 import { BasicSlider, DimSlider, matchStyles } from "./MatchSliders";
 import { ChannelCurves } from "../core/histogramMatch";
 import {
@@ -315,7 +315,12 @@ export function MatchTab() {
   // ChromaWarp's "click the layer to keep editing where you left off"
   // model. Off by default — opt-in because it can clobber in-progress
   // edits if the user is mid-tweak and clicks a different layer to inspect.
-  const [autoRestore, setAutoRestore] = useState(false);
+  // v1.20.43 — AUTO removed (silently mutating panel state on layer-click was
+  // surprising and most users left it off). RESTORE stays as a manual action.
+  // `canRestore` tracks whether the active layer has Color Smash XMP so the
+  // RESTORE button can dim itself when there's nothing to recover — teaches
+  // users the feature exists by enabling it precisely when it's useful.
+  const [canRestore, setCanRestore] = useState(false);
   // Suppress auto-restore for a short window after we ourselves wrote a
   // layer's XMP. Apply LUT creates the layer → PS fires a select event for
   // it → without suppression we'd immediately restore from the layer we
@@ -1268,6 +1273,8 @@ export function MatchTab() {
     envelope: envelopeRef.current,
     sourceDocId: srcDocId,
     sourceLayerId: sourceId,
+    targetDocId: tgtDocId,
+    targetLayerId: targetId,
     // Phase 2c source fingerprint — the actual k-means swatches at bake time.
     // With these saved on the layer, RESTORE on a closed-source doc still
     // shows the palette the user was working with, and weight changes can
@@ -1450,6 +1457,25 @@ export function MatchTab() {
     if (mode === "full" && (state.selectionMode === "off" || state.selectionMode === "focus" || state.selectionMode === "exclude")) {
       setSelectionMode(state.selectionMode);
     }
+    // v1.20.43 — full restore also reinstates the doc + layer pairing
+    // that produced the bake, so RESTORE actually drops the user back
+    // into the exact source/target combination. Only sets when the
+    // referenced doc/layer is still openable (silently skips otherwise
+    // so a stale id doesn't blow up the UI).
+    if (mode === "full") {
+      try {
+        const ps = require("photoshop");
+        const docs = ps.app.documents ?? [];
+        if (typeof state.sourceDocId === "number" && docs.find((d: any) => d.id === state.sourceDocId)) {
+          setSrcDocId(state.sourceDocId);
+        }
+        if (typeof state.targetDocId === "number" && docs.find((d: any) => d.id === state.targetDocId)) {
+          setTgtDocId(state.targetDocId);
+        }
+        if (typeof state.sourceLayerId === "number") setSourceId(state.sourceLayerId);
+        if (typeof state.targetLayerId === "number") setTargetId(state.targetLayerId);
+      } catch { /* ignore */ }
+    }
   };
 
   const restoreFromLayerId = async (layerId: number): Promise<boolean> => {
@@ -1481,37 +1507,47 @@ export function MatchTab() {
     return true;
   };
 
-  // Auto-restore listener — when AUTO is on, watch for layer-selection
-  // events. If the newly-active layer is one we authored (has Color Smash
-  // XMP), rehydrate the panel state from it. Suppressed for ~1.5s after
-  // every self-write to avoid the Apply LUT → select fires → restore from
-  // the layer we just wrote echo loop.
+  // v1.20.43 — always-on listener that probes the active layer for Color
+  // Smash XMP and sets canRestore accordingly. Does NOT auto-mutate panel
+  // state (AUTO was removed); just gates the RESTORE button's enabled state
+  // so users see at a glance whether the layer they clicked can be
+  // restored from. Suppressed for ~1.5s after self-writes to avoid the
+  // Apply→select echo.
   useEffect(() => {
-    if (!autoRestore) return;
     const ps = require("photoshop");
     const psAction = ps.action;
     let scheduled: any = null;
+    const probe = async () => {
+      if (Date.now() - lastSelfWriteRef.current < 1500) return;
+      try {
+        const doc = ps.app.activeDocument;
+        const layer = doc?.activeLayers?.[0];
+        if (!layer) { setCanRestore(false); return; }
+        // Use restoreFromLayerId's read path; just don't apply.
+        const state = await readLutLayerState(layer.id);
+        if (state) { setCanRestore(true); return; }
+        // Fall back to first child (group with XMP'd inner layer).
+        const child = Array.isArray(layer.layers) ? layer.layers[0] : null;
+        if (child?.id != null) {
+          const cs = await readLutLayerState(child.id);
+          setCanRestore(!!cs);
+          return;
+        }
+        setCanRestore(false);
+      } catch { setCanRestore(false); }
+    };
     const onSelect = () => {
-      // Coalesce — PS often fires multiple select notifications per click.
       if (scheduled) clearTimeout(scheduled);
-      scheduled = setTimeout(async () => {
-        scheduled = null;
-        if (Date.now() - lastSelfWriteRef.current < 1500) return; // self-write suppression
-        try {
-          const doc = ps.app.activeDocument;
-          const layer = doc?.activeLayers?.[0];
-          if (!layer) return;
-          const ok = await restoreFromLayerId(layer.id);
-          if (ok) setStatus(`Auto-restored from "${layer.name}".`);
-        } catch { /* ignore */ }
-      }, 80);
+      scheduled = setTimeout(() => { scheduled = null; probe(); }, 80);
     };
     psAction.addNotificationListener(["select"], onSelect);
+    // Run once on mount so the button reflects whatever's already active.
+    probe();
     return () => {
       if (scheduled) clearTimeout(scheduled);
       try { psAction.removeNotificationListener?.(["select"], onSelect); } catch { /* ignore */ }
     };
-  }, [autoRestore]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Restore — read the active layer's XMP and push every captured value
   // back into the panel. Useful when the user clicked a previously-authored
@@ -2242,12 +2278,8 @@ export function MatchTab() {
         </div>
       )}
 
-      <BottomActionBar
-        remember={remember} setRemember={setRemember}
-        onRefreshAll={onRefreshAll}
-        onResetAll={onResetAll}
-        stale={stale}
-      />
+      {/* v1.20.43 — BottomActionBar dissolved; SAVE/✕/⟳ pills relocated
+          into the Apply row below for a single consolidated action cluster. */}
 
       {/* Apply (writes Curves layer to PS) and Export LUT (writes .CUBE to disk).
           50/50 split. flexWrap:nowrap + overflow:hidden + minWidth:0 on each cell
@@ -2555,63 +2587,97 @@ export function MatchTab() {
             the contract is stronger than one-shot Apply LUT, so we make it opt-in.
             Match the visual style of the small mode-toggle pills used elsewhere
             (palette mask, adapt, count) — dim when off, soft amber when on. */}
+        {/* v1.20.43 — LIVE pill restyled: neutral gray when off (was almost
+            invisible amber-on-dark), warm amber only when on. Same height
+            as Apply / Save LUT pills next to it. */}
         <div onClick={() => setLiveLut(v => !v)}
           title={liveLut
             ? "Live LUT ON — slider changes auto-update the Match LUT layer in real-time (debounced 300ms). Click Apply LUT once to seed the layer if none exists yet, then changes propagate automatically."
             : "Live LUT OFF — the Match LUT layer is frozen until you hit Apply LUT again. Click to enable: every change auto-bakes into the existing layer."}
           style={{
-            padding: "1px 6px", fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
-            background: "transparent",
-            color: liveLut ? "#d8b87a" : "#5a4a3a",
-            border: `1px solid ${liveLut ? "#d8b87a" : "#5a4a3a"}`,
-            borderRadius: 2, cursor: "pointer", userSelect: "none",
-            display: "flex", alignItems: "center",
+            padding: "0 8px", fontSize: 10, fontWeight: 600, letterSpacing: 0.3,
+            background: liveLut ? "#3a3228" : "#2a2a2a",
+            color: liveLut ? "#e8c882" : "#aaaaaa",
+            border: `1px solid ${liveLut ? "#d8b87a" : "#666"}`,
+            borderRadius: 4, cursor: "pointer", userSelect: "none",
+            display: "flex", alignItems: "center", justifyContent: "center",
             height: 28, lineHeight: "26px", boxSizing: "border-box",
             flex: "0 0 auto",
           }}>LIVE</div>
-        {/* v1.20.40 — SWAP relocated up to the output-mode row label slot. */}
-        {/* v1.20.36 — MASK pill moved up to the marquee row (it's a mask
-            visualization, and that's where masking lives in the panel). */}
-        {/* Restore: hydrate the panel UI from the selected Match LUT layer's
-            XMP. Click on a previously-authored Match LUT layer in PS's
-            Layers panel, then click RESTORE here — every captured slider /
-            preset / palette weight pops back to the state that produced
-            that bake. Silent no-op if the layer has no Color Smash XMP.
-            v1.14.1 will fire this automatically on layer-select. */}
-        <div onClick={onRestoreFromLayer}
-          title="Restore panel state from the selected Match LUT layer's XMP metadata. Click a previously-baked Match LUT layer in the Layers panel, then click here to pop sliders/preset/weights back to what produced that LUT."
+        {/* v1.20.43 — RESTORE pill now dim/disabled when no XMP is found on
+            the active layer; comes alive when the user clicks a previously-
+            baked Match layer. Teaches users the feature exists by enabling
+            itself exactly when it's useful. */}
+        <div onClick={canRestore ? onRestoreFromLayer : undefined}
+          title={canRestore
+            ? "Restore panel state from the selected Match layer's XMP metadata. Snaps every slider, preset, palette weight, and doc/layer choice back to the state that produced this layer."
+            : "Disabled — no Color Smash metadata found on the active layer. Click a previously-baked Match layer in the Layers panel to enable."}
           style={{
-            padding: "1px 6px", fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
+            padding: "0 8px", fontSize: 10, fontWeight: 600, letterSpacing: 0.3,
             background: "transparent",
-            color: "#7aa8d8",
-            border: "1px solid #7aa8d8",
-            borderRadius: 2, cursor: "pointer", userSelect: "none",
-            display: "flex", alignItems: "center",
+            color: canRestore ? "#7aa8d8" : "#3a4a58",
+            border: `1px solid ${canRestore ? "#7aa8d8" : "#3a4a58"}`,
+            borderRadius: 4, cursor: canRestore ? "pointer" : "default", userSelect: "none",
+            display: "flex", alignItems: "center", justifyContent: "center",
             height: 28, lineHeight: "26px", boxSizing: "border-box",
             flex: "0 0 auto",
+            opacity: canRestore ? 1 : 0.55,
           }}>RESTORE</div>
-        {/* AUTO — when on, clicking a Match LUT layer in the Layers panel
-            triggers the same restore action automatically. Off by default
-            (opt-in) because it can clobber in-progress edits if the user
-            inspects an old layer mid-tweak. */}
-        <div onClick={() => setAutoRestore(v => !v)}
-          title={autoRestore
-            ? "Auto-restore ON — clicking any Match LUT layer in the Layers panel auto-rehydrates the panel state from its XMP. Click to disable."
-            : "Auto-restore OFF — Match LUT layers don't affect the panel when selected. Click to enable: clicks on Match LUT layers will pop panel state back to what produced them."}
+        {/* v1.20.43 — Save LUT styled to match the Apply pill aesthetic:
+            rounded shell, neutral gray background, light text. Reads as a
+            sibling action to Apply rather than a different system. */}
+        <div onClick={onExportLut}
+          title="Export the staged preset as a portable 33³ .CUBE 3D LUT to disk. Loadable in Photoshop, Premiere, Resolve, etc. Use Apply LUT instead if you just want it in this PS doc."
           style={{
-            padding: "1px 6px", fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
-            background: "transparent",
-            color: autoRestore ? "#7aa8d8" : "#3a5060",
-            border: `1px solid ${autoRestore ? "#7aa8d8" : "#3a5060"}`,
-            borderRadius: 2, cursor: "pointer", userSelect: "none",
-            display: "flex", alignItems: "center",
+            padding: "0 10px", fontSize: 10, fontWeight: 600, letterSpacing: 0.3,
+            background: "#3a3a3a", color: "#eeeeee",
+            border: "1px solid #888",
+            borderRadius: 4, cursor: "pointer", userSelect: "none",
+            display: "flex", alignItems: "center", justifyContent: "center",
             height: 28, lineHeight: "26px", boxSizing: "border-box",
             flex: "0 0 auto",
-          }}>AUTO</div>
-        {/* @ts-ignore Spectrum web component */}
-        <sp-button variant="secondary" onClick={onExportLut}
-          style={{ flex: "1 1 0", minWidth: 0, overflow: "hidden", whiteSpace: "nowrap" }}
-          title="Export the staged preset as a portable 33³ .CUBE 3D LUT to disk. Loadable in Photoshop, Premiere, Resolve, etc. Use Apply LUT instead if you just want it in this PS doc.">Save LUT…</sp-button>
+            whiteSpace: "nowrap",
+          }}>Save LUT…</div>
+        {/* v1.20.43 — SAVE/✕/⟳ pills relocated from the BottomActionBar to
+            this row. Compact icon-style so they trail the apply cluster
+            without dominating it. */}
+        <div onClick={() => setRemember(!remember)}
+          title="Save — persist all panel settings across reloads (sliders, zones, envelope, toggles, output mode, LUT options)."
+          style={{
+            width: 32, height: 28, marginLeft: 4,
+            display: "inline-flex", alignItems: "center", justifyContent: "center",
+            background: remember ? "#3a3a3a" : "transparent",
+            color: remember ? "#dddddd" : "#888",
+            border: `1px solid ${remember ? "#888" : "#444"}`,
+            borderRadius: 4, cursor: "pointer", userSelect: "none",
+            fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
+            boxSizing: "border-box", flexShrink: 0,
+          }}>SAVE</div>
+        <div onClick={async () => {
+          const ok = await uxpConfirm("Reset all panel settings to defaults and clear the saved file?", "Reset");
+          if (ok) onResetAll();
+        }}
+          title="Reset all settings to defaults and clear the saved file"
+          style={{
+            width: 22, height: 28, display: "inline-flex", alignItems: "center", justifyContent: "center",
+            background: "#e66666", color: "#fff", fontWeight: 700, fontSize: 13, lineHeight: 1,
+            border: "none", borderRadius: 4, cursor: "pointer", boxSizing: "border-box", flexShrink: 0,
+          }}>
+          <span style={{ marginTop: -1 }}>✕</span>
+        </div>
+        <div onClick={onRefreshAll}
+          title={stale
+            ? "Photoshop changed since last refresh — click to resync"
+            : "In sync. Click to refresh source + target previews + layer lists"}
+          style={{
+            width: 22, height: 28, display: "inline-flex", alignItems: "center", justifyContent: "center",
+            background: stale ? "#c19a3a" : "transparent",
+            color: stale ? "#fff" : "#aaa",
+            border: `1px solid ${stale ? "#c19a3a" : "#888"}`,
+            borderRadius: 4, cursor: "pointer", boxSizing: "border-box", flexShrink: 0, fontSize: 15, userSelect: "none",
+          }}>
+          <span style={{ marginTop: -2, lineHeight: 1 }}>⟳</span>
+        </div>
       </div>
 
       {/* Recent history (v1.20.0). Always rendered — empty buffer shows
