@@ -686,6 +686,10 @@ export function MatchTab() {
   // whatever the live source layer happens to extract. Auto-clears on any
   // refocus event: source layer change, source mode change, Refresh button.
   const [recipeMode, setRecipeMode] = useState(false);
+  // v1.20.14 — recipe display name, surfaced in the "Source: Preset" banner
+  // above the source selector so the user always knows when their live source
+  // layer is being bypassed in favor of a stored recipe.
+  const [recipeLabel, setRecipeLabel] = useState<string>("");
   // recipeSrcSnap is declared earlier (near srcOverride) because the srcSnap
   // derivation references it. It holds the synthesized source pixel buffer
   // reconstructed from a recipe's swatches + weights, routing BEFORE
@@ -724,6 +728,7 @@ export function MatchTab() {
       setRecipeMode(false);
       setSavedSourceSwatches(null);
       setRecipeSrcSnap(null);
+      setRecipeLabel("");
     }
     // Intentionally excludes recipeMode — we only want refocus events to
     // trigger the auto-clear, not the recipe-load itself.
@@ -1230,6 +1235,7 @@ export function MatchTab() {
       setSavedSourceSwatches(recipeSwatches);
       setRecipeSrcSnap(synthesizeRecipeSource(recipeSerialized, recipeWeights));
       setRecipeMode(true);
+      setRecipeLabel(entry.customName || entry.label || "Recipe");
     }
     applyStateToPanel(entry.state, "recipe");
     setStatus(`Loaded recipe (${entry.label}). Source synthesized from recipe — change source layer or click Refresh to return to live extraction.`);
@@ -1652,6 +1658,7 @@ export function MatchTab() {
     setSavedTargetSwatches(null);
     setRecipeMode(false);
     setRecipeSrcSnap(null);
+    setRecipeLabel("");
     refreshSrcLayers();
     refreshTgtLayers();
     src.refresh();
@@ -1667,6 +1674,28 @@ export function MatchTab() {
           Target lives below (above the preview) and reuses the preview itself for its
           visual feedback, so the target column no longer needs its own thumbnail. */}
       <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+          {recipeMode && (
+            <div
+              onClick={() => { setRecipeMode(false); setSavedSourceSwatches(null); setRecipeSrcSnap(null); setRecipeLabel(""); }}
+              title="A recipe preset is acting as the source — the live layer below is bypassed. Click to drop the preset and return to live source extraction."
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                padding: "4px 8px", marginBottom: 2,
+                fontSize: 10, fontWeight: 700, letterSpacing: 0.4,
+                background: "linear-gradient(90deg, #4a2a4a 0%, #3a2a4a 100%)",
+                color: "#e6c6e6",
+                border: "1px solid #7a4a7a", borderRadius: 3,
+                cursor: "pointer", userSelect: "none",
+              }}
+            >
+              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 11 }}>◆</span>
+                <span>SOURCE: PRESET</span>
+                <span style={{ opacity: 0.75, fontWeight: 500 }}>{recipeLabel}</span>
+              </span>
+              <span style={{ opacity: 0.7, fontWeight: 500 }}>✕ drop</span>
+            </div>
+          )}
           <SourceSelector
             docs={docs} activeDocId={srcDocId} srcMode={srcMode} browsedFile={browsedFile}
             onSwitchDoc={onSwitchSrcDoc} onSwitchSrcMode={switchSrcMode}
@@ -1710,22 +1739,6 @@ export function MatchTab() {
                   softness={sourceSoftness}
                   setSoftness={setSourceSoftness}
                 />
-                {recipeMode && (
-                  <div
-                    onClick={() => { setRecipeMode(false); setSavedSourceSwatches(null); setRecipeSrcSnap(null); }}
-                    title="Recipe palette is active. Click to drop the recipe and use the live source extraction instead."
-                    style={{
-                      marginTop: 4, display: "flex", alignItems: "center", justifyContent: "space-between",
-                      padding: "2px 6px", fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
-                      background: "#3a2a3a", color: "#d6a6d6",
-                      border: "1px solid #6a4a6a", borderRadius: 2,
-                      cursor: "pointer", userSelect: "none",
-                    }}
-                  >
-                    <span>RECIPE LOADED — PALETTE LOCKED</span>
-                    <span style={{ marginLeft: 8, opacity: 0.7 }}>✕ live</span>
-                  </div>
-                )}
               </div>
             }
           />
