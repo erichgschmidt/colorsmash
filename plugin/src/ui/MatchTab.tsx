@@ -40,6 +40,7 @@ import { lutGradientCSS } from "../app/historyThumbnail";
 import { syncOutputVisibilityToMode, repositionGroupAboveTarget } from "../app/outputVisibility";
 import {
   app, action as psAction, readLayerPixels, executeAsModal, getActiveDoc, getSelectionBounds, readSelectionMaskBytes,
+  branchColorSmashGroup,
 } from "../services/photoshop";
 import { downsampleToMaxEdge } from "../core/downsample";
 
@@ -1602,6 +1603,16 @@ export function MatchTab() {
     const curves = renderedCurves ?? curvesPendingRef.current;
     if (!curves) { setStatus("Compute a match first."); return; }
 
+    // v1.20.54 — if the + arm is "armed" (overwriteOnApply=false), branch
+    // off the current [Color Smash] group before applying: rename + hide
+    // the old one so getOrCreateColorSmashGroup spawns a fresh empty one
+    // for this Apply. Then disarm the + so subsequent Applies replace
+    // within this new group.
+    if (!overwriteOnApply && tgtDocId != null) {
+      try { await branchColorSmashGroup(tgtDocId); } catch { /* non-fatal */ }
+      setOverwriteOnApply(true);
+    }
+
     const targetPalette = targetPaletteSwatches.length > 0 ? {
       swatches: targetPaletteSwatches,
       weights: targetPaletteWeights.slice(),
@@ -1639,7 +1650,7 @@ export function MatchTab() {
           selectionMode: effectiveSelectionMode,
           targetLayerId: targetId === MERGED_LAYER_ID ? null : targetId,
           targetIsMerged: targetId === MERGED_LAYER_ID,
-          overwritePrior: overwriteOnApply,
+          overwritePrior: true,
           targetPalette,
           multiZonePeaks,
           multiZoneExtents,
@@ -1671,7 +1682,7 @@ export function MatchTab() {
         dither: lutDither,
         targetLayerId: targetId === MERGED_LAYER_ID ? null : targetId,
         targetIsMerged: targetId === MERGED_LAYER_ID,
-        overwritePrior: overwriteOnApply,
+        overwritePrior: true,
         targetPalette,
         xmpState: buildXmpState(),
       });
@@ -1772,6 +1783,11 @@ export function MatchTab() {
   const onApply = async () => {
     if (targetId == null) { setStatus("Pick target layer."); return; }
     if (srcMode === "layer" && sourceId == null) { setStatus("Pick source layer."); return; }
+    // v1.20.54 — branch off when + is armed (see onApplyLut for context).
+    if (!overwriteOnApply && tgtDocId != null) {
+      try { await branchColorSmashGroup(tgtDocId); } catch { /* non-fatal */ }
+      setOverwriteOnApply(true);
+    }
     if (srcMode === "selection" && !srcOverride) { setStatus("Snap a selection first."); return; }
     setStatus("Applying match...");
     try {
@@ -1814,7 +1830,7 @@ export function MatchTab() {
         colorSpace,
         // v1.20.25 — deselectFirst no longer passed; applyMatch never
         // deselects now so the marquee survives into the mask path.
-        overwritePrior: overwriteOnApply,
+        overwritePrior: true,
         preset: activePreset,
         // Target-palette weighting → layer mask on the Curves adjustment.
         // Pass the cluster centroids + per-cluster weights through; applyMatch
@@ -2444,8 +2460,8 @@ export function MatchTab() {
         }}>
           <div onClick={e => { e.stopPropagation(); setOverwriteOnApply(!overwriteOnApply); }}
             title={overwriteOnApply
-              ? "Apply replaces the prior Match layer (default). Click + to switch to 'Apply New' mode (stacks fresh layers)."
-              : "APPLY NEW — stacks a fresh Match layer alongside priors. Click to switch back to overwrite mode."}
+              ? "Apply replaces the prior Match within the current [Color Smash] session (default). Click + to arm 'Branch' — next Apply hides the current [Color Smash] group and starts a fresh one."
+              : "BRANCH ARMED — next Apply will collapse + hide the current [Color Smash] group (preserved, just invisible) and start a fresh session. Auto-disarms after that Apply. Click to cancel."}
             style={{
               width: 18, height: "100%", padding: 0, flexShrink: 0,
               background: overwriteOnApply ? "#2a2a2a" : "#1e3a1e",
@@ -2628,6 +2644,9 @@ export function MatchTab() {
         {/* v1.20.43 — Save LUT styled to match the Apply pill aesthetic:
             rounded shell, neutral gray background, light text. Reads as a
             sibling action to Apply rather than a different system. */}
+        {/* v1.20.54 — Save LUT now reads as [💾 LUT]: small disk glyph
+            (Unicode floppy) followed by the LUT label. Lighter visual
+            footprint than the old "Save LUT…" text, still 1:1 clear. */}
         <div onClick={onExportLut}
           title="Export the staged preset as a portable 33³ .CUBE 3D LUT to disk. Loadable in Photoshop, Premiere, Resolve, etc. Use Apply LUT instead if you just want it in this PS doc."
           style={{
@@ -2636,10 +2655,14 @@ export function MatchTab() {
             border: "1px solid #888",
             borderRadius: 4, cursor: "pointer", userSelect: "none",
             display: "flex", alignItems: "center", justifyContent: "center",
+            gap: 4,
             height: 28, lineHeight: "26px", boxSizing: "border-box",
             flex: "0 0 auto",
             whiteSpace: "nowrap",
-          }}>Save LUT…</div>
+          }}>
+          <span style={{ fontSize: 13, lineHeight: 1 }}>💾</span>
+          <span>LUT</span>
+        </div>
         {/* v1.20.43 — SAVE/✕/⟳ pills relocated from the BottomActionBar to
             this row. Compact icon-style so they trail the apply cluster
             without dominating it. */}

@@ -301,4 +301,36 @@ export async function deleteChannel(name: string): Promise<void> {
   } catch { /* ignore */ }
 }
 
+/**
+ * v1.20.54 — "branch off" the current [Color Smash] working group. Renames
+ * any group named exactly [Color Smash] to [Color Smash _<timestamp>] and
+ * sets visible=false on it. The next Apply will then create a fresh
+ * [Color Smash] group because getOrCreateColorSmashGroup looks up by name
+ * and won't find the renamed predecessor.
+ *
+ * No-op when there's no active [Color Smash] group yet (e.g., first
+ * Apply in a session).
+ */
+export async function branchColorSmashGroup(docId: number): Promise<void> {
+  try {
+    const doc = (app.documents ?? []).find((d: any) => d.id === docId);
+    if (!doc) return;
+    const findActive = (layers: any[]): any | null => {
+      for (const l of layers) {
+        if (l && l.name === GROUP_NAME && Array.isArray(l.layers)) return l;
+        if (Array.isArray(l.layers)) {
+          const found = findActive(l.layers);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+    const active = findActive(doc.layers ?? []);
+    if (!active) return;
+    const stamp = new Date().toTimeString().slice(0, 8);
+    try { active.name = `${GROUP_NAME} _${stamp}`; } catch { /* ignore */ }
+    try { active.visible = false; } catch { /* ignore */ }
+  } catch { /* non-fatal */ }
+}
+
 export { action, app };
