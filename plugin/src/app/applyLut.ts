@@ -18,7 +18,7 @@ import {
   GROUP_NAME, action, app,
   executeAsModal, readLayerPixels, setClippingMask, PixelBuffer,
   readSelectionMaskBytes,
-  deleteLayerMask, snapshotSelectionToChannel, restoreSelectionFromChannel, deleteChannel, deselectAll,
+  deleteLayerMask,
 } from "../services/photoshop";
 import { generateIccDeviceLinkBase64 } from "./iccGen";
 import {
@@ -421,16 +421,11 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
       } catch { /* ignore */ }
     }
 
-    // v1.20.26 — snapshot the active marquee before the adjustment-layer
-    // make. PS auto-applies any active selection as the new layer's mask,
-    // which both consumes the selection (it's no longer visible) AND
-    // produces a mask we don't want at the layer level. We restore the
-    // selection after the layer + mask cleanup, so the user's marquee
-    // survives the bake regardless of selectionMode.
-    const selSnapshot = await snapshotSelectionToChannel();
-    // v1.20.28 — deselect after the snapshot so PS doesn't auto-apply the
-    // marquee as a layer/group mask during the bake. Restored at the end.
-    if (selSnapshot) await deselectAll();
+    // v1.20.30 — selection-mask bytes were already captured early (line ~348)
+    // before any layer make consumed the marquee. No snapshot/restore channel
+    // gymnastics needed — the bytes are in memory, and the marquee survives
+    // naturally as long as we delete the layer's auto-applied selection mask
+    // (which we do, below).
 
     // Step 1: make the empty (identity) Color Lookup layer.
     const makeResult = await action.batchPlay([{
@@ -492,12 +487,8 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
       }
     }
 
-    // v1.20.26 — restore the marquee that PS consumed during adjustment-
-    // layer creation, then drop the temp alpha channel we used to ferry it.
-    if (selSnapshot) {
-      await restoreSelectionFromChannel(selSnapshot);
-      await deleteChannel(selSnapshot);
-    }
+    // v1.20.30 — no snapshot to restore; selection survives naturally now
+    // that we delete the auto-applied layer mask without touching the marquee.
 
     return { layerName, layerId: newLayerId };
   });
@@ -566,12 +557,10 @@ export async function applyMultiZoneLutAsLayers(
     const doc = app.activeDocument;
     if (!doc) throw new Error("No active document.");
 
-    // v1.20.27 — snapshot the active marquee BEFORE the bands are created.
-    // PS consumes the selection on each adjustment-layer make, so by the
-    // time we need to read the selection mask for the sub-group's mask we
-    // need to re-load it from this channel.
-    const mzSelSnapshot = await snapshotSelectionToChannel();
-    if (mzSelSnapshot) await deselectAll();
+    // v1.20.30 — multi-zone reads the selection mask EARLY too. Move the
+    // capture to where compositeBounds is known (right after the composite
+    // is computed). See comment near readSelectionMaskBytes call below.
+    let mzSelectionBytesEarly: Uint8Array | null = null;
 
     // 1. Find or create [Color Smash] group + clean up any prior Match LUT.
     const group = await getOrCreateColorSmashGroup(doc);
@@ -609,6 +598,13 @@ export async function applyMultiZoneLutAsLayers(
       left: 0, top: 0,
       right: composite.width, bottom: composite.height,
     };
+    // v1.20.30 — capture selection mask bytes BEFORE any band-layer make
+    // consumes the live marquee. Used later when composing the sub-group's
+    // mask (see "wantSubGroupMask" block).
+    if (params.selectionMode === "focus" || params.selectionMode === "exclude") {
+      try { mzSelectionBytesEarly = await readSelectionMaskBytes(doc.id, compositeBounds); }
+      catch { /* ignore */ }
+    }
     try {
       // 4. Adjusted peaks + extents + the 3 band triangle masks.
       const range = clampBandRange(
@@ -735,13 +731,11 @@ export async function applyMultiZoneLutAsLayers(
             : fullMask(px);
           // Compose with selection if active. Selection mask is read at
           // composite bounds so the byte arrays align.
-          // v1.20.27 — restore from snapshot first; band creates consumed
-          // the live marquee.
+          // v1.20.30 — use the early-captured bytes (mzSelectionBytesEarly)
+          // instead of re-reading; the band layers have consumed the live
+          // marquee by now, but the bytes are safe in memory.
           if (wantSelectionMask) {
-            if (mzSelSnapshot) {
-              try { await restoreSelectionFromChannel(mzSelSnapshot); } catch { /* ignore */ }
-            }
-            const sel = await readSelectionMaskBytes(doc.id, compositeBounds);
+            const sel = mzSelectionBytesEarly;
             if (sel) mask = composeWithSelection(mask, sel, selectionMode);
           }
           await attachLayerMask(doc.id, bandContainer.id, mask, t.width, t.height, t.bounds);
@@ -760,12 +754,6 @@ export async function applyMultiZoneLutAsLayers(
       if (params.xmpState && bandLayerIds.length > 0) {
         try { await writeLutLayerState(bandLayerIds[0], params.xmpState); }
         catch { /* non-fatal */ }
-      }
-
-      // v1.20.27 — restore marquee + clean up snapshot channel.
-      if (mzSelSnapshot) {
-        await restoreSelectionFromChannel(mzSelSnapshot);
-        await deleteChannel(mzSelSnapshot);
       }
 
       return { layerName: subName, layerId: bandContainer.id ?? null };

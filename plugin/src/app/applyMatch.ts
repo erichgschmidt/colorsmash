@@ -5,7 +5,7 @@ import {
   readLayerPixels, executeAsModal, statsRectForLayer,
   makeCurvesLayer, setClippingMask, GROUP_NAME, action, app,
   readSelectionMaskBytes,
-  deleteLayerMask, snapshotSelectionToChannel, restoreSelectionFromChannel, deleteChannel, deselectAll,
+  deleteLayerMask,
 } from "../services/photoshop";
 import { composeWithSelection, fullMask } from "./targetMask";
 import { downsampleToMaxEdge } from "../core/downsample";
@@ -158,6 +158,16 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       srcPixels = downsampleToMaxEdge(s, STATS_MAX_EDGE).data;
     }
     const t = targetIsMerged ? await readMergedPixelsOf(tgtDoc) : await readLayerPixels(target, statsRectForLayer(target), tgtDoc.id);
+    // v1.20.30 — capture selection mask bytes NOW, before any adjustment-
+    // layer make consumes the live marquee. Used in the compose blocks
+    // below (single-curve + multi-zone) instead of the prior snapshot-
+    // restore-via-alpha-channel approach that hit PS "command not
+    // currently available" errors.
+    const selBytesHolder: { value: Uint8Array | null } = { value: null };
+    if ((params.selectionMode === "focus" || params.selectionMode === "exclude") && !targetIsMerged) {
+      try { selBytesHolder.value = await readSelectionMaskBytes(doc.id, t.bounds); }
+      catch { /* ignore */ }
+    }
     const raw = fitByMode(
       params.matchMode ?? "full",
       srcPixels,
@@ -278,18 +288,12 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       if (top) await action.batchPlay([{ _obj: "select", _target: [{ _ref: "layer", _id: top.id }], makeVisible: false }], {});
     }
 
-    // v1.20.25 — removed auto-deselect-before-Apply. The previous behavior
-    // dropped the active marquee before the bake ran, which destroyed the
-    // selection that the selectionMode (focus/exclude) compositor needs to
-    // read later in the same flow. Users wanted their marquee preserved so
-    // the mask path could honor it; they can Ctrl+D manually if they want
-    // the marching ants gone after a bake.
-    // v1.20.26 — snapshot the marquee so PS can't consume it during
-    // adjustment-layer creation. Restored at the end of the bake.
-    const scSelSnapshot = await snapshotSelectionToChannel();
-    // v1.20.28 — explicit deselect so PS doesn't auto-apply the marquee
-    // as a mask on the new adjustment layer or the sub-group.
-    if (scSelSnapshot) await deselectAll();
+    // v1.20.25-30 — no deselect, no snapshot. selBytesHolder is captured
+    // eagerly above (right after `t` is built), so PS consuming the
+    // marquee during adjustment-layer creation doesn't matter — the
+    // bytes are already in memory. The marquee itself survives naturally
+    // because we delete the auto-applied layer mask without touching the
+    // active selection.
 
     // ─── Multi-zone branch: emit 3 stacked Curves layers + luminosity masks ──────
     if (multiZoneFit) {
@@ -636,16 +640,10 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
             tpMask = fullMask(pxCount);
           }
           // Compose marquee selection (focus or exclude) — parity with applyLut.
-          // v1.20.27 — re-load the selection from the snapshot channel; the
-          // band layers' creation consumed the active marquee earlier.
-          if (useSelectionMask) {
-            if (scSelSnapshot) {
-              try { await restoreSelectionFromChannel(scSelSnapshot); } catch { /* ignore */ }
-            }
-            const selBytes = await readSelectionMaskBytes(doc.id, t.bounds);
-            if (selBytes) {
-              tpMask = composeWithSelection(tpMask, selBytes, selectionMode);
-            }
+          // v1.20.30 — use the early-captured bytes; PS has consumed the
+          // live marquee on each band-layer create by this point.
+          if (useSelectionMask && selBytesHolder.value && selBytesHolder.value.length === pxCount) {
+            tpMask = composeWithSelection(tpMask, selBytesHolder.value, selectionMode);
           }
           const tpMaskImageData = await imaging.createImageDataFromBuffer(tpMask, {
             width: t.width, height: t.height, components: 1, chunky: true,
@@ -667,12 +665,6 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       if (params.amount && params.amount < 1) tags.push(`amt ${Math.round(params.amount * 100)}%`);
       if (params.chromaOnly) tags.push("hue-only");
       if (params.sourceLabel) tags.unshift(`src "${params.sourceLabel}"`);
-      // v1.20.27 — multi-zone returns here; restore the snapshot selection
-      // and clean up the temp alpha channel before exiting the modal block.
-      if (scSelSnapshot) {
-        await restoreSelectionFromChannel(scSelSnapshot);
-        await deleteChannel(scSelSnapshot);
-      }
       if (failures.length > 0) {
         // Surface the failure to the user instead of silently returning success.
         return `Matched (PARTIAL) · ${tags.join(" · ")} · ⚠ ${failures.length}/${bands.length} band(s) lack mask: ${failures.join("; ")}`;
@@ -815,20 +807,9 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
           mask = fullMask(pxCount);
         }
         // Compose marquee selection (focus or exclude) — parity with applyLut.
-        // v1.20.27 — by this point the makeCurvesLayer call has already
-        // consumed the active marquee (PS uses it as the auto-applied mask
-        // we strip below). readSelectionMaskBytes would return null here.
-        // Briefly re-load the selection from the snapshot channel so the
-        // imaging.getSelection call has something to return; final restore
-        // still happens at the end of the modal block.
-        if (scUseSelection) {
-          if (scSelSnapshot) {
-            try { await restoreSelectionFromChannel(scSelSnapshot); } catch { /* ignore */ }
-          }
-          const selBytes = await readSelectionMaskBytes(doc.id, t.bounds);
-          if (selBytes) {
-            mask = composeWithSelection(mask, selBytes, scSelectionMode);
-          }
+        // v1.20.30 — use the early-captured bytes.
+        if (scUseSelection && selBytesHolder.value && selBytesHolder.value.length === pxCount) {
+          mask = composeWithSelection(mask, selBytesHolder.value, scSelectionMode);
         }
         const { imaging } = require("photoshop");
         const maskImageData = await imaging.createImageDataFromBuffer(mask, {
@@ -844,13 +825,6 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
         });
         if (maskImageData.dispose) maskImageData.dispose();
       } catch { /* mask attach is best-effort; if it fails, the curves still apply unmasked */ }
-    }
-
-    // v1.20.26 — restore the marquee that PS consumed during the
-    // adjustment-layer creation, then drop the temp alpha channel.
-    if (scSelSnapshot) {
-      await restoreSelectionFromChannel(scSelSnapshot);
-      await deleteChannel(scSelSnapshot);
     }
 
     const tags = [`amt ${Math.round(params.amount * 100)}%`];

@@ -234,78 +234,13 @@ export async function deleteLayerMask(layerId: number): Promise<void> {
  * the saved channel name, or null if there's no selection. Pair with
  * restoreSelectionFromChannel + deleteChannel for the full round-trip.
  */
-const SEL_SNAPSHOT_NAME = "__cs_sel_snapshot__";
-export async function snapshotSelectionToChannel(): Promise<string | null> {
-  const sel = getSelectionBounds();
-  if (!sel) return null;
-  // v1.20.29 — proactively delete any stale snapshot channel from a prior
-  // bake that didn't clean up (modal aborted, PS crashed, etc.). Without
-  // this, the duplicate-to-name op can fail when the name already exists
-  // OR silently overwrite — and stale selection data leaks into the next
-  // bake, producing exactly the "focus picks wrong region" symptom.
-  try {
-    await action.batchPlay([{
-      _obj: "delete",
-      _target: [{ _ref: "channel", _name: SEL_SNAPSHOT_NAME }],
-      _options: { dialogOptions: "dontDisplay" },
-    }], {});
-  } catch { /* channel didn't exist — fine */ }
-  try {
-    // Canonical Save Selection descriptor — `to: { _ref: channel, _name }`
-    // creates a new alpha channel of that name holding the current selection.
-    await action.batchPlay([{
-      _obj: "duplicate",
-      _target: [{ _ref: "channel", _property: "selection" }],
-      to: { _ref: "channel", _name: SEL_SNAPSHOT_NAME },
-      _options: { dialogOptions: "dontDisplay" },
-    }], {});
-    return SEL_SNAPSHOT_NAME;
-  } catch { return null; }
-}
-
-/**
- * v1.20.28 — drop the active marquee without affecting saved alpha channels.
- * Pair with snapshotSelectionToChannel + restoreSelectionFromChannel for
- * "temporarily disable selection for the bake, restore afterward."
- */
-export async function deselectAll(): Promise<void> {
-  try {
-    await action.batchPlay([{
-      _obj: "set",
-      _target: [{ _ref: "channel", _property: "selection" }],
-      to: { _enum: "ordinal", _value: "none" },
-      _options: { dialogOptions: "dontDisplay" },
-    }], {});
-  } catch { /* ignore */ }
-}
-
-/**
- * v1.20.26 — re-load a saved alpha channel back into the active marquee
- * selection. No-op if the channel doesn't exist.
- */
-export async function restoreSelectionFromChannel(name: string): Promise<void> {
-  try {
-    // v1.20.28 — the "Load Selection" descriptor format.
-    await action.batchPlay([{
-      _obj: "set",
-      _target: [{ _ref: "channel", _property: "selection" }],
-      to: { _ref: "channel", _name: name },
-      _options: { dialogOptions: "dontDisplay" },
-    }], {});
-  } catch { /* ignore */ }
-}
-
-/**
- * v1.20.26 — delete a named alpha channel. Cleanup pair for
- * snapshotSelectionToChannel.
- */
-export async function deleteChannel(name: string): Promise<void> {
-  try {
-    await action.batchPlay([{
-      _obj: "delete",
-      _target: [{ _ref: "channel", _name: name }],
-    }], {});
-  } catch { /* ignore */ }
-}
+// v1.20.30 — removed the snapshot/restore/deselect channel-manipulation
+// trio. Reading the selection mask bytes BEFORE any adjustment-layer make
+// (the pattern applyLut already used at its top) sidesteps the
+// "selection consumed by PS" problem entirely. The marquee survives
+// naturally because PS only consumes it when AUTO-masking the new layer
+// — we delete that auto-mask anyway. Simpler and avoids the
+// "command not currently available" batchPlay failures users hit on the
+// channel-delete + set-selection-to-none operations.
 
 export { action, app };
