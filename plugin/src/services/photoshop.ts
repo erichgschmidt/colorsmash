@@ -239,13 +239,37 @@ export async function snapshotSelectionToChannel(): Promise<string | null> {
   const sel = getSelectionBounds();
   if (!sel) return null;
   try {
+    // v1.20.28 — corrected batchPlay shape. The "Save Selection" descriptor
+    // is `duplicate channel(selection) → to channel(<name>)`; the previous
+    // version's `name: <name>` field was a no-op in some PS versions, so
+    // the snapshot was never actually created (and restore was a no-op),
+    // which meant the live marquee was still active during the bake and
+    // PS auto-applied it as the layer mask — exactly the bug users hit.
     await action.batchPlay([{
       _obj: "duplicate",
       _target: [{ _ref: "channel", _property: "selection" }],
       name: SEL_SNAPSHOT_NAME,
+      to: { _ref: "channel", _name: SEL_SNAPSHOT_NAME },
+      _options: { dialogOptions: "dontDisplay" },
     }], {});
     return SEL_SNAPSHOT_NAME;
   } catch { return null; }
+}
+
+/**
+ * v1.20.28 — drop the active marquee without affecting saved alpha channels.
+ * Pair with snapshotSelectionToChannel + restoreSelectionFromChannel for
+ * "temporarily disable selection for the bake, restore afterward."
+ */
+export async function deselectAll(): Promise<void> {
+  try {
+    await action.batchPlay([{
+      _obj: "set",
+      _target: [{ _ref: "channel", _property: "selection" }],
+      to: { _enum: "ordinal", _value: "none" },
+      _options: { dialogOptions: "dontDisplay" },
+    }], {});
+  } catch { /* ignore */ }
 }
 
 /**
@@ -254,10 +278,12 @@ export async function snapshotSelectionToChannel(): Promise<string | null> {
  */
 export async function restoreSelectionFromChannel(name: string): Promise<void> {
   try {
+    // v1.20.28 — the "Load Selection" descriptor format.
     await action.batchPlay([{
       _obj: "set",
       _target: [{ _ref: "channel", _property: "selection" }],
       to: { _ref: "channel", _name: name },
+      _options: { dialogOptions: "dontDisplay" },
     }], {});
   } catch { /* ignore */ }
 }

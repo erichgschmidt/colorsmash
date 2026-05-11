@@ -5,7 +5,7 @@ import {
   readLayerPixels, executeAsModal, statsRectForLayer,
   makeCurvesLayer, setClippingMask, GROUP_NAME, action, app,
   readSelectionMaskBytes,
-  deleteLayerMask, snapshotSelectionToChannel, restoreSelectionFromChannel, deleteChannel,
+  deleteLayerMask, snapshotSelectionToChannel, restoreSelectionFromChannel, deleteChannel, deselectAll,
 } from "../services/photoshop";
 import { composeWithSelection, fullMask } from "./targetMask";
 import { downsampleToMaxEdge } from "../core/downsample";
@@ -287,6 +287,9 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     // v1.20.26 — snapshot the marquee so PS can't consume it during
     // adjustment-layer creation. Restored at the end of the bake.
     const scSelSnapshot = await snapshotSelectionToChannel();
+    // v1.20.28 — explicit deselect so PS doesn't auto-apply the marquee
+    // as a mask on the new adjustment layer or the sub-group.
+    if (scSelSnapshot) await deselectAll();
 
     // ─── Multi-zone branch: emit 3 stacked Curves layers + luminosity masks ──────
     if (multiZoneFit) {

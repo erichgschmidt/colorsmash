@@ -18,7 +18,7 @@ import {
   GROUP_NAME, action, app,
   executeAsModal, readLayerPixels, setClippingMask, PixelBuffer,
   readSelectionMaskBytes,
-  deleteLayerMask, snapshotSelectionToChannel, restoreSelectionFromChannel, deleteChannel,
+  deleteLayerMask, snapshotSelectionToChannel, restoreSelectionFromChannel, deleteChannel, deselectAll,
 } from "../services/photoshop";
 import { generateIccDeviceLinkBase64 } from "./iccGen";
 import {
@@ -428,6 +428,9 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
     // selection after the layer + mask cleanup, so the user's marquee
     // survives the bake regardless of selectionMode.
     const selSnapshot = await snapshotSelectionToChannel();
+    // v1.20.28 — deselect after the snapshot so PS doesn't auto-apply the
+    // marquee as a layer/group mask during the bake. Restored at the end.
+    if (selSnapshot) await deselectAll();
 
     // Step 1: make the empty (identity) Color Lookup layer.
     const makeResult = await action.batchPlay([{
@@ -568,6 +571,7 @@ export async function applyMultiZoneLutAsLayers(
     // time we need to read the selection mask for the sub-group's mask we
     // need to re-load it from this channel.
     const mzSelSnapshot = await snapshotSelectionToChannel();
+    if (mzSelSnapshot) await deselectAll();
 
     // 1. Find or create [Color Smash] group + clean up any prior Match LUT.
     const group = await getOrCreateColorSmashGroup(doc);
