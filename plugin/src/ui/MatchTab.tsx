@@ -300,12 +300,8 @@ export function MatchTab() {
     repositionGroupAboveTarget(targetId).catch(() => { /* non-fatal */ });
   }, [targetId]);
 
-  // SWAP — single-click A/B between LUT and the last Curves mode. Useful for
-  // quick comparison: stage a match, hit SWAP a few times to compare the
-  // Curves layer's continuous output against the LUT's quantized version.
-  const onSwapMode = () => {
-    setOutputMode(prev => prev === "lut" ? lastCurvesModeRef.current : "lut");
-  };
+  // v1.20.45 — onSwapMode removed with the SWAP pill. Clicking the
+  // RGB/Lab/LUT pills directly already fires visibility sync.
   // v1.20.25 — deselectOnApply removed. See applyMatch.ts for context.
   const [overwriteOnApply, setOverwriteOnApply] = useState(true);
   const [remember, setRemember] = useState(false);
@@ -2299,26 +2295,12 @@ export function MatchTab() {
           - RGB: separable per-channel curves → Curves layer (continuous, editable)
           - Lab: perceptual L*a*b* match, projected back to RGB curves → Curves layer
           - LUT: 33³ 3D transform with preset blend math baked in → Color Lookup layer */}
-      {/* v1.20.41 — output-mode + multi-zone combined into a single block:
-          tall SWAP on the left spans both rows (communicates that BOTH
-          rows describe the output that gets swapped). The two rows of
-          pills sit to the right with NO gaps between them so they read
-          as a single segmented block. */}
+      {/* v1.20.45 — SWAP pill removed; clicking RGB/Lab/LUT already fires
+          visibility-sync via the outputMode effect (selecting a mode hides
+          the other layer types in [Color Smash] and shows the matching
+          one). No redundant button needed. The output+multi block now
+          spans the full row width. */}
       <div style={{ marginTop: 6, display: "flex", alignItems: "stretch", gap: 4 }}>
-        <div onClick={onSwapMode}
-          title={outputMode === "lut"
-            ? `Swap to ${lastCurvesModeRef.current.toUpperCase()} mode (Curves). Hides Match LUT layers, shows Match Curves layers in PS.`
-            : `Swap to LUT mode. Hides Match Curves layers, shows Match LUT layers in PS.`}
-          style={{
-            width: 38, padding: 0,
-            display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: 10, fontWeight: 700, letterSpacing: 0.5,
-            background: "transparent",
-            color: "#aab07a",
-            border: "1px solid #aab07a",
-            borderRadius: 2, cursor: "pointer", userSelect: "none",
-            boxSizing: "border-box", flexShrink: 0,
-          }}>SWAP</div>
         <div style={{ display: "flex", flex: 1, flexDirection: "column", gap: 0 }}>
           {/* Top row: output mode (RGB/Lab/LUT). No gap between pills. */}
           <div style={{ display: "flex", flex: 1, gap: 0 }}>
@@ -2544,34 +2526,43 @@ export function MatchTab() {
           overflow: "hidden",
           boxSizing: "border-box",
         }}>
-          {/* Replace-arm. Plain rectangle inside the rounded shell; the
-              outer clip handles the left rounded corner. Vertical divider
-              between arm and Apply body via the Apply's borderLeft. */}
+          {/* v1.20.45 — arm redesigned. The DEFAULT is overwrite (replace
+              the prior Match layer), and the default state shows no
+              indicator at all — just "Apply." Toggling to NEW mode
+              (stacks a new layer alongside priors) flips the arm to a
+              friendly green "+" with the Apply label reading "Apply +".
+              Old red dot was visually scary for what's actually the most
+              common case. */}
           <div onClick={e => { e.stopPropagation(); setOverwriteOnApply(!overwriteOnApply); }}
             title={overwriteOnApply
-              ? "REPLACE ARMED — Apply will overwrite the prior Match Curves/LUT layer in [Color Smash]. Click to disarm (Apply will stack alongside priors)."
-              : "Replace disarmed — Apply will stack alongside prior layers. Click to arm Replace: prior layer is deleted on each Apply."}
+              ? "Apply replaces the prior Match layer (default). Click the + to switch to 'Apply New' mode — each Apply stacks a fresh layer alongside priors."
+              : "APPLY NEW — each Apply stacks a fresh Match layer alongside priors (your timeline grows). Click to switch back to overwrite mode (default)."}
             style={{
               width: 18, height: "100%", padding: 0, flexShrink: 0,
-              background: overwriteOnApply ? "#c4423a" : "#2a2a2a",
+              background: overwriteOnApply ? "#2a2a2a" : "#1e3a1e",
               display: "flex", alignItems: "center", justifyContent: "center",
               cursor: "pointer", userSelect: "none",
               boxSizing: "border-box",
             }}>
-            <span style={{
-              width: 6, height: 6, borderRadius: "50%",
-              background: overwriteOnApply ? "#fff" : "#666",
-              display: "inline-block",
-            }} />
+            {overwriteOnApply
+              ? <span style={{
+                  width: 6, height: 6, borderRadius: "50%",
+                  background: "#666", display: "inline-block",
+                }} />
+              : <span style={{
+                  color: "#7ad87a", fontSize: 14, fontWeight: 700, lineHeight: 1,
+                  userSelect: "none",
+                }}>+</span>}
           </div>
-          {/* Apply body — custom button styled like Spectrum secondary. */}
+          {/* Apply body — label reads "Apply" in default replace mode,
+              "Apply +" in new-layer mode. */}
           <div onClick={outputMode === "lut" ? onApplyLut : onApply}
             title={
               outputMode === "lut"
-                ? "Create a Color Lookup adjustment layer in [Color Smash] loaded with a 33³ 3D LUT. Captures non-separable preset blend math (Color/Hue/Saturation/Luminosity) a Curves layer can't represent. Use LIVE for real-time updates, RESTORE/AUTO to round-trip via the layer's XMP."
+                ? "Create a Color Lookup adjustment layer in [Color Smash] loaded with a 33³ 3D LUT. The + arm toggles whether Apply replaces the prior layer (default) or stacks new ones alongside it."
                 : multiZone
                   ? "Multi: creates 3 stacked Curves layers (shadow/mid/highlight) with band limiting via mask and/or Blend If. Each editable independently in PS."
-                  : "Create a new Curves adjustment layer in the target document, clipped to the target layer. The left arm toggles whether prior Match layers are replaced or stacked."
+                  : "Create a new Curves adjustment layer in the target document, clipped to the target layer. The + arm toggles whether Apply replaces the prior layer (default) or stacks new ones."
             }
             style={{
               flex: "1 1 0", minWidth: 0, height: "100%",
@@ -2581,7 +2572,7 @@ export function MatchTab() {
               borderLeft: "1px solid #555",
               cursor: "pointer", userSelect: "none",
               overflow: "hidden", whiteSpace: "nowrap",
-            }}>Apply</div>
+            }}>{overwriteOnApply ? "Apply" : "Apply +"}</div>
         </div>
         {/* Live LUT toggle: when on, every state change re-bakes the LUT into
             the existing Match LUT layer (debounced ~300ms). Off by default —
