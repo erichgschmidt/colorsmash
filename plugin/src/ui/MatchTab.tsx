@@ -35,7 +35,6 @@ import { updateMatchCurvesLayerInPlace } from "../app/liveCurvesUpdate";
 import { LutLayerState, readLutLayerState, stampState } from "../app/lutXmp";
 import {
   HistoryEntry, makeHistoryEntry, pushHistoryEntry, pruneHistory, togglePinnedEntry, renameHistoryEntry,
-  remapWeightsByLabNearestNeighbor,
 } from "../app/recentHistory";
 import { lutGradientCSS } from "../app/historyThumbnail";
 import { syncOutputVisibilityToMode, repositionGroupAboveTarget } from "../app/outputVisibility";
@@ -672,6 +671,13 @@ export function MatchTab() {
   // these only kick in when there's no live data.
   const [savedSourceSwatches, setSavedSourceSwatches] = useState<PaletteSwatch[] | null>(null);
   const [savedTargetSwatches, setSavedTargetSwatches] = useState<PaletteSwatch[] | null>(null);
+  // v1.20.12 — when true, the loaded history recipe's palette (swatches +
+  // weights) is the ACTIVE source palette. Live extraction is suppressed so
+  // the panel UI (sliders, swatch chips) shows what the engine is actually
+  // computing against, and Apply bakes against the recipe's clusters — not
+  // whatever the live source layer happens to extract. Auto-clears on any
+  // refocus event: source layer change, source mode change, Refresh button.
+  const [recipeMode, setRecipeMode] = useState(false);
 
   // Palette extraction lives at the parent level so weights can be wired into both
   // the PaletteStrip UI and the synthesized-weighted-source path that drives the
@@ -686,10 +692,28 @@ export function MatchTab() {
   // savedSourceSwatches is only the cold-start fallback when no live
   // source exists yet (panel just opened against an XMP-tagged layer).
   const paletteSwatches = useMemo(() => {
+    // v1.20.12 — recipe mode wins over live extraction. User explicitly
+    // loaded a recipe; the panel should show that recipe's palette until
+    // they refocus (auto-cleared by source-layer or srcMode change effects
+    // below, or manually by Refresh).
+    if (recipeMode && savedSourceSwatches && savedSourceSwatches.length > 0) return savedSourceSwatches;
     if (srcSnap) return extractPalette(srcSnap.data, srcSnap.width, srcSnap.height, paletteCount);
     if (savedSourceSwatches && savedSourceSwatches.length > 0) return savedSourceSwatches;
     return [];
-  }, [srcSnap, paletteCount, savedSourceSwatches]);
+  }, [srcSnap, paletteCount, savedSourceSwatches, recipeMode]);
+
+  // v1.20.12 — auto-escape recipe mode when the user changes their source
+  // focus. sourceId / srcMode are the canonical signals that "the user
+  // wants their live source back."
+  useEffect(() => {
+    if (recipeMode) {
+      setRecipeMode(false);
+      setSavedSourceSwatches(null);
+    }
+    // Intentionally excludes recipeMode — we only want refocus events to
+    // trigger the auto-clear, not the recipe-load itself.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceId, srcMode]);
 
   // Reset weights to all-1 (neutral) whenever the palette identity changes. Stale
   // weights from a previous source's clusters would be meaningless against a fresh
@@ -705,12 +729,16 @@ export function MatchTab() {
   // the recipe. This ref tells the reset effect to skip exactly one cycle.
   const skipNextWeightResetRef = useRef(false);
   useEffect(() => {
+    // v1.20.12 — recipe mode owns the weights array; do NOT reset to neutral
+    // just because the swatch list changed. The recipe's weights are bound
+    // to the recipe's swatches and they arrive together via applyHistoryEntry.
+    if (recipeMode) return;
     if (skipNextWeightResetRef.current) {
       skipNextWeightResetRef.current = false;
       return;
     }
     setPaletteWeights(paletteSwatches.map(() => 1));
-  }, [paletteIdentity]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [paletteIdentity, recipeMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Per-pixel cluster assignment cache. Expensive (~3M ops at 256-edge: RGB→Lab
   // + nearest-centroid for every pixel) but only depends on srcSnap + palette
@@ -1122,36 +1150,26 @@ export function MatchTab() {
   // Click handler for a history thumbnail — restores panel state from the
   // entry's saved snapshot. Does NOT auto-Apply (predictable: user picks
   // history, panel updates, user hits Apply if they want to bake again).
-  // v1.20.11 — apply a history recipe to whatever live source is currently
-  // focused. Extract the live palette at the recipe's swatch count, then
-  // remap the recipe's weights onto those clusters via Lab nearest-neighbor.
-  // This makes recipes portable: weight #3 stays semantically aligned with
-  // the closest perceptual match in the new source's clusters instead of
-  // pointing at "whatever cluster happens to be index 3."
+  // v1.20.12 — apply a history recipe by activating its stored palette as
+  // the source. The recipe's swatches + weights take over until the user
+  // refocuses (changes source layer / mode, or clicks Refresh). This is
+  // what makes recipes portable: the engine renders against the recipe's
+  // actual clusters, the sliders show the recipe's weights aligned to the
+  // recipe's swatch chips, and Apply bakes the visible state.
   const applyHistoryEntry = (entry: HistoryEntry): void => {
-    const recipeCount = entry.state.paletteCount ?? 5;
-    const recipeSwatches = entry.state.sourcePaletteSwatches ?? [];
-    const recipeWeights = entry.state.sourcePaletteWeights ?? [];
-    // Use the LIVE source's palette extracted at the recipe's count for
-    // the remap target. Falls back to recipe swatches as-is when no live
-    // source is loaded (cold-start case).
-    let remappedWeights: number[] | undefined;
-    if (srcSnap) {
-      const liveSwatches = extractPalette(srcSnap.data, srcSnap.width, srcSnap.height, recipeCount);
-      remappedWeights = remapWeightsByLabNearestNeighbor(recipeSwatches, recipeWeights, liveSwatches);
-    } else {
-      remappedWeights = recipeWeights.slice();
+    const recipeSwatches = (entry.state.sourcePaletteSwatches ?? []).map((s: any) => ({
+      r: s.r, g: s.g, b: s.b,
+      weight: typeof s.weight === "number" ? s.weight : 1,
+      labL: typeof s.labL === "number" ? s.labL : 50,
+      labA: typeof s.labA === "number" ? s.labA : 0,
+      labB: typeof s.labB === "number" ? s.labB : 0,
+    })) as PaletteSwatch[];
+    if (recipeSwatches.length > 0) {
+      setSavedSourceSwatches(recipeSwatches);
+      setRecipeMode(true);
     }
-    const adaptedState: LutLayerState = {
-      ...entry.state,
-      sourcePaletteWeights: remappedWeights,
-    };
-    applyStateToPanel(adaptedState, "recipe");
-    setStatus(
-      srcSnap
-        ? `Loaded recipe (${entry.label}). Weights remapped to current source clusters by perceptual similarity.`
-        : `Loaded recipe (${entry.label}).`,
-    );
+    applyStateToPanel(entry.state, "recipe");
+    setStatus(`Loaded recipe (${entry.label}). Change source layer or click Refresh to return to live extraction.`);
   };
 
   // Shared restore implementation — pulled out of the manual onRestoreFromLayer
@@ -1569,6 +1587,7 @@ export function MatchTab() {
     // asks for a re-sync.
     setSavedSourceSwatches(null);
     setSavedTargetSwatches(null);
+    setRecipeMode(false);
     refreshSrcLayers();
     refreshTgtLayers();
     src.refresh();
@@ -1627,6 +1646,22 @@ export function MatchTab() {
                   softness={sourceSoftness}
                   setSoftness={setSourceSoftness}
                 />
+                {recipeMode && (
+                  <div
+                    onClick={() => { setRecipeMode(false); setSavedSourceSwatches(null); }}
+                    title="Recipe palette is active. Click to drop the recipe and use the live source extraction instead."
+                    style={{
+                      marginTop: 4, display: "flex", alignItems: "center", justifyContent: "space-between",
+                      padding: "2px 6px", fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
+                      background: "#3a2a3a", color: "#d6a6d6",
+                      border: "1px solid #6a4a6a", borderRadius: 2,
+                      cursor: "pointer", userSelect: "none",
+                    }}
+                  >
+                    <span>RECIPE LOADED — PALETTE LOCKED</span>
+                    <span style={{ marginLeft: 8, opacity: 0.7 }}>✕ live</span>
+                  </div>
+                )}
               </div>
             }
           />
