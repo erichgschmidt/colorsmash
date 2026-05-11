@@ -22,6 +22,7 @@ import { generateIccDeviceLinkBase64 } from "./iccGen";
 import {
   TargetPaletteSpec, targetWeightsActive, applyTargetPaletteMaskToLayer,
 } from "./targetMask";
+import { LutLayerState, writeLutLayerState } from "./lutXmp";
 
 const LUT_LAYER_PREFIX = "Match LUT";
 
@@ -45,6 +46,10 @@ export interface ApplyLutParams {
   /** True when target is the Merged-document sentinel — skips both clipping
       and per-cluster masking since neither has a meaningful spatial anchor. */
   targetIsMerged?: boolean;
+  /** Panel state to embed in the layer's XMP metadata. When present, the
+      layer carries enough info for the Restore button to rehydrate the
+      panel UI from this layer later. Optional — apply works without it. */
+  xmpState?: LutLayerState;
 }
 
 export interface ApplyLutResult {
@@ -313,6 +318,12 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
         try { existing.name = layerName; } catch { /* ignore */ }
         // Refresh the mask too — weights may have changed between commits.
         await attachMaskIfRequested(existing.id);
+        // Re-stamp the XMP — preset/palette weights may have moved since the
+        // layer was first authored, so Restore should pick up the latest.
+        if (params.xmpState) {
+          try { await writeLutLayerState(existing.id, params.xmpState); }
+          catch { /* non-fatal */ }
+        }
         return { layerName, layerId: existing.id };
       }
     }
@@ -375,6 +386,10 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
       try { await newLayer.move(group, "placeInside"); } catch { /* ignore */ }
       try { newLayerId = newLayer.id; } catch { /* ignore */ }
       if (newLayerId != null) await attachMaskIfRequested(newLayerId);
+      if (newLayerId != null && params.xmpState) {
+        try { await writeLutLayerState(newLayerId, params.xmpState); }
+        catch { /* non-fatal */ }
+      }
     }
 
     return { layerName, layerId: newLayerId };

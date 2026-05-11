@@ -30,6 +30,7 @@ import { loadSettings, makeDebouncedSaver, clearSettings, PersistedSettings } fr
 import { uxpInfo } from "./uxpInfo";
 import { applyMatch } from "../app/applyMatch";
 import { applyLutAsAdjustmentLayer } from "../app/applyLut";
+import { LutLayerState, readLutLayerState, stampState } from "../app/lutXmp";
 import {
   app, action as psAction, readLayerPixels, executeAsModal, getActiveDoc, getSelectionBounds,
 } from "../services/photoshop";
@@ -828,6 +829,80 @@ export function MatchTab() {
     } catch (e: any) { setStatus(`LUT export error: ${e?.message ?? e}`); }
   };
 
+  // Build the XMP fingerprint we attach to every Match LUT layer. Captures
+  // the full panel state that produced the bake so Restore can hydrate the
+  // UI back to it later. Doesn't include source pixels — Phase 2c will add
+  // a tiny histogram-based fingerprint so the layer is fully self-contained.
+  const buildXmpState = (): LutLayerState => stampState({
+    preset: activePreset,
+    matchMode,
+    colorSpace,
+    paletteCount,
+    sourcePaletteWeights: paletteWeights.slice(),
+    targetPaletteWeights: targetPaletteWeights.slice(),
+    sourceSoftness,
+    targetSoftness,
+    paletteAdaptive,
+    multiZone,
+    dimensions: dimsRef.current,
+    zones: zonesRef.current,
+    envelope: envelopeRef.current,
+    sourceDocId: srcDocId,
+    sourceLayerId: sourceId,
+  }, "1.14.0");
+
+  // Restore — read the active layer's XMP and push every captured value
+  // back into the panel. Useful when the user clicked a previously-authored
+  // Match LUT layer and wants to resume editing where they left off.
+  // v1.14.1 will fire this automatically on layer-select notifications;
+  // for now it's a manual button next to LIVE / Apply LUT.
+  const onRestoreFromLayer = async () => {
+    try {
+      const ps = require("photoshop");
+      const doc = ps.app.activeDocument;
+      const activeLayer = doc?.activeLayers?.[0];
+      if (!activeLayer) { setStatus("No layer selected."); return; }
+      const state = await readLutLayerState(activeLayer.id);
+      if (!state) {
+        setStatus("Selected layer has no Color Smash metadata.");
+        return;
+      }
+      // Apply every field that's present. Each setter is idempotent so
+      // partial restores (older xmpVersion) don't break.
+      if (state.preset) setActivePreset(state.preset as any);
+      if (state.matchMode) setMatchMode(state.matchMode as MatchMode);
+      if (state.colorSpace === "rgb" || state.colorSpace === "lab") setColorSpace(state.colorSpace);
+      if (state.paletteCount === 3 || state.paletteCount === 5 || state.paletteCount === 7) {
+        setPaletteCount(state.paletteCount);
+      }
+      if (state.sourcePaletteWeights && Array.isArray(state.sourcePaletteWeights)) {
+        setPaletteWeights(state.sourcePaletteWeights);
+      }
+      if (state.targetPaletteWeights && Array.isArray(state.targetPaletteWeights)) {
+        setTargetPaletteWeights(state.targetPaletteWeights);
+      }
+      if (typeof state.sourceSoftness === "number") setSourceSoftness(state.sourceSoftness);
+      if (typeof state.targetSoftness === "number") setTargetSoftness(state.targetSoftness);
+      if (state.paletteAdaptive != null) setPaletteAdaptive(!!state.paletteAdaptive);
+      if (state.multiZone != null) setMultiZone(!!state.multiZone);
+      if (state.dimensions) {
+        dimsRef.current = { ...DEFAULT_DIMENSIONS, ...state.dimensions } as DimensionOpts;
+        setDimsLabel(dimsRef.current);
+      }
+      if (state.zones) {
+        zonesRef.current = { ...DEFAULT_ZONES, ...state.zones } as ZoneOpts;
+        setZonesLabel(zonesRef.current);
+      }
+      if (state.envelope && Array.isArray(state.envelope) && state.envelope.length > 0) {
+        envelopeRef.current = state.envelope as EnvelopePoint[];
+        setEnvelopeLabel(state.envelope as EnvelopePoint[]);
+      }
+      setStatus(`Restored panel state from "${activeLayer.name}" (saved ${state.timestamp ? new Date(state.timestamp).toLocaleString() : "unknown time"}).`);
+    } catch (e: any) {
+      setStatus(`Restore failed: ${e?.message ?? e}`);
+    }
+  };
+
   // Apply LUT — bake the staged preset into a Color Lookup adjustment layer
   // automatically, no file dialog. The .cube goes to the plugin's temp folder
   // (PS references it from there) and the layer lands in the [Color Smash]
@@ -850,6 +925,7 @@ export function MatchTab() {
           weights: targetPaletteWeights.slice(),
           softness: targetSoftness,
         } : undefined,
+        xmpState: buildXmpState(),
       });
       // Track the new layer's id so toggling Live LUT later updates THIS layer
       // instead of creating yet another one.
@@ -1541,6 +1617,24 @@ export function MatchTab() {
             height: 28, lineHeight: "26px", boxSizing: "border-box",
             flex: "0 0 auto",
           }}>LIVE</div>
+        {/* Restore: hydrate the panel UI from the selected Match LUT layer's
+            XMP. Click on a previously-authored Match LUT layer in PS's
+            Layers panel, then click RESTORE here — every captured slider /
+            preset / palette weight pops back to the state that produced
+            that bake. Silent no-op if the layer has no Color Smash XMP.
+            v1.14.1 will fire this automatically on layer-select. */}
+        <div onClick={onRestoreFromLayer}
+          title="Restore panel state from the selected Match LUT layer's XMP metadata. Click a previously-baked Match LUT layer in the Layers panel, then click here to pop sliders/preset/weights back to what produced that LUT."
+          style={{
+            padding: "1px 6px", fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
+            background: "transparent",
+            color: "#7aa8d8",
+            border: "1px solid #7aa8d8",
+            borderRadius: 2, cursor: "pointer", userSelect: "none",
+            display: "flex", alignItems: "center",
+            height: 28, lineHeight: "26px", boxSizing: "border-box",
+            flex: "0 0 auto",
+          }}>RESTORE</div>
         {/* @ts-ignore Spectrum web component */}
         <sp-button variant="secondary" onClick={onExportLut}
           style={{ flex: "1 1 0", minWidth: 0, overflow: "hidden", whiteSpace: "nowrap" }}
