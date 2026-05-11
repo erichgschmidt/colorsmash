@@ -16,6 +16,7 @@
 import { ChannelCurves, generateLutCube, Preset } from "../core/histogramMatch";
 import { GROUP_NAME, action, app } from "../services/photoshop";
 import { executeAsModal } from "../services/photoshop";
+import { generateIccDeviceLinkBase64 } from "./iccGen";
 
 const LUT_LAYER_PREFIX = "Match LUT";
 
@@ -156,7 +157,7 @@ function base64EncodeLatin1Fallback(s: string): string {
  * field is a result, not an input.
  */
 async function tryLoadLutIntoActiveLayer(
-  cubeText: string, displayName: string,
+  cubeText: string, displayName: string, curves: ChannelCurves,
 ): Promise<{ ok: boolean; lastErr: any }> {
   // Diagnostic dump of a working manual-load layer (v1.12.1) revealed:
   //   - LUT3DFileData is an ArrayBuffer holding the RAW BYTES of the original
@@ -184,6 +185,13 @@ async function tryLoadLutIntoActiveLayer(
   // data, we're done; if it requires the profile to be pre-baked too, we'd
   // need to generate ICC DeviceLink bytes (next iteration).
   const cubeB64 = cubeToBase64(cubeText);
+  // Generate the ICC DeviceLink profile from current curves. PS uses `profile`
+  // (the parsed binary form) for rendering — without it the layer holds cube
+  // data but applies nothing. We bypass PS's reader entirely by handing it a
+  // valid ICC profile we built from the ChannelCurves directly. See iccGen.ts
+  // for the template-based generator (one-time captured boilerplate + freshly
+  // computed 33³ CLUT bytes).
+  const profileB64 = generateIccDeviceLinkBase64(curves);
   const setDesc = {
     _obj: "set",
     _target: [{ _ref: "adjustmentLayer", _enum: "ordinal", _value: "targetEnum" }],
@@ -194,6 +202,7 @@ async function tryLoadLutIntoActiveLayer(
       LUTFormat: { _enum: "LUTFormatType", _value: "LUTFormatCUBE" },
       LUT3DFileName: displayName,
       name: displayName,
+      profile: { _data: profileB64, _rawData: "base64" },
     },
   };
   try {
@@ -287,7 +296,7 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
             makeVisible: false,
           }], {});
         } catch { /* ignore */ }
-        const { ok, lastErr } = await tryLoadLutIntoActiveLayer(cubeText, fileName);
+        const { ok, lastErr } = await tryLoadLutIntoActiveLayer(cubeText, fileName, params.curves);
         if (!ok) throw new Error(`Live LUT update failed: ${lastErr?.message ?? lastErr ?? "unknown"}`);
         // Keep the name in sync (preset may have changed since creation).
         try { existing.name = layerName; } catch { /* ignore */ }
@@ -333,7 +342,7 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
     }
 
     // Step 2: load the 3D LUT into the new layer.
-    const { ok, lastErr } = await tryLoadLutIntoActiveLayer(cubeText, file.name);
+    const { ok, lastErr } = await tryLoadLutIntoActiveLayer(cubeText, file.name, params.curves);
     // Diagnostic: query the layer back and dump its descriptor so we can see
     // what fields PS actually populated. If LUT data is missing, the dump will
     // show which keys are empty — and comparing this to a manually-loaded LUT
