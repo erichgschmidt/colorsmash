@@ -37,13 +37,16 @@ function nearestSwatchByL(swatches: SerializedSwatch[], targetL: number): Serial
  * See module docstring for the approximation strategy.
  */
 export function lutGradientCSS(state: LutLayerState): string {
-  // Prefer target swatches (the "output palette" the LUT pushes toward); fall
-  // back to source swatches; fall back to grayscale passthrough.
+  // v1.20.18 — recipes are source-only. Prefer SOURCE swatches so the
+  // bottom-of-thumbnail gradient previews "what palette this recipe pushes
+  // a neutral input toward." Older entries with target swatches stored
+  // would otherwise paint the wrong colors here once recipes shed their
+  // target side. Falls back to grayscale passthrough when no swatches.
   const palette: SerializedSwatch[] =
-    (state.targetPaletteSwatches && state.targetPaletteSwatches.length > 0)
-      ? state.targetPaletteSwatches
-      : (state.sourcePaletteSwatches && state.sourcePaletteSwatches.length > 0)
-        ? state.sourcePaletteSwatches
+    (state.sourcePaletteSwatches && state.sourcePaletteSwatches.length > 0)
+      ? state.sourcePaletteSwatches
+      : (state.targetPaletteSwatches && state.targetPaletteSwatches.length > 0)
+        ? state.targetPaletteSwatches
         : [];
 
   const preset: Preset = ((state.preset as Preset) || "color");
