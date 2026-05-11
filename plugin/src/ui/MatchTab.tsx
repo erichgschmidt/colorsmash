@@ -31,7 +31,7 @@ import { uxpInfo } from "./uxpInfo";
 import { applyMatch } from "../app/applyMatch";
 import { applyLutAsAdjustmentLayer, applyMultiZoneLutAsLayers } from "../app/applyLut";
 import { LutLayerState, readLutLayerState, stampState } from "../app/lutXmp";
-import { syncOutputVisibilityToMode } from "../app/outputVisibility";
+import { syncOutputVisibilityToMode, repositionGroupAboveTarget } from "../app/outputVisibility";
 import {
   app, action as psAction, readLayerPixels, executeAsModal, getActiveDoc, getSelectionBounds,
 } from "../services/photoshop";
@@ -191,6 +191,19 @@ export function MatchTab() {
     if (!visSyncFirstRunRef.current) { visSyncFirstRunRef.current = true; return; }
     syncOutputVisibilityToMode(outputMode).catch(() => { /* non-fatal */ });
   }, [outputMode]);
+
+  // Reposition the [Color Smash] group above the new target whenever the
+  // user picks a different target layer. Keeps the existing Curves/LUT
+  // outputs anchored above whatever the user is now editing — without this,
+  // switching targets leaves the group orphaned in its previous location.
+  // Skipped on first run (mount) so picking up a saved targetId doesn't
+  // jolt the layer panel before the user has even interacted.
+  const reposFirstRunRef = useRef(false);
+  useEffect(() => {
+    if (!reposFirstRunRef.current) { reposFirstRunRef.current = true; return; }
+    if (targetId == null || targetId === MERGED_LAYER_ID) return;
+    repositionGroupAboveTarget(targetId).catch(() => { /* non-fatal */ });
+  }, [targetId]);
 
   // SWAP — single-click A/B between LUT and the last Curves mode. Useful for
   // quick comparison: stage a match, hit SWAP a few times to compare the

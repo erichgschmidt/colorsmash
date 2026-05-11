@@ -97,3 +97,41 @@ export async function syncOutputVisibilityToMode(mode: "rgb" | "lab" | "lut"): P
     }
   });
 }
+
+/**
+ * Reposition the [Color Smash] group so it sits directly above the given
+ * target layer in the layer stack. Called when the user switches the target
+ * in the plugin so existing Curves / LUT outputs (which are clipped to or
+ * sit above the target) re-anchor to the new destination.
+ *
+ * No-op when:
+ *   - No active document
+ *   - No [Color Smash] group exists yet
+ *   - Target layer can't be resolved
+ *   - The group is already in the right place (saves a modal scope)
+ */
+export async function repositionGroupAboveTarget(targetLayerId: number): Promise<void> {
+  const doc = app.activeDocument;
+  if (!doc) return;
+  const group = findColorSmashGroup(doc);
+  if (!group) return;
+  // Find target by recursive id lookup (target may live inside a group).
+  const findById = (layers: any[]): any | null => {
+    for (const l of layers) {
+      if (l?.id === targetLayerId) return l;
+      if (Array.isArray(l.layers)) {
+        const found = findById(l.layers);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+  const target = findById(doc.layers ?? []);
+  if (!target) return;
+  await executeAsModal("Color Smash reposition group", async () => {
+    // PS's layer.move(reference, "placeBefore") puts the moved layer just
+    // above the reference. "placeBefore" in PS API means "in front of in
+    // the stack order" = higher in the Layers panel.
+    try { await group.move(target, "placeBefore"); } catch { /* ignore */ }
+  });
+}

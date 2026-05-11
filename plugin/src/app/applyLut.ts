@@ -191,7 +191,7 @@ function base64EncodeLatin1Fallback(s: string): string {
  * field is a result, not an input.
  */
 async function tryLoadLutIntoActiveLayer(
-  cubeText: string, displayName: string, curves: ChannelCurves,
+  cubeText: string, displayName: string, curves: ChannelCurves, preset: Preset,
 ): Promise<{ ok: boolean; lastErr: any }> {
   // Diagnostic dump of a working manual-load layer (v1.12.1) revealed:
   //   - LUT3DFileData is an ArrayBuffer holding the RAW BYTES of the original
@@ -225,7 +225,7 @@ async function tryLoadLutIntoActiveLayer(
   // valid ICC profile we built from the ChannelCurves directly. See iccGen.ts
   // for the template-based generator (one-time captured boilerplate + freshly
   // computed 33³ CLUT bytes).
-  const profileB64 = generateIccDeviceLinkBase64(curves);
+  const profileB64 = generateIccDeviceLinkBase64(curves, preset);
   const setDesc = {
     _obj: "set",
     _target: [{ _ref: "adjustmentLayer", _enum: "ordinal", _value: "targetEnum" }],
@@ -329,7 +329,7 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
             makeVisible: false,
           }], {});
         } catch { /* ignore */ }
-        const { ok, lastErr } = await tryLoadLutIntoActiveLayer(cubeText, fileName, params.curves);
+        const { ok, lastErr } = await tryLoadLutIntoActiveLayer(cubeText, fileName, params.curves, params.preset);
         if (!ok) throw new Error(`Live LUT update failed: ${lastErr?.message ?? lastErr ?? "unknown"}`);
         try { existing.name = layerName; } catch { /* ignore */ }
         // Refresh the mask too — weights may have changed between commits.
@@ -379,7 +379,7 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
     }
 
     // Step 2: load the 3D LUT into the new layer.
-    const { ok, lastErr } = await tryLoadLutIntoActiveLayer(cubeText, fileName, params.curves);
+    const { ok, lastErr } = await tryLoadLutIntoActiveLayer(cubeText, fileName, params.curves, params.preset);
     if (!ok) {
       try {
         const stray = doc.activeLayers?.[0];
@@ -449,7 +449,7 @@ export async function applyMultiZoneLutAsLayers(
     const curves = params.multiZoneFit[key];
     const cubeText = generateLutCube(curves, params.preset, size, `Color Smash ${key}`);
     const cubeB64 = cubeToBase64(cubeText);
-    const profileB64 = generateIccDeviceLinkBase64(curves);
+    const profileB64 = generateIccDeviceLinkBase64(curves, params.preset);
     return { key, cubeText, cubeB64, profileB64 };
   });
 

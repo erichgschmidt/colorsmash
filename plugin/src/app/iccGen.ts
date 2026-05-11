@@ -28,7 +28,7 @@
 // 33³ grid. We override the profile size field at offset 0 to match if
 // it ever needs to change.
 
-import { ChannelCurves } from "../core/histogramMatch";
+import { ChannelCurves, Preset, applyPresetPostprocess, averageChannelCurves } from "../core/histogramMatch";
 
 // Base64-encoded fixed chunks of the ICC profile, extracted from a real
 // PS-exported reference. Imported as raw text so we can decode at runtime.
@@ -66,34 +66,49 @@ function bytesToB64(bytes: Uint8Array): string {
 }
 
 /**
- * Build the CLUT bytes from per-channel curves. For each input grid point
- * (r, g, b) in 33³, look up the corresponding output value through each
- * channel's curve and pack as uint16-BE.
+ * Build the CLUT bytes from per-channel curves AND the preset's blend math.
  *
- * Curves are 256-entry Uint8Array (0..255 → 0..255). We sample at the input
- * grid points (33 steps across 0..255) and scale to uint16 (0..65535).
+ * Each grid sample is:
+ *   1. Pre-fold contrast preset's R=G=B luma curve (averageChannelCurves).
+ *   2. Apply per-channel curves: orig → mapped.
+ *   3. Run applyPresetPostprocess(orig, mapped, preset) to bake in any
+ *      non-separable blend math (Color / Hue / Saturation / Luminosity).
+ *   4. Scale 8-bit output to 16-bit BE.
+ *
+ * This is the same pipeline generateLutCube uses to write .cube text.
+ * Keeping them in sync matters because PS renders from the ICC profile
+ * (which buildClut produces), NOT from the cube text. v1.16.1 forgot the
+ * preset step here, which caused all 5 presets to render identically in
+ * LUT mode (only Full / "color" preset is a postprocess no-op).
  *
  * CLUT ordering per ICC mft2 spec: input channel that varies SLOWEST is
  * stored first. For RGB inputs that's R outermost, G middle, B innermost.
  * Within each entry, output channels are R, G, B in order.
  */
-function buildClut(curves: ChannelCurves): Uint8Array {
+function buildClut(curves: ChannelCurves, preset: Preset): Uint8Array {
   const out = new Uint8Array(CLUT_SIZE);
+  // Same contrast-collapse generateLutCube does: contrast preset uses one
+  // luma curve replicated across R/G/B so there's no per-channel color shift.
+  const finalCurves = preset === "contrast" ? averageChannelCurves(curves) : curves;
+  const orig = new Uint8Array(4); orig[3] = 255;
+  const mapped = new Uint8Array(4); mapped[3] = 255;
   let p = 0;
   for (let ri = 0; ri < GRID; ri++) {
     const rInput = Math.round((ri / (GRID - 1)) * 255);
-    const rOut = curves.r[rInput];
     for (let gi = 0; gi < GRID; gi++) {
       const gInput = Math.round((gi / (GRID - 1)) * 255);
-      const gOut = curves.g[gInput];
       for (let bi = 0; bi < GRID; bi++) {
         const bInput = Math.round((bi / (GRID - 1)) * 255);
-        const bOut = curves.b[bInput];
-        // Scale 8-bit (0..255) → 16-bit (0..65535). Pure mul by 257 ensures
+        orig[0] = rInput; orig[1] = gInput; orig[2] = bInput;
+        mapped[0] = finalCurves.r[rInput];
+        mapped[1] = finalCurves.g[gInput];
+        mapped[2] = finalCurves.b[bInput];
+        const post = applyPresetPostprocess(orig, mapped, preset);
+        // Scale 8-bit (0..255) → 16-bit (0..65535). Mul by 257 ensures
         // 255 maps exactly to 65535 (vs a /255 × 65535 which has rounding).
-        const r16 = rOut * 257;
-        const g16 = gOut * 257;
-        const b16 = bOut * 257;
+        const r16 = post[0] * 257;
+        const g16 = post[1] * 257;
+        const b16 = post[2] * 257;
         out[p++] = (r16 >> 8) & 0xff;
         out[p++] = r16 & 0xff;
         out[p++] = (g16 >> 8) & 0xff;
@@ -107,14 +122,19 @@ function buildClut(curves: ChannelCurves): Uint8Array {
 }
 
 /**
- * Generate an ICC DeviceLink profile from per-channel curves.
+ * Generate an ICC DeviceLink profile from per-channel curves + active preset.
  * Returns the base64-encoded profile bytes ready to drop into a batchPlay
  * descriptor's `profile._data` field.
+ *
+ * Preset matters here because PS renders the layer from this ICC profile,
+ * so any non-separable blend math (Color / Hue / Saturation / Luminosity)
+ * must be pre-baked into the CLUT — there's no separable curve we can fall
+ * back on inside a 3D LUT.
  */
-export function generateIccDeviceLinkBase64(curves: ChannelCurves): string {
+export function generateIccDeviceLinkBase64(curves: ChannelCurves, preset: Preset = "color"): string {
   const prefix = b64ToBytes(ICC_PREFIX_B64);
   const suffix = b64ToBytes(ICC_SUFFIX_B64);
-  const clut = buildClut(curves);
+  const clut = buildClut(curves, preset);
   if (prefix.length + clut.length + suffix.length !== TOTAL_PROFILE_SIZE) {
     throw new Error(
       `ICC profile size mismatch: prefix=${prefix.length} + clut=${clut.length} ` +
