@@ -200,7 +200,7 @@ export function MatchTab() {
   // a semi-transparent red wash. Convention matches PS's Quick Mask: red =
   // protected, clear = affected. Lets users SEE the composed mask
   // (palette × selection) before Apply, without manually inspecting masks.
-  const [showMask, setShowMask] = useState(false);
+  const [showMask, setShowMask] = useState(true);
 
   // Selection / marquee tristate (v1.18.0). At Apply time, if a marquee is
   // active in PS and mode is Focus/Exclude, the marquee becomes the layer
@@ -2390,6 +2390,7 @@ export function MatchTab() {
                 borderRadius: 2, cursor: "pointer", userSelect: "none",
                 height: 18, lineHeight: "16px", boxSizing: "border-box",
                 flexShrink: 0,
+                marginRight: 8, // v1.20.39 — visual breathing room before the marquee tristate.
               }}>MASK</div>
             <div style={{ display: "flex", flex: 1, gap: 2, opacity: marqueeDisabled ? 0.55 : 1 }}>
               {([
