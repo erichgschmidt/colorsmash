@@ -44,6 +44,32 @@ export interface HistoryEntry {
    *  `max` cap (they count toward total length but the cap protects them
    *  from being trimmed). */
   pinned?: boolean;
+  /** v1.20.3 — user-supplied display name. When present, overrides the
+   *  auto-generated `label` in the UI. Only available on pinned entries
+   *  (the rename UI surfaces a text input alongside the star). Empty string
+   *  reverts to the auto label. */
+  customName?: string;
+}
+
+/** Set or clear the customName on an entry by id. Returns a NEW array;
+ *  missing ids leave the array unchanged. Empty/whitespace name clears
+ *  the override (entry falls back to its auto-generated label). */
+export function renameHistoryEntry(
+  history: HistoryEntry[],
+  id: string,
+  customName: string,
+): HistoryEntry[] {
+  if (!Array.isArray(history)) return [];
+  const trimmed = (customName || "").trim();
+  let found = false;
+  const next = history.map(e => {
+    if (e && e.id === id) {
+      found = true;
+      return { ...e, customName: trimmed.length > 0 ? trimmed : undefined };
+    }
+    return e;
+  });
+  return found ? next : history.slice();
 }
 
 /** Clamp a numeric byte channel to 0..255. */

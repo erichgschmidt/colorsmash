@@ -34,8 +34,9 @@ import { applyLutAsAdjustmentLayer, applyMultiZoneLutAsLayers } from "../app/app
 import { updateMatchCurvesLayerInPlace } from "../app/liveCurvesUpdate";
 import { LutLayerState, readLutLayerState, stampState } from "../app/lutXmp";
 import {
-  HistoryEntry, makeHistoryEntry, pushHistoryEntry, pruneHistory, togglePinnedEntry,
+  HistoryEntry, makeHistoryEntry, pushHistoryEntry, pruneHistory, togglePinnedEntry, renameHistoryEntry,
 } from "../app/recentHistory";
+import { lutGradientCSS } from "../app/historyThumbnail";
 import { syncOutputVisibilityToMode, repositionGroupAboveTarget } from "../app/outputVisibility";
 import {
   app, action as psAction, readLayerPixels, executeAsModal, getActiveDoc, getSelectionBounds,
@@ -218,6 +219,10 @@ export function MatchTab() {
   // Default open in v1.20.1 — feedback was that the collapsed disclosure
   // was easy to miss, and the strip is small enough to live exposed.
   const [historyOpen, setHistoryOpen] = useState(true);
+  // v1.20.3 — when set to an entry id, the thumbnail's title area swaps to
+  // a small text input for renaming. Pinned entries only; recents use the
+  // auto-generated label. Saved on blur / Enter; canceled on Escape.
+  const [renamingEntryId, setRenamingEntryId] = useState<string | null>(null);
   // Effective value used by Apply pipeline + buildXmpState. When source
   // mode is "selection," force "off" so the source marquee isn't double-
   // duty as an output mask. The raw `selectionMode` state preserves the
@@ -2214,38 +2219,61 @@ export function MatchTab() {
           </div>
           {historyOpen && (
             <div style={{ display: "flex", flexDirection: "row", gap: 4, marginTop: 4, flexWrap: "wrap" }}>
-              {sorted.map(entry => (
+              {sorted.map(entry => {
+                const displayLabel = entry.customName || entry.label;
+                return (
                 <div key={entry.id}
-                  title={`${entry.label}\nSaved ${new Date(entry.timestamp).toLocaleString()}\nClick to restore. ${entry.pinned ? "★ Pinned — won't be evicted from history." : "Shift-click the star to pin."}`}
+                  title={`${displayLabel}${entry.customName ? ` (auto: ${entry.label})` : ""}\nSaved ${new Date(entry.timestamp).toLocaleString()}\nClick to restore. ${entry.pinned ? "Double-click to rename. ★ Pinned — won't be evicted." : "Click the star to pin."}`}
+                  onDoubleClick={() => {
+                    // v1.20.3 — double-click triggers rename mode. Auto-pins
+                    // the entry if not already pinned (rename only makes
+                    // sense for entries you want to keep around).
+                    if (!entry.pinned) {
+                      setRecentHistory(prev => togglePinnedEntry(prev, entry.id));
+                    }
+                    setRenamingEntryId(entry.id);
+                  }}
                   style={{
-                    width: 60, height: 16, padding: 0,
+                    width: 60, height: 22, padding: 0,
                     display: "flex", flexDirection: "row", position: "relative",
                     border: `1px solid ${entry.pinned ? "#c19a3a" : "#555"}`,
                     borderRadius: 2,
                     userSelect: "none",
                     overflow: "hidden", flexShrink: 0,
                   }}>
-                  {/* Palette signature segments — click anywhere on the strip
+                  {/* Thumbnail body (v1.20.4) — top half: LUT-applied-to-
+                      gradient preview (visual signature of the transform).
+                      Bottom half: palette-segment signature (sized by weights,
+                      colored by swatch RGB). Together they read as both
+                      "what palette" and "what the LUT does." Click anywhere
                       to restore. Star button stops propagation. */}
                   <div onClick={() => applyHistoryEntry(entry)}
-                    style={{ flex: 1, display: "flex", flexDirection: "row", cursor: "pointer", overflow: "hidden" }}>
-                    {entry.signature.colors.length > 0
-                      ? entry.signature.colors.map((c, i) => {
-                          const r = (c >> 16) & 0xff;
-                          const g = (c >> 8) & 0xff;
-                          const b = c & 0xff;
-                          const w = entry.signature.weights[i] ?? 0;
-                          const total = entry.signature.weights.reduce((s, x) => s + (x || 0), 0) || 1;
-                          return (
-                            <div key={i} style={{
-                              flex: `${Math.max(1, w)} 1 0`,
-                              background: `rgb(${r},${g},${b})`,
-                              minWidth: 0,
-                            }} title={`rgb(${r},${g},${b}) · ${((w / total) * 100).toFixed(0)}%`} />
-                          );
-                        })
-                      : <div style={{ flex: 1, background: "#444" }} />
-                    }
+                    style={{ flex: 1, display: "flex", flexDirection: "column", cursor: "pointer", overflow: "hidden" }}>
+                    {/* LUT-applied gradient strip — agent-built helper renders
+                        a 32-stop CSS gradient pre-transformed by the entry's
+                        curves + preset. Takes ~half the thumbnail height. */}
+                    <div style={{ flex: 1, background: lutGradientCSS(entry.state), minHeight: 0 }} />
+                    {/* Palette signature — sized by weights, colored by
+                        swatch RGB. Takes the other half. */}
+                    <div style={{ flex: 1, display: "flex", flexDirection: "row", minHeight: 0 }}>
+                      {entry.signature.colors.length > 0
+                        ? entry.signature.colors.map((c, i) => {
+                            const r = (c >> 16) & 0xff;
+                            const g = (c >> 8) & 0xff;
+                            const b = c & 0xff;
+                            const w = entry.signature.weights[i] ?? 0;
+                            const total = entry.signature.weights.reduce((s, x) => s + (x || 0), 0) || 1;
+                            return (
+                              <div key={i} style={{
+                                flex: `${Math.max(1, w)} 1 0`,
+                                background: `rgb(${r},${g},${b})`,
+                                minWidth: 0,
+                              }} title={`rgb(${r},${g},${b}) · ${((w / total) * 100).toFixed(0)}%`} />
+                            );
+                          })
+                        : <div style={{ flex: 1, background: "#444" }} />
+                      }
+                    </div>
                   </div>
                   {/* Pin star — top-right corner overlay. Solid when pinned,
                       outline when not. Click toggles pinned state without
@@ -2266,8 +2294,25 @@ export function MatchTab() {
                       borderRadius: 2,
                       cursor: "pointer", userSelect: "none",
                     }}>{entry.pinned ? "★" : "☆"}</div>
+                  {/* Custom-name badge — small text "tick" hanging off the
+                      bottom-left when the user has renamed the entry. Tooltip
+                      shows the name; double-click the thumbnail to edit. */}
+                  {entry.customName && (
+                    <div style={{
+                      position: "absolute", bottom: -1, left: -1,
+                      maxWidth: 56, padding: "0 2px",
+                      fontSize: 7, fontWeight: 600, lineHeight: 1,
+                      background: "rgba(20,20,20,0.85)",
+                      color: "#c19a3a",
+                      border: "1px solid #c19a3a",
+                      borderRadius: 1,
+                      overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis",
+                      pointerEvents: "none",
+                    }}>{entry.customName}</div>
+                  )}
                 </div>
-              ))}
+                );
+              })}
               {/* Placeholder slots (v1.20.2) — fill out the row to
                   HISTORY_MAX so the user discovers the feature even
                   before their first Apply. Each placeholder is a thin
@@ -2277,7 +2322,7 @@ export function MatchTab() {
                 <div key={`ph-${i}`}
                   title="Empty history slot — Apply a match to fill."
                   style={{
-                    width: 60, height: 16, padding: 0,
+                    width: 60, height: 22, padding: 0,
                     display: "flex", alignItems: "center", justifyContent: "center",
                     border: "1px dashed #3a3a3a", borderRadius: 2,
                     background: "transparent",
@@ -2301,6 +2346,48 @@ export function MatchTab() {
               )}
             </div>
           )}
+          {/* Rename input (v1.20.3) — appears below the thumbnail strip when
+              the user double-clicks an entry. Auto-focuses, saves on Enter
+              or blur, cancels on Escape. Leaving the name empty clears any
+              prior custom name (entry falls back to the auto-generated
+              label). */}
+          {historyOpen && renamingEntryId && (() => {
+            const targetEntry = recentHistory.find(e => e.id === renamingEntryId);
+            if (!targetEntry) return null;
+            const initialValue = targetEntry.customName ?? "";
+            return (
+              <div style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 4, height: 18, lineHeight: "16px" }}>
+                <span style={{ fontSize: 9, opacity: 0.6, flexShrink: 0 }}>rename</span>
+                <input type="text"
+                  defaultValue={initialValue}
+                  autoFocus
+                  placeholder={targetEntry.label}
+                  onBlur={e => {
+                    setRecentHistory(prev => renameHistoryEntry(prev, targetEntry.id, e.target.value));
+                    setRenamingEntryId(null);
+                  }}
+                  onKeyDown={e => {
+                    if (e.key === "Enter") {
+                      setRecentHistory(prev => renameHistoryEntry(prev, targetEntry.id, (e.target as HTMLInputElement).value));
+                      setRenamingEntryId(null);
+                    } else if (e.key === "Escape") {
+                      setRenamingEntryId(null);
+                    }
+                  }}
+                  style={{
+                    flex: 1, height: 16, fontSize: 9, padding: "0 4px",
+                    background: "#1a1a1a", color: "#ddd",
+                    border: "1px solid #c19a3a", borderRadius: 2,
+                    boxSizing: "border-box", lineHeight: "14px",
+                  }} />
+                <div onClick={() => setRenamingEntryId(null)}
+                  title="Cancel rename"
+                  style={{ width: 14, height: 14, display: "flex", alignItems: "center", justifyContent: "center",
+                           fontSize: 9, color: "#888", border: "1px solid #444", borderRadius: 2,
+                           cursor: "pointer", userSelect: "none", flexShrink: 0 }}>×</div>
+              </div>
+            );
+          })()}
         </div>
         );
       })()}
