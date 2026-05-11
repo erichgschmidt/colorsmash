@@ -352,35 +352,31 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
       }
     }
 
-    // Single helper for "attach the mask to layer X" so create and update
-    // paths share it. Builds the appropriate mask (palette × selection)
-    // and attaches via imaging.putLayerMask.
-    const attachMaskIfRequested = async (layerId: number) => {
-      if (!wantAnyMask || !targetBuf) return;
-      const px = targetBuf.width * targetBuf.height;
-      // Start from the target-palette mask if active, otherwise a full mask.
-      let mask: Uint8Array;
-      if (wantPaletteMask && params.targetPalette) {
-        mask = buildTargetPaletteMaskBytes(targetBuf, params.targetPalette);
-      } else {
-        mask = fullMask(px);
-      }
-      // Compose with selection if active.
-      // v1.20.33 — composeWithSelection bails on size mismatch, which can
-      // happen when imaging.getPixels and bounds.right-left return slightly
-      // different widths on sub-pixel-bounds layers. Pad/truncate first so
-      // the compose actually runs.
-      if (selectionMaskBytes && selectionMode !== "off") {
-        let sel = selectionMaskBytes;
-        if (sel.length !== mask.length) {
-          const padded = new Uint8Array(mask.length);
-          padded.set(sel.subarray(0, Math.min(sel.length, mask.length)));
-          sel = padded;
-        }
-        mask = composeWithSelection(mask, sel, selectionMode);
-      }
+    // v1.20.35 — two mask attach helpers. Palette-ratio mask goes on the
+    // inner adjustment layer; selection-shaped mask goes on the outer
+    // sub-group. PS multiplies them at render time so the net visible
+    // behavior is identical to the old composited single-mask version,
+    // but each is independently editable.
+    const attachPaletteMaskToLayer = async (layerId: number) => {
+      if (!wantPaletteMask || !targetBuf || !params.targetPalette) return;
+      const mask = buildTargetPaletteMaskBytes(targetBuf, params.targetPalette);
       try {
         await attachLayerMask(doc.id, layerId, mask, targetBuf.width, targetBuf.height, targetBuf.bounds);
+      } catch { /* non-fatal */ }
+    };
+    const attachSelectionMaskToGroup = async (groupId: number) => {
+      if (!wantSelectionMask || !targetBuf || !selectionMaskBytes) return;
+      const px = targetBuf.width * targetBuf.height;
+      let sel = selectionMaskBytes;
+      if (sel.length !== px) {
+        const padded = new Uint8Array(px);
+        padded.set(sel.subarray(0, Math.min(sel.length, px)));
+        sel = padded;
+      }
+      // Selection-only mask: focus → selection bytes, exclude → inverted.
+      const mask = composeWithSelection(fullMask(px), sel, selectionMode);
+      try {
+        await attachLayerMask(doc.id, groupId, mask, targetBuf.width, targetBuf.height, targetBuf.bounds);
       } catch { /* non-fatal */ }
     };
 
@@ -398,8 +394,14 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
         const { ok, lastErr } = await tryLoadLutIntoActiveLayer(cubeText, fileName, effectiveCurves, params.preset, size, 1 /* already lerped */, dither);
         if (!ok) throw new Error(`Live LUT update failed: ${lastErr?.message ?? lastErr ?? "unknown"}`);
         try { existing.name = layerName; } catch { /* ignore */ }
-        // Refresh the mask too — weights may have changed between commits.
-        await attachMaskIfRequested(existing.id);
+        // v1.20.35 — refresh both masks (palette on inner, selection on
+        // parent sub-group). weights/selection may have changed since
+        // the previous bake.
+        await attachPaletteMaskToLayer(existing.id);
+        try {
+          const parentId = existing.parent?.id;
+          if (typeof parentId === "number") await attachSelectionMaskToGroup(parentId);
+        } catch { /* ignore */ }
         // Re-stamp the XMP — preset/palette weights may have moved since the
         // layer was first authored, so Restore should pick up the latest.
         if (params.xmpState) {
@@ -493,7 +495,9 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
       const subGroup = await doc.createLayerGroup({ name: subName });
       try { await subGroup.move(group, "placeInside"); } catch { /* ignore */ }
       try { await newLayer.move(subGroup, "placeInside"); } catch { /* ignore */ }
-      if (subGroup?.id != null) await attachMaskIfRequested(subGroup.id);
+      // v1.20.35 — split masks: palette → inner adj layer, selection → sub-group.
+      if (newLayerId != null) await attachPaletteMaskToLayer(newLayerId);
+      if (subGroup?.id != null) await attachSelectionMaskToGroup(subGroup.id);
       if (params.xmpState) {
         if (newLayerId != null) {
           try { await writeLutLayerState(newLayerId, params.xmpState); } catch { /* non-fatal */ }
@@ -638,8 +642,16 @@ export async function applyMultiZoneLutAsLayers(
       const subName = params.overwritePrior !== false
         ? LUT_LAYER_PREFIX
         : `${LUT_LAYER_PREFIX} ${new Date().toTimeString().slice(0, 8)}`;
-      const bandContainer = await doc.createLayerGroup({ name: subName });
-      try { await bandContainer.move(group, "placeInside"); } catch { /* ignore */ }
+      // v1.20.35 — two-level nesting:
+      //   outerGroup (selection mask)
+      //   └── bandContainer (palette-ratio mask)
+      //       ├── band layer [Shadows]   (luma band mask)
+      //       ├── band layer [Mids]      (luma band mask)
+      //       └── band layer [Highlights] (luma band mask)
+      const outerGroup = await doc.createLayerGroup({ name: subName });
+      try { await outerGroup.move(group, "placeInside"); } catch { /* ignore */ }
+      const bandContainer = await doc.createLayerGroup({ name: `Multi-${LUT_LAYER_PREFIX}` });
+      try { await bandContainer.move(outerGroup, "placeInside"); } catch { /* ignore */ }
 
       // 6. For each band: make Color Lookup → load LUT → attach band mask →
       //    set blend mode → move into sub-group.
@@ -726,10 +738,10 @@ export async function applyMultiZoneLutAsLayers(
         try { bandLayerIds.push(bandLayer.id); } catch { /* ignore */ }
       }
 
-      // 7. Attach target-palette mask to the sub-group itself if requested.
-      //    Same composite-bounds note as the band masks above: the mask
-      //    buffer is doc-sized, so its targetBounds must be the composite's
-      //    full extent, NOT the (possibly smaller) target layer's bounds.
+      // 7. v1.20.35 — split masks:
+      //    palette-ratio mask → bandContainer (inner, wraps the 3 bands)
+      //    selection mask     → outerGroup (outermost, spatial scope)
+      //    band luma mask     → individual band layers (unchanged)
       if (wantSubGroupMask && bandContainer?.id != null) {
         try {
           const t = {
@@ -737,24 +749,22 @@ export async function applyMultiZoneLutAsLayers(
             bounds: compositeBounds,
           };
           const px = t.width * t.height;
-          // Build the base mask: target-palette cluster mask if active,
-          // otherwise a full-intensity (255) array so selection mode alone
-          // can still mask the sub-group.
-          let mask = (wantPaletteMask && params.targetPalette)
-            ? buildTargetPaletteMaskBytes(t, params.targetPalette)
-            : fullMask(px);
-          // Compose with selection if active. Selection mask is read at
-          // composite bounds so the byte arrays align.
-          // v1.20.27 — restore from snapshot first; band creates consumed
-          // the live marquee.
+          // Palette mask on bandContainer (only if palette is active).
+          if (wantPaletteMask && params.targetPalette) {
+            const paletteMask = buildTargetPaletteMaskBytes(t, params.targetPalette);
+            await attachLayerMask(doc.id, bandContainer.id, paletteMask, t.width, t.height, t.bounds);
+          }
+          // Selection mask on outerGroup (only if marquee mode is set).
           if (wantSelectionMask) {
             if (mzSelSnapshot) {
               try { await restoreSelectionFromChannel(mzSelSnapshot); } catch { /* ignore */ }
             }
             const sel = await readSelectionMaskBytes(doc.id, compositeBounds);
-            if (sel) mask = composeWithSelection(mask, sel, selectionMode);
+            if (sel && outerGroup?.id != null) {
+              const selMask = composeWithSelection(fullMask(px), sel, selectionMode);
+              await attachLayerMask(doc.id, outerGroup.id, selMask, t.width, t.height, t.bounds);
+            }
           }
-          await attachLayerMask(doc.id, bandContainer.id, mask, t.width, t.height, t.bounds);
         } catch { /* non-fatal */ }
       }
 

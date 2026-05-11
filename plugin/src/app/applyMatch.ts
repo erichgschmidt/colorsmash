@@ -403,17 +403,24 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       // the LUT path's wantSelectionMask gate).
       const useSelectionMask = selectionMode !== "off" && !targetIsMerged;
       const wantSubGroupMask = useTargetMask || useSelectionMask;
+      // v1.20.35 — two-level nesting:
+      //   outerGroup   (selection mask, spatial scope)
+      //   └── bandContainer (palette-ratio mask)
+      //       ├── band layer [Shadows] (luma band mask)
+      //       ├── band layer [Mids]    (luma band mask)
+      //       └── band layer [Highlights] (luma band mask)
+      let outerGroup: any = group;
       let bandContainer: any = group;
       try {
-        // selectNoLayers so the new group isn't created inside whatever's currently
-        // active (matches the same precaution the parent [Color Smash] group uses).
         await action.batchPlay([{ _obj: "selectNoLayers", _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }] }], {});
       } catch { /* not critical */ }
       const subName = overwrite ? RESULT_LAYER_NAME : `${RESULT_LAYER_NAME} ${new Date().toTimeString().slice(0, 8)}`;
       try {
-        bandContainer = await doc.createLayerGroup({ name: subName });
-        await bandContainer.move(group, "placeInside");
-      } catch { bandContainer = group; /* fallback to flat layout if group creation fails */ }
+        outerGroup = await doc.createLayerGroup({ name: subName });
+        await outerGroup.move(group, "placeInside");
+        bandContainer = await doc.createLayerGroup({ name: `Multi-${RESULT_LAYER_NAME}` });
+        await bandContainer.move(outerGroup, "placeInside");
+      } catch { bandContainer = group; outerGroup = group; /* fallback to flat layout if group creation fails */ }
       const useTargetSubGroup = wantSubGroupMask && bandContainer !== group;
 
       for (const band of bands) {
@@ -611,13 +618,12 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       // each band keeps its luma limiter, the group mask attenuates the whole
       // multi-zone composite by per-cluster color weight.
       if (useTargetSubGroup && bandContainer !== group && tFullForMask && tFullForMask.data) {
-        // v1.20.34 — use FULL-LAYER buffer for the mask (same reason as
-        // single-curve path). `tm` aliases tFullForMask for the existing
-        // mask-build code.
+        // v1.20.35 — split masks: palette → bandContainer (inner),
+        // selection → outerGroup (outer). `tm` aliases tFullForMask.
         const tm = tFullForMask;
         try {
           const pxCount = tm.width * tm.height;
-          let tpMask: Uint8Array;
+          let tpMask: Uint8Array | null = null;
           if (useTargetMask && tp) {
           const k = tp.swatches.length;
           const softness = Math.max(0, Math.min(100, tp.softness ?? 0));
@@ -685,30 +691,43 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
               tpMask[i] = Math.max(0, Math.min(255, Math.round(wf * 255)));
             }
           }
-          } else {
-            // Palette neutral but selection is set — start from constant-255
-            // so the selection mask alone drives the sub-group's masking.
-            tpMask = fullMask(pxCount);
           }
-          // Compose marquee selection (focus or exclude) — parity with applyLut.
-          // v1.20.32 — use the eager-captured bytes; reliable across PS
-          // versions (some silently drop the mid-flow restoreSelection).
+          // Build the selection-only mask separately (for the outer group).
+          let selOnlyMask: Uint8Array | null = null;
           if (useSelectionMask && eagerSelBytesHolder.value) {
             const sel = resampleSelectionToMaskSize(eagerSelBytesHolder.value, pxCount);
-            tpMask = composeWithSelection(tpMask, sel, selectionMode);
+            selOnlyMask = composeWithSelection(fullMask(pxCount), sel, selectionMode);
           }
-          const tpMaskImageData = await imaging.createImageDataFromBuffer(tpMask, {
-            width: tm.width, height: tm.height, components: 1, chunky: true,
-            colorProfile: "Gray Gamma 2.2", colorSpace: "Grayscale",
-          });
-          await imaging.putLayerMask({
-            documentID: doc.id,
-            layerID: bandContainer.id,
-            imageData: tpMaskImageData,
-            targetBounds: tm.bounds,
-            replace: true,
-          });
-          if (tpMaskImageData.dispose) tpMaskImageData.dispose();
+          // Attach palette mask to the inner bandContainer.
+          if (tpMask) {
+            const tpMaskImageData = await imaging.createImageDataFromBuffer(tpMask, {
+              width: tm.width, height: tm.height, components: 1, chunky: true,
+              colorProfile: "Gray Gamma 2.2", colorSpace: "Grayscale",
+            });
+            await imaging.putLayerMask({
+              documentID: doc.id,
+              layerID: bandContainer.id,
+              imageData: tpMaskImageData,
+              targetBounds: tm.bounds,
+              replace: true,
+            });
+            if (tpMaskImageData.dispose) tpMaskImageData.dispose();
+          }
+          // Attach selection mask to the outer group.
+          if (selOnlyMask && outerGroup?.id != null) {
+            const selImageData = await imaging.createImageDataFromBuffer(selOnlyMask, {
+              width: tm.width, height: tm.height, components: 1, chunky: true,
+              colorProfile: "Gray Gamma 2.2", colorSpace: "Grayscale",
+            });
+            await imaging.putLayerMask({
+              documentID: doc.id,
+              layerID: outerGroup.id,
+              imageData: selImageData,
+              targetBounds: tm.bounds,
+              replace: true,
+            });
+            if (selImageData.dispose) selImageData.dispose();
+          }
         } catch { /* group mask is best-effort; bands still apply unmasked if it fails */ }
       }
 
@@ -779,14 +798,17 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     const scUsePalette = !!(params.targetPalette && !targetIsMerged && t && t.data);
     if ((scUsePalette || scUseSelection) && !targetIsMerged && tFullForMask && tFullForMask.data) {
       const tp = params.targetPalette;
-      // v1.20.34 — use FULL-LAYER buffer for the mask, not stats-cropped.
-      // See comment at tFullForMask creation. `tm` aliases the local
-      // variable so the existing mask-build code (originally written
-      // against `t`) doesn't need scattered renames.
+      // v1.20.35 — TWO MASKS now:
+      //   palette-ratio mask → inner adjustment LAYER (curveLayer)
+      //   selection mask     → outer SUB-GROUP (scSubGroup)
+      // Editing one doesn't disturb the other. Each is built independently;
+      // PS multiplies them at render time so the final visible behavior is
+      // identical to the prior composited single-mask version.
       const tm = tFullForMask;
       try {
         const pxCount = tm.width * tm.height;
-        let mask: Uint8Array;
+        // Build the palette mask (no selection compose). Empty if no palette.
+        let paletteMask: Uint8Array | null = null;
         if (scUsePalette && tp) {
         const k = tp.swatches.length;
         const softness = Math.max(0, Math.min(100, tp.softness ?? 0));
@@ -807,7 +829,7 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
           cents[i * 3 + 1] = tp.swatches[i].labA;
           cents[i * 3 + 2] = tp.swatches[i].labB;
         }
-        mask = new Uint8Array(pxCount);
+        paletteMask = new Uint8Array(pxCount);
         const srgbToLinear = (c: number) => {
           const x = c / 255;
           return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
@@ -817,7 +839,7 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
         const distBuf = new Float32Array(k);
         for (let i = 0; i < pxCount; i++) {
           const o = i * 4;
-          if (tm.data[o + 3] < 128) { mask[i] = 0; continue; }
+          if (tm.data[o + 3] < 128) { paletteMask[i] = 0; continue; }
           const R = srgbToLinear(tm.data[o]);
           const G = srgbToLinear(tm.data[o + 1]);
           const B = srgbToLinear(tm.data[o + 2]);
@@ -836,14 +858,9 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
               const d = dl * dl + da * da + db * db;
               if (d < bestDist) { bestDist = d; best = c; }
             }
-            mask[i] = wByte[best];
+            paletteMask[i] = wByte[best];
           } else {
             // Soft-blend: Lorentzian over all clusters, weighted sum of weights.
-            // MUST match the preview's falloff (palette.precomputeEffectiveWeights)
-            // exactly — otherwise the bake mask attenuates curves differently
-            // than the preview shows. v1.8.3 switched the preview from gaussian
-            // to Lorentzian (1/(1+d²/σ²)) for performance; the bake here was
-            // left on gaussian, causing visible mismatch at softness > 0.
             let minD = Infinity;
             for (let c = 0; c < k; c++) {
               const dl = L - cents[c * 3];
@@ -861,34 +878,49 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
               sumWG += g * wFloat[c];
             }
             const wf = sumG > 0 ? sumWG / sumG : 1;
-            mask[i] = Math.max(0, Math.min(255, Math.round(wf * 255)));
+            paletteMask[i] = Math.max(0, Math.min(255, Math.round(wf * 255)));
           }
         }
-        } else {
-          // Palette neutral but selection is set — constant-255 base so the
-          // selection mask alone drives the layer's masking.
-          mask = fullMask(pxCount);
         }
-        // Compose marquee selection (focus or exclude) — parity with applyLut.
-        // v1.20.32 — use the eager-captured bytes (live marquee snapshotted
-        // before makeCurvesLayer consumed it).
+        // Build the selection-only mask for the outer sub-group.
+        // composeWithSelection(fullMask, sel, mode) = pure selection mask
+        // (focus → selection bytes; exclude → 255 - selection bytes).
+        let selectionMaskBytes: Uint8Array | null = null;
         if (scUseSelection && eagerSelBytesHolder.value) {
           const sel = resampleSelectionToMaskSize(eagerSelBytesHolder.value, pxCount);
-          mask = composeWithSelection(mask, sel, scSelectionMode);
+          selectionMaskBytes = composeWithSelection(fullMask(pxCount), sel, scSelectionMode);
         }
         const { imaging } = require("photoshop");
-        const maskImageData = await imaging.createImageDataFromBuffer(mask, {
-          width: tm.width, height: tm.height, components: 1, chunky: true,
-          colorProfile: "Gray Gamma 2.2", colorSpace: "Grayscale",
-        });
-        await imaging.putLayerMask({
-          documentID: doc.id,
-          layerID: scSubGroup.id,
-          imageData: maskImageData,
-          targetBounds: tm.bounds,
-          replace: true,
-        });
-        if (maskImageData.dispose) maskImageData.dispose();
+        // Attach palette mask to inner adjustment layer (palette-ratio mask).
+        if (paletteMask) {
+          const paletteImageData = await imaging.createImageDataFromBuffer(paletteMask, {
+            width: tm.width, height: tm.height, components: 1, chunky: true,
+            colorProfile: "Gray Gamma 2.2", colorSpace: "Grayscale",
+          });
+          await imaging.putLayerMask({
+            documentID: doc.id,
+            layerID: curveLayer.id,
+            imageData: paletteImageData,
+            targetBounds: tm.bounds,
+            replace: true,
+          });
+          if (paletteImageData.dispose) paletteImageData.dispose();
+        }
+        // Attach selection mask to outer sub-group (spatial scope).
+        if (selectionMaskBytes) {
+          const selImageData = await imaging.createImageDataFromBuffer(selectionMaskBytes, {
+            width: tm.width, height: tm.height, components: 1, chunky: true,
+            colorProfile: "Gray Gamma 2.2", colorSpace: "Grayscale",
+          });
+          await imaging.putLayerMask({
+            documentID: doc.id,
+            layerID: scSubGroup.id,
+            imageData: selImageData,
+            targetBounds: tm.bounds,
+            replace: true,
+          });
+          if (selImageData.dispose) selImageData.dispose();
+        }
       } catch { /* mask attach is best-effort; if it fails, the curves still apply unmasked */ }
     }
 
