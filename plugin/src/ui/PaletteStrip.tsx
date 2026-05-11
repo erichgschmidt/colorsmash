@@ -428,15 +428,18 @@ export function PaletteStrip(props: PaletteStripProps) {
                 background: bg,
                 border: softness > 0 ? "none" : "1px solid #333",
                 borderRadius: 2,
-                // v1.20.47 — target bar fade is now much more dramatic:
-                // opacity tracks weight with a near-zero floor, AND we
-                // desaturate the color toward gray via grayscale filter
-                // proportional to (1 - weight). So weight=0 reads as a
-                // washed-out near-transparent strip on the checker
-                // background — looks unambiguously "masked." Source bar
-                // keeps the v1.7 behavior (low-weight just dims slightly).
+                // v1.20.48 — quadratic opacity falloff so the fade is
+                // *visible* across the whole drag range, not just at the
+                // extreme low end. opacity = w² + 0.04 floor:
+                //   w=1   → 1.00 (full)
+                //   w=0.75→ 0.60
+                //   w=0.5 → 0.29
+                //   w=0.25→ 0.10
+                //   w=0   → 0.04 (just barely visible — grabbable)
+                // Combined with grayscale(1 - w), even small slider drags
+                // produce a clear "this is fading toward transparent" feel.
                 opacity: fadeWithWeight
-                  ? Math.max(0.06, Math.min(1, w))
+                  ? Math.max(0.04, Math.min(1, w * w))
                   : (w < 0.02 ? 0.35 : 1),
                 filter: fadeWithWeight
                   ? `grayscale(${Math.max(0, Math.min(1, 1 - w))})`
