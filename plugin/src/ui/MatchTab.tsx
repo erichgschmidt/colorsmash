@@ -2324,26 +2324,106 @@ export function MatchTab() {
           - RGB: separable per-channel curves → Curves layer (continuous, editable)
           - Lab: perceptual L*a*b* match, projected back to RGB curves → Curves layer
           - LUT: 33³ 3D transform with preset blend math baked in → Color Lookup layer */}
-      {/* v1.20.51 — MASK pill moved from the marquee row to sit ABOVE the
-          output-mode block (right between Envelope and Apply/RGB/Lab/LUT).
-          Visualization belongs with the output it's helping you preview. */}
-      <div style={{ marginTop: 6, display: "flex", alignItems: "center" }}>
-        <div onClick={() => setShowMask(v => !v)}
-          title={showMask
-            ? "Show Mask ON — protected regions painted red on the matched preview (palette × selection composition). Click to disable."
-            : "Show Mask OFF — preview shows pure transform output. Click to enable: protected regions paint red."}
-          style={{
-            padding: "0 10px",
-            fontSize: 10, fontWeight: 600, letterSpacing: 0.4,
-            display: "inline-flex", alignItems: "center", justifyContent: "center",
-            background: showMask ? "#3a2828" : "transparent",
-            color: showMask ? "#e87a7a" : "#5a3a3a",
-            border: `1px solid ${showMask ? "#d87a7a" : "#5a3a3a"}`,
-            borderRadius: 4, cursor: "pointer", userSelect: "none",
-            height: 22, lineHeight: "20px", boxSizing: "border-box",
-            flexShrink: 0,
-          }}>MASK</div>
-      </div>
+      {/* v1.20.53 — MASK + marquee tristate now share a single row above
+          the output-mode block. MASK leads, then Off/Focus/Exclude pills,
+          then the ↻ selection-status icon. Hint banners (no selection
+          captured, source-mode disabled) render below this row when
+          relevant. */}
+      {(() => {
+        const marqueeDisabled = srcMode === "selection";
+        const disabledTip = "Disabled because the source is using the active marquee. Switch source to a layer or browsed image to use the marquee as an output mask.";
+        const showNoSelectionHint =
+          !marqueeDisabled &&
+          selectionMode !== "off" &&
+          !selectionPreviewMask;
+        return (
+          <>
+          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 4, height: 22, lineHeight: "20px" }}>
+            <div onClick={() => setShowMask(v => !v)}
+              title={showMask
+                ? "Show Mask ON — protected regions painted red on the matched preview (palette × selection composition). Click to disable."
+                : "Show Mask OFF — preview shows pure transform output. Click to enable: protected regions paint red."}
+              style={{
+                padding: "0 10px",
+                fontSize: 10, fontWeight: 600, letterSpacing: 0.4,
+                display: "inline-flex", alignItems: "center", justifyContent: "center",
+                background: showMask ? "#3a2828" : "transparent",
+                color: showMask ? "#e87a7a" : "#5a3a3a",
+                border: `1px solid ${showMask ? "#d87a7a" : "#5a3a3a"}`,
+                borderRadius: 4, cursor: "pointer", userSelect: "none",
+                height: 22, lineHeight: "20px", boxSizing: "border-box",
+                flexShrink: 0,
+              }}>MASK</div>
+            <div style={{ display: "flex", flex: 1, gap: 2, opacity: marqueeDisabled ? 0.55 : 1 }}>
+              {([
+                ["off",     "Off",     "Ignore the marquee — full-image apply (default). The marquee stays on the doc."],
+                ["focus",   "Focus",   "Use the active marquee as the layer mask — the Curves/LUT applies ONLY inside the marquee. Multiplied with the target-palette mask if both are active."],
+                ["exclude", "Exclude", "Use the INVERSE of the active marquee as the layer mask — the Curves/LUT applies everywhere OUTSIDE the marquee. Useful for protecting a chosen area."],
+              ] as Array<["off" | "focus" | "exclude", string, string]>).map(([val, label, tip]) => (
+                <div key={val}
+                  onClick={() => { if (!marqueeDisabled) setSelectionMode(val); }}
+                  title={marqueeDisabled ? disabledTip : tip}
+                  style={{
+                    flex: 1, height: 22, padding: 0,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 10, fontWeight: 600, letterSpacing: 0.3,
+                    background: !marqueeDisabled && selectionMode === val ? "#3a3a3a" : "transparent",
+                    color: !marqueeDisabled && selectionMode === val ? "#dddddd" : "#888",
+                    border: `1px solid ${!marqueeDisabled && selectionMode === val ? "#888" : "#444"}`,
+                    borderRadius: 2,
+                    cursor: marqueeDisabled ? "default" : "pointer",
+                    userSelect: "none",
+                    lineHeight: "20px", boxSizing: "border-box",
+                  }}>{label}</div>
+              ))}
+            </div>
+            <div
+              onClick={() => setSelectionTick(t => t + 1)}
+              title={(() => {
+                if (marqueeDisabled) return disabledTip;
+                if (effectiveSelectionMode === "off") return "Marquee mode is OFF — preview ignores any active selection. Click to force a selection re-read.";
+                if (!selectionPreviewMask) return "No selection detected for the target preview (or the snap has no bounds yet). Draw a marquee on the target and click ↻ to retry.";
+                let inside = 0;
+                for (let i = 0; i < selectionPreviewMask.length; i++) if (selectionPreviewMask[i] > 127) inside++;
+                const pct = ((inside / selectionPreviewMask.length) * 100).toFixed(1);
+                return `Selection captured: ${inside}/${selectionPreviewMask.length} preview pixels inside (${pct}%). Click ↻ to refresh.`;
+              })()}
+              style={{
+                width: 22, height: 22, marginLeft: 2,
+                display: "inline-flex", alignItems: "center", justifyContent: "center",
+                background: "transparent",
+                color: selectionPreviewMask ? "#7ad87a" : "#888",
+                border: `1px solid ${selectionPreviewMask ? "#7ad87a" : "#555"}`,
+                borderRadius: 2, cursor: marqueeDisabled ? "default" : "pointer",
+                fontSize: 12, userSelect: "none",
+                opacity: marqueeDisabled ? 0.3 : 1,
+              }}>
+              <span style={{ marginTop: -1, lineHeight: 1 }}>↻</span>
+            </div>
+          </div>
+          {showNoSelectionHint && (
+            <div style={{
+              marginTop: 2, padding: "2px 6px",
+              fontSize: 9, color: "#d8b87a",
+              background: "transparent", border: "1px solid #5a4a2a", borderRadius: 2,
+              lineHeight: 1.3,
+            }}>
+              Marquee mode is <b>{selectionMode}</b> but no selection was captured. Draw a marquee on the target document, then click ↻ to refresh.{selectionMaskError ? <><br/><span style={{ opacity: 0.7 }}>{selectionMaskError}</span></> : null}
+            </div>
+          )}
+          {marqueeDisabled && (
+            <div style={{
+              marginTop: 2, padding: "2px 6px",
+              fontSize: 9, color: "#888",
+              background: "transparent", border: "1px solid #444", borderRadius: 2,
+              lineHeight: 1.3,
+            }}>
+              Disabled because your <b>source mode is "selection"</b> — the marquee is in use as source pixels. Switch source mode to "layer" to use the marquee here as an output mask.
+            </div>
+          )}
+          </>
+        );
+      })()}
 
       {/* v1.20.51 — output block redesigned:
           - Tall Apply pill on the LEFT spans both rows.
@@ -2449,9 +2529,13 @@ export function MatchTab() {
                       flex: 1, height: 18, padding: 0,
                       display: "flex", alignItems: "center", justifyContent: "center",
                       fontSize: 8, fontWeight: 600, letterSpacing: 0.3,
+                      // v1.20.53 — match MULTI's color discipline so BLEND
+                      // stays readable when disabled (was #555 on transparent,
+                      // basically invisible). Now uses the same #777 dim
+                      // color MULTI uses for its "off but readable" state.
                       background: cfg.blendIf && cfg.multi ? "#2f2f2f" : "transparent",
-                      color: subDisabled ? "#555" : (cfg.blendIf ? "#cccccc" : "#777"),
-                      border: `1px solid ${subDisabled ? "#2a2a2a" : (cfg.blendIf ? "#888" : "#3a3a3a")}`,
+                      color: cfg.blendIf && cfg.multi ? "#cccccc" : "#777",
+                      border: `1px solid ${cfg.blendIf && cfg.multi ? "#888" : "#3a3a3a"}`,
                       borderLeftWidth: 0,
                       borderTopWidth: 0,
                       borderRadius: 0,
@@ -2460,8 +2544,8 @@ export function MatchTab() {
                       opacity: subDisabled ? 0.55 : (active ? 1 : 0.7),
                     }}
                     title={subDisabled
-                      ? "Blend If is only meaningful when Multi is on for this tab."
-                      : `Blend If (${label}): use Blending Options sliders instead of layer masks for the 3 band layers.`}>
+                      ? "Blend is only meaningful when Multi is on for this tab."
+                      : `Blend (${label}): use Blending Options sliders instead of layer masks for the 3 band layers.`}>
                     BLEND
                   </div>
                 </div>
@@ -2471,103 +2555,8 @@ export function MatchTab() {
         </div>
       </div>
 
-      {/* Marquee tristate (v1.18.0 / v1.19.3 mutual-exclusion). At Apply
-          time, the active PS marquee can be used as the OUTPUT layer mask:
-            - Off:     ignore marquee, full-image apply
-            - Focus:   marquee shape becomes the layer mask (apply inside only)
-            - Exclude: inverse marquee becomes the layer mask (apply outside only)
-          Auto-disabled (dimmed, click no-op) when source mode is
-          "selection" because the marquee is already in use as source pixels —
-          can't be source AND output mask simultaneously. */}
-      {(() => {
-        const marqueeDisabled = srcMode === "selection";
-        const disabledTip = "Disabled because the source is using the active marquee. Switch source to a layer or browsed image to use the marquee as an output mask.";
-        // v1.20.21 — clear hint text appears below the row when the user
-        // has selected focus/exclude but no marquee is captured. Tells them
-        // exactly what's missing instead of leaving them wondering why the
-        // preview didn't change.
-        const showNoSelectionHint =
-          !marqueeDisabled &&
-          selectionMode !== "off" &&
-          !selectionPreviewMask;
-        return (
-          <>
-          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 4, height: 18, lineHeight: "16px" }}>
-            {/* v1.20.51 — MASK pill moved up above the output-mode block. */}
-            <div style={{ display: "flex", flex: 1, gap: 2, opacity: marqueeDisabled ? 0.55 : 1 }}>
-              {([
-                ["off",     "Off",     "Ignore the marquee — full-image apply (default). The marquee stays on the doc."],
-                ["focus",   "Focus",   "Use the active marquee as the layer mask — the Curves/LUT applies ONLY inside the marquee. Multiplied with the target-palette mask if both are active."],
-                ["exclude", "Exclude", "Use the INVERSE of the active marquee as the layer mask — the Curves/LUT applies everywhere OUTSIDE the marquee. Useful for protecting a chosen area."],
-              ] as Array<["off" | "focus" | "exclude", string, string]>).map(([val, label, tip]) => (
-                <div key={val}
-                  onClick={() => { if (!marqueeDisabled) setSelectionMode(val); }}
-                  title={marqueeDisabled ? disabledTip : tip}
-                  style={{
-                    flex: 1, height: 18, padding: 0,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
-                    background: !marqueeDisabled && selectionMode === val ? "#3a3a3a" : "transparent",
-                    color: !marqueeDisabled && selectionMode === val ? "#dddddd" : "#888",
-                    border: `1px solid ${!marqueeDisabled && selectionMode === val ? "#888" : "#444"}`,
-                    borderRadius: 2,
-                    cursor: marqueeDisabled ? "default" : "pointer",
-                    userSelect: "none",
-                    lineHeight: "16px", boxSizing: "border-box",
-                  }}>{label}</div>
-              ))}
-            </div>
-            {/* v1.20.20 — manual refresh + status indicator for the marquee
-                preview mask. Shows whether the selection is currently being
-                captured (and at what coverage). Click ↻ to force a re-read
-                if the PS 'set' notification was missed. */}
-            <div
-              onClick={() => setSelectionTick(t => t + 1)}
-              title={(() => {
-                if (marqueeDisabled) return disabledTip;
-                if (effectiveSelectionMode === "off") return "Marquee mode is OFF — preview ignores any active selection. Click to force a selection re-read.";
-                if (!selectionPreviewMask) return "No selection detected for the target preview (or the snap has no bounds yet). Draw a marquee on the target and click ↻ to retry.";
-                let inside = 0;
-                for (let i = 0; i < selectionPreviewMask.length; i++) if (selectionPreviewMask[i] > 127) inside++;
-                const pct = ((inside / selectionPreviewMask.length) * 100).toFixed(1);
-                return `Selection captured: ${inside}/${selectionPreviewMask.length} preview pixels inside (${pct}%). Click ↻ to refresh.`;
-              })()}
-              style={{
-                width: 18, height: 18, marginLeft: 2,
-                display: "inline-flex", alignItems: "center", justifyContent: "center",
-                background: "transparent",
-                color: selectionPreviewMask ? "#7ad87a" : "#888",
-                border: `1px solid ${selectionPreviewMask ? "#7ad87a" : "#555"}`,
-                borderRadius: 2, cursor: marqueeDisabled ? "default" : "pointer",
-                fontSize: 11, userSelect: "none",
-                opacity: marqueeDisabled ? 0.3 : 1,
-              }}>
-              <span style={{ marginTop: -1, lineHeight: 1 }}>↻</span>
-            </div>
-          </div>
-          {showNoSelectionHint && (
-            <div style={{
-              marginTop: 2, padding: "2px 6px",
-              fontSize: 9, color: "#d8b87a",
-              background: "transparent", border: "1px solid #5a4a2a", borderRadius: 2,
-              lineHeight: 1.3,
-            }}>
-              Marquee mode is <b>{selectionMode}</b> but no selection was captured. Draw a marquee on the target document, then click ↻ to refresh.{selectionMaskError ? <><br/><span style={{ opacity: 0.7 }}>{selectionMaskError}</span></> : null}
-            </div>
-          )}
-          {marqueeDisabled && (
-            <div style={{
-              marginTop: 2, padding: "2px 6px",
-              fontSize: 9, color: "#888",
-              background: "transparent", border: "1px solid #444", borderRadius: 2,
-              lineHeight: 1.3,
-            }}>
-              Disabled because your <b>source mode is "selection"</b> — the marquee is in use as source pixels. Switch source mode to "layer" to use the marquee here as an output mask.
-            </div>
-          )}
-        </>
-        );
-      })()}
+      {/* v1.20.53 — marquee tristate was relocated up alongside MASK
+          (above the output-mode block). This slot is now empty. */}
 
       {/* v1.20.51 — Apply pill relocated UP into the output-mode block.
           This row keeps just the secondary actions: LIVE, RESTORE, Save
