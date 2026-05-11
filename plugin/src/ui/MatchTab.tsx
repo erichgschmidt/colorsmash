@@ -2425,6 +2425,24 @@ export function MatchTab() {
               }}>
               <span style={{ marginTop: -1, lineHeight: 1 }}>↻</span>
             </div>
+            {/* v1.20.36 — MASK toggle relocated from the apply row to the
+                marquee row. Same red-tinted pill style as before; matches
+                the height/font/border of the Off/Focus/Exclude pills here. */}
+            <div onClick={() => setShowMask(v => !v)}
+              title={showMask
+                ? "Show Mask ON — protected regions painted red on the matched preview (palette × selection composition). Click to disable."
+                : "Show Mask OFF — preview shows pure transform output. Click to enable: protected regions paint red."}
+              style={{
+                padding: "0 6px", marginLeft: 2,
+                fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
+                display: "inline-flex", alignItems: "center", justifyContent: "center",
+                background: showMask ? "#3a2828" : "transparent",
+                color: showMask ? "#e87a7a" : "#5a3a3a",
+                border: `1px solid ${showMask ? "#d87a7a" : "#5a3a3a"}`,
+                borderRadius: 2, cursor: "pointer", userSelect: "none",
+                height: 18, lineHeight: "16px", boxSizing: "border-box",
+                flexShrink: 0,
+              }}>MASK</div>
           </div>
           {showNoSelectionHint && (
             <div style={{
@@ -2550,26 +2568,8 @@ export function MatchTab() {
             height: 28, lineHeight: "26px", boxSizing: "border-box",
             flex: "0 0 auto",
           }}>SWAP</div>
-        {/* SHOW MASK — toggles a red-wash overlay on the matched preview
-            showing where the LUT/Curves WILL NOT apply (protected by the
-            target-palette mask). Convention: red = protected, clear =
-            affected (matches PS Quick Mask). Useful to verify your masking
-            composition before Apply, especially when palette weights +
-            selection compose into a non-obvious shape. */}
-        <div onClick={() => setShowMask(v => !v)}
-          title={showMask
-            ? "Show Mask ON — protected regions painted red on the matched preview. Click to disable."
-            : "Show Mask OFF — preview shows pure transform output. Click to enable: protected regions (where the LUT/Curves won't apply due to palette mask) will paint red on the matched preview."}
-          style={{
-            padding: "1px 6px", fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
-            background: "transparent",
-            color: showMask ? "#d87a7a" : "#5a3a3a",
-            border: `1px solid ${showMask ? "#d87a7a" : "#5a3a3a"}`,
-            borderRadius: 2, cursor: "pointer", userSelect: "none",
-            display: "flex", alignItems: "center",
-            height: 28, lineHeight: "26px", boxSizing: "border-box",
-            flex: "0 0 auto",
-          }}>MASK</div>
+        {/* v1.20.36 — MASK pill moved up to the marquee row (it's a mask
+            visualization, and that's where masking lives in the panel). */}
         {/* Restore: hydrate the panel UI from the selected Match LUT layer's
             XMP. Click on a previously-authored Match LUT layer in PS's
             Layers panel, then click RESTORE here — every captured slider /
