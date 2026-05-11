@@ -2266,112 +2266,111 @@ export function MatchTab() {
           - RGB: separable per-channel curves → Curves layer (continuous, editable)
           - Lab: perceptual L*a*b* match, projected back to RGB curves → Curves layer
           - LUT: 33³ 3D transform with preset blend math baked in → Color Lookup layer */}
-      <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 4 }}>
-        {/* v1.20.40 — SWAP relocated here from the apply row. Lives in the
-            "output label" slot of the RGB/Lab/LUT row because that's
-            literally what it does — flip between LUT and the last Curves
-            mode without dragging the mouse to the tristate. Pill is
-            18px-tall to match the RGB/Lab/LUT pills next to it. */}
+      {/* v1.20.41 — output-mode + multi-zone combined into a single block:
+          tall SWAP on the left spans both rows (communicates that BOTH
+          rows describe the output that gets swapped). The two rows of
+          pills sit to the right with NO gaps between them so they read
+          as a single segmented block. */}
+      <div style={{ marginTop: 6, display: "flex", alignItems: "stretch", gap: 4 }}>
         <div onClick={onSwapMode}
           title={outputMode === "lut"
             ? `Swap to ${lastCurvesModeRef.current.toUpperCase()} mode (Curves). Hides Match LUT layers, shows Match Curves layers in PS.`
             : `Swap to LUT mode. Hides Match Curves layers, shows Match LUT layers in PS.`}
           style={{
-            width: 38, height: 18, padding: 0,
+            width: 38, padding: 0,
             display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
+            fontSize: 10, fontWeight: 700, letterSpacing: 0.5,
             background: "transparent",
             color: "#aab07a",
             border: "1px solid #aab07a",
             borderRadius: 2, cursor: "pointer", userSelect: "none",
-            lineHeight: "16px", boxSizing: "border-box", flexShrink: 0,
+            boxSizing: "border-box", flexShrink: 0,
           }}>SWAP</div>
-        <div style={{ display: "flex", flex: 1, gap: 2 }}>
-          {([
-            ["rgb", "RGB", "Output mode: RGB — separable per-channel curves fit in RGB space. Creates a Curves adjustment layer; continuously editable in PS."],
-            ["lab", "Lab", "Output mode: Lab — perceptual L*a*b* histogram match (curves projected to per-channel RGB). Creates a Curves adjustment layer."],
-            ["lut", "LUT", "Output mode: LUT — 33³ 3D Color Lookup with preset blend math (Color/Hue/Saturation/Luminosity) baked in. Creates a Color Lookup adjustment layer that captures non-separable transforms a Curves layer can't represent. Preview shows the quantized LUT result so what you see matches what bakes."],
-          ] as Array<["rgb" | "lab" | "lut", string, string]>).map(([val, label, tip]) => (
-            <div key={val} onClick={() => setOutputMode(val)} title={tip}
-              style={{
-                flex: 1, height: 18, padding: 0,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
-                background: outputMode === val ? "#3a3a3a" : "transparent",
-                color: outputMode === val ? "#dddddd" : "#888",
-                border: `1px solid ${outputMode === val ? "#888" : "#444"}`,
-                borderRadius: 2, cursor: "pointer", userSelect: "none",
-                lineHeight: "16px", boxSizing: "border-box",
-              }}>{label}</div>
-          ))}
-        </div>
-      </div>
-
-      {/* Multi-zone toggles (v1.19.3: moved below the Output mode row).
-          Multi splits the bake into 3 stacked Shadow/Mid/Highlight layers
-          with band-luma masks. Blend If swaps the mask for Blending Options
-          sliders. Adaptive shifts band peaks to the target histogram's
-          P10/P50/P90. Sub-toggles dim when Multi is off (labels stay
-          legible — see v1.19.2 fix). */}
-      {(() => {
-        const subDisabled = !multiZone;
-        const ROW_GAP = 4;
-        const pillStyle = (active: boolean, disabled: boolean): React.CSSProperties => ({
-          flex: 1, height: 18, padding: 0,
-          display: "flex", alignItems: "center", justifyContent: "center",
-          fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
-          background: active ? "#3a3a3a" : "transparent",
-          color: disabled ? "#777" : (active ? "#dddddd" : "#888"),
-          border: `1px solid ${disabled ? "#3a3a3a" : (active ? "#888" : "#444")}`,
-          borderRadius: 2, cursor: disabled ? "default" : "pointer", userSelect: "none",
-          lineHeight: "16px", boxSizing: "border-box",
-          opacity: disabled ? 0.75 : 1,
-        });
-        return (
-          <div style={{
-            display: "flex", flexWrap: "nowrap", alignItems: "center",
-            marginTop: 6, fontSize: 11,
-            color: multiZone ? "#dddddd" : "#aaaaaa",
-            height: 18, lineHeight: "18px", overflow: "hidden", gap: ROW_GAP,
-            width: "100%", minWidth: 0,
-          }}>
-            <div onClick={() => setMultiZone(!multiZone)}
-              style={pillStyle(multiZone, false)}
-              title="Multi: emit 3 stacked Curves layers (shadows / mids / highlights), each limited to its luminance band. Adapts spatially across mixed-lighting scenes.">
-              MULTI
-            </div>
-            <div onClick={() => { if (!subDisabled) setMultiZoneLimit(multiZoneLimit === "blendIf" ? "mask" : "blendIf"); }}
-              style={pillStyle(multiZoneLimit === "blendIf" && !subDisabled, subDisabled)}
-              title="Blend If: limit each band layer with the underlying-luma sliders (Layer Style → Blending Options) instead of a luminosity mask. When OFF, a paintable mask is exported instead. May not work in all PS versions.">
-              BLEND IF
-            </div>
-            <div onClick={() => { if (!subDisabled) setAdaptiveBands(!adaptiveBands); }}
-              style={pillStyle(adaptiveBands && !subDisabled, subDisabled)}
-              title={`Adaptive: shift band peaks + extents to the target histogram's percentiles (P10/P50/P90) instead of fixed 0/128/255. ${multiZone && lumaBins ? `Current peaks: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""}`}>
-              ADAPTIVE
-            </div>
-            <span style={{ display: "inline-flex", alignItems: "center", flexShrink: 0 }}>
-              <span onClick={(e: any) => { e.stopPropagation(); e.preventDefault(); void uxpInfo("Multi-zone Curves — what each toggle does", [
-                { heading: "Multi",
-                  body: "Apply emits three stacked Curves layers (Shadows, Mids, Highlights) instead of one. Each curve is fitted from ONLY the pixels whose luma falls in its band. The three layers land in the [Color Smash] group, clipped to the target, and stay independently editable in Photoshop afterwards. Useful for mixed-lighting scenes where a single global curve over- or under-corrects." },
-                { heading: "Band limiting (default = Mask)",
-                  body: "By default each band layer gets a paintable luminosity layer mask — visible thumbnail in the Layers panel, fully editable (paint to localize, blur to feather). This is the cleanest separation and what you want most of the time." },
-                { heading: "Blend If toggle",
-                  body: "Turn ON to use the underlying-luma sliders (Layer Style → Blending Options) instead of a mask. Lighter than a mask (no mask data) and editable from the Blending Options dialog. Mutually exclusive with the mask — turning Blend If on disables mask export. May not work reliably in all Photoshop versions." },
-                { heading: "Adaptive",
-                  body: "When ON, the band peaks shift to the target histogram's P10 / P50 / P90 luma percentiles, and the outer extents follow the histogram's actual min/max — so each band gets a meaningful pixel sample even on low-key or high-key images. When OFF, peaks are fixed at 0 / 128 / 255. Default ON; turn off only when you want a strict 0/128/255 partition for a specific look." },
-                { heading: "Replace",
-                  body: "When Replace is on, re-applying overwrites the prior multi-zone trio rather than stacking another set on top." },
-              ]); }}
-                title="What does Multi do? Click for details."
-                style={{ marginLeft: 6, cursor: "help", fontSize: 10, opacity: 0.7, flexShrink: 0,
-                         border: "1px solid #888", borderRadius: 8, width: 12, height: 12,
-                         display: "inline-flex", alignItems: "center", justifyContent: "center",
-                         lineHeight: 1, userSelect: "none" }}>?</span>
-            </span>
+        <div style={{ display: "flex", flex: 1, flexDirection: "column", gap: 0 }}>
+          {/* Top row: output mode (RGB/Lab/LUT). No gap between pills. */}
+          <div style={{ display: "flex", flex: 1, gap: 0 }}>
+            {([
+              ["rgb", "RGB", "Output mode: RGB — separable per-channel curves fit in RGB space. Creates a Curves adjustment layer; continuously editable in PS."],
+              ["lab", "Lab", "Output mode: Lab — perceptual L*a*b* histogram match (curves projected to per-channel RGB). Creates a Curves adjustment layer."],
+              ["lut", "LUT", "Output mode: LUT — 33³ 3D Color Lookup with preset blend math (Color/Hue/Saturation/Luminosity) baked in. Creates a Color Lookup adjustment layer that captures non-separable transforms a Curves layer can't represent. Preview shows the quantized LUT result so what you see matches what bakes."],
+            ] as Array<["rgb" | "lab" | "lut", string, string]>).map(([val, label, tip], idx) => (
+              <div key={val} onClick={() => setOutputMode(val)} title={tip}
+                style={{
+                  flex: 1, height: 18, padding: 0,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
+                  background: outputMode === val ? "#3a3a3a" : "transparent",
+                  color: outputMode === val ? "#dddddd" : "#888",
+                  border: `1px solid ${outputMode === val ? "#888" : "#444"}`,
+                  // No-gap segmented block: collapse adjacent borders so the
+                  // strip reads as a single control.
+                  borderLeftWidth: idx === 0 ? 1 : 0,
+                  borderRadius: 0,
+                  cursor: "pointer", userSelect: "none",
+                  lineHeight: "16px", boxSizing: "border-box",
+                }}>{label}</div>
+            ))}
           </div>
-        );
-      })()}
+          {/* Bottom row: multi-zone toggles. Same no-gap segmented styling
+              as the row above. Sub-toggles dim when MULTI is off. */}
+          {(() => {
+            const subDisabled = !multiZone;
+            const segPill = (active: boolean, disabled: boolean, isFirst: boolean): React.CSSProperties => ({
+              flex: 1, height: 18, padding: 0,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
+              background: active ? "#3a3a3a" : "transparent",
+              color: disabled ? "#777" : (active ? "#dddddd" : "#888"),
+              border: `1px solid ${disabled ? "#3a3a3a" : (active ? "#888" : "#444")}`,
+              borderLeftWidth: isFirst ? 1 : 0,
+              borderTopWidth: 0, // merge with the row above for a continuous block
+              borderRadius: 0,
+              cursor: disabled ? "default" : "pointer", userSelect: "none",
+              lineHeight: "16px", boxSizing: "border-box",
+              opacity: disabled ? 0.75 : 1,
+            });
+            return (
+              <div style={{ display: "flex", flex: 1, gap: 0 }}>
+                <div onClick={() => setMultiZone(!multiZone)}
+                  style={segPill(multiZone, false, true)}
+                  title="Multi: emit 3 stacked Curves layers (shadows / mids / highlights), each limited to its luminance band. Adapts spatially across mixed-lighting scenes.">
+                  MULTI
+                </div>
+                <div onClick={() => { if (!subDisabled) setMultiZoneLimit(multiZoneLimit === "blendIf" ? "mask" : "blendIf"); }}
+                  style={segPill(multiZoneLimit === "blendIf" && !subDisabled, subDisabled, false)}
+                  title="Blend If: limit each band layer with the underlying-luma sliders (Layer Style → Blending Options) instead of a luminosity mask. When OFF, a paintable mask is exported instead. May not work in all PS versions.">
+                  BLEND IF
+                </div>
+                <div onClick={() => { if (!subDisabled) setAdaptiveBands(!adaptiveBands); }}
+                  style={segPill(adaptiveBands && !subDisabled, subDisabled, false)}
+                  title={`Adaptive: shift band peaks + extents to the target histogram's percentiles (P10/P50/P90) instead of fixed 0/128/255. ${multiZone && lumaBins ? `Current peaks: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""}`}>
+                  ADAPTIVE
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+        {/* Help (?) icon — kept outside the segmented block. */}
+        <span style={{ display: "inline-flex", alignItems: "center", flexShrink: 0 }}>
+          <span onClick={(e: any) => { e.stopPropagation(); e.preventDefault(); void uxpInfo("Multi-zone Curves — what each toggle does", [
+            { heading: "Multi",
+              body: "Apply emits three stacked Curves layers (Shadows, Mids, Highlights) instead of one. Each curve is fitted from ONLY the pixels whose luma falls in its band. The three layers land in the [Color Smash] group, clipped to the target, and stay independently editable in Photoshop afterwards. Useful for mixed-lighting scenes where a single global curve over- or under-corrects." },
+            { heading: "Band limiting (default = Mask)",
+              body: "By default each band layer gets a paintable luminosity layer mask — visible thumbnail in the Layers panel, fully editable (paint to localize, blur to feather). This is the cleanest separation and what you want most of the time." },
+            { heading: "Blend If toggle",
+              body: "Turn ON to use the underlying-luma sliders (Layer Style → Blending Options) instead of a mask. Lighter than a mask (no mask data) and editable from the Blending Options dialog. Mutually exclusive with the mask — turning Blend If on disables mask export. May not work reliably in all Photoshop versions." },
+            { heading: "Adaptive",
+              body: "When ON, the band peaks shift to the target histogram's P10 / P50 / P90 luma percentiles, and the outer extents follow the histogram's actual min/max — so each band gets a meaningful pixel sample even on low-key or high-key images. When OFF, peaks are fixed at 0 / 128 / 255. Default ON; turn off only when you want a strict 0/128/255 partition for a specific look." },
+            { heading: "Replace",
+              body: "When Replace is on, re-applying overwrites the prior multi-zone trio rather than stacking another set on top." },
+          ]); }}
+            title="What does Multi do? Click for details."
+            style={{ cursor: "help", fontSize: 10, opacity: 0.7, flexShrink: 0,
+                     border: "1px solid #888", borderRadius: 8, width: 12, height: 12,
+                     display: "inline-flex", alignItems: "center", justifyContent: "center",
+                     lineHeight: 1, userSelect: "none" }}>?</span>
+        </span>
+      </div>
 
       {/* Marquee tristate (v1.18.0 / v1.19.3 mutual-exclusion). At Apply
           time, the active PS marquee can be used as the OUTPUT layer mask:
