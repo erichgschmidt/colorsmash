@@ -690,7 +690,16 @@ export function MatchTab() {
   const paletteIdentity = paletteSwatches.length > 0
     ? `${paletteSwatches.length}:${paletteSwatches[0].labL.toFixed(1)}:${paletteSwatches[0].labA.toFixed(1)}:${paletteSwatches[0].labB.toFixed(1)}`
     : "0";
+  // v1.20.8 — when a recipe restore (history click or XMP restore) sets
+  // sourcePaletteWeights, paletteCount may change which triggers a palette
+  // identity change which would normally reset weights to all-1, clobbering
+  // the recipe. This ref tells the reset effect to skip exactly one cycle.
+  const skipNextWeightResetRef = useRef(false);
   useEffect(() => {
+    if (skipNextWeightResetRef.current) {
+      skipNextWeightResetRef.current = false;
+      return;
+    }
     setPaletteWeights(paletteSwatches.map(() => 1));
   }, [paletteIdentity]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1138,6 +1147,7 @@ export function MatchTab() {
       setPaletteCount(state.paletteCount);
     }
     if (state.sourcePaletteWeights && Array.isArray(state.sourcePaletteWeights)) {
+      skipNextWeightResetRef.current = true;
       setPaletteWeights(state.sourcePaletteWeights);
     }
     if (mode === "full" && state.targetPaletteWeights && Array.isArray(state.targetPaletteWeights)) {
