@@ -2002,7 +2002,6 @@ export function MatchTab() {
           setSoftness={setTargetSoftness}
           maskEnabled={targetMaskEnabled}
           setMaskEnabled={setTargetMaskEnabled}
-          fadeWithWeight={true}
         />
       </div>
 
