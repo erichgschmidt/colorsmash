@@ -450,16 +450,29 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
       try { await setClippingMask(newLayer, true); } catch { /* ignore */ }
     }
 
-    // Rename + move into the group, capture id, attach mask if needed.
+    // v1.20.24 — wrap the single adjustment layer in a sub-group inside
+    // [Color Smash], mirroring the multi-zone structure. Mask attaches to
+    // the SUB-GROUP (so palette + selection composition lives at the group
+    // level, just like multi-zone's bandContainer). XMP is written to both
+    // the inner layer (for Live LUT / Replace lookup) and the sub-group
+    // (so AUTO restore works whether the user clicks the layer or its
+    // containing group).
     let newLayerId: number | null = null;
     if (newLayer) {
       try { newLayer.name = layerName; } catch { /* ignore */ }
-      try { await newLayer.move(group, "placeInside"); } catch { /* ignore */ }
       try { newLayerId = newLayer.id; } catch { /* ignore */ }
-      if (newLayerId != null) await attachMaskIfRequested(newLayerId);
-      if (newLayerId != null && params.xmpState) {
-        try { await writeLutLayerState(newLayerId, params.xmpState); }
-        catch { /* non-fatal */ }
+      const subName = params.overwritePrior !== false
+        ? layerName
+        : `${layerName} ${new Date().toTimeString().slice(0, 8)}`;
+      const subGroup = await doc.createLayerGroup({ name: subName });
+      try { await subGroup.move(group, "placeInside"); } catch { /* ignore */ }
+      try { await newLayer.move(subGroup, "placeInside"); } catch { /* ignore */ }
+      if (subGroup?.id != null) await attachMaskIfRequested(subGroup.id);
+      if (params.xmpState) {
+        if (newLayerId != null) {
+          try { await writeLutLayerState(newLayerId, params.xmpState); } catch { /* non-fatal */ }
+        }
+        try { await writeLutLayerState(subGroup.id, params.xmpState); } catch { /* non-fatal */ }
       }
     }
 

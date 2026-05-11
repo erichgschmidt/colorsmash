@@ -1453,7 +1453,29 @@ export function MatchTab() {
   };
 
   const restoreFromLayerId = async (layerId: number): Promise<boolean> => {
-    const state = await readLutLayerState(layerId);
+    // v1.20.24 — single-layer applies are now wrapped in a sub-group inside
+    // [Color Smash]. XMP is written to both the inner layer and the sub-
+    // group, so either one restores. As a safety net, if the directly-
+    // addressed layer has no XMP but it's a group, look at its first child.
+    let state = await readLutLayerState(layerId);
+    if (!state) {
+      try {
+        const ps = require("photoshop");
+        const doc = ps.app.activeDocument;
+        const find = (layers: any[]): any | null => {
+          for (const l of layers) {
+            if (l.id === layerId) return l;
+            if (Array.isArray(l.layers)) {
+              const found = find(l.layers); if (found) return found;
+            }
+          }
+          return null;
+        };
+        const layer = doc ? find(doc.layers ?? []) : null;
+        const child = layer && Array.isArray(layer.layers) ? layer.layers[0] : null;
+        if (child?.id != null) state = await readLutLayerState(child.id);
+      } catch { /* ignore */ }
+    }
     if (!state) return false;
     applyStateToPanel(state);
     return true;

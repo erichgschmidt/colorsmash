@@ -684,7 +684,16 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     //   contrast        → "luminosity" blend  (L only from curves, target keeps H+S)
     //   color           → Normal              (full per-channel transfer — labelled "Full" in the UI)
     if (presetBlend) { try { curveLayer.blendMode = presetBlend; } catch { /* ignore */ } }
-    try { await curveLayer.move(group, "placeInside"); } catch { /* ignore */ }
+    // v1.20.24 — wrap the single Curves layer in a sub-group inside
+    // [Color Smash], matching the multi-zone bandContainer structure.
+    // Mask attaches to the SUB-GROUP rather than the layer, so palette +
+    // selection composition lives at the group level.
+    const scSubName = overwrite
+      ? layerName
+      : `${layerName} ${new Date().toTimeString().slice(0, 8)}`;
+    const scSubGroup = await doc.createLayerGroup({ name: scSubName });
+    try { await scSubGroup.move(group, "placeInside"); } catch { /* ignore */ }
+    try { await curveLayer.move(scSubGroup, "placeInside"); } catch { /* ignore */ }
 
     // Target-palette mask: when the user has dialed any cluster's weight away
     // from 1, build a grayscale mask at full target resolution (one byte per
@@ -797,7 +806,7 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
         });
         await imaging.putLayerMask({
           documentID: doc.id,
-          layerID: curveLayer.id,
+          layerID: scSubGroup.id,
           imageData: maskImageData,
           targetBounds: t.bounds,
           replace: true,
