@@ -39,7 +39,7 @@ import {
 import { lutGradientCSS } from "../app/historyThumbnail";
 import { syncOutputVisibilityToMode, repositionGroupAboveTarget } from "../app/outputVisibility";
 import {
-  app, action as psAction, readLayerPixels, executeAsModal, getActiveDoc, getSelectionBounds,
+  app, action as psAction, readLayerPixels, executeAsModal, getActiveDoc, getSelectionBounds, readSelectionMaskBytes,
 } from "../services/photoshop";
 import { downsampleToMaxEdge } from "../core/downsample";
 
@@ -233,6 +233,36 @@ export function MatchTab() {
   // user's last choice for when they switch source mode away from selection.
   const effectiveSelectionMode: "off" | "focus" | "exclude" =
     srcMode === "selection" ? "off" : selectionMode;
+
+  // v1.20.19 — selection-aware preview compositing.
+  // selectionPreviewMask is one byte per preview pixel (0..255, where 255 =
+  // fully inside the marquee). Read from PS via imaging.getSelection at the
+  // target snap's source bounds, downsampled to the preview resolution by
+  // nearest-neighbor. Refresh triggers: target snap reference change,
+  // selectionMode change, or PS notification (user redrew the marquee).
+  // Used to mask both the matched preview render AND the MASK overlay,
+  // so users can see the focus/exclude effect before baking.
+  const [selectionPreviewMask, setSelectionPreviewMask] = useState<Uint8Array | null>(null);
+  const [selectionTick, setSelectionTick] = useState(0);
+  // Listen to PS 'set' notifications and bump the ticker — covers marquee
+  // drag commits, deselect, modify selection, etc. Throttled to ~150ms so
+  // a fast lasso drag doesn't fire dozens of reads in flight.
+  useEffect(() => {
+    if (effectiveSelectionMode === "off") return;
+    let scheduled: any = null;
+    const onSet = () => {
+      if (scheduled) return;
+      scheduled = setTimeout(() => {
+        scheduled = null;
+        setSelectionTick(t => t + 1);
+      }, 150);
+    };
+    try { psAction.addNotificationListener(["set"], onSet); } catch { /* ignore */ }
+    return () => {
+      if (scheduled) clearTimeout(scheduled);
+      try { psAction.removeNotificationListener?.(["set"], onSet); } catch { /* ignore */ }
+    };
+  }, [effectiveSelectionMode]);
 
   // Remember the last Curves-flavor mode so the SWAP pill can flip between
   // LUT and the user's preferred Curves space (RGB or Lab). Toggling out of
@@ -552,6 +582,49 @@ export function MatchTab() {
 
   const src = useLayerPreview(srcDocId, srcMode === "layer" ? sourceId : null);
   const tgt = useLayerPreview(tgtDocId, targetId);
+
+  // v1.20.19 — read the PS selection at the target snap's source bounds and
+  // downsample to preview resolution by nearest-neighbor. Stored as one byte
+  // per preview pixel (0..255). Cleared when selectionMode is "off" or
+  // there's no snap.
+  useEffect(() => {
+    const snap = tgt.snap;
+    if (effectiveSelectionMode === "off" || !snap || !snap.bounds || tgtDocId == null) {
+      setSelectionPreviewMask(null);
+      return;
+    }
+    const bounds = snap.bounds;
+    let cancelled = false;
+    (async () => {
+      try {
+        const full = await readSelectionMaskBytes(tgtDocId, bounds);
+        if (cancelled) return;
+        if (!full) { setSelectionPreviewMask(null); return; }
+        const srcW = bounds.right - bounds.left;
+        const srcH = bounds.bottom - bounds.top;
+        const dstW = snap.width;
+        const dstH = snap.height;
+        if (srcW <= 0 || srcH <= 0 || dstW <= 0 || dstH <= 0) {
+          setSelectionPreviewMask(null);
+          return;
+        }
+        // Nearest-neighbor downsample. Selection masks are binary-ish so
+        // bilinear gains little, and NN keeps edges crisp.
+        const out = new Uint8Array(dstW * dstH);
+        for (let y = 0; y < dstH; y++) {
+          const sy = Math.min(srcH - 1, Math.floor((y / dstH) * srcH));
+          for (let x = 0; x < dstW; x++) {
+            const sx = Math.min(srcW - 1, Math.floor((x / dstW) * srcW));
+            out[y * dstW + x] = full[sy * srcW + sx];
+          }
+        }
+        if (!cancelled) setSelectionPreviewMask(out);
+      } catch {
+        if (!cancelled) setSelectionPreviewMask(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [effectiveSelectionMode, tgt.snap, tgtDocId, selectionTick]);
   // v1.20.13 — recipe-synthesized source wins over both selection-mode
   // override and live src.snap. The recipe's swatch+weight distribution
   // IS the source while a recipe is active. Cleared automatically on
@@ -1017,27 +1090,62 @@ export function MatchTab() {
       }
       out = lutOut;
     }
-    // Show Mask overlay (v1.18.x). When toggled on, red-wash regions where
-    // the composed mask is LOW (LUT/Curves will NOT apply there). Convention
-    // matches PS Quick Mask: red = protected. Shows the target-palette mask;
-    // selection compositing in the preview is a future increment.
-    //
-    // Gate is permissive on purpose: the overlay runs whenever showMask is on
-    // and `targetEffectiveWeights` is sized to the preview buffer. If all
-    // weights are neutral the overlay does nothing visually (mask is 1
-    // everywhere) — correct semantics, and the user sees a clear "no mask"
-    // result instead of a no-op toggle. v1.18.1 was over-gated on
-    // `targetWeightsActive` and silently did nothing in the common case.
+    // v1.20.19 — compose the selection mask into the preview BEFORE the
+    // MASK overlay. When effectiveSelectionMode is "focus" or "exclude" and
+    // we have a downsampled selection mask matching the preview, blend the
+    // transformed pixels back toward the original outside the selection
+    // (focus) or inside it (exclude). This mirrors what Apply will bake as
+    // the layer mask, so users see the selection effect live.
+    const selMask = selectionPreviewMask;
+    if (
+      effectiveSelectionMode !== "off" &&
+      selMask &&
+      selMask.length * 4 === out.length
+    ) {
+      const orig = tgtBuf.data;
+      const invert = effectiveSelectionMode === "exclude";
+      const composed = new Uint8Array(out);
+      for (let i = 0, p = 0; i < composed.length; i += 4, p++) {
+        let w = selMask[p] / 255;
+        if (invert) w = 1 - w;
+        if (w >= 0.999) continue;
+        if (w <= 0.001) {
+          composed[i]     = orig[i];
+          composed[i + 1] = orig[i + 1];
+          composed[i + 2] = orig[i + 2];
+          continue;
+        }
+        composed[i]     = Math.round(orig[i]     + (composed[i]     - orig[i])     * w);
+        composed[i + 1] = Math.round(orig[i + 1] + (composed[i + 1] - orig[i + 1]) * w);
+        composed[i + 2] = Math.round(orig[i + 2] + (composed[i + 2] - orig[i + 2]) * w);
+      }
+      out = composed;
+    }
+
+    // Show Mask overlay (v1.18.x, v1.20.19). When toggled on, red-wash
+    // regions where the composed mask is LOW (LUT/Curves will NOT apply
+    // there). Convention matches PS Quick Mask: red = protected. The
+    // composed mask now multiplies target-palette weight × selection
+    // weight, so both palette-based protection AND marquee focus/exclude
+    // are visualized together.
     const ew = targetEffectiveWeights;
     if (showMask && ew && ew.length * 4 === out.length) {
       // Mutate a fresh copy so toggling showMask off doesn't force a curves
       // recompute — out stays the un-overlaid version for cached redraw.
       const overlaid = new Uint8Array(out);
+      const sel = selMask && selMask.length === ew.length ? selMask : null;
+      const invert = effectiveSelectionMode === "exclude";
       for (let i = 0, p = 0; i < overlaid.length; i += 4, p++) {
-        const w = Math.max(0, Math.min(1, ew[p]));
+        const paletteW = Math.max(0, Math.min(1, ew[p]));
+        let selW = 1;
+        if (sel && effectiveSelectionMode !== "off") {
+          selW = sel[p] / 255;
+          if (invert) selW = 1 - selW;
+        }
+        const composedW = paletteW * selW;
         // protectAmount = 1 - mask. 0 = fully applied (no red). 1 = fully
         // protected (max red).
-        const protectAmount = 1 - w;
+        const protectAmount = 1 - composedW;
         if (protectAmount < 0.01) continue;
         // Lerp toward red (255, 40, 40) by 0.6 × protectAmount. Strong
         // enough to be visible against most images, not so strong that the
@@ -1088,7 +1196,7 @@ export function MatchTab() {
     // triggers a redraw with the fresh per-pixel weights.
     // targetMaskEnabled also in deps so toggling the mask gate redraws the
     // preview between masked and uniform application.
-  }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, multiZoneExtents, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope, activePreset, targetEffectiveWeights, targetMaskEnabled, showMask, outputMode, lutStrength, lutGrid]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, multiZoneExtents, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope, activePreset, targetEffectiveWeights, targetMaskEnabled, showMask, outputMode, lutStrength, lutGrid, selectionPreviewMask, effectiveSelectionMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Export the staged preset as a 33-grid 3D LUT in .CUBE format. Sidesteps the
   // unreliable PS Color Lookup API entirely — user picks a save location, we write

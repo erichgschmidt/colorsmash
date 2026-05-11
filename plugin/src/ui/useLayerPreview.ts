@@ -27,6 +27,10 @@ export interface LayerSnapshot {
   data: Uint8Array;
   layerName: string;
   layerId: number;
+  // v1.20.19 — canvas-space bounds of the snap source. Lets downstream
+  // consumers (selection-mask preview compositing) read PS selections at
+  // the same source rect the pixel snap came from and downsample to match.
+  bounds?: { left: number; top: number; right: number; bottom: number };
 }
 
 export function useLayerPreview(docId: number | null, layerId: number | null): { snap: LayerSnapshot | null; refresh: () => void; error: string | null } {
@@ -56,13 +60,13 @@ export function useLayerPreview(docId: number | null, layerId: number | null): {
           else for (let i = 0, j = 0; i < w * h; i++, j += 3) { const o = i * 4; data[o] = src[j]; data[o + 1] = src[j + 1]; data[o + 2] = src[j + 2]; data[o + 3] = 255; }
           if (id.dispose) id.dispose();
           const small = downsampleToMaxEdge({ width: w, height: h, data, bounds: { left: 0, top: 0, right: w, bottom: h } }, PREVIEW_MAX_EDGE);
-          return { width: small.width, height: small.height, data: small.data, layerName: "Merged", layerId };
+          return { width: small.width, height: small.height, data: small.data, layerName: "Merged", layerId, bounds: small.bounds };
         }
         const layer = findLayerById(doc.layers, layerId);
         if (!layer) throw new Error(`Layer ${layerId} not found`);
         const buf = await readLayerPixels(layer, undefined, doc.id);
         const small = downsampleToMaxEdge(buf, PREVIEW_MAX_EDGE);
-        return { width: small.width, height: small.height, data: small.data, layerName: layer.name, layerId };
+        return { width: small.width, height: small.height, data: small.data, layerName: layer.name, layerId, bounds: small.bounds };
       });
       setSnap(result);
       setError(null);
