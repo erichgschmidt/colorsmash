@@ -141,34 +141,68 @@ export async function setClippingMask(layer: any, clip: boolean): Promise<void> 
  * Used by the Selection tristate (v1.18.0) to attach the marquee as a layer
  * mask at Apply time, optionally multiplied with the target-palette mask.
  */
+/**
+ * Returns selection mask bytes aligned to the requested `bounds` rect — one
+ * byte per pixel, length = (right-left) * (bottom-top), row-major.
+ *
+ * v1.20.23 — fix for top-left-misalignment bug. `imaging.getSelection` does
+ * NOT honor `sourceBounds` as a hard "fill this rect with mask"; it returns
+ * the selection's OWN bounding box, sized to the selection (sometimes smaller
+ * than the requested rect). Earlier versions blindly dumped the returned
+ * bytes into the top-left of a width×height buffer, so a marquee on the
+ * right side of the canvas showed up as a small strip in the top-left of
+ * the preview.
+ *
+ * Now we read the selection at its own bounds (via `getSelectionBounds()`),
+ * then paste those bytes into the requested-bounds output buffer at the
+ * correct offset (with intersection clipping). Pixels outside the selection
+ * bbox are 0 (= not selected), as expected.
+ */
 export async function readSelectionMaskBytes(
   documentId: number,
   bounds: Rect,
 ): Promise<Uint8Array | null> {
   if (!imaging || !imaging.getSelection) return null;
-  const width = bounds.right - bounds.left;
-  const height = bounds.bottom - bounds.top;
-  if (width <= 0 || height <= 0) return null;
+  const reqW = bounds.right - bounds.left;
+  const reqH = bounds.bottom - bounds.top;
+  if (reqW <= 0 || reqH <= 0) return null;
+  // Use the selection's own bbox as sourceBounds — imaging.getSelection
+  // reliably returns bytes sized to whatever rect actually contains the
+  // selection mask. Intersect with the requested rect so out-of-range
+  // selections degrade gracefully.
+  const selBox = getSelectionBounds();
+  if (!selBox) return null;
+  const isect = intersect(selBox, bounds);
+  if (!isect) {
+    // Selection is entirely outside the requested rect — return a buffer
+    // of zeros so callers can compose without special-casing.
+    return new Uint8Array(reqW * reqH);
+  }
   try {
     const sel = await imaging.getSelection({
       documentID: documentId,
-      sourceBounds: bounds,
+      sourceBounds: isect,
       kind: "selection",
     });
-    // imaging.getSelection returns ImageData with 1-component grayscale.
     const raw = await sel.imageData.getData();
     const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
-    // Detach the imaging buffer so we don't leak it. Some PS versions expose
-    // .dispose() on the ImageData.
+    const actualW = sel.imageData.width;
+    const actualH = sel.imageData.height;
     try { sel.imageData.dispose?.(); } catch { /* ignore */ }
-    // Expected byte length = width × height (one byte per pixel).
-    if (bytes.length === width * height) return new Uint8Array(bytes);
-    // Fallback: copy out what's there and clamp to expected size.
-    const out = new Uint8Array(width * height);
-    out.set(bytes.subarray(0, Math.min(out.length, bytes.length)));
+    // Paste the selection slice into the requested-bounds output buffer
+    // at (isect.left - bounds.left, isect.top - bounds.top).
+    const out = new Uint8Array(reqW * reqH);
+    const offX = isect.left - bounds.left;
+    const offY = isect.top  - bounds.top;
+    const copyW = Math.min(actualW, reqW - offX);
+    const copyH = Math.min(actualH, reqH - offY);
+    for (let y = 0; y < copyH; y++) {
+      const srcRow = y * actualW;
+      const dstRow = (offY + y) * reqW + offX;
+      out.set(bytes.subarray(srcRow, srcRow + copyW), dstRow);
+    }
     return out;
   } catch {
-    // No selection / unsupported / out of bounds — all treated the same.
     return null;
   }
 }
