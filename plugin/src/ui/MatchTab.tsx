@@ -919,14 +919,19 @@ export function MatchTab() {
     }
     // Show Mask overlay (v1.18.x). When toggled on, red-wash regions where
     // the composed mask is LOW (LUT/Curves will NOT apply there). Convention
-    // matches PS Quick Mask: red = protected. Currently shows the target-
-    // palette mask only — selection compositing in the preview is a future
-    // increment (would need a per-render selection read at preview bounds).
-    if (showMask && targetWeightsActive && targetEffectiveWeights) {
-      const ew = targetEffectiveWeights;
-      // Mutate a fresh copy so the cached `out` for resultPendingRef stays
-      // the un-overlaid version (matters if user toggles showMask off — we
-      // shouldn't have to recompute the curves to redraw).
+    // matches PS Quick Mask: red = protected. Shows the target-palette mask;
+    // selection compositing in the preview is a future increment.
+    //
+    // Gate is permissive on purpose: the overlay runs whenever showMask is on
+    // and `targetEffectiveWeights` is sized to the preview buffer. If all
+    // weights are neutral the overlay does nothing visually (mask is 1
+    // everywhere) — correct semantics, and the user sees a clear "no mask"
+    // result instead of a no-op toggle. v1.18.1 was over-gated on
+    // `targetWeightsActive` and silently did nothing in the common case.
+    const ew = targetEffectiveWeights;
+    if (showMask && ew && ew.length * 4 === out.length) {
+      // Mutate a fresh copy so toggling showMask off doesn't force a curves
+      // recompute — out stays the un-overlaid version for cached redraw.
       const overlaid = new Uint8Array(out);
       for (let i = 0, p = 0; i < overlaid.length; i += 4, p++) {
         const w = Math.max(0, Math.min(1, ew[p]));
@@ -934,10 +939,10 @@ export function MatchTab() {
         // protected (max red).
         const protectAmount = 1 - w;
         if (protectAmount < 0.01) continue;
-        // Lerp toward red (255, 40, 40) by 0.55 × protectAmount. Strong
+        // Lerp toward red (255, 40, 40) by 0.6 × protectAmount. Strong
         // enough to be visible against most images, not so strong that the
-        // underlying preview is invisible.
-        const wash = protectAmount * 0.55;
+        // underlying preview disappears.
+        const wash = protectAmount * 0.6;
         overlaid[i]     = Math.round(overlaid[i]     * (1 - wash) + 255 * wash);
         overlaid[i + 1] = Math.round(overlaid[i + 1] * (1 - wash) + 40  * wash);
         overlaid[i + 2] = Math.round(overlaid[i + 2] * (1 - wash) + 40  * wash);
@@ -1839,23 +1844,22 @@ export function MatchTab() {
         // items shrink to toggle width only (labels clip silently behind next item).
         // flex-wrap:nowrap + height:18 + overflow:hidden = row CANNOT jump under any
         // panel width. Trailing (?) icon stays in place flush left, no marginLeft:auto.
-        const ROW_GAP = 6;
-        // Same layout treatment as BottomActionBar: <div> instead of <label>,
-        // explicit lineHeight, locked checkbox size, display:block on label spans.
-        const cell = (basis: number): React.CSSProperties => ({
-          display: "inline-flex", alignItems: "center", gap: 6,
-          flex: `0 1 ${basis}px`, minWidth: 14, maxWidth: `${basis}px`,
-          overflow: "hidden", whiteSpace: "nowrap",
-          height: 18, lineHeight: "18px",
+        const ROW_GAP = 4;
+        // Pill toggle factory — same visual language as RGB/Lab/LUT and
+        // Off/Focus/Exclude segmented controls (v1.18.x). Each Multi-zone
+        // option becomes a flex-1 pill, filled when on, dimmed when off or
+        // disabled. Replaced the checkbox+label row for tighter visuals.
+        const pillStyle = (active: boolean, disabled: boolean): React.CSSProperties => ({
+          flex: 1, height: 18, padding: 0,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
+          background: active ? "#3a3a3a" : "transparent",
+          color: disabled ? "#555" : (active ? "#dddddd" : "#888"),
+          border: `1px solid ${disabled ? "#333" : (active ? "#888" : "#444")}`,
+          borderRadius: 2, cursor: disabled ? "default" : "pointer", userSelect: "none",
+          lineHeight: "16px", boxSizing: "border-box",
+          opacity: disabled ? 0.5 : 1,
         });
-        const cbStyle: React.CSSProperties = {
-          margin: 0, flexShrink: 0, width: 14, height: 14, padding: 0, boxSizing: "border-box",
-          cursor: subDisabled ? "default" : "pointer",
-        };
-        const txt: React.CSSProperties = {
-          display: "block", overflow: "hidden", whiteSpace: "nowrap", minWidth: 0, lineHeight: "18px", paddingLeft: 4,
-        };
-        const subTxt: React.CSSProperties = { ...txt, opacity: subDisabled ? 0.5 : 1 };
         return (
           <div style={{
             display: "flex", flexWrap: "nowrap", alignItems: "center",
@@ -1864,28 +1868,20 @@ export function MatchTab() {
             height: 18, lineHeight: "18px", overflow: "hidden", gap: ROW_GAP,
             width: "100%", minWidth: 0,
           }}>
-            <div onClick={() => setMultiZone(!multiZone)} style={{ ...cell(70), cursor: "pointer" }}
+            <div onClick={() => setMultiZone(!multiZone)}
+              style={pillStyle(multiZone, false)}
               title="Multi: emit 3 stacked Curves layers (shadows / mids / highlights), each limited to its luminance band. Adapts spatially across mixed-lighting scenes.">
-              <input type="checkbox" checked={multiZone} onChange={e => setMultiZone(e.target.checked)}
-                style={{ ...cbStyle, cursor: "pointer" }} />
-              <span style={txt}>Multi</span>
+              MULTI
             </div>
             <div onClick={() => { if (!subDisabled) setMultiZoneLimit(multiZoneLimit === "blendIf" ? "mask" : "blendIf"); }}
-              style={{ ...cell(65), cursor: subDisabled ? "default" : "pointer" }}
+              style={pillStyle(multiZoneLimit === "blendIf" && !subDisabled, subDisabled)}
               title="Blend If: limit each band layer with the underlying-luma sliders (Layer Style → Blending Options) instead of a luminosity mask. When OFF, a paintable mask is exported instead. May not work in all PS versions.">
-              <input type="checkbox" disabled={subDisabled}
-                checked={multiZoneLimit === "blendIf"}
-                onChange={e => setMultiZoneLimit(e.target.checked ? "blendIf" : "mask")}
-                style={cbStyle} />
-              <span style={subTxt}>Blend If</span>
+              BLEND IF
             </div>
             <div onClick={() => { if (!subDisabled) setAdaptiveBands(!adaptiveBands); }}
-              style={{ ...cell(65), cursor: subDisabled ? "default" : "pointer" }}
+              style={pillStyle(adaptiveBands && !subDisabled, subDisabled)}
               title={`Adaptive: shift band peaks + extents to the target histogram's percentiles (P10/P50/P90) instead of fixed 0/128/255. ${multiZone && lumaBins ? `Current peaks: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""}`}>
-              <input type="checkbox" disabled={subDisabled} checked={adaptiveBands}
-                onChange={e => setAdaptiveBands(e.target.checked)}
-                style={cbStyle} />
-              <span style={subTxt}>Adaptive</span>
+              ADAPTIVE
             </div>
             {/* Trailing (?) info icon — flush left like everything else (no auto margin). */}
             <span style={{ display: "inline-flex", alignItems: "center", flexShrink: 0 }}>

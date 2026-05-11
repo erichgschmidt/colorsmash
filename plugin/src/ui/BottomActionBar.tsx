@@ -28,37 +28,25 @@ export function BottomActionBar(props: BottomActionBarProps) {
     if (ok) onResetAll();
   };
 
-  // Single left-aligned row, all flush left with consistent gap:
-  //   [☐ Deselect] [☐ Replace] [☐ Save] [✕] [RGB] [⟳]
-  //
-  // Layout rules:
-  //   - flex-wrap:nowrap so the row never breaks to a second line
-  //   - Each [toggle+label] cell has a fixed basis but can shrink down to just the
-  //     toggle width (label clips silently behind the next cell when compressed)
-  //   - The 3 trailing buttons (✕/RGB/⟳) are flex-shrink:0 — they always render
-  //     at full size and stay in place; they don't get pushed by label widths
-  //   - gap between all items is uniform so visual spacing reads as "equal apart"
-  const ROW_GAP = 6;
-  // Each cell is a flex container with a fixed basis that can shrink down to JUST
-  // the checkbox width. Explicit lineHeight matches row height so text can't push
-  // the row taller. The label-span is display:block (not inline) so its overflow
-  // truly clips horizontally — inline spans were apparently re-flowing in UXP.
-  const cell = (basis: number): React.CSSProperties => ({
-    display: "inline-flex", alignItems: "center", gap: 6, paddingLeft: 0,
-    flex: `0 1 ${basis}px`, minWidth: 14, maxWidth: `${basis}px`,
-    overflow: "hidden", whiteSpace: "nowrap",
-    height: 18, lineHeight: "18px",
-    cursor: "pointer",
+  // Single left-aligned row of segmented pills + trailing icons:
+  //   [DESELECT][REPLACE][SAVE]  [✕] [⟳]
+  // v1.18.x: checkbox+label replaced with pill toggles matching the
+  // RGB/Lab/LUT and Off/Focus/Exclude visual language elsewhere in the
+  // panel. Pills are filled when active, outlined when off — same dim
+  // gray vocabulary, no color theming so they read as "settings" not
+  // "actions" (the colored pills above — LIVE / SWAP / MASK — are
+  // distinct, action-y).
+  const ROW_GAP = 4;
+  const pillStyle = (active: boolean): React.CSSProperties => ({
+    flex: 1, height: 18, padding: 0,
+    display: "flex", alignItems: "center", justifyContent: "center",
+    fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
+    background: active ? "#3a3a3a" : "transparent",
+    color: active ? "#dddddd" : "#888",
+    border: `1px solid ${active ? "#888" : "#444"}`,
+    borderRadius: 2, cursor: "pointer", userSelect: "none",
+    lineHeight: "16px", boxSizing: "border-box",
   });
-  const labelTxt: React.CSSProperties = {
-    display: "block", overflow: "hidden", whiteSpace: "nowrap",
-    minWidth: 0, lineHeight: "18px", paddingLeft: 4,
-  };
-  // Lock checkbox width explicitly — UXP renders native checkboxes at variable
-  // widths (16-22px) which can violate cell minWidth and force unexpected reflow.
-  const checkboxStyle: React.CSSProperties = {
-    margin: 0, flexShrink: 0, width: 14, height: 14, padding: 0, boxSizing: "border-box",
-  };
   return (
     <div style={{
       display: "flex", flexWrap: "nowrap", alignItems: "center",
@@ -66,23 +54,20 @@ export function BottomActionBar(props: BottomActionBarProps) {
       height: 18, lineHeight: "18px", overflow: "hidden", gap: ROW_GAP,
       width: "100%", minWidth: 0,
     }}>
-      {/* Use <div> instead of <label> — UXP <label>+<input> has UA-specific
-          intrinsic-sizing rules that bypass some flex constraints. Click on the
-          <div> still toggles via onClick handler. */}
-      <div onClick={() => setDeselectOnApply(!deselectOnApply)} style={cell(70)}
-        title="Deselect — drop the active marquee before creating the layer so curves apply to the full target.">
-        <input type="checkbox" checked={deselectOnApply} onChange={e => setDeselectOnApply(e.target.checked)} style={checkboxStyle} />
-        <span style={labelTxt}>Deselect</span>
+      <div onClick={() => setDeselectOnApply(!deselectOnApply)}
+        style={pillStyle(deselectOnApply)}
+        title="Deselect — drop the active marquee before creating the layer so curves/LUT apply to the full target. (Independent of the marquee Focus/Exclude toggle above the Apply button.)">
+        DESELECT
       </div>
-      <div onClick={() => setOverwriteOnApply(!overwriteOnApply)} style={cell(65)}
-        title="Replace — on: overwrite the prior Match Curves layer. Off: keep prior layers (hidden) so you can stack alternatives.">
-        <input type="checkbox" checked={overwriteOnApply} onChange={e => setOverwriteOnApply(e.target.checked)} style={checkboxStyle} />
-        <span style={labelTxt}>Replace</span>
+      <div onClick={() => setOverwriteOnApply(!overwriteOnApply)}
+        style={pillStyle(overwriteOnApply)}
+        title="Replace — on: overwrite the prior Match Curves/LUT layer in [Color Smash] on Apply. Off: keep prior layers (hidden) so you can stack alternatives.">
+        REPLACE
       </div>
-      <div onClick={() => setRemember(!remember)} style={cell(65)}
+      <div onClick={() => setRemember(!remember)}
+        style={pillStyle(remember)}
         title="Save — persist all panel settings across reloads (sliders, zones, envelope, toggles).">
-        <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} style={checkboxStyle} />
-        <span style={labelTxt}>Save</span>
+        SAVE
       </div>
       <button onClick={handleResetClick}
         title="Reset all settings to defaults and clear the saved file"
