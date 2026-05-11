@@ -1871,11 +1871,15 @@ export function MatchTab() {
           display: "flex", alignItems: "center", justifyContent: "center",
           fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
           background: active ? "#3a3a3a" : "transparent",
-          color: disabled ? "#555" : (active ? "#dddddd" : "#888"),
-          border: `1px solid ${disabled ? "#333" : (active ? "#888" : "#444")}`,
+          // Disabled state keeps text legible against the panel background —
+          // earlier #555 × 0.5 opacity made the label nearly invisible. Now
+          // disabled uses #777 (inactive-ish gray) at 0.75 opacity so the
+          // label still reads as "muted but present."
+          color: disabled ? "#777" : (active ? "#dddddd" : "#888"),
+          border: `1px solid ${disabled ? "#3a3a3a" : (active ? "#888" : "#444")}`,
           borderRadius: 2, cursor: disabled ? "default" : "pointer", userSelect: "none",
           lineHeight: "16px", boxSizing: "border-box",
-          opacity: disabled ? 0.5 : 1,
+          opacity: disabled ? 0.75 : 1,
         });
         return (
           <div style={{
