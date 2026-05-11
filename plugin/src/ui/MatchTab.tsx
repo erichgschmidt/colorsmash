@@ -33,6 +33,9 @@ import { applyMatch } from "../app/applyMatch";
 import { applyLutAsAdjustmentLayer, applyMultiZoneLutAsLayers } from "../app/applyLut";
 import { updateMatchCurvesLayerInPlace } from "../app/liveCurvesUpdate";
 import { LutLayerState, readLutLayerState, stampState } from "../app/lutXmp";
+import {
+  HistoryEntry, makeHistoryEntry, pushHistoryEntry, pruneHistory,
+} from "../app/recentHistory";
 import { syncOutputVisibilityToMode, repositionGroupAboveTarget } from "../app/outputVisibility";
 import {
   app, action as psAction, readLayerPixels, executeAsModal, getActiveDoc, getSelectionBounds,
@@ -205,6 +208,14 @@ export function MatchTab() {
   // — just an effective override), and the pill row visually dims to
   // signal it's inactive.
   const [selectionMode, setSelectionMode] = useState<"off" | "focus" | "exclude">("off");
+
+  // Recent-history ring buffer (v1.20.0). Every successful Apply pushes a
+  // snapshot of the panel state. UI shows the last N (default 5) as small
+  // palette-strip thumbnails near the Apply area; click an entry to restore.
+  // Stored in PersistedSettings so the history survives panel reloads.
+  const HISTORY_MAX = 5;
+  const [recentHistory, setRecentHistory] = useState<HistoryEntry[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
   // Effective value used by Apply pipeline + buildXmpState. When source
   // mode is "selection," force "off" so the source marquee isn't double-
   // duty as an output mask. The raw `selectionMode` state preserves the
@@ -333,6 +344,11 @@ export function MatchTab() {
         if (s.selectionMode === "off" || s.selectionMode === "focus" || s.selectionMode === "exclude") {
           setSelectionMode(s.selectionMode);
         }
+        // v1.20.0 — restore recent-history ring buffer. pruneHistory drops
+        // malformed entries from older saves and clamps to max.
+        if (Array.isArray(s.recentHistory)) {
+          setRecentHistory(pruneHistory(s.recentHistory, HISTORY_MAX));
+        }
         if (s.deselectOnApply != null) setDeselectOnApply(s.deselectOnApply);
         if (s.overwriteOnApply != null) setOverwriteOnApply(s.overwriteOnApply);
         if (s.openSection !== undefined) setOpenSection(s.openSection);
@@ -366,11 +382,12 @@ export function MatchTab() {
       sourceSoftness,
       targetSoftness,
       targetMaskEnabled,
+      recentHistory,
     };
     saveDebouncedRef.current!(snapshot);
   }, [remember, matchMode, multiZone, multiZoneLimit, adaptiveBands, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
       colorSpace, outputMode, lutStrength, lutGrid, lutDither, selectionMode, deselectOnApply, overwriteOnApply, openSection,
-      zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel, paletteCount, paletteAdaptive, sourceSoftness, targetSoftness, targetMaskEnabled]);
+      zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel, paletteCount, paletteAdaptive, sourceSoftness, targetSoftness, targetMaskEnabled, recentHistory]);
 
   const [docs, setDocs] = useState<{ id: number; name: string }[]>([]);
   // Hash of doc id+name pairs. Used as the key on the doc <select> elements so that
@@ -1067,23 +1084,40 @@ export function MatchTab() {
     selectionMode: effectiveSelectionMode,
   }, "1.19.0");
 
+  // Push the current panel state to the recent-history ring buffer. Called
+  // by both Curves and LUT Apply success paths. Dedupe / immutable update
+  // is handled inside pushHistoryEntry — multiple identical Applies in a
+  // row won't spam the buffer.
+  const pushCurrentToHistory = (): void => {
+    const state = buildXmpState();
+    const entry = makeHistoryEntry(state);
+    setRecentHistory(prev => pushHistoryEntry(prev, entry, HISTORY_MAX));
+  };
+
+  // Click handler for a history thumbnail — restores panel state from the
+  // entry's saved snapshot. Does NOT auto-Apply (predictable: user picks
+  // history, panel updates, user hits Apply if they want to bake again).
+  const applyHistoryEntry = (entry: HistoryEntry): void => {
+    applyStateToPanel(entry.state);
+    setStatus(`Restored panel state from history (${entry.label}).`);
+  };
+
   // Shared restore implementation — pulled out of the manual onRestoreFromLayer
   // handler so the auto-restore listener can use the same code path. Takes a
   // layer id so the listener can target the just-selected layer specifically
   // (vs the manual button which uses whatever is active). Returns true if it
   // applied a restore, false if the layer had no Color Smash XMP.
-  const restoreFromLayerId = async (layerId: number): Promise<boolean> => {
-    const state = await readLutLayerState(layerId);
-    if (!state) return false;
+  // Apply a LutLayerState to all the panel setters. Shared by the XMP-
+  // restore path (restoreFromLayerId) and the history-click path
+  // (applyHistoryEntry) so both rehydrate the panel identically.
+  const applyStateToPanel = (state: LutLayerState): void => {
     if (state.preset) setActivePreset(state.preset as any);
     if (state.matchMode) setMatchMode(state.matchMode as MatchMode);
-    // v1.15.0+: prefer outputMode; fall back to legacy colorSpace.
     if (state.outputMode === "rgb" || state.outputMode === "lab" || state.outputMode === "lut") {
       setOutputMode(state.outputMode);
     } else if (state.colorSpace === "rgb" || state.colorSpace === "lab") {
       setOutputMode(state.colorSpace);
     } else {
-      // Restored from a Match LUT layer without explicit mode → it WAS a LUT.
       setOutputMode("lut");
     }
     if (state.paletteCount === 3 || state.paletteCount === 5 || state.paletteCount === 7) {
@@ -1111,25 +1145,24 @@ export function MatchTab() {
       envelopeRef.current = state.envelope as EnvelopePoint[];
       setEnvelopeLabel(state.envelope as EnvelopePoint[]);
     }
-    // Phase 2c: source/target palette swatches saved at bake time. Drop them
-    // into the saved-fallback state so the palette strips show the user's
-    // saved palette even when the source/target docs aren't currently open.
-    // Live snaps still take precedence when available.
     if (Array.isArray(state.sourcePaletteSwatches) && state.sourcePaletteSwatches.length > 0) {
       setSavedSourceSwatches(state.sourcePaletteSwatches as PaletteSwatch[]);
     }
     if (Array.isArray(state.targetPaletteSwatches) && state.targetPaletteSwatches.length > 0) {
       setSavedTargetSwatches(state.targetPaletteSwatches as PaletteSwatch[]);
     }
-    // v1.19.0 — LUT-output knobs + marquee selector. Each is idempotent
-    // and only fires when the field is present in the saved state (so
-    // pre-v1.19 layers don't reset these to defaults).
     if (typeof state.lutStrength === "number") setLutStrength(Math.max(0, Math.min(100, state.lutStrength)));
     if (state.lutGrid === 17 || state.lutGrid === 33 || state.lutGrid === 65) setLutGrid(state.lutGrid);
     if (typeof state.lutDither === "boolean") setLutDither(state.lutDither);
     if (state.selectionMode === "off" || state.selectionMode === "focus" || state.selectionMode === "exclude") {
       setSelectionMode(state.selectionMode);
     }
+  };
+
+  const restoreFromLayerId = async (layerId: number): Promise<boolean> => {
+    const state = await readLutLayerState(layerId);
+    if (!state) return false;
+    applyStateToPanel(state);
     return true;
   };
 
@@ -1244,6 +1277,7 @@ export function MatchTab() {
         liveLutLayerIdRef.current = result.layerId;
         lastSelfWriteRef.current = Date.now();
         setStatus(`Applied "${result.layerName}" (3× 33³ multi-zone LUT).`);
+        pushCurrentToHistory();
         return;
       } catch (e: any) {
         setStatus(`Apply multi-zone LUT failed: ${e?.message ?? e}`);
@@ -1271,6 +1305,7 @@ export function MatchTab() {
       liveLutLayerIdRef.current = result.layerId;
       lastSelfWriteRef.current = Date.now();
       setStatus(`Applied "${result.layerName}" (33³ LUT).`);
+      pushCurrentToHistory();
     } catch (e: any) {
       setStatus(`Apply LUT failed: ${e?.message ?? e} — try Save LUT and load manually via Image → Adjustments → Color Lookup.`);
     }
@@ -1427,6 +1462,7 @@ export function MatchTab() {
         })(),
         selectionMode: effectiveSelectionMode,
       }));
+      pushCurrentToHistory();
     } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
   };
 
@@ -2144,6 +2180,74 @@ export function MatchTab() {
           style={{ flex: "1 1 0", minWidth: 0, overflow: "hidden", whiteSpace: "nowrap" }}
           title="Export the staged preset as a portable 33³ .CUBE 3D LUT to disk. Loadable in Photoshop, Premiere, Resolve, etc. Use Apply LUT instead if you just want it in this PS doc.">Save LUT…</sp-button>
       </div>
+
+      {/* Recent history (v1.20.0). Collapsible — only takes vertical space
+          when the user expands it. Header is a thin row with a chevron +
+          "history" label + count badge. Body renders palette-signature
+          thumbnails (one per entry). Click a thumbnail → restore state.
+          When the ring buffer is empty (no Applies yet this session AND no
+          saved history), the whole section is hidden. */}
+      {recentHistory.length > 0 && (
+        <div style={{ marginTop: 6 }}>
+          <div onClick={() => setHistoryOpen(o => !o)}
+            style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, opacity: 0.65,
+                     cursor: "pointer", userSelect: "none", height: 14, lineHeight: "14px" }}
+            title={historyOpen ? "Hide recent applies" : "Show recent applies — click any thumbnail to restore that state"}>
+            <span style={{ width: 8, display: "inline-block", textAlign: "center" }}>
+              {historyOpen ? "▾" : "▸"}
+            </span>
+            <span>history ({recentHistory.length})</span>
+          </div>
+          {historyOpen && (
+            <div style={{ display: "flex", flexDirection: "row", gap: 4, marginTop: 4, flexWrap: "wrap" }}>
+              {recentHistory.map(entry => (
+                <div key={entry.id} onClick={() => applyHistoryEntry(entry)}
+                  title={`${entry.label}\nSaved ${new Date(entry.timestamp).toLocaleString()}\nClick to restore.`}
+                  style={{
+                    width: 60, height: 16, padding: 0,
+                    display: "flex", flexDirection: "row",
+                    border: "1px solid #555", borderRadius: 2,
+                    cursor: "pointer", userSelect: "none",
+                    overflow: "hidden", flexShrink: 0,
+                  }}>
+                  {/* Palette signature: horizontal segments sized by weight,
+                      colored by the swatch RGB. The strip reads as a visual
+                      "fingerprint" of the bake at a glance. */}
+                  {entry.signature.colors.length > 0
+                    ? entry.signature.colors.map((c, i) => {
+                        const r = (c >> 16) & 0xff;
+                        const g = (c >> 8) & 0xff;
+                        const b = c & 0xff;
+                        const w = entry.signature.weights[i] ?? 0;
+                        const total = entry.signature.weights.reduce((s, x) => s + (x || 0), 0) || 1;
+                        return (
+                          <div key={i} style={{
+                            flex: `${Math.max(1, w)} 1 0`,
+                            background: `rgb(${r},${g},${b})`,
+                            minWidth: 0,
+                            // total used to normalize widths — referenced via the flex weighting above
+                            // (kept here for the comment context, no functional use)
+                          }} title={`rgb(${r},${g},${b}) · ${((w / total) * 100).toFixed(0)}%`} />
+                        );
+                      })
+                    : <div style={{ flex: 1, background: "#444" }} />
+                  }
+                </div>
+              ))}
+              {/* Clear-history affordance — small × at the end of the row. */}
+              <div onClick={() => setRecentHistory([])}
+                title="Clear recent history"
+                style={{
+                  width: 16, height: 16, display: "flex",
+                  alignItems: "center", justifyContent: "center",
+                  fontSize: 10, color: "#888", border: "1px solid #444",
+                  borderRadius: 2, cursor: "pointer", userSelect: "none",
+                  flexShrink: 0,
+                }}>×</div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* LUT-specific knobs (v1.17.0; relocated below the Apply row in v1.18.x
           so the Apply cluster reads as the primary action — knobs are

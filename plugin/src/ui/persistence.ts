@@ -24,6 +24,10 @@ export interface PersistedSettings {
   lutGrid?: 17 | 33 | 65; // 3D LUT grid points per axis
   lutDither?: boolean;    // PS colorLookup.dither field
   selectionMode?: "off" | "focus" | "exclude"; // v1.18.0 — marquee → layer mask
+  // v1.20.0 — recent-history ring buffer. Auto-recorded after each Apply.
+  // Typed as `any[]` here so persistence.ts doesn't pull in the LutLayerState
+  // shape transitively; the recentHistory module owns parsing/pruning on load.
+  recentHistory?: any[];
   // Apply behavior
   deselectOnApply?: boolean;
   overwriteOnApply?: boolean;
