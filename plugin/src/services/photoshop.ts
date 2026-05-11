@@ -238,17 +238,24 @@ const SEL_SNAPSHOT_NAME = "__cs_sel_snapshot__";
 export async function snapshotSelectionToChannel(): Promise<string | null> {
   const sel = getSelectionBounds();
   if (!sel) return null;
+  // v1.20.29 — proactively delete any stale snapshot channel from a prior
+  // bake that didn't clean up (modal aborted, PS crashed, etc.). Without
+  // this, the duplicate-to-name op can fail when the name already exists
+  // OR silently overwrite — and stale selection data leaks into the next
+  // bake, producing exactly the "focus picks wrong region" symptom.
   try {
-    // v1.20.28 — corrected batchPlay shape. The "Save Selection" descriptor
-    // is `duplicate channel(selection) → to channel(<name>)`; the previous
-    // version's `name: <name>` field was a no-op in some PS versions, so
-    // the snapshot was never actually created (and restore was a no-op),
-    // which meant the live marquee was still active during the bake and
-    // PS auto-applied it as the layer mask — exactly the bug users hit.
+    await action.batchPlay([{
+      _obj: "delete",
+      _target: [{ _ref: "channel", _name: SEL_SNAPSHOT_NAME }],
+      _options: { dialogOptions: "dontDisplay" },
+    }], {});
+  } catch { /* channel didn't exist — fine */ }
+  try {
+    // Canonical Save Selection descriptor — `to: { _ref: channel, _name }`
+    // creates a new alpha channel of that name holding the current selection.
     await action.batchPlay([{
       _obj: "duplicate",
       _target: [{ _ref: "channel", _property: "selection" }],
-      name: SEL_SNAPSHOT_NAME,
       to: { _ref: "channel", _name: SEL_SNAPSHOT_NAME },
       _options: { dialogOptions: "dontDisplay" },
     }], {});
