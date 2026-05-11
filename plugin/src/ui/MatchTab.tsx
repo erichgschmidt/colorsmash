@@ -2050,44 +2050,61 @@ export function MatchTab() {
       })()}
 
       <div style={{ display: "flex", flexWrap: "nowrap", gap: 4, marginTop: 6, width: "100%" }}>
-        {/* REPLACE — moved next to Apply (v1.19.3) so it reads as a direct
-            modifier of the Apply action: "Apply, replacing the prior layer."
-            Was previously in the BottomActionBar pill row; now lives here.
-            Filled when on (default) — overwrites the prior Match Curves/LUT
-            layer on Apply. Off — keeps prior layers (hidden) so users can
-            stack alternatives for comparison. */}
-        <div onClick={() => setOverwriteOnApply(!overwriteOnApply)}
-          title={overwriteOnApply
-            ? "Replace ON — Apply will overwrite the prior Match Curves/LUT layer in [Color Smash]. Click to keep prior layers (they'll hide so the new one is visible)."
-            : "Replace OFF — Apply stacks alongside prior layers (prior layers hidden). Click to enable Replace: prior layer is deleted on each Apply."}
-          style={{
-            padding: "1px 8px", fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
-            background: overwriteOnApply ? "#3a3a3a" : "transparent",
-            color: overwriteOnApply ? "#dddddd" : "#888",
-            border: `1px solid ${overwriteOnApply ? "#888" : "#444"}`,
-            borderRadius: 2, cursor: "pointer", userSelect: "none",
-            display: "flex", alignItems: "center",
-            height: 28, lineHeight: "26px", boxSizing: "border-box",
-            flex: "0 0 auto",
-          }}>REPLACE</div>
-        {/* Single mode-aware Apply button (v1.15.0). The output-mode selector
-            above the Apply row decides which adjustment layer this produces:
-              RGB / Lab → Curves layer (continuous, editable; honors Multi)
-              LUT       → Color Lookup layer (non-separable transform; not
-                          continuously editable but captures Color/Hue/Sat/
-                          Luminosity blend math a Curves layer cannot)
-            Save LUT… (right of the pills) always exports a portable .cube
-            regardless of mode. */}
-        {/* @ts-ignore Spectrum web component */}
-        <sp-button variant="secondary" onClick={outputMode === "lut" ? onApplyLut : onApply}
-          style={{ flex: "1 1 0", minWidth: 0, overflow: "hidden", whiteSpace: "nowrap" }}
-          title={
-            outputMode === "lut"
-              ? "Create a Color Lookup adjustment layer in [Color Smash] loaded with a 33³ 3D LUT. Captures non-separable preset blend math (Color/Hue/Saturation/Luminosity) a Curves layer can't represent. Use LIVE for real-time updates, RESTORE/AUTO to round-trip via the layer's XMP."
-              : multiZone
-                ? "Multi: creates 3 stacked Curves layers (shadow/mid/highlight) with band limiting via mask and/or Blend If. Each editable independently in PS."
-                : "Create a new Curves adjustment layer in the target document, clipped to the target layer. Honors Replace and Deselect toggles below."
-          }>Apply</sp-button>
+        {/* Unified Apply + Replace-arm widget (v1.20.4). Two click zones
+            inside a single button shell:
+              - Left arm (~14px, angled notch): toggles overwriteOnApply.
+                Red when armed = "will replace prior layer." Dim gray when
+                disarmed = "will stack alongside priors."
+              - Right body: dispatches Apply (Curves or LUT per outputMode).
+            Same Apply behavior as before — only the visual is unified.
+            Pattern borrowed from DAW "arm for record" buttons: a small
+            stateful indicator embedded into the primary action button. */}
+        <div style={{ flex: "1 1 0", minWidth: 0, display: "flex", flexDirection: "row", height: 28 }}>
+          {/* Replace-arm — angled notch via clipPath. Stops propagation so
+              clicking the arm only toggles state, doesn't fire Apply. */}
+          <div onClick={e => { e.stopPropagation(); setOverwriteOnApply(!overwriteOnApply); }}
+            title={overwriteOnApply
+              ? "REPLACE ARMED — Apply will overwrite the prior Match Curves/LUT layer in [Color Smash]. Click to disarm (Apply will stack alongside priors instead)."
+              : "Replace disarmed — Apply will stack alongside prior layers. Click to arm Replace: prior layer is deleted on each Apply."}
+            style={{
+              width: 16, height: 28, padding: 0, flexShrink: 0,
+              background: overwriteOnApply ? "#c4423a" : "#2a2a2a",
+              color: overwriteOnApply ? "#fff" : "#5a5a5a",
+              border: `1px solid ${overwriteOnApply ? "#c4423a" : "#3a3a3a"}`,
+              borderRight: "none",
+              borderTopLeftRadius: 4, borderBottomLeftRadius: 4,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: 11, fontWeight: 700, lineHeight: 1,
+              cursor: "pointer", userSelect: "none",
+              boxSizing: "border-box",
+              // Angled notch on the right edge — diagonal cut into the arm
+              // so it visually "tabs" into the Apply body. Clip-path is
+              // supported in UXP Chromium.
+              clipPath: "polygon(0 0, 100% 0, calc(100% - 6px) 100%, 0 100%)",
+            }}>
+            {/* Small dot indicator — visible at any state, red-on-red vs
+                gray-on-dark gives subtle contrast cue. */}
+            <span style={{
+              width: 6, height: 6, borderRadius: "50%",
+              background: overwriteOnApply ? "#fff" : "#5a5a5a",
+              display: "inline-block",
+            }} />
+          </div>
+          {/* Apply body — the rest of the button. Reuses sp-button for
+              Spectrum hover/active styling. The clip-path on the arm cuts
+              into this area visually, so we add a small negative marginLeft
+              to overlap the notch boundary cleanly. */}
+          {/* @ts-ignore Spectrum web component */}
+          <sp-button variant="secondary" onClick={outputMode === "lut" ? onApplyLut : onApply}
+            style={{ flex: "1 1 0", minWidth: 0, overflow: "hidden", whiteSpace: "nowrap", marginLeft: -6 }}
+            title={
+              outputMode === "lut"
+                ? "Create a Color Lookup adjustment layer in [Color Smash] loaded with a 33³ 3D LUT. Captures non-separable preset blend math (Color/Hue/Saturation/Luminosity) a Curves layer can't represent. Use LIVE for real-time updates, RESTORE/AUTO to round-trip via the layer's XMP."
+                : multiZone
+                  ? "Multi: creates 3 stacked Curves layers (shadow/mid/highlight) with band limiting via mask and/or Blend If. Each editable independently in PS."
+                  : "Create a new Curves adjustment layer in the target document, clipped to the target layer. The left arm toggles whether prior Match layers are replaced or stacked."
+            }>Apply</sp-button>
+        </div>
         {/* Live LUT toggle: when on, every state change re-bakes the LUT into
             the existing Match LUT layer (debounced ~300ms). Off by default —
             the contract is stronger than one-shot Apply LUT, so we make it opt-in.
