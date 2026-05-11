@@ -19,6 +19,10 @@ export interface PersistedSettings {
   chromaOnly?: boolean;
   colorSpace?: "rgb" | "lab"; // legacy (pre-v1.15.0); kept for back-compat reads
   outputMode?: "rgb" | "lab" | "lut"; // v1.15.0+: unified RGB/Lab/LUT selector
+  // LUT-specific knobs (v1.17.0)
+  lutStrength?: number;   // 0..100 — bake-time blend toward identity LUT
+  lutGrid?: 17 | 33 | 65; // 3D LUT grid points per axis
+  lutDither?: boolean;    // PS colorLookup.dither field
   // Apply behavior
   deselectOnApply?: boolean;
   overwriteOnApply?: boolean;

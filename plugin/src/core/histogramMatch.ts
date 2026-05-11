@@ -1061,6 +1061,28 @@ export function applyLutPreviewToRgba(
   return out;
 }
 
+/**
+ * Lerp per-channel curves toward identity by (1 - strength).
+ * strength = 1.0 → curves unchanged.
+ * strength = 0.0 → pure identity (input passes through).
+ * Used by the LUT bake's Strength slider so the exported .cube / Color Lookup
+ * profile carries the dialed-back transform (PS layer opacity doesn't survive
+ * .cube export, so we bake the lerp in).
+ */
+export function lerpCurvesTowardIdentity(c: ChannelCurves, strength: number): ChannelCurves {
+  if (strength >= 1) return c;
+  const s = Math.max(0, Math.min(1, strength));
+  const r = new Uint8Array(256);
+  const g = new Uint8Array(256);
+  const b = new Uint8Array(256);
+  for (let v = 0; v < 256; v++) {
+    r[v] = Math.round(v + (c.r[v] - v) * s);
+    g[v] = Math.round(v + (c.g[v] - v) * s);
+    b[v] = Math.round(v + (c.b[v] - v) * s);
+  }
+  return { r, g, b };
+}
+
 // Per-pixel weighted curve application using a precomputed effective-weight
 // buffer (one Float32 per pixel). The cluster math (hard argmin or soft blend)
 // happens once in palette.precomputeEffectiveWeights and is cached at the

@@ -13,7 +13,7 @@
 // PS version, the caller should fall back to writing a copy and surfacing
 // the path to the user.
 
-import { ChannelCurves, generateLutCube, Preset } from "../core/histogramMatch";
+import { ChannelCurves, generateLutCube, Preset, lerpCurvesTowardIdentity } from "../core/histogramMatch";
 import {
   GROUP_NAME, action, app,
   executeAsModal, readLayerPixels, setClippingMask, PixelBuffer,
@@ -29,7 +29,16 @@ const LUT_LAYER_PREFIX = "Match LUT";
 export interface ApplyLutParams {
   curves: ChannelCurves;
   preset: Preset;
-  size?: number;        // default 33
+  size?: number;        // default 33 (also accepted via gridSize for clarity)
+  /** Grid points per axis for the 3D LUT. 17 = draft, 33 = standard, 65 = high.
+   *  Alias for `size`; one of the two should be passed. */
+  gridSize?: number;
+  /** 0..1 — lerps the generated LUT toward identity before bake. Survives
+   *  portable export (.cube) because the lerp is baked INTO the LUT, unlike
+   *  PS layer opacity. Default 1 (full strength). */
+  strength?: number;
+  /** PS colorLookup.dither field — inject noise to hide banding. Default true. */
+  dither?: boolean;
   targetLayerId?: number | null; // if provided, clip the LUT layer to it
   overwritePrior?: boolean;      // delete prior 'Match LUT*' layers in [Color Smash] group
   /** If set, look for this existing Match LUT layer and update its LUT data
@@ -192,6 +201,7 @@ function base64EncodeLatin1Fallback(s: string): string {
  */
 async function tryLoadLutIntoActiveLayer(
   cubeText: string, displayName: string, curves: ChannelCurves, preset: Preset,
+  gridSize: number = 33, strength: number = 1, dither: boolean = true,
 ): Promise<{ ok: boolean; lastErr: any }> {
   // Diagnostic dump of a working manual-load layer (v1.12.1) revealed:
   //   - LUT3DFileData is an ArrayBuffer holding the RAW BYTES of the original
@@ -225,7 +235,7 @@ async function tryLoadLutIntoActiveLayer(
   // valid ICC profile we built from the ChannelCurves directly. See iccGen.ts
   // for the template-based generator (one-time captured boilerplate + freshly
   // computed 33³ CLUT bytes).
-  const profileB64 = generateIccDeviceLinkBase64(curves, preset);
+  const profileB64 = generateIccDeviceLinkBase64(curves, preset, gridSize, strength);
   const setDesc = {
     _obj: "set",
     _target: [{ _ref: "adjustmentLayer", _enum: "ordinal", _value: "targetEnum" }],
@@ -237,6 +247,7 @@ async function tryLoadLutIntoActiveLayer(
       LUT3DFileName: displayName,
       name: displayName,
       profile: { _data: profileB64, _rawData: "base64" },
+      dither,
     },
   };
   try {
@@ -262,13 +273,24 @@ async function tryLoadLutIntoActiveLayer(
  * an empty Color Lookup layer alongside the error.
  */
 export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise<ApplyLutResult> {
-  const size = params.size ?? 33;
+  // v1.17.0 LUT knobs: `gridSize` (17/33/65) replaces the legacy `size`
+  // alias (kept for back-compat); `strength` (0..1) bakes a partial-effect
+  // lerp into the LUT bytes themselves; `dither` controls PS's noise-
+  // injection field on the Color Lookup layer.
+  const size = params.gridSize ?? params.size ?? 33;
+  const strength = Math.max(0, Math.min(1, params.strength ?? 1));
+  const dither = params.dither ?? true;
+  // Apply strength lerp BEFORE generating cube/ICC so both consumers see the
+  // same dialed-back curves. Generator side applies preset postprocess on
+  // top of these — order matters: identity-lerp first, preset blend math
+  // second.
+  const effectiveCurves = strength >= 1 ? params.curves : lerpCurvesTowardIdentity(params.curves, strength);
 
   // Generate the cube text + ICC profile entirely in memory. Both ride inside
   // the batchPlay descriptor (LUT3DFileData carries the cube bytes,
   // profile carries the ICC DeviceLink) so no file ever touches disk and no
   // folder picker prompts. PS reads everything out of the descriptor itself.
-  const cubeText = generateLutCube(params.curves, params.preset, size, "Color Smash");
+  const cubeText = generateLutCube(effectiveCurves, params.preset, size, "Color Smash");
   const presetTag = params.preset === "color" ? "full"
                   : params.preset === "hue" ? "color"
                   : params.preset === "hueOnly" ? "hue"
@@ -329,7 +351,7 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
             makeVisible: false,
           }], {});
         } catch { /* ignore */ }
-        const { ok, lastErr } = await tryLoadLutIntoActiveLayer(cubeText, fileName, params.curves, params.preset);
+        const { ok, lastErr } = await tryLoadLutIntoActiveLayer(cubeText, fileName, effectiveCurves, params.preset, size, 1 /* already lerped */, dither);
         if (!ok) throw new Error(`Live LUT update failed: ${lastErr?.message ?? lastErr ?? "unknown"}`);
         try { existing.name = layerName; } catch { /* ignore */ }
         // Refresh the mask too — weights may have changed between commits.
@@ -429,7 +451,9 @@ import {
 export async function applyMultiZoneLutAsLayers(
   params: ApplyMultiZoneLutParams,
 ): Promise<ApplyLutResult> {
-  const size = params.size ?? 33;
+  const size = params.gridSize ?? params.size ?? 33;
+  const strength = Math.max(0, Math.min(1, params.strength ?? 1));
+  const dither = params.dither ?? true;
   const presetTag = params.preset === "color" ? "full"
                   : params.preset === "hue" ? "color"
                   : params.preset === "hueOnly" ? "hue"
@@ -446,10 +470,13 @@ export async function applyMultiZoneLutAsLayers(
   // inside the modal scope doing CPU work. Each is ~200KB so the three combined
   // are ~600KB of base64 — well within batchPlay limits.
   const bandsData = (["shadow", "mid", "highlight"] as const).map(key => {
-    const curves = params.multiZoneFit[key];
+    const rawBandCurves = params.multiZoneFit[key];
+    // Per-band strength lerp (same scale across all three bands so the
+    // multi-zone composite still aggregates to the user's intended dial).
+    const curves = strength >= 1 ? rawBandCurves : lerpCurvesTowardIdentity(rawBandCurves, strength);
     const cubeText = generateLutCube(curves, params.preset, size, `Color Smash ${key}`);
     const cubeB64 = cubeToBase64(cubeText);
-    const profileB64 = generateIccDeviceLinkBase64(curves, params.preset);
+    const profileB64 = generateIccDeviceLinkBase64(curves, params.preset, size, 1 /* already lerped */);
     return { key, cubeText, cubeB64, profileB64 };
   });
 
@@ -564,6 +591,7 @@ export async function applyMultiZoneLutAsLayers(
             LUT3DFileName: `colorsmash_${presetTag}_${key}.cube`,
             name: `colorsmash_${presetTag}_${key}.cube`,
             profile: { _data: data.profileB64, _rawData: "base64" },
+            dither,
           },
         };
         const loadRes = await action.batchPlay([setDesc as any], {});

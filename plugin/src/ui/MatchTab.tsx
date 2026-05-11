@@ -24,6 +24,7 @@ import {
   EnvelopePoint, DEFAULT_ENVELOPE,
   fitByMode, MatchMode, Preset,
   fitMultiZoneByMode, applyMultiZoneToRgba, processMultiZoneFit, MultiZoneFit, adaptiveBandPeaks,
+  lerpCurvesTowardIdentity,
 } from "../core/histogramMatch";
 import { EnvelopeEditor } from "./EnvelopeEditor";
 import { loadSettings, makeDebouncedSaver, clearSettings, PersistedSettings } from "./persistence";
@@ -171,6 +172,21 @@ export function MatchTab() {
   // the curves are then trilinearly sampled into a 3D LUT regardless.
   const colorSpace: "rgb" | "lab" = outputMode === "lut" ? "rgb" : outputMode;
 
+  // LUT-specific knobs (v1.17.0).
+  //   lutStrength: 0..100. Lerps the generated LUT toward an identity LUT
+  //     before bake — 100 = full transform, 0 = no-op. Differs from PS layer
+  //     opacity because the lerp is baked INTO the LUT, so .cube exports
+  //     carry the dialed-back look.
+  //   lutGrid: 17 | 33 | 65. 17³ = draft (~50KB), 33³ = standard, 65³ = high
+  //     quality (~3.3MB). Higher grid = less banding in subtle gradients,
+  //     slower to bake / bigger files.
+  //   lutDither: PS's colorLookup.dither field — injects noise to hide
+  //     quantization banding. Default ON, mirrors PS's own default.
+  const [lutStrength, setLutStrength] = useState(100);
+  const [lutGrid, setLutGrid] = useState<17 | 33 | 65>(33);
+  const [lutDither, setLutDither] = useState(true);
+  const [lutAdvancedOpen, setLutAdvancedOpen] = useState(false);
+
   // Remember the last Curves-flavor mode so the SWAP pill can flip between
   // LUT and the user's preferred Curves space (RGB or Lab). Toggling out of
   // LUT goes back to whichever Curves mode was last active.
@@ -285,6 +301,10 @@ export function MatchTab() {
         } else if (s.colorSpace === "rgb" || s.colorSpace === "lab") {
           setOutputMode(s.colorSpace);
         }
+        // v1.17.0 LUT knobs
+        if (typeof s.lutStrength === "number") setLutStrength(Math.max(0, Math.min(100, s.lutStrength)));
+        if (s.lutGrid === 17 || s.lutGrid === 33 || s.lutGrid === 65) setLutGrid(s.lutGrid);
+        if (typeof s.lutDither === "boolean") setLutDither(s.lutDither);
         if (s.deselectOnApply != null) setDeselectOnApply(s.deselectOnApply);
         if (s.overwriteOnApply != null) setOverwriteOnApply(s.overwriteOnApply);
         if (s.openSection !== undefined) setOpenSection(s.openSection);
@@ -307,7 +327,7 @@ export function MatchTab() {
     const snapshot: PersistedSettings = {
       remember,
       amount: amountLabel, smooth: smoothLabel, stretch: stretchLabel,
-      anchorStretchToHist, chromaOnly, colorSpace, outputMode, matchMode, multiZone, multiZoneLimit, adaptiveBands,
+      anchorStretchToHist, chromaOnly, colorSpace, outputMode, lutStrength, lutGrid, lutDither, matchMode, multiZone, multiZoneLimit, adaptiveBands,
       deselectOnApply, overwriteOnApply,
       openSection,
       zones: zonesLabel, lockZoneTotal,
@@ -321,7 +341,7 @@ export function MatchTab() {
     };
     saveDebouncedRef.current!(snapshot);
   }, [remember, matchMode, multiZone, multiZoneLimit, adaptiveBands, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
-      colorSpace, outputMode, deselectOnApply, overwriteOnApply, openSection,
+      colorSpace, outputMode, lutStrength, lutGrid, lutDither, deselectOnApply, overwriteOnApply, openSection,
       zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel, paletteCount, paletteAdaptive, sourceSoftness, targetSoftness, targetMaskEnabled]);
 
   const [docs, setDocs] = useState<{ id: number; name: string }[]>([]);
@@ -856,7 +876,12 @@ export function MatchTab() {
     // grid generateLutCube would write, so the preview matches the bake.
     // Target-weight attenuation is preserved by lerping toward the original.
     if (outputMode === "lut" && curvesForGraph) {
-      const lutOut = applyLutPreviewToRgba(tgtBuf.data, curvesForGraph, activePreset, 33);
+      // Preview matches what the bake produces: apply strength lerp first, then
+      // pass through the LUT preview at the user's selected grid size.
+      const previewCurves = lutStrength >= 100
+        ? curvesForGraph
+        : lerpCurvesTowardIdentity(curvesForGraph, lutStrength / 100);
+      const lutOut = applyLutPreviewToRgba(tgtBuf.data, previewCurves, activePreset, lutGrid);
       if (targetWeightsActive && targetEffectiveWeights) {
         const orig = tgtBuf.data;
         const ew = targetEffectiveWeights;
@@ -1123,7 +1148,9 @@ export function MatchTab() {
         const result = await applyMultiZoneLutAsLayers({
           multiZoneFit: procFit,
           preset: activePreset,
-          size: 33,
+          gridSize: lutGrid,
+          strength: lutStrength / 100,
+          dither: lutDither,
           targetLayerId: targetId === MERGED_LAYER_ID ? null : targetId,
           targetIsMerged: targetId === MERGED_LAYER_ID,
           overwritePrior: overwriteOnApply,
@@ -1152,7 +1179,9 @@ export function MatchTab() {
       const result = await applyLutAsAdjustmentLayer({
         curves,
         preset: activePreset,
-        size: 33,
+        gridSize: lutGrid,
+        strength: lutStrength / 100,
+        dither: lutDither,
         targetLayerId: targetId === MERGED_LAYER_ID ? null : targetId,
         targetIsMerged: targetId === MERGED_LAYER_ID,
         overwritePrior: overwriteOnApply,
@@ -1221,7 +1250,9 @@ export function MatchTab() {
           const result = await applyLutAsAdjustmentLayer({
             curves: renderedCurves,
             preset: activePreset,
-            size: 33,
+            gridSize: lutGrid,
+            strength: lutStrength / 100,
+            dither: lutDither,
             targetLayerId: targetId === MERGED_LAYER_ID ? null : targetId,
             targetIsMerged: targetId === MERGED_LAYER_ID,
             overwritePrior: false, // update-in-place handles the existing layer
@@ -1873,6 +1904,78 @@ export function MatchTab() {
           ))}
         </div>
       </div>
+
+      {/* LUT-specific knobs (v1.17.0). Only rendered when LUT mode is active —
+          in RGB/Lab modes these settings don't apply (Curves layers don't
+          quantize, can be tweaked in PS afterwards). Strength + Quality
+          surfaced inline; Dither tucked behind an Advanced disclosure since
+          the default (on) is what 99% of users want. */}
+      {outputMode === "lut" && (
+        <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+          {/* Strength slider — lerps LUT toward identity before bake.
+              Differs from PS layer opacity because the lerp is baked INTO
+              the LUT, so .cube exports carry the dialed-back look. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 4, height: 14, lineHeight: "14px" }}
+            title={`LUT strength: ${lutStrength}% — blends the generated 3D LUT toward an identity LUT before bake. 100% = full match, 0% = identity (no transform). The lerp is baked into the LUT bytes, so portable .cube exports carry the dialed-back look (PS layer opacity wouldn't survive .cube export).`}>
+            <span style={{ fontSize: 9, opacity: 0.5, width: 38 }}>strength</span>
+            <input type="range" min={0} max={100} step={1} value={lutStrength}
+              onChange={e => setLutStrength(parseInt((e.target as HTMLInputElement).value, 10))}
+              style={{ flex: 1, margin: 0, cursor: "pointer" }} />
+            <span style={{ fontSize: 9, opacity: 0.7, width: 28, textAlign: "right" }}>{lutStrength}%</span>
+          </div>
+          {/* Grid quality 3-way. 17³ draft / 33³ standard / 65³ high.
+              Bigger grids = less banding in subtle gradients + bigger .cube
+              files. 33³ default matches the long-standing Color Smash LUT
+              size + PS Color Lookup default. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 4, height: 18, lineHeight: "16px" }}>
+            <span style={{ fontSize: 9, opacity: 0.5, width: 38 }}>quality</span>
+            <div style={{ display: "flex", flex: 1, gap: 2 }}>
+              {([
+                [17 as const, "Draft 17³",   "Draft quality: 17³ grid (~50KB). Fastest to bake, visible banding in subtle gradients. Good for quick previews / iterative editing."],
+                [33 as const, "Standard 33³", "Standard quality: 33³ grid (~430KB). Default. Matches PS Color Lookup's native default. Good for most photographic work."],
+                [65 as const, "High 65³",    "High quality: 65³ grid (~3.3MB). Smoothest result, larger files. Useful for video-grading / log-LUT workflows where 33³ shows banding."],
+              ] as Array<[17 | 33 | 65, string, string]>).map(([val, label, tip]) => (
+                <div key={val} onClick={() => setLutGrid(val)} title={tip}
+                  style={{
+                    flex: 1, height: 18, padding: 0,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
+                    background: lutGrid === val ? "#3a3a3a" : "transparent",
+                    color: lutGrid === val ? "#dddddd" : "#888",
+                    border: `1px solid ${lutGrid === val ? "#888" : "#444"}`,
+                    borderRadius: 2, cursor: "pointer", userSelect: "none",
+                    lineHeight: "16px", boxSizing: "border-box",
+                  }}>{label}</div>
+              ))}
+            </div>
+          </div>
+          {/* Advanced disclosure (collapsed by default) housing the Dither
+              toggle. The PS Color Lookup adjustment layer has a `dither`
+              field that injects noise to hide banding — defaults on
+              (matches PS UI). Tucked away because 99% of users won't touch
+              it but power users want it available. */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <div onClick={() => setLutAdvancedOpen(o => !o)}
+              style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, opacity: 0.5, cursor: "pointer", userSelect: "none", height: 14, lineHeight: "14px" }}
+              title="Advanced LUT options">
+              <span style={{ width: 8, display: "inline-block", textAlign: "center" }}>
+                {lutAdvancedOpen ? "▾" : "▸"}
+              </span>
+              <span>advanced</span>
+            </div>
+            {lutAdvancedOpen && (
+              <div onClick={() => setLutDither(!lutDither)}
+                style={{ display: "flex", alignItems: "center", gap: 6, paddingLeft: 14, fontSize: 9, color: "#cccccc", cursor: "pointer", height: 14, lineHeight: "14px" }}
+                title="Dither: PS Color Lookup's noise-injection field that hides quantization banding at 33³ grid resolution. Default ON, matches PS's own default. Turn off if you want a bit-exact LUT result and accept visible banding in subtle gradients.">
+                <input type="checkbox" checked={lutDither}
+                  onChange={e => setLutDither(e.target.checked)}
+                  style={{ margin: 0, width: 12, height: 12 }} />
+                <span>dither</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <div style={{ display: "flex", flexWrap: "nowrap", gap: 4, marginTop: 6, width: "100%" }}>
         {/* Single mode-aware Apply button (v1.15.0). The output-mode selector

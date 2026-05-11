@@ -28,7 +28,7 @@
 // 33³ grid. We override the profile size field at offset 0 to match if
 // it ever needs to change.
 
-import { ChannelCurves, Preset, applyPresetPostprocess, averageChannelCurves } from "../core/histogramMatch";
+import { ChannelCurves, Preset, applyPresetPostprocess, averageChannelCurves, lerpCurvesTowardIdentity } from "../core/histogramMatch";
 
 // Base64-encoded fixed chunks of the ICC profile, extracted from a real
 // PS-exported reference. Imported as raw text so we can decode at runtime.
@@ -40,9 +40,17 @@ import { ICC_PREFIX_B64 } from "./_iccTemplate";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 import { ICC_SUFFIX_B64 } from "./_iccTemplate";
 
-const GRID = 33;
-const CLUT_SIZE = GRID * GRID * GRID * 3 * 2; // 215,622 bytes
-const TOTAL_PROFILE_SIZE = 216008;
+// Reference template was captured from a 33³ ICC export (215,622 byte CLUT,
+// 216,008 byte total profile). For variable grid sizes we keep the same
+// prefix + suffix layout — only three field-level patches differ between
+// grids: total profile size, A2B0 tag length, and the grid byte inside the
+// mft2 header. Offsets below pinpoint those.
+//
+// Byte offsets for the three grid-dependent field patches:
+const PATCH_OFFSET_PROFILE_SIZE = 0;     // uint32 BE at file start
+const PATCH_OFFSET_A2B0_LENGTH = 164;    // uint32 BE in tag table (A2B0 entry's length field)
+const PATCH_OFFSET_GRID_BYTE = 0x13e;    // uint8 inside the mft2 header at A2B0+10
+const A2B0_OVERHEAD = 52 + 12 + 12;      // mft2 header + input tables + output tables
 
 /** Decode a base64 string to Uint8Array. */
 function b64ToBytes(b64: string): Uint8Array {
@@ -85,20 +93,21 @@ function bytesToB64(bytes: Uint8Array): string {
  * stored first. For RGB inputs that's R outermost, G middle, B innermost.
  * Within each entry, output channels are R, G, B in order.
  */
-function buildClut(curves: ChannelCurves, preset: Preset): Uint8Array {
-  const out = new Uint8Array(CLUT_SIZE);
+function buildClut(curves: ChannelCurves, preset: Preset, gridSize: number): Uint8Array {
+  const N = gridSize;
+  const out = new Uint8Array(N * N * N * 3 * 2);
   // Same contrast-collapse generateLutCube does: contrast preset uses one
   // luma curve replicated across R/G/B so there's no per-channel color shift.
   const finalCurves = preset === "contrast" ? averageChannelCurves(curves) : curves;
   const orig = new Uint8Array(4); orig[3] = 255;
   const mapped = new Uint8Array(4); mapped[3] = 255;
   let p = 0;
-  for (let ri = 0; ri < GRID; ri++) {
-    const rInput = Math.round((ri / (GRID - 1)) * 255);
-    for (let gi = 0; gi < GRID; gi++) {
-      const gInput = Math.round((gi / (GRID - 1)) * 255);
-      for (let bi = 0; bi < GRID; bi++) {
-        const bInput = Math.round((bi / (GRID - 1)) * 255);
+  for (let ri = 0; ri < N; ri++) {
+    const rInput = Math.round((ri / (N - 1)) * 255);
+    for (let gi = 0; gi < N; gi++) {
+      const gInput = Math.round((gi / (N - 1)) * 255);
+      for (let bi = 0; bi < N; bi++) {
+        const bInput = Math.round((bi / (N - 1)) * 255);
         orig[0] = rInput; orig[1] = gInput; orig[2] = bInput;
         mapped[0] = finalCurves.r[rInput];
         mapped[1] = finalCurves.g[gInput];
@@ -121,34 +130,57 @@ function buildClut(curves: ChannelCurves, preset: Preset): Uint8Array {
   return out;
 }
 
+/** Write a uint32 BE into a Uint8Array at the given offset. */
+function writeUint32BE(buf: Uint8Array, off: number, v: number) {
+  buf[off]     = (v >>> 24) & 0xff;
+  buf[off + 1] = (v >>> 16) & 0xff;
+  buf[off + 2] = (v >>> 8)  & 0xff;
+  buf[off + 3] = v          & 0xff;
+}
+
 /**
- * Generate an ICC DeviceLink profile from per-channel curves + active preset.
- * Returns the base64-encoded profile bytes ready to drop into a batchPlay
- * descriptor's `profile._data` field.
+ * Generate an ICC DeviceLink profile from per-channel curves + active preset
+ * + grid size + strength. Returns the base64-encoded profile bytes ready to
+ * drop into a batchPlay descriptor's `profile._data` field.
  *
- * Preset matters here because PS renders the layer from this ICC profile,
- * so any non-separable blend math (Color / Hue / Saturation / Luminosity)
- * must be pre-baked into the CLUT — there's no separable curve we can fall
- * back on inside a 3D LUT.
+ * Grid size: 17 / 33 / 65 (any positive int works; PS handles arbitrary
+ * grid sizes via the mft2 header byte). The same template prefix + suffix
+ * is reused for all grids — we just patch three byte-level fields:
+ *   - profile size (file size, offset 0, uint32 BE)
+ *   - A2B0 tag length (in tag table, offset 164, uint32 BE)
+ *   - grid byte (mft2 header, offset 0x13e, uint8)
+ *
+ * Strength: 0..1. Lerps the curves toward identity by (1 - strength) before
+ * baking into the CLUT, so the exported .cube / Color Lookup profile
+ * carries the dialed-back transform.
+ *
+ * Preset: same as before — non-separable blend math (Color / Hue / etc.)
+ * gets folded into each CLUT sample via applyPresetPostprocess.
  */
-export function generateIccDeviceLinkBase64(curves: ChannelCurves, preset: Preset = "color"): string {
-  const prefix = b64ToBytes(ICC_PREFIX_B64);
-  const suffix = b64ToBytes(ICC_SUFFIX_B64);
-  const clut = buildClut(curves, preset);
-  if (prefix.length + clut.length + suffix.length !== TOTAL_PROFILE_SIZE) {
-    throw new Error(
-      `ICC profile size mismatch: prefix=${prefix.length} + clut=${clut.length} ` +
-      `+ suffix=${suffix.length} ≠ ${TOTAL_PROFILE_SIZE}`,
-    );
+export function generateIccDeviceLinkBase64(
+  curves: ChannelCurves,
+  preset: Preset = "color",
+  gridSize: number = 33,
+  strength: number = 1,
+): string {
+  if (gridSize < 2 || gridSize > 256) {
+    throw new Error(`Invalid LUT grid size ${gridSize}; expected 2..256.`);
   }
-  const out = new Uint8Array(TOTAL_PROFILE_SIZE);
+  // Apply strength lerp ONCE up front — both buildClut and any future
+  // postprocess in the profile will see the lerped curves.
+  const effectiveCurves = strength >= 1 ? curves : lerpCurvesTowardIdentity(curves, strength);
+  const prefix = b64ToBytes(ICC_PREFIX_B64); // 372 bytes — captured from 33³ reference
+  const suffix = b64ToBytes(ICC_SUFFIX_B64); // 14 bytes — output tables + padding
+  const clut = buildClut(effectiveCurves, preset, gridSize);
+  const totalSize = prefix.length + clut.length + suffix.length;
+  const a2b0Length = clut.length + A2B0_OVERHEAD; // mft2 + tables + CLUT
+  const out = new Uint8Array(totalSize);
   out.set(prefix, 0);
   out.set(clut, prefix.length);
   out.set(suffix, prefix.length + clut.length);
-  // Profile size field at offset 0 (uint32 BE).
-  out[0] = (TOTAL_PROFILE_SIZE >> 24) & 0xff;
-  out[1] = (TOTAL_PROFILE_SIZE >> 16) & 0xff;
-  out[2] = (TOTAL_PROFILE_SIZE >> 8) & 0xff;
-  out[3] = TOTAL_PROFILE_SIZE & 0xff;
+  // Patch grid-dependent fields:
+  writeUint32BE(out, PATCH_OFFSET_PROFILE_SIZE, totalSize);
+  writeUint32BE(out, PATCH_OFFSET_A2B0_LENGTH, a2b0Length);
+  out[PATCH_OFFSET_GRID_BYTE] = gridSize & 0xff;
   return bytesToB64(out);
 }
