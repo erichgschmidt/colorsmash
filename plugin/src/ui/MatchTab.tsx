@@ -1161,9 +1161,23 @@ export function MatchTab() {
   // by both Curves and LUT Apply success paths. Dedupe / immutable update
   // is handled inside pushHistoryEntry — multiple identical Applies in a
   // row won't spam the buffer.
+  // v1.20.17 — history entries are SOURCE-ONLY recipes. Target state
+  // (targetPaletteSwatches, targetPaletteWeights, targetSoftness, selectionMode)
+  // is intentionally stripped before pushing — it's session-ephemeral and
+  // changes per document. Keeping it in recipes made them confusing to
+  // reuse across docs and bloated the persisted file. The baked LAYER'S
+  // XMP still gets full state (for RESTORE/AUTO continue-editing); history
+  // is just the portable preset library on top.
   const pushCurrentToHistory = (): void => {
-    const state = buildXmpState();
-    const entry = makeHistoryEntry(state);
+    const full = buildXmpState();
+    const recipeOnly: LutLayerState = {
+      ...full,
+      targetPaletteSwatches: [],
+      targetPaletteWeights: [],
+      targetSoftness: 0,
+      selectionMode: "off",
+    };
+    const entry = makeHistoryEntry(recipeOnly);
     setRecentHistory(prev => pushHistoryEntry(prev, entry, HISTORY_MAX));
   };
 
@@ -2441,14 +2455,15 @@ export function MatchTab() {
                     userSelect: "none",
                     overflow: "hidden", flexShrink: 0,
                   }}>
-                  {/* Thumbnail body (v1.20.16) — top half: SOURCE palette,
-                      bottom half: TARGET palette. Both segments sized by
-                      clusterPrevalence × userMultiplier, mirroring the live
-                      UI's PaletteStrip math. Reads naturally as source → target,
-                      top to bottom. Click anywhere to load the recipe. */}
+                  {/* Thumbnail body (v1.20.17) — recipes are SOURCE-ONLY.
+                      Top: source palette signature (sized by clusterPrevalence
+                      × userMultiplier). Bottom: transform-preview gradient
+                      (32-stop CSS gradient pre-transformed by the recipe's
+                      curves + preset) — visually communicates "what this
+                      recipe DOES to a neutral input." Reads as palette →
+                      effect, top to bottom. Click anywhere to load. */}
                   <div onClick={() => applyHistoryEntry(entry)}
                     style={{ flex: 1, display: "flex", flexDirection: "column", cursor: "pointer", overflow: "hidden" }}>
-                    {/* Source palette signature on TOP. */}
                     <div style={{ flex: 1, display: "flex", flexDirection: "row", minHeight: 0 }}>
                       {entry.signature.colors.length > 0
                         ? entry.signature.colors.map((c, i) => {
@@ -2462,42 +2477,13 @@ export function MatchTab() {
                                 flex: `${Math.max(1, w)} 1 0`,
                                 background: `rgb(${r},${g},${b})`,
                                 minWidth: 0,
-                              }} title={`source · rgb(${r},${g},${b}) · ${((w / total) * 100).toFixed(0)}%`} />
+                              }} title={`rgb(${r},${g},${b}) · ${((w / total) * 100).toFixed(0)}%`} />
                             );
                           })
                         : <div style={{ flex: 1, background: "#444" }} />
                       }
                     </div>
-                    {/* Target palette signature on BOTTOM — computed on the
-                        fly from entry.state.targetPaletteSwatches ×
-                        targetPaletteWeights so old entries render correctly
-                        without a migration. Falls back to the transform-
-                        preview gradient when no target palette is stored
-                        (recipes saved before multi-palette signatures). */}
-                    {(() => {
-                      const tgtSw = entry.state.targetPaletteSwatches;
-                      const tgtW = entry.state.targetPaletteWeights;
-                      if (Array.isArray(tgtSw) && tgtSw.length > 0) {
-                        const segs = tgtSw.map((s, i) => {
-                          const prev = typeof s?.weight === "number" ? Math.max(0, s.weight) : 1;
-                          const mult = Array.isArray(tgtW) && typeof tgtW[i] === "number" ? Math.max(0, tgtW[i]) : 1;
-                          return { r: s.r | 0, g: s.g | 0, b: s.b | 0, w: prev * mult };
-                        });
-                        const total = segs.reduce((a, b) => a + b.w, 0) || 1;
-                        return (
-                          <div style={{ flex: 1, display: "flex", flexDirection: "row", minHeight: 0 }}>
-                            {segs.map((s, i) => (
-                              <div key={i} style={{
-                                flex: `${Math.max(1, Math.round(s.w * 100))} 1 0`,
-                                background: `rgb(${s.r},${s.g},${s.b})`,
-                                minWidth: 0,
-                              }} title={`target · rgb(${s.r},${s.g},${s.b}) · ${((s.w / total) * 100).toFixed(0)}%`} />
-                            ))}
-                          </div>
-                        );
-                      }
-                      return <div style={{ flex: 1, background: lutGradientCSS(entry.state), minHeight: 0 }} />;
-                    })()}
+                    <div style={{ flex: 1, background: lutGradientCSS(entry.state), minHeight: 0 }} />
                   </div>
                   {/* Pin star — top-right corner overlay. Solid when pinned,
                       outline when not. Click toggles pinned state without

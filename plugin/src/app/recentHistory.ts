@@ -209,22 +209,13 @@ export function dedupKey(state: LutLayerState): string {
   const srcW = (state.sourcePaletteWeights || [])
     .map((w) => (typeof w === "number" ? Math.round(w * 1000) : 0))
     .join(",");
-  const tgtW = (state.targetPaletteWeights || [])
-    .map((w) => (typeof w === "number" ? Math.round(w * 1000) : 0))
-    .join(",");
   const ss = state.sourceSoftness ?? 0;
-  const ts = state.targetSoftness ?? 0;
-  // v1.20.9 — include source + target swatch identities so re-Applying
-  // the same recipe against a DIFFERENT source/target image creates a new
-  // history entry. Without this the dedupe key matched and the second
-  // Apply was silently dropped from history.
+  // v1.20.17 — recipes are source-only; target fields are stripped before
+  // entries land in history, so the dedupe key only needs source identity.
   const srcSig = (state.sourcePaletteSwatches || [])
     .map((s: any) => `${s?.r ?? 0},${s?.g ?? 0},${s?.b ?? 0}`)
     .join(";");
-  const tgtSig = (state.targetPaletteSwatches || [])
-    .map((s: any) => `${s?.r ?? 0},${s?.g ?? 0},${s?.b ?? 0}`)
-    .join(";");
-  return `${mode}|${preset}|${multi}|${n}|${srcW}|${tgtW}|${ss}|${ts}|${srcSig}|${tgtSig}`;
+  return `${mode}|${preset}|${multi}|${n}|${srcW}|${ss}|${srcSig}`;
 }
 
 /** Push a new entry onto the front of the history. Dedupes against the
