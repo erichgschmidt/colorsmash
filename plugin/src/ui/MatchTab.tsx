@@ -2606,14 +2606,17 @@ export function MatchTab() {
             : "Disabled — no Color Smash metadata found on the active layer. Click a previously-baked Match layer in the Layers panel to enable."}
           style={{
             padding: "0 8px", fontSize: 10, fontWeight: 600, letterSpacing: 0.3,
-            background: "transparent",
-            color: canRestore ? "#7aa8d8" : "#3a4a58",
-            border: `1px solid ${canRestore ? "#7aa8d8" : "#3a4a58"}`,
+            // v1.20.46 — muted gray when disabled, accent color only when
+            // there's actually something to restore. Matches LIVE's pattern:
+            // reserve color for the active state.
+            background: canRestore ? "#283440" : "#2a2a2a",
+            color: canRestore ? "#7aa8d8" : "#aaaaaa",
+            border: `1px solid ${canRestore ? "#7aa8d8" : "#666"}`,
             borderRadius: 4, cursor: canRestore ? "pointer" : "default", userSelect: "none",
             display: "flex", alignItems: "center", justifyContent: "center",
             height: 28, lineHeight: "26px", boxSizing: "border-box",
             flex: "0 0 auto",
-            opacity: canRestore ? 1 : 0.55,
+            opacity: canRestore ? 1 : 0.7,
           }}>RESTORE</div>
         {/* v1.20.43 — Save LUT styled to match the Apply pill aesthetic:
             rounded shell, neutral gray background, light text. Reads as a
