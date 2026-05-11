@@ -158,6 +158,20 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       srcPixels = downsampleToMaxEdge(s, STATS_MAX_EDGE).data;
     }
     const t = targetIsMerged ? await readMergedPixelsOf(tgtDoc) : await readLayerPixels(target, statsRectForLayer(target), tgtDoc.id);
+    // v1.20.34 — read the FULL LAYER pixels separately (not selection-
+    // intersected) for the mask-building path. The bake's curves are
+    // still fit from `t` (selection-cropped, for accuracy when the user
+    // wants the curves derived from just the selected pixels), but the
+    // mask must cover the ENTIRE layer or PS uses its default
+    // (white/visible) outside the attached region — which silently broke
+    // focus mode (selection-restricted apply leaked out everywhere
+    // beyond the marquee). applyLut never had this bug because it reads
+    // at undefined sourceBounds.
+    let tFullForMask: typeof t = t;
+    if (!targetIsMerged) {
+      try { tFullForMask = await readLayerPixels(target, undefined, tgtDoc.id); }
+      catch { /* fall back to t if the full read fails */ }
+    }
     const raw = fitByMode(
       params.matchMode ?? "full",
       srcPixels,
@@ -294,8 +308,11 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     const eagerSelBytesHolder: { value: Uint8Array | null } = { value: null };
     if (params.selectionMode === "focus" || params.selectionMode === "exclude") {
       try {
-        if (!targetIsMerged && t && t.bounds) {
-          eagerSelBytesHolder.value = await readSelectionMaskBytes(doc.id, t.bounds);
+        if (!targetIsMerged && tFullForMask && tFullForMask.bounds) {
+          // v1.20.34 — read at FULL layer bounds (not stats-intersected),
+          // so the mask covers the entire layer and PS doesn't fill the
+          // unmasked region with its default-visible mask.
+          eagerSelBytesHolder.value = await readSelectionMaskBytes(doc.id, tFullForMask.bounds);
         }
       } catch { /* ignore */ }
     }
@@ -593,9 +610,13 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
       // the mask on the GROUP rather than per-band-layer is what the user wants:
       // each band keeps its luma limiter, the group mask attenuates the whole
       // multi-zone composite by per-cluster color weight.
-      if (useTargetSubGroup && bandContainer !== group && t && t.data) {
+      if (useTargetSubGroup && bandContainer !== group && tFullForMask && tFullForMask.data) {
+        // v1.20.34 — use FULL-LAYER buffer for the mask (same reason as
+        // single-curve path). `tm` aliases tFullForMask for the existing
+        // mask-build code.
+        const tm = tFullForMask;
         try {
-          const pxCount = t.width * t.height;
+          const pxCount = tm.width * tm.height;
           let tpMask: Uint8Array;
           if (useTargetMask && tp) {
           const k = tp.swatches.length;
@@ -624,10 +645,10 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
           const distBuf = new Float32Array(k);
           for (let i = 0; i < pxCount; i++) {
             const o = i * 4;
-            if (t.data[o + 3] < 128) { tpMask[i] = 0; continue; }
-            const R = srgbToLinear(t.data[o]);
-            const G = srgbToLinear(t.data[o + 1]);
-            const B = srgbToLinear(t.data[o + 2]);
+            if (tm.data[o + 3] < 128) { tpMask[i] = 0; continue; }
+            const R = srgbToLinear(tm.data[o]);
+            const G = srgbToLinear(tm.data[o + 1]);
+            const B = srgbToLinear(tm.data[o + 2]);
             const X = R * 0.4124564 + G * 0.3575761 + B * 0.1804375;
             const Y = R * 0.2126729 + G * 0.7151522 + B * 0.0721750;
             const Z = R * 0.0193339 + G * 0.1191920 + B * 0.9503041;
@@ -677,14 +698,14 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
             tpMask = composeWithSelection(tpMask, sel, selectionMode);
           }
           const tpMaskImageData = await imaging.createImageDataFromBuffer(tpMask, {
-            width: t.width, height: t.height, components: 1, chunky: true,
+            width: tm.width, height: tm.height, components: 1, chunky: true,
             colorProfile: "Gray Gamma 2.2", colorSpace: "Grayscale",
           });
           await imaging.putLayerMask({
             documentID: doc.id,
             layerID: bandContainer.id,
             imageData: tpMaskImageData,
-            targetBounds: t.bounds,
+            targetBounds: tm.bounds,
             replace: true,
           });
           if (tpMaskImageData.dispose) tpMaskImageData.dispose();
@@ -756,10 +777,15 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     const scSelectionMode = params.selectionMode ?? "off";
     const scUseSelection = scSelectionMode !== "off" && !targetIsMerged;
     const scUsePalette = !!(params.targetPalette && !targetIsMerged && t && t.data);
-    if ((scUsePalette || scUseSelection) && !targetIsMerged && t && t.data) {
+    if ((scUsePalette || scUseSelection) && !targetIsMerged && tFullForMask && tFullForMask.data) {
       const tp = params.targetPalette;
+      // v1.20.34 — use FULL-LAYER buffer for the mask, not stats-cropped.
+      // See comment at tFullForMask creation. `tm` aliases the local
+      // variable so the existing mask-build code (originally written
+      // against `t`) doesn't need scattered renames.
+      const tm = tFullForMask;
       try {
-        const pxCount = t.width * t.height;
+        const pxCount = tm.width * tm.height;
         let mask: Uint8Array;
         if (scUsePalette && tp) {
         const k = tp.swatches.length;
@@ -791,10 +817,10 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
         const distBuf = new Float32Array(k);
         for (let i = 0; i < pxCount; i++) {
           const o = i * 4;
-          if (t.data[o + 3] < 128) { mask[i] = 0; continue; }
-          const R = srgbToLinear(t.data[o]);
-          const G = srgbToLinear(t.data[o + 1]);
-          const B = srgbToLinear(t.data[o + 2]);
+          if (tm.data[o + 3] < 128) { mask[i] = 0; continue; }
+          const R = srgbToLinear(tm.data[o]);
+          const G = srgbToLinear(tm.data[o + 1]);
+          const B = srgbToLinear(tm.data[o + 2]);
           const X = R * 0.4124564 + G * 0.3575761 + B * 0.1804375;
           const Y = R * 0.2126729 + G * 0.7151522 + B * 0.0721750;
           const Z = R * 0.0193339 + G * 0.1191920 + B * 0.9503041;
@@ -852,14 +878,14 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
         }
         const { imaging } = require("photoshop");
         const maskImageData = await imaging.createImageDataFromBuffer(mask, {
-          width: t.width, height: t.height, components: 1, chunky: true,
+          width: tm.width, height: tm.height, components: 1, chunky: true,
           colorProfile: "Gray Gamma 2.2", colorSpace: "Grayscale",
         });
         await imaging.putLayerMask({
           documentID: doc.id,
           layerID: scSubGroup.id,
           imageData: maskImageData,
-          targetBounds: t.bounds,
+          targetBounds: tm.bounds,
           replace: true,
         });
         if (maskImageData.dispose) maskImageData.dispose();
