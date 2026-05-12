@@ -17,8 +17,13 @@
 
 import { GROUP_NAME, app, action, executeAsModal } from "../services/photoshop";
 
-const CURVES_PREFIX = "Match Curves";
+// v1.20.62 — per-colorSpace prefixes after the v1.20.57 rename. Each mode
+// has its own layer family; visibility sync needs to know all three plus
+// the legacy "Match Curves" name for backward compat with old PSDs.
+const RGB_PREFIX = "Match RGB";
+const LAB_PREFIX = "Match Lab";
 const LUT_PREFIX = "Match LUT";
+const LEGACY_CURVES_PREFIX = "Match Curves"; // pre-v1.20.57 bakes
 
 interface LayerNode { id: number; name: string; layers?: LayerNode[]; visible?: boolean }
 
@@ -74,27 +79,30 @@ export async function syncOutputVisibilityToMode(mode: "rgb" | "lab" | "lut"): P
   if (!doc) return;
   const group = findColorSmashGroup(doc);
   if (!group) return;
-  const curves: LayerNode[] = [];
+  const rgb: LayerNode[] = [];
+  const lab: LayerNode[] = [];
   const luts: LayerNode[] = [];
-  collectByPrefix(group, CURVES_PREFIX, curves);
+  const legacy: LayerNode[] = [];
+  collectByPrefix(group, RGB_PREFIX, rgb);
+  collectByPrefix(group, LAB_PREFIX, lab);
   collectByPrefix(group, LUT_PREFIX, luts);
-  if (curves.length === 0 && luts.length === 0) return;
+  collectByPrefix(group, LEGACY_CURVES_PREFIX, legacy);
+  if (rgb.length === 0 && lab.length === 0 && luts.length === 0 && legacy.length === 0) return;
 
-  const wantCurvesVisible = mode !== "lut";
-  const wantLutVisible = mode === "lut";
+  // Per-mode visibility plan:
+  //   rgb mode → show "Match RGB" + legacy "Match Curves"; hide Lab + LUT.
+  //   lab mode → show "Match Lab"; hide RGB + legacy + LUT.
+  //   lut mode → show LUT; hide every Curves family.
+  const wantRgbVisible    = mode === "rgb";
+  const wantLabVisible    = mode === "lab";
+  const wantLutVisible    = mode === "lut";
+  const wantLegacyVisible = mode === "rgb"; // legacy bakes most likely RGB-default
 
   await executeAsModal("Color Smash sync output visibility", async () => {
-    // Set visibility on each top-level matching node. Sub-groups carry their
-    // children's visibility implicitly, so we only need to hit the outermost
-    // matching nodes — collectByPrefix returns them in tree order, parents
-    // before children, so deduplicating by ancestry isn't critical here
-    // (idempotent show/hide).
-    for (const layer of curves) {
-      try { await setLayerVisible(layer.id, wantCurvesVisible); } catch { /* ignore */ }
-    }
-    for (const layer of luts) {
-      try { await setLayerVisible(layer.id, wantLutVisible); } catch { /* ignore */ }
-    }
+    for (const layer of rgb)    { try { await setLayerVisible(layer.id, wantRgbVisible);    } catch { /* ignore */ } }
+    for (const layer of lab)    { try { await setLayerVisible(layer.id, wantLabVisible);    } catch { /* ignore */ } }
+    for (const layer of luts)   { try { await setLayerVisible(layer.id, wantLutVisible);    } catch { /* ignore */ } }
+    for (const layer of legacy) { try { await setLayerVisible(layer.id, wantLegacyVisible); } catch { /* ignore */ } }
   });
 }
 

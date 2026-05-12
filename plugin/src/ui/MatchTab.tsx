@@ -241,7 +241,7 @@ export function MatchTab() {
   // snapshot of the panel state. UI shows the last N (default 5) as small
   // palette-strip thumbnails near the Apply area; click an entry to restore.
   // Stored in PersistedSettings so the history survives panel reloads.
-  const HISTORY_MAX = 5;
+  const HISTORY_MAX = 10;
   const [recentHistory, setRecentHistory] = useState<HistoryEntry[]>([]);
   // Default open in v1.20.1 — feedback was that the collapsed disclosure
   // was easy to miss, and the strip is small enough to live exposed.
@@ -2919,12 +2919,17 @@ export function MatchTab() {
         );
       })()}
 
-      {/* LUT-specific knobs (v1.17.0; relocated below the Apply row in v1.18.x
-          so the Apply cluster reads as the primary action — knobs are
-          contextual settings for that action, not pre-actions). Only rendered
-          when LUT mode is active. */}
-      {outputMode === "lut" && (
-        <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+      {/* LUT-specific knobs. v1.20.62 — always rendered (was gated on
+          outputMode==='lut'). Keeping these slots reserved avoids the
+          panel resizing when users flip between LUT and Curves modes;
+          they just dim out when not applicable. */}
+      {(() => {
+        const lutInactive = outputMode !== "lut";
+        return (
+        <div style={{
+          marginTop: 6, display: "flex", flexDirection: "column", gap: 4,
+          opacity: lutInactive ? 0.45 : 1,
+        }}>
           {/* Strength slider — lerps LUT toward identity before bake.
               Differs from PS layer opacity because the lerp is baked INTO
               the LUT, so .cube exports carry the dialed-back look. */}
@@ -2981,7 +2986,8 @@ export function MatchTab() {
             )}
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* Curves graph below Apply */}
       <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7 }}>Fitted curves (R G B)</div>
