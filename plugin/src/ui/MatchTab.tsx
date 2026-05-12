@@ -2471,25 +2471,28 @@ export function MatchTab() {
                   borderRadius: 2, cursor: "pointer", userSelect: "none",
                   lineHeight: "14px", boxSizing: "border-box", flexShrink: 0,
                 }}>AUTO</div>
-              <div onClick={() => setAdaptiveBands(!adaptiveBands)}
-                title={adaptiveBands
-                  ? `Adaptive ON (default) — multi-zone band peaks track the target histogram (P10/P50/P90) whenever MULTI is active for a tab. ${adaptApplicable && lumaBins ? `Current: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""} Click to disable.`
-                  : "Adaptive OFF — multi-zone band peaks fixed at 0/128/255. Click to re-enable percentile-driven peaks."}
-                style={{
-                  flex: 1, height: 16, padding: 0,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
-                  // v1.20.60 — ADAPT renders its on/off state UNCONDITIONALLY,
-                  // not gated by whether MULTI is active. It's a global default-
-                  // ON modifier; whether MULTI is on or not on a given tab,
-                  // the toggle's state communicates "adaptive bands are on
-                  // when multi-zone is in play."
-                  background: adaptiveBands ? "#3a3228" : "transparent",
-                  color: adaptiveBands ? "#e8c882" : "#888",
-                  border: `1px solid ${adaptiveBands ? "#d8b87a" : "#444"}`,
-                  borderRadius: 2, cursor: "pointer", userSelect: "none",
-                  lineHeight: "14px", boxSizing: "border-box",
-                }}>ADAPT</div>
+              {/* v1.20.61 — ADAPT sized to match a single tab pill (~1/3 of
+                  the tab-area width). Two invisible filler divs fill the
+                  remaining 2/3 so the strip's column structure mirrors the
+                  RGB | Lab | LUT row below. */}
+              <div style={{ display: "flex", flex: 1, gap: 0 }}>
+                <div onClick={() => setAdaptiveBands(!adaptiveBands)}
+                  title={adaptiveBands
+                    ? `Adaptive ON (default) — multi-zone band peaks track the target histogram (P10/P50/P90) whenever MULTI is active for a tab. ${adaptApplicable && lumaBins ? `Current: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""} Click to disable.`
+                    : "Adaptive OFF — multi-zone band peaks fixed at 0/128/255. Click to re-enable percentile-driven peaks."}
+                  style={{
+                    flex: 1, height: 16, padding: 0,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
+                    background: adaptiveBands ? "#3a3228" : "transparent",
+                    color: adaptiveBands ? "#e8c882" : "#888",
+                    border: `1px solid ${adaptiveBands ? "#d8b87a" : "#444"}`,
+                    borderRadius: 2, cursor: "pointer", userSelect: "none",
+                    lineHeight: "14px", boxSizing: "border-box",
+                  }}>ADAPT</div>
+                <div style={{ flex: 1 }} />
+                <div style={{ flex: 1 }} />
+              </div>
             </div>
           );
         })()}
