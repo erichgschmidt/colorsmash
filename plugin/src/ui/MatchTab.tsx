@@ -38,6 +38,9 @@ import {
   dedupKey,
 } from "../app/recentHistory";
 import { serializeRecipes, parseRecipes, mergeImportedRecipes } from "../app/recipeIO";
+import { buildStarterRecipes } from "../app/starterRecipes";
+
+const STARTER_PACK_VERSION = 1;
 import { lutGradientCSS } from "../app/historyThumbnail";
 import { syncOutputVisibilityToMode, repositionGroupAboveTarget } from "../app/outputVisibility";
 import {
@@ -246,6 +249,10 @@ export function MatchTab() {
   // Stored in PersistedSettings so the history survives panel reloads.
   const HISTORY_MAX = 10;
   const [recentHistory, setRecentHistory] = useState<HistoryEntry[]>([]);
+  // v1.20.66 — track which starter-pack version this user is on so we don't
+  // re-inject every reload. Loaded from persistence; if absent the next
+  // save writes it.
+  const [starterPackVersion, setStarterPackVersion] = useState(0);
   // Default open in v1.20.1 — feedback was that the collapsed disclosure
   // was easy to miss, and the strip is small enough to live exposed.
   const [historyOpen, setHistoryOpen] = useState(true);
@@ -437,6 +444,8 @@ export function MatchTab() {
         if (Array.isArray(s.recentHistory)) {
           setRecentHistory(pruneHistory(s.recentHistory, HISTORY_MAX));
         }
+        // v1.20.66 — track which starter pack version this install has seen.
+        if (typeof s.starterPackVersion === "number") setStarterPackVersion(s.starterPackVersion);
         // deselectOnApply removed in v1.20.25 — ignore any old persisted value.
         if (s.overwriteOnApply != null) setOverwriteOnApply(s.overwriteOnApply);
         if (s.openSection !== undefined) setOpenSection(s.openSection);
@@ -447,6 +456,25 @@ export function MatchTab() {
           envelopeRef.current = s.envelope as EnvelopePoint[];
           setEnvelopeLabel(s.envelope as EnvelopePoint[]);
         }
+      }
+      // v1.20.66 — first-run starter pack injection. If this install hasn't
+      // seen the current starter pack version yet AND has no prior pinned
+      // recipes (so we don't clobber a user's curated library), inject
+      // the bundled set + mark this version as installed. starterPackVersion
+      // saves on the next debounced persistence flush.
+      const loadedVersion = (s && typeof s.starterPackVersion === "number") ? s.starterPackVersion : 0;
+      if (loadedVersion < STARTER_PACK_VERSION) {
+        setRecentHistory(prev => {
+          const hasPinned = prev.some(e => e.pinned);
+          if (hasPinned) return prev; // respect the user's curated state
+          const starters = buildStarterRecipes();
+          // Filter out any starter with an id that already exists (defensive
+          // — handles weird reload states).
+          const existingIds = new Set(prev.map(e => e.id));
+          const fresh = starters.filter(s2 => !existingIds.has(s2.id));
+          return [...fresh, ...prev];
+        });
+        setStarterPackVersion(STARTER_PACK_VERSION);
       }
       loadedRef.current = true;
     })();
@@ -463,6 +491,9 @@ export function MatchTab() {
       // v1.20.64 — persist the full per-tab record so each output mode's
       // Multi/BlendIf settings survive panel reloads.
       tabConfig,
+      // v1.20.66 — once the starter pack has been injected, this prevents
+      // re-injection on every reload.
+      starterPackVersion,
       overwriteOnApply,
       openSection,
       zones: zonesLabel, lockZoneTotal,
@@ -476,7 +507,7 @@ export function MatchTab() {
       recentHistory,
     };
     saveDebouncedRef.current!(snapshot);
-  }, [remember, matchMode, multiZone, multiZoneLimit, adaptiveBands, tabConfig, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
+  }, [remember, matchMode, multiZone, multiZoneLimit, adaptiveBands, tabConfig, starterPackVersion, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
       colorSpace, outputMode, lutStrength, lutGrid, lutDither, selectionMode, overwriteOnApply, openSection,
       zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel, paletteCount, paletteAdaptive, sourceSoftness, targetSoftness, targetMaskEnabled, recentHistory]);
 

@@ -28,6 +28,11 @@ export interface PersistedSettings {
   // Typed as `any[]` here so persistence.ts doesn't pull in the LutLayerState
   // shape transitively; the recentHistory module owns parsing/pruning on load.
   recentHistory?: any[];
+  // v1.20.66 — once the starter recipe pack has been injected (on first
+  // run when no prior history exists), this flag is flipped so we don't
+  // re-inject on every reload. Bump the value (1 → 2) if/when the pack
+  // ships new starters and you want them to land in old installs.
+  starterPackVersion?: number;
   // Apply behavior
   deselectOnApply?: boolean;
   overwriteOnApply?: boolean;
