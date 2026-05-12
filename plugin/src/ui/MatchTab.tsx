@@ -2492,6 +2492,59 @@ export function MatchTab() {
         </div>
         {/* RIGHT: three tab columns. Each column = tab pill on top, two
             sub-toggle pills below (MULTI, BLEND IF). */}
+        {/* v1.20.55 — LIVE / ADAPT stacked column. LIVE pairs with the
+            top "output mode" row (it's the main bake-mode toggle); ADAPT
+            pairs with the bottom "modifier" row (it's a multi-zone
+            refinement). Dim when not applicable to the active config:
+            LIVE dims for non-LUT modes, ADAPT dims when Multi is off
+            on the active tab. */}
+        {(() => {
+          const liveApplicable = outputMode === "lut";
+          const adaptApplicable = tabConfig[outputMode].multi;
+          return (
+            <div style={{ display: "flex", flexDirection: "column", gap: 0, width: 44, flexShrink: 0 }}>
+              <div onClick={() => setLiveLut(v => !v)}
+                title={liveApplicable
+                  ? (liveLut
+                    ? "Live LUT ON — slider changes auto-update the Match LUT layer in real-time (debounced 300ms). Click to disable."
+                    : "Live LUT OFF — Match LUT layer frozen until you hit Apply. Click to enable real-time auto-bake.")
+                  : "Live is LUT-only — switch the output mode to LUT to enable real-time updates."}
+                style={{
+                  height: 18, padding: 0,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
+                  background: liveLut && liveApplicable ? "#3a3228" : "transparent",
+                  color: !liveApplicable ? "#555" : (liveLut ? "#e8c882" : "#777"),
+                  border: `1px solid ${!liveApplicable ? "#3a3a3a" : (liveLut ? "#d8b87a" : "#444")}`,
+                  borderRightWidth: 0, // collapse against the RGB column's left border
+                  borderRadius: 0,
+                  cursor: liveApplicable ? "pointer" : "default", userSelect: "none",
+                  lineHeight: "16px", boxSizing: "border-box",
+                  opacity: liveApplicable ? 1 : 0.55,
+                }}>LIVE</div>
+              <div onClick={() => setAdaptiveBands(!adaptiveBands)}
+                title={adaptApplicable
+                  ? (adaptiveBands
+                    ? `Adaptive ON — multi-zone band peaks track the target histogram (P10/P50/P90). ${lumaBins ? `Current: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""}`
+                    : "Adaptive OFF — multi-zone band peaks fixed at 0/128/255. Click to enable percentile-driven peaks.")
+                  : "Adaptive is multi-zone-only — turn MULTI on for this tab to enable."}
+                style={{
+                  height: 18, padding: 0,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
+                  background: adaptiveBands && adaptApplicable ? "#3a3228" : "transparent",
+                  color: !adaptApplicable ? "#555" : (adaptiveBands ? "#e8c882" : "#777"),
+                  border: `1px solid ${!adaptApplicable ? "#3a3a3a" : (adaptiveBands ? "#d8b87a" : "#444")}`,
+                  borderRightWidth: 0,
+                  borderTopWidth: 0, // merge with LIVE above
+                  borderRadius: 0,
+                  cursor: adaptApplicable ? "pointer" : "default", userSelect: "none",
+                  lineHeight: "16px", boxSizing: "border-box",
+                  opacity: adaptApplicable ? 1 : 0.55,
+                }}>ADAPT</div>
+            </div>
+          );
+        })()}
         <div style={{ display: "flex", flex: 1, gap: 0 }}>
           {([
             ["rgb", "RGB", "RGB — separable per-channel Curves layer."],
@@ -2583,42 +2636,9 @@ export function MatchTab() {
             the contract is stronger than one-shot Apply LUT, so we make it opt-in.
             Match the visual style of the small mode-toggle pills used elsewhere
             (palette mask, adapt, count) — dim when off, soft amber when on. */}
-        {/* v1.20.43 — LIVE pill restyled: neutral gray when off (was almost
-            invisible amber-on-dark), warm amber only when on. Same height
-            as Apply / Save LUT pills next to it. */}
-        <div onClick={() => setLiveLut(v => !v)}
-          title={liveLut
-            ? "Live LUT ON — slider changes auto-update the Match LUT layer in real-time (debounced 300ms). Click Apply LUT once to seed the layer if none exists yet, then changes propagate automatically."
-            : "Live LUT OFF — the Match LUT layer is frozen until you hit Apply LUT again. Click to enable: every change auto-bakes into the existing layer."}
-          style={{
-            padding: "0 8px", fontSize: 10, fontWeight: 600, letterSpacing: 0.3,
-            background: liveLut ? "#3a3228" : "#2a2a2a",
-            color: liveLut ? "#e8c882" : "#aaaaaa",
-            border: `1px solid ${liveLut ? "#d8b87a" : "#666"}`,
-            borderRadius: 4, cursor: "pointer", userSelect: "none",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            height: 28, lineHeight: "26px", boxSizing: "border-box",
-            flex: "0 0 auto",
-          }}>LIVE</div>
-        {/* v1.20.51 — ADAPT relocated from the multi-zone block to here.
-            It's a global "fit the bands to histogram percentiles" toggle,
-            so it lives with the other action-row controls rather than
-            inside the per-tab output-mode block. Dim gray when off,
-            warm amber when on (matches LIVE's color discipline). */}
-        <div onClick={() => setAdaptiveBands(!adaptiveBands)}
-          title={adaptiveBands
-            ? `Adaptive ON — multi-zone band peaks track the target histogram (P10/P50/P90) rather than fixed 0/128/255. ${multiZone && lumaBins ? `Current: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""} Click to disable.`
-            : "Adaptive OFF — multi-zone band peaks fixed at 0/128/255. Click to enable: peaks shift to the target histogram's percentiles for better fits on low-key / high-key images."}
-          style={{
-            padding: "0 8px", fontSize: 10, fontWeight: 600, letterSpacing: 0.3,
-            background: adaptiveBands ? "#3a3228" : "#2a2a2a",
-            color: adaptiveBands ? "#e8c882" : "#aaaaaa",
-            border: `1px solid ${adaptiveBands ? "#d8b87a" : "#666"}`,
-            borderRadius: 4, cursor: "pointer", userSelect: "none",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            height: 28, lineHeight: "26px", boxSizing: "border-box",
-            flex: "0 0 auto",
-          }}>ADAPT</div>
+        {/* v1.20.55 — LIVE and ADAPT relocated UP into the output block
+            as a stacked column next to Apply. Action row keeps only the
+            admin-style controls (RESTORE / 💾 LUT / SAVE / ✕ / ⟳). */}
         {/* v1.20.43 — RESTORE pill now dim/disabled when no XMP is found on
             the active layer; comes alive when the user clicks a previously-
             baked Match layer. Teaches users the feature exists by enabling
