@@ -364,6 +364,13 @@ export function MatchTab() {
   // it modifies a PS layer continuously while the user adjusts sliders, which
   // is a stronger contract than the one-shot Apply button.
   const [liveLut, setLiveLut] = useState(false);
+  // v1.20.68 — isolation toggle. When on, all top-level layers in the
+  // target doc except the target's ancestor chain and the [Color Smash]
+  // group are hidden, giving the user a quick "see just the matched
+  // result" view. Snapshot of prior visibility is stored in a ref so we
+  // can flip back cleanly. Toggling off restores the saved state.
+  const [isolated, setIsolated] = useState(false);
+  const isolationSnapshotRef = useRef<Map<number, boolean> | null>(null);
   const liveLutLayerIdRef = useRef<number | null>(null);
   // (liveUpdates and stale state declared above, before the hooks that consume them.)
 
@@ -2012,6 +2019,109 @@ export function MatchTab() {
   const sel = matchStyles.sel;
   const tinyBtn = matchStyles.tinyBtn;
 
+  // v1.20.68 — jump to target layer in PS Layers panel. Quality-of-life:
+  // when the panel target dropdown points at a layer buried in a group,
+  // this saves the user a click+expand to actually open + edit it.
+  const onJumpToTarget = async () => {
+    if (targetId == null || targetId === MERGED_LAYER_ID) {
+      setStatus("No specific target layer to jump to.");
+      return;
+    }
+    try {
+      await executeAsModal("Color Smash jump to target", async () => {
+        await psAction.batchPlay([{
+          _obj: "select",
+          _target: [{ _ref: "layer", _id: targetId }],
+          makeVisible: true,
+        }], {});
+      });
+    } catch (e: any) {
+      setStatus(`Jump failed: ${e?.message ?? e}`);
+    }
+  };
+
+  // v1.20.68 — isolation toggle. When activated, snapshots the current
+  // visibility of every layer in the target doc, then hides everything
+  // EXCEPT the target's ancestor chain and the [Color Smash] group's
+  // ancestor chain. Toggling off restores the snapshot exactly.
+  // Acts as an A/B compare: see the matched output without surrounding
+  // context, then flip back to the full comp.
+  const onToggleIsolation = async () => {
+    if (tgtDocId == null) { setStatus("Pick a target doc first."); return; }
+    try {
+      await executeAsModal("Color Smash isolate", async () => {
+        const ps = require("photoshop");
+        const doc = (ps.app.documents ?? []).find((d: any) => d.id === tgtDocId);
+        if (!doc) return;
+        if (!isolated) {
+          // Build the keep-visible set: target layer + its ancestor chain,
+          // plus [Color Smash] group + its ancestor chain.
+          const keep = new Set<number>();
+          const addAncestors = (id: number) => {
+            const findPath = (layers: any[], path: any[]): any[] | null => {
+              for (const l of layers) {
+                if (l.id === id) return [...path, l];
+                if (Array.isArray(l.layers)) {
+                  const p = findPath(l.layers, [...path, l]);
+                  if (p) return p;
+                }
+              }
+              return null;
+            };
+            const path = findPath(doc.layers ?? [], []);
+            if (path) for (const node of path) keep.add(node.id);
+          };
+          if (targetId != null && targetId !== MERGED_LAYER_ID) addAncestors(targetId);
+          // Find [Color Smash] group + add its ancestor chain.
+          const findCS = (layers: any[]): any | null => {
+            for (const l of layers) {
+              if (l.name === "[Color Smash]" && Array.isArray(l.layers)) return l;
+              if (Array.isArray(l.layers)) { const f = findCS(l.layers); if (f) return f; }
+            }
+            return null;
+          };
+          const csGroup = findCS(doc.layers ?? []);
+          if (csGroup) addAncestors(csGroup.id);
+          // Snapshot + hide the others.
+          const snap = new Map<number, boolean>();
+          const walk = (layers: any[]) => {
+            for (const l of layers) {
+              snap.set(l.id, !!l.visible);
+              if (!keep.has(l.id)) {
+                try { l.visible = false; } catch { /* ignore */ }
+              } else {
+                try { l.visible = true; } catch { /* ignore */ }
+              }
+              if (Array.isArray(l.layers)) walk(l.layers);
+            }
+          };
+          walk(doc.layers ?? []);
+          isolationSnapshotRef.current = snap;
+          setIsolated(true);
+        } else {
+          // Restore from snapshot.
+          const snap = isolationSnapshotRef.current;
+          if (snap) {
+            const walk = (layers: any[]) => {
+              for (const l of layers) {
+                const prev = snap.get(l.id);
+                if (typeof prev === "boolean") {
+                  try { l.visible = prev; } catch { /* ignore */ }
+                }
+                if (Array.isArray(l.layers)) walk(l.layers);
+              }
+            };
+            walk(doc.layers ?? []);
+          }
+          isolationSnapshotRef.current = null;
+          setIsolated(false);
+        }
+      });
+    } catch (e: any) {
+      setStatus(`Isolate toggle failed: ${e?.message ?? e}`);
+    }
+  };
+
   // Full reset: every persisted setting back to its default + delete the saved file.
   // Triggered by the red ✕ in the bottom bar.
   const onResetAll = () => {
@@ -2059,7 +2169,7 @@ export function MatchTab() {
 
   return (
     <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-      {/* v1.20.67 — small inline wordmark at the top of the panel: bundled
+      {/* v1.20.68 — small inline wordmark at the top of the panel: bundled
           plugin icon + "Color Smash" + version, with a ? help icon at the
           right. Subtle (opacity 0.7) so it identifies the plugin without
           competing for attention. */}
@@ -2075,7 +2185,7 @@ export function MatchTab() {
         }}>Color Smash</span>
         <span style={{
           fontSize: 9, color: "#888", userSelect: "none",
-        }}>v1.20.67</span>
+        }}>v1.20.68</span>
         <span style={{ flex: 1 }} />
         <span onClick={(e: any) => { e.stopPropagation(); e.preventDefault(); void uxpInfo("Color Smash — about", [
           { heading: "What this is",
@@ -2085,7 +2195,7 @@ export function MatchTab() {
           { heading: "Workflow tips",
             body: "+ on the Apply pill archives the current [Color Smash] session and starts a fresh one. RESTORE on any baked layer recovers the exact panel state that produced it. AUTO re-bakes the existing layer on every slider drag. MASK shows protected regions as red on the preview." },
           { heading: "Version",
-            body: "Color Smash v1.20.67. Branch: master. Build cleanly on PS 25.0+." },
+            body: "Color Smash v1.20.68. Branch: master. Build cleanly on PS 25.0+." },
         ]); }}
           title="About Color Smash"
           style={{
@@ -2690,8 +2800,44 @@ export function MatchTab() {
                     borderRadius: 2, cursor: "pointer", userSelect: "none",
                     lineHeight: "14px", boxSizing: "border-box",
                   }}>ADAPT</div>
-                <div style={{ flex: 1 }} />
-                <div style={{ flex: 1 }} />
+                {/* v1.20.68 — JUMP: select the target layer in PS Layers
+                    panel. Quick navigation when the target dropdown
+                    points at a layer buried in a group. */}
+                <div onClick={onJumpToTarget}
+                  title={targetId == null || targetId === MERGED_LAYER_ID
+                    ? "JUMP — no specific target layer to jump to (pick a layer in the target dropdown first)."
+                    : "JUMP — select the target layer in PS Layers panel + scroll it into view."}
+                  style={{
+                    flex: 1, height: 16, padding: 0,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
+                    background: "transparent",
+                    color: (targetId != null && targetId !== MERGED_LAYER_ID) ? "#888" : "#555",
+                    border: `1px solid ${(targetId != null && targetId !== MERGED_LAYER_ID) ? "#444" : "#3a3a3a"}`,
+                    borderRadius: 2,
+                    cursor: (targetId != null && targetId !== MERGED_LAYER_ID) ? "pointer" : "default",
+                    userSelect: "none",
+                    lineHeight: "14px", boxSizing: "border-box",
+                    opacity: (targetId != null && targetId !== MERGED_LAYER_ID) ? 1 : 0.55,
+                  }}>JUMP</div>
+                {/* v1.20.68 — ISOLATE: A/B compare via hide-other-layers.
+                    When on, snapshots prior visibility and hides every
+                    top-level layer except the target's ancestor chain +
+                    [Color Smash] group. Toggling off restores. */}
+                <div onClick={onToggleIsolation}
+                  title={isolated
+                    ? "ISOLATE ON — non-target / non-[Color Smash] layers hidden. Click to restore prior visibility."
+                    : "ISOLATE OFF — click to hide every layer except the target's ancestor chain + [Color Smash] group. A/B compare against the full comp."}
+                  style={{
+                    flex: 1, height: 16, padding: 0,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
+                    background: isolated ? "#283440" : "transparent",
+                    color: isolated ? "#7aa8d8" : "#888",
+                    border: `1px solid ${isolated ? "#7aa8d8" : "#444"}`,
+                    borderRadius: 2, cursor: "pointer", userSelect: "none",
+                    lineHeight: "14px", boxSizing: "border-box",
+                  }}>ISOLATE</div>
               </div>
             </div>
           );
