@@ -33,7 +33,14 @@ interface LayerNode { id: number; name: string; layers?: LayerNode[]; visible?: 
 function collectByPrefix(root: { layers?: LayerNode[] }, prefix: string, out: LayerNode[]) {
   for (const l of root.layers ?? []) {
     if (typeof l.name === "string" && (l.name === prefix || l.name.startsWith(prefix))) {
+      // v1.20.64 — stop recursion at the first match. Toggling visibility
+      // on a parent group implicitly governs its descendants; recursing
+      // and pushing every child too caused duplicate toggles per node
+      // (harmless today since both ranks want the same state, but risky
+      // for any future case where band-level visibility should diverge
+      // from the group's). Tree order is preserved by stopping here.
       out.push(l);
+      continue;
     }
     if (l.layers) collectByPrefix(l, prefix, out);
   }

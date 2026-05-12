@@ -774,12 +774,21 @@ export async function applyMultiZoneLutAsLayers(
         try { await setClippingMask(bandContainer, true); } catch { /* ignore */ }
       }
 
-      // 9. XMP fingerprint on the first band layer (consumed by RESTORE on
-      //    any layer in the sub-group via shared prefix). For simplicity we
-      //    only stamp the topmost — Restore reads from whatever's active.
-      if (params.xmpState && bandLayerIds.length > 0) {
-        try { await writeLutLayerState(bandLayerIds[0], params.xmpState); }
-        catch { /* non-fatal */ }
+      // 9. v1.20.64 — XMP fingerprint stamped on outer group, inner
+      //    bandContainer, AND every band layer. Previously only the
+      //    shadow band carried XMP, so clicking the outer group / mids /
+      //    highlights left RESTORE disabled. Mirrors applyMatch's
+      //    multi-zone parity.
+      if (params.xmpState) {
+        if (outerGroup?.id != null) {
+          try { await writeLutLayerState(outerGroup.id, params.xmpState); } catch { /* non-fatal */ }
+        }
+        if (bandContainer?.id != null) {
+          try { await writeLutLayerState(bandContainer.id, params.xmpState); } catch { /* non-fatal */ }
+        }
+        for (const bid of bandLayerIds) {
+          try { await writeLutLayerState(bid, params.xmpState); } catch { /* non-fatal */ }
+        }
       }
 
       // v1.20.27 — restore marquee + clean up snapshot channel.

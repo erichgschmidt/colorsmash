@@ -385,11 +385,26 @@ export function MatchTab() {
         if (s.anchorStretchToHist != null) setAnchorStretchToHist(s.anchorStretchToHist);
         if (s.matchMode) setMatchMode(s.matchMode as MatchMode);
         // Normalize legacy "both" persisted state to "blendIf" — Mask is now implicit
-        // (used whenever Blend If is off), so "both" no longer makes sense in the UI.
-        if (s.multiZoneLimit === "both" || s.multiZoneLimit === "blendIf") setMultiZoneLimit("blendIf");
-        else if (s.multiZoneLimit === "mask") setMultiZoneLimit("mask");
-        if (s.multiZone != null) setMultiZone(s.multiZone);
-        if (s.multiZoneLimit) setMultiZoneLimit(s.multiZoneLimit);
+        // v1.20.64 — prefer the per-tab `tabConfig` snapshot if present
+        // (saved since v1.20.64). Falls back to the legacy single
+        // multiZone/multiZoneLimit fields, fanning them into all three
+        // tab slots so old PSDs/recipes don't lose state on first reload.
+        if (s.tabConfig) {
+          setTabConfig({
+            rgb: { multi: !!s.tabConfig.rgb?.multi, blendIf: !!s.tabConfig.rgb?.blendIf },
+            lab: { multi: !!s.tabConfig.lab?.multi, blendIf: !!s.tabConfig.lab?.blendIf },
+            lut: { multi: !!s.tabConfig.lut?.multi, blendIf: !!s.tabConfig.lut?.blendIf },
+          });
+        } else if (s.multiZone != null || s.multiZoneLimit != null) {
+          // Legacy migration — single values get applied to all three tabs.
+          const legacyMulti = !!s.multiZone;
+          const legacyBlendIf = s.multiZoneLimit === "blendIf" || s.multiZoneLimit === "both";
+          setTabConfig({
+            rgb: { multi: legacyMulti, blendIf: legacyBlendIf },
+            lab: { multi: legacyMulti, blendIf: legacyBlendIf },
+            lut: { multi: legacyMulti, blendIf: legacyBlendIf },
+          });
+        }
         // v1.20.60 — adaptiveBands is now ALWAYS default-on. Don't honor a
         // legacy `false` from persistence — users should land on the sane
         // default every fresh session and explicitly opt out by clicking
@@ -443,6 +458,9 @@ export function MatchTab() {
       remember,
       amount: amountLabel, smooth: smoothLabel, stretch: stretchLabel,
       anchorStretchToHist, chromaOnly, colorSpace, outputMode, lutStrength, lutGrid, lutDither, selectionMode, matchMode, multiZone, multiZoneLimit, adaptiveBands,
+      // v1.20.64 — persist the full per-tab record so each output mode's
+      // Multi/BlendIf settings survive panel reloads.
+      tabConfig,
       overwriteOnApply,
       openSection,
       zones: zonesLabel, lockZoneTotal,
@@ -456,7 +474,7 @@ export function MatchTab() {
       recentHistory,
     };
     saveDebouncedRef.current!(snapshot);
-  }, [remember, matchMode, multiZone, multiZoneLimit, adaptiveBands, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
+  }, [remember, matchMode, multiZone, multiZoneLimit, adaptiveBands, tabConfig, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
       colorSpace, outputMode, lutStrength, lutGrid, lutDither, selectionMode, overwriteOnApply, openSection,
       zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel, paletteCount, paletteAdaptive, sourceSoftness, targetSoftness, targetMaskEnabled, recentHistory]);
 
@@ -1456,7 +1474,28 @@ export function MatchTab() {
     if (typeof state.sourceSoftness === "number") setSourceSoftness(state.sourceSoftness);
     if (mode === "full" && typeof state.targetSoftness === "number") setTargetSoftness(state.targetSoftness);
     if (state.paletteAdaptive != null) setPaletteAdaptive(!!state.paletteAdaptive);
-    if (state.multiZone != null) setMultiZone(!!state.multiZone);
+    // v1.20.64 — write tabConfig directly with the explicit target key so
+    // the restored Multi/BlendIf land on the OUTPUT MODE THE BAKE USED, not
+    // whichever tab happens to be active at restore time. setMultiZone()
+    // is a shim that closes over `outputMode`; React batches the
+    // setOutputMode + setMultiZone calls so the shim still sees the OLD
+    // outputMode and routes Multi into the wrong tab.
+    if (state.multiZone != null) {
+      const targetMode =
+        (state.outputMode === "rgb" || state.outputMode === "lab" || state.outputMode === "lut") ? state.outputMode
+        : (state.colorSpace === "rgb" || state.colorSpace === "lab") ? state.colorSpace
+        : "lut";
+      setTabConfig(prev => ({
+        ...prev,
+        [targetMode]: {
+          multi: !!state.multiZone,
+          // multiZoneLimit isn't carried in XMP (only multi is), so we
+          // preserve the existing blendIf for that tab rather than
+          // forcing it off on every restore.
+          blendIf: prev[targetMode].blendIf,
+        },
+      }));
+    }
     if (state.dimensions) {
       dimsRef.current = { ...DEFAULT_DIMENSIONS, ...state.dimensions } as DimensionOpts;
       setDimsLabel(dimsRef.current);
@@ -1615,6 +1654,9 @@ export function MatchTab() {
     // within this new group.
     if (!overwriteOnApply && tgtDocId != null) {
       try { await branchColorSmashGroup(tgtDocId); } catch { /* non-fatal */ }
+      // v1.20.64 — clear the live-LUT layer pointer so AUTO doesn't keep
+      // mutating the LUT layer inside the now-archived hidden group.
+      liveLutLayerIdRef.current = null;
       setOverwriteOnApply(true);
     }
 
@@ -1661,11 +1703,14 @@ export function MatchTab() {
           multiZoneExtents,
           xmpState: buildXmpState(),
         });
-        // Live LUT is disabled for multi-zone (would require updating 3
-        // layers per commit + recomputing 3 ICC profiles — defer to a
-        // future increment). Track the sub-group id for the visibility-sync
-        // path so SWAP/AUTO can toggle the whole multi-zone trio at once.
-        liveLutLayerIdRef.current = result.layerId;
+        // v1.20.64 — multi-zone LUT result returns the band-container group
+        // id. Storing that into liveLutLayerIdRef would cause AUTO's next
+        // tick (after a switch out of multi mode) to pass a group id as
+        // `updateExistingLayerId`, which the single-LUT applyLut path can't
+        // handle and silently produces stray layers. Keep the ref null in
+        // multi-zone so AUTO always re-seeds via the create path until the
+        // user does a non-multi Apply.
+        liveLutLayerIdRef.current = null;
         lastSelfWriteRef.current = Date.now();
         setStatus(`Applied "${result.layerName}" (3× 33³ multi-zone LUT).`);
         pushCurrentToHistory();
@@ -1791,6 +1836,9 @@ export function MatchTab() {
     // v1.20.54 — branch off when + is armed (see onApplyLut for context).
     if (!overwriteOnApply && tgtDocId != null) {
       try { await branchColorSmashGroup(tgtDocId); } catch { /* non-fatal */ }
+      // v1.20.64 — clear the live-LUT layer pointer so AUTO doesn't keep
+      // mutating the LUT layer inside the now-archived hidden group.
+      liveLutLayerIdRef.current = null;
       setOverwriteOnApply(true);
     }
     if (srcMode === "selection" && !srcOverride) { setStatus("Snap a selection first."); return; }
