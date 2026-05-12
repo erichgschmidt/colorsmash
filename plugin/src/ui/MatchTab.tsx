@@ -2441,15 +2441,53 @@ export function MatchTab() {
         );
       })()}
 
-      {/* v1.20.51 — output block redesigned:
-          - Tall Apply pill on the LEFT spans both rows.
-          - RIGHT: three tab columns (RGB / Lab / LUT). Each column has its
-            own MULTI + BLEND IF sub-toggles. Each tab REMEMBERS its config
-            independently, so flipping between modes restores per-mode
-            settings.
-          - ADAPTIVE moved out of this block into the action row below
-            (it's a global setting, not per-tab). */}
-      <div style={{ marginTop: 6, display: "flex", alignItems: "stretch", gap: 4 }}>
+      {/* v1.20.59 — output block restructured to reduce visual density.
+          A thin top row carries AUTO (above the Apply column) and ADAPT
+          (above the tabs columns). Below that: tall Apply pill + 3 tab
+          columns each with their MULTI/BLEND sub-toggles. So the column
+          count drops from 5 (Apply, LIVE/ADAPT, RGB, Lab, LUT) to 4
+          (Apply, RGB, Lab, LUT) and the global modifiers ride on top. */}
+      <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 0 }}>
+        {/* Thin top strip: AUTO + ADAPT */}
+        {(() => {
+          const adaptApplicable = tabConfig[outputMode].multi;
+          return (
+            <div style={{ display: "flex", gap: 4, height: 16, marginBottom: 2 }}>
+              <div onClick={() => setLiveLut(v => !v)}
+                title={liveLut
+                  ? `AUTO ON — slider changes auto-update the existing Match ${outputMode === "lut" ? "LUT" : "Curves"} layer in real-time (debounced 300ms). Hit Apply once to seed the layer if none exists yet; subsequent changes propagate automatically. Click to disable.`
+                  : `AUTO OFF — the Match ${outputMode === "lut" ? "LUT" : "Curves"} layer is frozen until you hit Apply again. Click to enable real-time auto-bake.`}
+                style={{
+                  width: 76, height: 16, padding: 0,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
+                  background: liveLut ? "#3a3228" : "transparent",
+                  color: liveLut ? "#e8c882" : "#888",
+                  border: `1px solid ${liveLut ? "#d8b87a" : "#444"}`,
+                  borderRadius: 2, cursor: "pointer", userSelect: "none",
+                  lineHeight: "14px", boxSizing: "border-box", flexShrink: 0,
+                }}>AUTO</div>
+              <div onClick={() => setAdaptiveBands(!adaptiveBands)}
+                title={adaptApplicable
+                  ? (adaptiveBands
+                    ? `Adaptive ON — multi-zone band peaks track the target histogram (P10/P50/P90). ${lumaBins ? `Current: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""}`
+                    : "Adaptive OFF — multi-zone band peaks fixed at 0/128/255. Click to enable percentile-driven peaks.")
+                  : "Adaptive is multi-zone-only — turn MULTI on for the active tab to enable."}
+                style={{
+                  flex: 1, height: 16, padding: 0,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
+                  background: adaptiveBands && adaptApplicable ? "#3a3228" : "transparent",
+                  color: !adaptApplicable ? "#555" : (adaptiveBands ? "#e8c882" : "#888"),
+                  border: `1px solid ${!adaptApplicable ? "#3a3a3a" : (adaptiveBands ? "#d8b87a" : "#444")}`,
+                  borderRadius: 2, cursor: adaptApplicable ? "pointer" : "default", userSelect: "none",
+                  lineHeight: "14px", boxSizing: "border-box",
+                  opacity: adaptApplicable ? 1 : 0.55,
+                }}>ADAPT</div>
+            </div>
+          );
+        })()}
+        <div style={{ display: "flex", alignItems: "stretch", gap: 4 }}>
         {/* Tall Apply pill — outer rounded shell with arm + body. Spans
             the full height of the two-row tabs block to its right (~40px). */}
         <div style={{
@@ -2490,61 +2528,7 @@ export function MatchTab() {
               whiteSpace: "nowrap", overflow: "hidden",
             }}>{overwriteOnApply ? "Apply" : "Apply +"}</div>
         </div>
-        {/* RIGHT: three tab columns. Each column = tab pill on top, two
-            sub-toggle pills below (MULTI, BLEND IF). */}
-        {/* v1.20.55 — LIVE / ADAPT stacked column. LIVE pairs with the
-            top "output mode" row (it's the main bake-mode toggle); ADAPT
-            pairs with the bottom "modifier" row (it's a multi-zone
-            refinement). Dim when not applicable to the active config:
-            LIVE dims for non-LUT modes, ADAPT dims when Multi is off
-            on the active tab. */}
-        {(() => {
-          const adaptApplicable = tabConfig[outputMode].multi;
-          return (
-            <div style={{ display: "flex", flexDirection: "column", gap: 0, width: 44, flexShrink: 0 }}>
-              {/* v1.20.56 — LIVE works for ALL output modes since v1.16.4
-                  (LUT path rewrites the Color Lookup descriptor; RGB/Lab
-                  path calls updateMatchCurvesLayerInPlace). Removed the
-                  incorrect LUT-only gating. */}
-              <div onClick={() => setLiveLut(v => !v)}
-                title={liveLut
-                  ? `Live ON — slider changes auto-update the existing Match ${outputMode === "lut" ? "LUT" : "Curves"} layer in real-time (debounced 300ms). Hit Apply once to seed the layer if none exists yet; subsequent changes propagate automatically. Click to disable.`
-                  : `Live OFF — the Match ${outputMode === "lut" ? "LUT" : "Curves"} layer is frozen until you hit Apply again. Click to enable real-time auto-bake.`}
-                style={{
-                  height: 18, padding: 0,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
-                  background: liveLut ? "#3a3228" : "transparent",
-                  color: liveLut ? "#e8c882" : "#777",
-                  border: `1px solid ${liveLut ? "#d8b87a" : "#444"}`,
-                  borderRightWidth: 0,
-                  borderRadius: 0,
-                  cursor: "pointer", userSelect: "none",
-                  lineHeight: "16px", boxSizing: "border-box",
-                }}>LIVE</div>
-              <div onClick={() => setAdaptiveBands(!adaptiveBands)}
-                title={adaptApplicable
-                  ? (adaptiveBands
-                    ? `Adaptive ON — multi-zone band peaks track the target histogram (P10/P50/P90). ${lumaBins ? `Current: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""}`
-                    : "Adaptive OFF — multi-zone band peaks fixed at 0/128/255. Click to enable percentile-driven peaks.")
-                  : "Adaptive is multi-zone-only — turn MULTI on for this tab to enable."}
-                style={{
-                  height: 18, padding: 0,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
-                  background: adaptiveBands && adaptApplicable ? "#3a3228" : "transparent",
-                  color: !adaptApplicable ? "#555" : (adaptiveBands ? "#e8c882" : "#777"),
-                  border: `1px solid ${!adaptApplicable ? "#3a3a3a" : (adaptiveBands ? "#d8b87a" : "#444")}`,
-                  borderRightWidth: 0,
-                  borderTopWidth: 0, // merge with LIVE above
-                  borderRadius: 0,
-                  cursor: adaptApplicable ? "pointer" : "default", userSelect: "none",
-                  lineHeight: "16px", boxSizing: "border-box",
-                  opacity: adaptApplicable ? 1 : 0.55,
-                }}>ADAPT</div>
-            </div>
-          );
-        })()}
+        {/* v1.20.59 — LIVE/ADAPT moved up into the thin top strip. */}
         <div style={{ display: "flex", flex: 1, gap: 0 }}>
           {([
             ["rgb", "RGB", "RGB — separable per-channel Curves layer."],
@@ -2622,6 +2606,7 @@ export function MatchTab() {
             );
           })}
         </div>
+      </div>
       </div>
 
       {/* v1.20.53 — marquee tristate was relocated up alongside MASK
