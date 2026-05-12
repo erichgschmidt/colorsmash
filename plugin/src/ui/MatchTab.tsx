@@ -2499,28 +2499,28 @@ export function MatchTab() {
             LIVE dims for non-LUT modes, ADAPT dims when Multi is off
             on the active tab. */}
         {(() => {
-          const liveApplicable = outputMode === "lut";
           const adaptApplicable = tabConfig[outputMode].multi;
           return (
             <div style={{ display: "flex", flexDirection: "column", gap: 0, width: 44, flexShrink: 0 }}>
+              {/* v1.20.56 — LIVE works for ALL output modes since v1.16.4
+                  (LUT path rewrites the Color Lookup descriptor; RGB/Lab
+                  path calls updateMatchCurvesLayerInPlace). Removed the
+                  incorrect LUT-only gating. */}
               <div onClick={() => setLiveLut(v => !v)}
-                title={liveApplicable
-                  ? (liveLut
-                    ? "Live LUT ON — slider changes auto-update the Match LUT layer in real-time (debounced 300ms). Click to disable."
-                    : "Live LUT OFF — Match LUT layer frozen until you hit Apply. Click to enable real-time auto-bake.")
-                  : "Live is LUT-only — switch the output mode to LUT to enable real-time updates."}
+                title={liveLut
+                  ? `Live ON — slider changes auto-update the existing Match ${outputMode === "lut" ? "LUT" : "Curves"} layer in real-time (debounced 300ms). Hit Apply once to seed the layer if none exists yet; subsequent changes propagate automatically. Click to disable.`
+                  : `Live OFF — the Match ${outputMode === "lut" ? "LUT" : "Curves"} layer is frozen until you hit Apply again. Click to enable real-time auto-bake.`}
                 style={{
                   height: 18, padding: 0,
                   display: "flex", alignItems: "center", justifyContent: "center",
                   fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
-                  background: liveLut && liveApplicable ? "#3a3228" : "transparent",
-                  color: !liveApplicable ? "#555" : (liveLut ? "#e8c882" : "#777"),
-                  border: `1px solid ${!liveApplicable ? "#3a3a3a" : (liveLut ? "#d8b87a" : "#444")}`,
-                  borderRightWidth: 0, // collapse against the RGB column's left border
+                  background: liveLut ? "#3a3228" : "transparent",
+                  color: liveLut ? "#e8c882" : "#777",
+                  border: `1px solid ${liveLut ? "#d8b87a" : "#444"}`,
+                  borderRightWidth: 0,
                   borderRadius: 0,
-                  cursor: liveApplicable ? "pointer" : "default", userSelect: "none",
+                  cursor: "pointer", userSelect: "none",
                   lineHeight: "16px", boxSizing: "border-box",
-                  opacity: liveApplicable ? 1 : 0.55,
                 }}>LIVE</div>
               <div onClick={() => setAdaptiveBands(!adaptiveBands)}
                 title={adaptApplicable
