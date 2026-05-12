@@ -19,7 +19,12 @@ import {
 } from "../core/histogramMatch";
 import { GROUP_NAME, action, app, executeAsModal } from "../services/photoshop";
 
-const CURVES_LAYER_PREFIX = "Match Curves";
+// v1.20.57 — Curves bakes now use per-colorSpace names: 'Match RGB' and
+// 'Match Lab'. We match either prefix for the LIVE update path.
+const CURVES_LAYER_PREFIXES = ["Match RGB", "Match Lab", "Match Curves"];
+function isCurvesLayerName(name: string | undefined): boolean {
+  return typeof name === "string" && CURVES_LAYER_PREFIXES.some(p => name.startsWith(p));
+}
 const CONTROL_POINTS = 12;
 
 interface LayerNode { id: number; name: string; kind?: string; layers?: LayerNode[] }
@@ -37,7 +42,7 @@ function findSingleMatchCurvesLayer(parent: { layers?: LayerNode[] }): LayerNode
       if (found) return found;
       continue;
     }
-    if (typeof l.name === "string" && l.name.startsWith(CURVES_LAYER_PREFIX)) {
+    if (isCurvesLayerName(l.name)) {
       return l;
     }
   }

@@ -22,7 +22,13 @@ import { writeLutLayerState } from "./lutXmp";
 
 const STATS_MAX_EDGE = 512;
 const CONTROL_POINTS = 12;
-const RESULT_LAYER_NAME = "Match Curves";
+// v1.20.57 — distinguish the output by colorSpace so RGB and Lab bakes
+// don't collide in the [Color Smash] group. Replace-mode lookup also
+// matches the prefix so prior bakes get cleaned up correctly.
+function resultLayerName(colorSpace?: "rgb" | "lab"): string {
+  if (colorSpace === "lab") return "Match Lab";
+  return "Match RGB";
+}
 
 // Recursive layer lookup — layers may live inside groups (auto-grouping plugins, normal usage).
 function findLayerById(layers: any[], id: number): any | null {
@@ -127,6 +133,10 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
   return executeAsModal("Color Smash match", async () => {
     const srcDoc = getDocById(params.srcDocId);
     const tgtDoc = getDocById(params.tgtDocId);
+    // v1.20.57 — per-colorSpace layer name. Each output mode (RGB / Lab)
+    // gets its own naming so they don't collide and Replace-mode only
+    // cleans up bakes of the same mode.
+    const RESULT_LAYER_NAME = resultLayerName(params.colorSpace);
     // PS DOM operations (createLayerGroup, layer.move, etc.) implicitly target the active doc.
     // Activate the TARGET doc so the Curves layer lands in the correct document.
     if (app.activeDocument?.id !== tgtDoc.id) app.activeDocument = tgtDoc;
