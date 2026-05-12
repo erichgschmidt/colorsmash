@@ -250,7 +250,11 @@ export function makeHistoryEntry(state: LutLayerState): HistoryEntry {
   };
 }
 
-/** Type guard: is value a plausible HistoryEntry? */
+/** Type guard: is value a plausible HistoryEntry?
+ *  v1.20.65 — also rejects empty-state entries (state === {} would pass
+ *  the structural typeof check but apply nothing on restore, looking
+ *  like a bug to the user). Requires at least one identifying key on
+ *  state so corrupted/partial snapshots get dropped at load. */
 function isValidEntry(v: any): v is HistoryEntry {
   if (!v || typeof v !== "object") return false;
   if (typeof v.id !== "string" || v.id.length === 0) return false;
@@ -260,6 +264,10 @@ function isValidEntry(v: any): v is HistoryEntry {
   if (!v.signature || typeof v.signature !== "object") return false;
   if (!Array.isArray(v.signature.colors)) return false;
   if (!Array.isArray(v.signature.weights)) return false;
+  // Reject empty/partial state — at minimum the entry needs a preset
+  // or palette swatches to be meaningfully restorable. Anything less
+  // would silently apply defaults on click and surface as a bug.
+  if (Object.keys(v.state).length === 0) return false;
   return true;
 }
 

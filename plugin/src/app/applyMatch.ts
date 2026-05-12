@@ -745,7 +745,12 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
             });
             if (selImageData.dispose) selImageData.dispose();
           }
-        } catch { /* group mask is best-effort; bands still apply unmasked if it fails */ }
+        } catch (e: any) {
+          // v1.20.65 — was silent. Log to console so the dev tools at
+          // least show what went wrong; status-line surfacing is a
+          // bigger UX change deferred to a follow-up.
+          try { console.warn("[Color Smash] Multi-zone group mask attach failed:", e?.message ?? e); } catch { /* ignore */ }
+        }
       }
 
       const adaptive = (eMin > 0 || eMax < 255 || sP > 0 || hP < 255);
@@ -949,7 +954,9 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
           });
           if (selImageData.dispose) selImageData.dispose();
         }
-      } catch { /* mask attach is best-effort; if it fails, the curves still apply unmasked */ }
+      } catch (e: any) {
+        try { console.warn("[Color Smash] Single-curve mask attach failed:", e?.message ?? e); } catch { /* ignore */ }
+      }
     }
 
     // v1.20.40 — write XMP for RESTORE / AUTO round-trip. Parity with

@@ -123,6 +123,10 @@ describe("dedupKey", () => {
 
 describe("pruneHistory", () => {
   it("drops entries missing required fields", () => {
+    // v1.20.65 — tightened isValidEntry: empty `state: {}` is no longer
+    // considered restorable (would silently apply defaults on click).
+    // The entry below with state:{} is now correctly dropped along with
+    // null / undefined / structurally-malformed candidates.
     const good = makeHistoryEntry(mkState());
     const dirty = [
       good,
@@ -133,9 +137,8 @@ describe("pruneHistory", () => {
       { id: "", timestamp: 1, label: "l", state: {}, signature: { colors: [], weights: [] } },
     ];
     const out = pruneHistory(dirty, 10);
-    expect(out.length).toBe(2);
+    expect(out.length).toBe(1);
     expect(out[0].id).toBe(good.id);
-    expect(out[1].id).toBe("y");
   });
 
   it("returns empty array for non-array input", () => {

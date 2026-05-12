@@ -35,7 +35,9 @@ import { updateMatchCurvesLayerInPlace } from "../app/liveCurvesUpdate";
 import { LutLayerState, readLutLayerState, stampState } from "../app/lutXmp";
 import {
   HistoryEntry, makeHistoryEntry, pushHistoryEntry, pruneHistory, togglePinnedEntry, renameHistoryEntry,
+  dedupKey,
 } from "../app/recentHistory";
+import { serializeRecipes, parseRecipes, mergeImportedRecipes } from "../app/recipeIO";
 import { lutGradientCSS } from "../app/historyThumbnail";
 import { syncOutputVisibilityToMode, repositionGroupAboveTarget } from "../app/outputVisibility";
 import {
@@ -1362,6 +1364,68 @@ export function MatchTab() {
     setRecentHistory(prev => pushHistoryEntry(prev, entry, HISTORY_MAX));
   };
 
+  // v1.20.65 — Recipe export. Writes ALL pinned entries (plus all entries
+  // if there are no pins) to a versioned JSON file via the OS save dialog.
+  // Cross-machine portable; doc/layer ids are stripped at serialization
+  // time (see recipeIO.ts).
+  const onExportRecipes = async () => {
+    try {
+      const pinned = recentHistory.filter(e => e.pinned);
+      const toExport = pinned.length > 0 ? pinned : recentHistory;
+      if (toExport.length === 0) {
+        setStatus("No recipes to export. Apply a match (and pin it) first.");
+        return;
+      }
+      const uxp = require("uxp");
+      const stamp = new Date().toISOString().slice(0, 10);
+      const fname = `color-smash-recipes-${stamp}.json`;
+      const file = await uxp.storage.localFileSystem.getFileForSaving(fname, { types: ["json"] });
+      if (!file) { setStatus("Export cancelled."); return; }
+      const text = serializeRecipes(toExport, "1.20.65");
+      await file.write(text, { format: uxp.storage.formats.utf8 });
+      setStatus(`Exported ${toExport.length} recipe${toExport.length === 1 ? "" : "s"} to ${file.name}.`);
+    } catch (e: any) {
+      setStatus(`Recipe export failed: ${e?.message ?? e}`);
+    }
+  };
+
+  // v1.20.65 — Recipe import. Reads a previously-exported JSON file via
+  // the OS open dialog, validates per-entry, merges via dedupKey (skips
+  // duplicates), auto-pins everything imported so it survives ring-buffer
+  // eviction. Cross-machine doc/layer ids never travel (stripped at
+  // export time).
+  const onImportRecipes = async () => {
+    try {
+      const uxp = require("uxp");
+      const file = await uxp.storage.localFileSystem.getFileForOpening({ types: ["json"] });
+      if (!file) { setStatus("Import cancelled."); return; }
+      const text = await file.read({ format: uxp.storage.formats.utf8 });
+      if (typeof text !== "string" || text.length === 0) {
+        setStatus("Import failed: empty file.");
+        return;
+      }
+      const result = parseRecipes(text);
+      if ("error" in result) {
+        setStatus(`Import failed: ${result.error}`);
+        return;
+      }
+      if (result.entries.length === 0) {
+        setStatus("Import: file contained no valid recipes.");
+        return;
+      }
+      setRecentHistory(prev => {
+        const merge = mergeImportedRecipes(prev, result.entries, dedupKey);
+        // Report via status after the state update settles.
+        setTimeout(() => {
+          setStatus(`Imported ${merge.added} recipe${merge.added === 1 ? "" : "s"}${merge.skipped > 0 ? ` (${merge.skipped} duplicate${merge.skipped === 1 ? "" : "s"} skipped)` : ""}.`);
+        }, 0);
+        return merge.merged;
+      });
+    } catch (e: any) {
+      setStatus(`Recipe import failed: ${e?.message ?? e}`);
+    }
+  };
+
   // Click handler for a history thumbnail — restores panel state from the
   // entry's saved snapshot. Does NOT auto-Apply (predictable: user picks
   // history, panel updates, user hits Apply if they want to bake again).
@@ -1818,7 +1882,7 @@ export function MatchTab() {
           // RGB / Lab modes: update the existing Match Curves adjustment layer's
           // curves descriptor + blend mode in place. No-op if user hasn't hit
           // Apply yet (no layer to update); they need to seed one first.
-          const result = await updateMatchCurvesLayerInPlace(renderedCurves, activePreset);
+          const result = await updateMatchCurvesLayerInPlace(renderedCurves, activePreset, tgtDocId ?? undefined);
           if (result.ok) lastSelfWriteRef.current = Date.now();
         }
       } catch (e: any) {
@@ -2813,14 +2877,38 @@ export function MatchTab() {
         const placeholderCount = Math.max(0, HISTORY_MAX - sorted.length);
         return (
         <div style={{ marginTop: 6 }}>
-          <div onClick={() => setHistoryOpen(o => !o)}
-            style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, opacity: 0.65,
-                     cursor: "pointer", userSelect: "none", height: 14, lineHeight: "14px" }}
-            title={historyOpen ? "Hide recent applies" : "Show recent applies — click any thumbnail to restore that state"}>
-            <span style={{ width: 8, display: "inline-block", textAlign: "center" }}>
-              {historyOpen ? "▾" : "▸"}
-            </span>
-            <span>history ({recentHistory.length})</span>
+          {/* v1.20.65 — header row: disclosure on the left, import/export
+              tiny icons on the right. Cross-machine recipe portability. */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", height: 14, lineHeight: "14px" }}>
+            <div onClick={() => setHistoryOpen(o => !o)}
+              style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, opacity: 0.65,
+                       cursor: "pointer", userSelect: "none" }}
+              title={historyOpen ? "Hide recent applies" : "Show recent applies — click any thumbnail to restore that state"}>
+              <span style={{ width: 8, display: "inline-block", textAlign: "center" }}>
+                {historyOpen ? "▾" : "▸"}
+              </span>
+              <span>history ({recentHistory.length})</span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <div onClick={onImportRecipes}
+                title="Import recipes from a .json file (cross-machine portable, auto-pinned)"
+                style={{
+                  fontSize: 9, fontWeight: 600, letterSpacing: 0.3,
+                  padding: "2px 6px", color: "#888",
+                  border: "1px solid #444", borderRadius: 2,
+                  cursor: "pointer", userSelect: "none",
+                }}>↓ IMPORT</div>
+              <div onClick={onExportRecipes}
+                title={recentHistory.some(e => e.pinned)
+                  ? "Export PINNED recipes to a .json file (cross-machine portable)"
+                  : "Export ALL recipes to a .json file (cross-machine portable). Pin entries to export just a curated set."}
+                style={{
+                  fontSize: 9, fontWeight: 600, letterSpacing: 0.3,
+                  padding: "2px 6px", color: "#888",
+                  border: "1px solid #444", borderRadius: 2,
+                  cursor: "pointer", userSelect: "none",
+                }}>↑ EXPORT</div>
+            </div>
           </div>
           {historyOpen && sorted.length === 0 && (
             <div style={{

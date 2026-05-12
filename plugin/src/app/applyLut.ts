@@ -342,7 +342,9 @@ export async function applyLutAsAdjustmentLayer(params: ApplyLutParams): Promise
       if (targetLayer) {
         try {
           targetBuf = await readLayerPixels(targetLayer, undefined, doc.id);
-        } catch { /* mask becomes a no-op if read fails */ }
+        } catch (e: any) {
+          try { console.warn("[Color Smash] Target pixel read for mask failed:", e?.message ?? e); } catch { /* ignore */ }
+        }
       }
       if (wantSelectionMask && targetBuf) {
         selectionMaskBytes = await readSelectionMaskBytes(doc.id, targetBuf.bounds);
@@ -730,7 +732,9 @@ export async function applyMultiZoneLutAsLayers(
             replace: true,
           });
           if (maskImageData.dispose) maskImageData.dispose();
-        } catch { /* non-fatal: layer still applies LUT, just unmasked */ }
+        } catch (e: any) {
+          try { console.warn("[Color Smash] LUT band mask attach failed:", e?.message ?? e); } catch { /* ignore */ }
+        }
 
         // 6f. Move into the sub-group. Layer stays selected so the next make
         //     stacks above it within the group.

@@ -91,8 +91,16 @@ function presetBlendMode(preset: Preset): string {
 export async function updateMatchCurvesLayerInPlace(
   curves: ChannelCurves,
   preset: Preset,
+  tgtDocId?: number,
 ): Promise<{ ok: boolean; layerId: number | null }> {
-  const doc = app.activeDocument;
+  // v1.20.65 — accept an explicit target-doc id so AUTO doesn't write to
+  // whichever doc is foregrounded when the user happens to be dragging a
+  // slider. Falls back to activeDocument if caller didn't pass one (so
+  // existing call sites that haven't been updated keep working — but
+  // they'll hit the multi-doc bug).
+  const doc = tgtDocId != null
+    ? (app.documents ?? []).find((d: any) => d.id === tgtDocId) ?? app.activeDocument
+    : app.activeDocument;
   if (!doc) return { ok: false, layerId: null };
   const group = findColorSmashGroup(doc);
   if (!group) return { ok: false, layerId: null };
@@ -108,6 +116,9 @@ export async function updateMatchCurvesLayerInPlace(
 
   const layerId = layer.id;
   return await executeAsModal("Color Smash live curves update", async () => {
+    // v1.20.65 — make the target doc active inside the modal so the
+    // batchPlay 'set' descriptor below lands on the right document.
+    try { if (app.activeDocument?.id !== doc.id) app.activeDocument = doc; } catch { /* ignore */ }
     try {
       // batchPlay 'set' on the adjustment layer's curves descriptor.
       // Mirrors makeCurvesLayer's shape but with 'set' verb on existing layer.
