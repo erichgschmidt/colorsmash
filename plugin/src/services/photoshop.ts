@@ -302,33 +302,44 @@ export async function deleteChannel(name: string): Promise<void> {
 }
 
 /**
- * v1.20.54 — "branch off" the current [Color Smash] working group. Renames
- * any group named exactly [Color Smash] to [Color Smash _<timestamp>] and
- * sets visible=false on it. The next Apply will then create a fresh
- * [Color Smash] group because getOrCreateColorSmashGroup looks up by name
- * and won't find the renamed predecessor.
+ * v1.20.58 — "branch off" the current [Color Smash] working group.
+ * Renames the active [Color Smash] to [Color Smash _<NN>] with NN being
+ * the next sequence number (scans the doc for existing archived groups,
+ * picks highest + 1), and sets visible=false. The next Apply spawns a
+ * fresh [Color Smash] for the new session.
  *
- * No-op when there's no active [Color Smash] group yet (e.g., first
- * Apply in a session).
+ * Numbering is zero-padded to 2 digits (_01, _02, ...) up to 99, then
+ * grows naturally (_100, etc.). Each iteration is identifiable at a
+ * glance in the PS Layers panel.
+ *
+ * No-op when there's no active [Color Smash] group yet.
  */
 export async function branchColorSmashGroup(docId: number): Promise<void> {
   try {
     const doc = (app.documents ?? []).find((d: any) => d.id === docId);
     if (!doc) return;
-    const findActive = (layers: any[]): any | null => {
+    let active: any | null = null;
+    let highest = 0;
+    const numRe = new RegExp(`^${GROUP_NAME.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")} _(\\d+)`);
+    const walk = (layers: any[]) => {
       for (const l of layers) {
-        if (l && l.name === GROUP_NAME && Array.isArray(l.layers)) return l;
-        if (Array.isArray(l.layers)) {
-          const found = findActive(l.layers);
-          if (found) return found;
+        if (!l) continue;
+        if (l.name === GROUP_NAME && Array.isArray(l.layers) && !active) {
+          active = l;
+        } else if (typeof l.name === "string") {
+          const m = l.name.match(numRe);
+          if (m) {
+            const n = parseInt(m[1], 10);
+            if (Number.isFinite(n) && n > highest) highest = n;
+          }
         }
+        if (Array.isArray(l.layers)) walk(l.layers);
       }
-      return null;
     };
-    const active = findActive(doc.layers ?? []);
+    walk(doc.layers ?? []);
     if (!active) return;
-    const stamp = new Date().toTimeString().slice(0, 8);
-    try { active.name = `${GROUP_NAME} _${stamp}`; } catch { /* ignore */ }
+    const next = (highest + 1).toString().padStart(2, "0");
+    try { active.name = `${GROUP_NAME} _${next}`; } catch { /* ignore */ }
     try { active.visible = false; } catch { /* ignore */ }
   } catch { /* non-fatal */ }
 }
