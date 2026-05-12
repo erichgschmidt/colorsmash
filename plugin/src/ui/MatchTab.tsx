@@ -372,6 +372,14 @@ export function MatchTab() {
   const [isolated, setIsolated] = useState(false);
   const isolationSnapshotRef = useRef<Map<number, boolean> | null>(null);
   const liveLutLayerIdRef = useRef<number | null>(null);
+  // v1.20.69 — when the user clicks a different output-mode tab (RGB/Lab/LUT),
+  // we want to (a) swap mode and (b) fire Apply for the new mode. Because the
+  // fit + renderedCurves pipeline runs through useMemo + state, we can't just
+  // call onApply synchronously after setOutputMode — the curves for the new
+  // mode haven't been computed yet. Instead we set this flag and let an
+  // effect that depends on [outputMode, renderedCurves] fire Apply once both
+  // have settled into the new mode.
+  const pendingApplyRef = useRef(false);
   // (liveUpdates and stale state declared above, before the hooks that consume them.)
 
   const [openSection, setOpenSection] = useState<"basic" | "dims" | "zones" | "envelope" | null>(null);
@@ -2016,6 +2024,32 @@ export function MatchTab() {
     } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
   };
 
+  // v1.20.69 — tab-click handler: clicking RGB/Lab/LUT swaps mode AND fires
+  // Apply for that mode. If switching to a NEW mode, we can't call apply
+  // synchronously — fit + renderedCurves run through useMemo on outputMode,
+  // so the curves for the new mode aren't ready yet. We flip a ref flag and
+  // a useEffect (below) waits for outputMode to commit + renderedCurves to
+  // refresh, then dispatches to the appropriate handler.
+  const onTabClick = (val: "rgb" | "lab" | "lut") => {
+    if (val === outputMode) {
+      // Same tab clicked → fire apply right away with current curves.
+      (val === "lut" ? onApplyLut : onApply)();
+      return;
+    }
+    pendingApplyRef.current = true;
+    setOutputMode(val);
+  };
+  useEffect(() => {
+    if (!pendingApplyRef.current) return;
+    pendingApplyRef.current = false;
+    // Defer one tick so fit/useMemo for the new colorSpace has propagated
+    // into renderedCurves before Apply reads it via curvesPendingRef.
+    const t = setTimeout(() => {
+      (outputMode === "lut" ? onApplyLut : onApply)();
+    }, 40);
+    return () => clearTimeout(t);
+  }, [outputMode, renderedCurves]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const sel = matchStyles.sel;
   const tinyBtn = matchStyles.tinyBtn;
 
@@ -2185,7 +2219,7 @@ export function MatchTab() {
         }}>Color Smash</span>
         <span style={{
           fontSize: 9, color: "#888", userSelect: "none",
-        }}>v1.20.68</span>
+        }}>v1.20.69</span>
         <span style={{ flex: 1 }} />
         <span onClick={(e: any) => { e.stopPropagation(); e.preventDefault(); void uxpInfo("Color Smash — about", [
           { heading: "What this is",
@@ -2195,7 +2229,7 @@ export function MatchTab() {
           { heading: "Workflow tips",
             body: "+ on the Apply pill archives the current [Color Smash] session and starts a fresh one. RESTORE on any baked layer recovers the exact panel state that produced it. AUTO re-bakes the existing layer on every slider drag. MASK shows protected regions as red on the preview." },
           { heading: "Version",
-            body: "Color Smash v1.20.68. Branch: master. Build cleanly on PS 25.0+." },
+            body: "Color Smash v1.20.69. Branch: master. Build cleanly on PS 25.0+." },
         ]); }}
           title="About Color Smash"
           style={{
@@ -2755,32 +2789,20 @@ export function MatchTab() {
         );
       })()}
 
-      {/* v1.20.59 — output block restructured to reduce visual density.
-          A thin top row carries AUTO (above the Apply column) and ADAPT
-          (above the tabs columns). Below that: tall Apply pill + 3 tab
-          columns each with their MULTI/BLEND sub-toggles. So the column
-          count drops from 5 (Apply, LIVE/ADAPT, RGB, Lab, LUT) to 4
-          (Apply, RGB, Lab, LUT) and the global modifiers ride on top. */}
+      {/* v1.20.69 — output block restructured again. Apply pill removed:
+          tab clicks (RGB/Lab/LUT) now BOTH swap output mode AND fire Apply.
+          Column 1 (76px) is now the global-modifier stack:
+            top row (aligned w/ RGB|Lab|LUT) = "+" branch arm
+            bottom row (aligned w/ MULTI|BLEND) = AUTO armed-record indicator
+          The thin top strip drops AUTO and keeps [ADAPT][JUMP][ISOLATE]. */}
       <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 0 }}>
-        {/* Thin top strip: AUTO + ADAPT */}
+        {/* Thin top strip: ADAPT + JUMP + ISOLATE (AUTO moved down). */}
         {(() => {
           const adaptApplicable = tabConfig[outputMode].multi;
           return (
             <div style={{ display: "flex", gap: 4, height: 16, marginBottom: 2 }}>
-              <div onClick={() => setLiveLut(v => !v)}
-                title={liveLut
-                  ? `AUTO ON — slider changes auto-update the existing Match ${outputMode === "lut" ? "LUT" : "Curves"} layer in real-time (debounced 300ms). Hit Apply once to seed the layer if none exists yet; subsequent changes propagate automatically. Click to disable.`
-                  : `AUTO OFF — the Match ${outputMode === "lut" ? "LUT" : "Curves"} layer is frozen until you hit Apply again. Click to enable real-time auto-bake.`}
-                style={{
-                  width: 76, height: 16, padding: 0,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
-                  background: liveLut ? "#3a3228" : "transparent",
-                  color: liveLut ? "#e8c882" : "#888",
-                  border: `1px solid ${liveLut ? "#d8b87a" : "#444"}`,
-                  borderRadius: 2, cursor: "pointer", userSelect: "none",
-                  lineHeight: "14px", boxSizing: "border-box", flexShrink: 0,
-                }}>AUTO</div>
+              {/* Spacer aligned with column 1 below (76px). */}
+              <div style={{ width: 76, height: 16, flexShrink: 0 }} />
               {/* v1.20.61 — ADAPT sized to match a single tab pill (~1/3 of
                   the tab-area width). Two invisible filler divs fill the
                   remaining 2/3 so the strip's column structure mirrors the
@@ -2843,52 +2865,67 @@ export function MatchTab() {
           );
         })()}
         <div style={{ display: "flex", alignItems: "stretch", gap: 4 }}>
-        {/* Tall Apply pill — outer rounded shell with arm + body. Spans
-            the full height of the two-row tabs block to its right (~40px). */}
+        {/* v1.20.69 — column 1: stacked + (branch arm) above AUTO (armed
+            record indicator). 76px wide × 38px tall (two 18px rows + 2px
+            gap), matching the heights of [tab pill] (18) + [MULTI/BLEND]
+            (18) in the tabs grid to its right. Apply pill removed — tab
+            clicks (RGB/Lab/LUT) now both swap mode AND fire Apply. */}
         <div style={{
-          display: "flex", flexDirection: "row",
-          width: 76, height: 40,
-          borderRadius: 4, border: "1px solid #888",
-          overflow: "hidden", boxSizing: "border-box", flexShrink: 0,
+          display: "flex", flexDirection: "column",
+          width: 76, gap: 2, flexShrink: 0,
         }}>
+          {/* Top row: + branch arm. */}
           <div onClick={e => { e.stopPropagation(); setOverwriteOnApply(!overwriteOnApply); }}
             title={overwriteOnApply
-              ? "Apply replaces the prior Match within the current [Color Smash] session (default). Click + to arm 'Branch' — next Apply hides the current [Color Smash] group and starts a fresh one."
+              ? "Click + to arm 'Branch' — next Apply (RGB/Lab/LUT tab click) hides the current [Color Smash] group and starts a fresh session."
               : "BRANCH ARMED — next Apply will collapse + hide the current [Color Smash] group (preserved, just invisible) and start a fresh session. Auto-disarms after that Apply. Click to cancel."}
             style={{
-              width: 18, height: "100%", padding: 0, flexShrink: 0,
-              background: overwriteOnApply ? "#2a2a2a" : "#1e3a1e",
+              height: 18, padding: 0,
               display: "flex", alignItems: "center", justifyContent: "center",
+              background: overwriteOnApply ? "transparent" : "#1e3a1e",
+              border: `1px solid ${overwriteOnApply ? "#444" : "#7ad87a"}`,
+              borderRadius: 2,
               cursor: "pointer", userSelect: "none", boxSizing: "border-box",
+              lineHeight: "16px",
             }}>
-            {overwriteOnApply
-              ? <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#666", display: "inline-block" }} />
-              : <span style={{ color: "#7ad87a", fontSize: 14, fontWeight: 700, lineHeight: 1, userSelect: "none" }}>+</span>}
+            <span style={{
+              color: overwriteOnApply ? "#888" : "#7ad87a",
+              fontSize: 14, fontWeight: 700, lineHeight: 1,
+            }}>+</span>
           </div>
-          <div onClick={outputMode === "lut" ? onApplyLut : onApply}
-            title={
-              outputMode === "lut"
-                ? "Create a Color Lookup adjustment layer in [Color Smash] loaded with a 33³ 3D LUT."
-                : multiZone
-                  ? "Multi: creates 3 stacked Curves layers (shadow/mid/highlight) with band limiting via mask and/or Blend If."
-                  : "Create a new Curves adjustment layer in the target document, clipped to the target layer."
-            }
+          {/* Bottom row: AUTO as red record-armed indicator. Filled red
+              circle when armed (liveLut=true); hollow gray ring when off.
+              "Record-armed" mirrors music-DAW conventions. */}
+          <div onClick={() => setLiveLut(v => !v)}
+            title={liveLut
+              ? `AUTO ARMED — slider changes auto-update the existing Match ${outputMode === "lut" ? "LUT" : "Curves"} layer in real-time (debounced 300ms). Click to disarm.`
+              : `AUTO — click to arm real-time auto-bake. Match ${outputMode === "lut" ? "LUT" : "Curves"} layer will re-bake on every slider change once seeded by an Apply.`}
             style={{
-              flex: "1 1 0", minWidth: 0, height: "100%",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              background: "#3a3a3a", color: "#eeeeee",
-              fontSize: 11, fontWeight: 700, letterSpacing: 0.3,
-              borderLeft: "1px solid #555",
-              cursor: "pointer", userSelect: "none",
-              whiteSpace: "nowrap", overflow: "hidden",
-            }}>{overwriteOnApply ? "Apply" : "Apply +"}</div>
+              height: 18, padding: 0,
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
+              background: liveLut ? "#3a1818" : "transparent",
+              border: `1px solid ${liveLut ? "#d84a4a" : "#444"}`,
+              color: liveLut ? "#ff8a8a" : "#888",
+              borderRadius: 2, cursor: "pointer", userSelect: "none",
+              fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
+              lineHeight: "16px", boxSizing: "border-box",
+            }}>
+            <span style={{
+              width: 8, height: 8, borderRadius: "50%",
+              background: liveLut ? "#ff3a3a" : "transparent",
+              border: liveLut ? "1px solid #ff8a8a" : "1.5px solid #888",
+              boxShadow: liveLut ? "0 0 4px #ff3a3a" : "none",
+              display: "inline-block", flexShrink: 0,
+            }} />
+            <span>AUTO</span>
+          </div>
         </div>
         {/* v1.20.59 — LIVE/ADAPT moved up into the thin top strip. */}
         <div style={{ display: "flex", flex: 1, gap: 0 }}>
           {([
-            ["rgb", "RGB", "RGB — separable per-channel Curves layer."],
-            ["lab", "Lab", "Lab — perceptual histogram match, projected to per-channel Curves layer."],
-            ["lut", "LUT", "LUT — 33³ Color Lookup adjustment with preset blend math baked in."],
+            ["rgb", "RGB", "RGB — separable per-channel Curves layer. Click to switch mode AND Apply (bakes a new Curves layer)."],
+            ["lab", "Lab", "Lab — perceptual histogram match, projected to per-channel Curves layer. Click to switch mode AND Apply."],
+            ["lut", "LUT", "LUT — 33³ Color Lookup adjustment with preset blend math baked in. Click to switch mode AND Apply."],
           ] as Array<["rgb" | "lab" | "lut", string, string]>).map(([val, label, tip], idx) => {
             const active = outputMode === val;
             const cfg = tabConfig[val];
@@ -2898,8 +2935,8 @@ export function MatchTab() {
             const isFirst = idx === 0;
             return (
               <div key={val} style={{ flex: 1, display: "flex", flexDirection: "column", gap: 0, minWidth: 0 }}>
-                {/* Tab label pill. */}
-                <div onClick={() => setOutputMode(val)} title={tip}
+                {/* Tab label pill. v1.20.69 — click swaps mode AND triggers Apply. */}
+                <div onClick={() => onTabClick(val)} title={tip}
                   style={{
                     height: 18, padding: 0,
                     display: "flex", alignItems: "center", justifyContent: "center",
