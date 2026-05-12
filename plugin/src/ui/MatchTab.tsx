@@ -389,7 +389,11 @@ export function MatchTab() {
         else if (s.multiZoneLimit === "mask") setMultiZoneLimit("mask");
         if (s.multiZone != null) setMultiZone(s.multiZone);
         if (s.multiZoneLimit) setMultiZoneLimit(s.multiZoneLimit);
-        if (s.adaptiveBands != null) setAdaptiveBands(s.adaptiveBands);
+        // v1.20.60 — adaptiveBands is now ALWAYS default-on. Don't honor a
+        // legacy `false` from persistence — users should land on the sane
+        // default every fresh session and explicitly opt out by clicking
+        // ADAPT off if they want fixed 0/128/255 band peaks.
+        // (Persistence still writes the value; just no-op on read.)
         if (s.paletteCount === 3 || s.paletteCount === 5 || s.paletteCount === 7) setPaletteCount(s.paletteCount);
         if (s.paletteAdaptive != null) setPaletteAdaptive(s.paletteAdaptive);
         if (typeof s.sourceSoftness === "number") setSourceSoftness(Math.max(0, Math.min(100, s.sourceSoftness)));
@@ -2468,21 +2472,23 @@ export function MatchTab() {
                   lineHeight: "14px", boxSizing: "border-box", flexShrink: 0,
                 }}>AUTO</div>
               <div onClick={() => setAdaptiveBands(!adaptiveBands)}
-                title={adaptApplicable
-                  ? (adaptiveBands
-                    ? `Adaptive ON — multi-zone band peaks track the target histogram (P10/P50/P90). ${lumaBins ? `Current: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""}`
-                    : "Adaptive OFF — multi-zone band peaks fixed at 0/128/255. Click to enable percentile-driven peaks.")
-                  : "Adaptive is multi-zone-only — turn MULTI on for the active tab to enable."}
+                title={adaptiveBands
+                  ? `Adaptive ON (default) — multi-zone band peaks track the target histogram (P10/P50/P90) whenever MULTI is active for a tab. ${adaptApplicable && lumaBins ? `Current: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""} Click to disable.`
+                  : "Adaptive OFF — multi-zone band peaks fixed at 0/128/255. Click to re-enable percentile-driven peaks."}
                 style={{
                   flex: 1, height: 16, padding: 0,
                   display: "flex", alignItems: "center", justifyContent: "center",
                   fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
-                  background: adaptiveBands && adaptApplicable ? "#3a3228" : "transparent",
-                  color: !adaptApplicable ? "#555" : (adaptiveBands ? "#e8c882" : "#888"),
-                  border: `1px solid ${!adaptApplicable ? "#3a3a3a" : (adaptiveBands ? "#d8b87a" : "#444")}`,
-                  borderRadius: 2, cursor: adaptApplicable ? "pointer" : "default", userSelect: "none",
+                  // v1.20.60 — ADAPT renders its on/off state UNCONDITIONALLY,
+                  // not gated by whether MULTI is active. It's a global default-
+                  // ON modifier; whether MULTI is on or not on a given tab,
+                  // the toggle's state communicates "adaptive bands are on
+                  // when multi-zone is in play."
+                  background: adaptiveBands ? "#3a3228" : "transparent",
+                  color: adaptiveBands ? "#e8c882" : "#888",
+                  border: `1px solid ${adaptiveBands ? "#d8b87a" : "#444"}`,
+                  borderRadius: 2, cursor: "pointer", userSelect: "none",
                   lineHeight: "14px", boxSizing: "border-box",
-                  opacity: adaptApplicable ? 1 : 0.55,
                 }}>ADAPT</div>
             </div>
           );
