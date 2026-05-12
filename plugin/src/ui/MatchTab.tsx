@@ -216,7 +216,8 @@ export function MatchTab() {
   const [lutStrength, setLutStrength] = useState(100);
   const [lutGrid, setLutGrid] = useState<17 | 33 | 65>(33);
   const [lutDither, setLutDither] = useState(true);
-  const [lutAdvancedOpen, setLutAdvancedOpen] = useState(false);
+  // v1.20.63 — lutAdvancedOpen removed; Dither now shown inline.
+  const [curvesGraphOpen, setCurvesGraphOpen] = useState(false);
 
   // Show Mask overlay (v1.18.x). When ON, the matched preview paints
   // protected regions (where the mask is LOW = LUT/Curves WON'T apply) with
@@ -2012,17 +2013,33 @@ export function MatchTab() {
         </div>
       </div>
 
-      {/* Matched preview (full-width, large) with zoom controls + Before/After badge */}
-      <MatchedPreview
-        ref={matchedHandleRef}
-        canSwap={srcMode === "layer"}
-        onSwap={() => {
-          setSrcDocId(tgtDocId);
-          setTgtDocId(srcDocId);
-          setSourceId(targetId);
-          setTargetId(sourceId);
-        }}
-      />
+      {/* v1.20.63 — when no target is selected the preview is just empty
+          black space. Render a thin placeholder banner instead so the
+          panel doesn't have a void in the middle. Once a target lands,
+          MatchedPreview takes over and the placeholder is replaced. */}
+      {targetId == null ? (
+        <div style={{
+          marginTop: 4, padding: "18px 8px",
+          fontSize: 10, color: "#777", fontStyle: "italic",
+          background: "transparent", border: "1px dashed #333", borderRadius: 3,
+          textAlign: "center", lineHeight: 1.4,
+        }}>
+          Pick a target layer above to preview the match.
+          <br />
+          <span style={{ opacity: 0.7 }}>Source: {srcDocId != null ? "✓" : "—"} · Target: —</span>
+        </div>
+      ) : (
+        <MatchedPreview
+          ref={matchedHandleRef}
+          canSwap={srcMode === "layer"}
+          onSwap={() => {
+            setSrcDocId(tgtDocId);
+            setTgtDocId(srcDocId);
+            setSourceId(targetId);
+            setTargetId(sourceId);
+          }}
+        />
+      )}
 
       {/* Target palette weight bar — mirrors the source palette but the
           weights modulate CURVE APPLICATION strength per cluster (not source
@@ -2349,6 +2366,9 @@ export function MatchTab() {
           then the ↻ selection-status icon. Hint banners (no selection
           captured, source-mode disabled) render below this row when
           relevant. */}
+      {/* v1.20.63 — zone divider: separates the transform sections
+          (Color/Tone/Envelope) above from the output/Apply zone below. */}
+      <div style={{ borderTop: "1px solid #2a2a2a", marginTop: 8, marginBottom: 2 }} />
       {(() => {
         const marqueeDisabled = srcMode === "selection";
         const disabledTip = "Disabled because the source is using the active marquee. Switch source to a layer or browsed image to use the marquee as an output mask.";
@@ -2680,18 +2700,24 @@ export function MatchTab() {
         {/* v1.20.43 — SAVE/✕/⟳ pills relocated from the BottomActionBar to
             this row. Compact icon-style so they trail the apply cluster
             without dominating it. */}
+        {/* v1.20.63 — was 'SAVE' which was easily confused with the Save
+            LUT button next to it. Now renders as a gear icon ⚙ + 'PREFS'
+            tooltip clarifies it's the 'remember settings across reloads'
+            toggle, NOT a save-current-bake action. */}
         <div onClick={() => setRemember(!remember)}
-          title="Save — persist all panel settings across reloads (sliders, zones, envelope, toggles, output mode, LUT options)."
+          title={remember
+            ? "PREFS ON — panel settings (sliders, palette weights, envelope, output mode, LUT options) are persisted across reloads. Click to disable."
+            : "PREFS OFF — panel settings reset to defaults on next reload. Click to enable persistence."}
           style={{
-            width: 32, height: 28, marginLeft: 4,
+            width: 28, height: 28, marginLeft: 4,
             display: "inline-flex", alignItems: "center", justifyContent: "center",
             background: remember ? "#3a3a3a" : "transparent",
             color: remember ? "#dddddd" : "#888",
             border: `1px solid ${remember ? "#888" : "#444"}`,
             borderRadius: 4, cursor: "pointer", userSelect: "none",
-            fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
+            fontSize: 14, lineHeight: 1,
             boxSizing: "border-box", flexShrink: 0,
-          }}>SAVE</div>
+          }}>⚙</div>
         <div onClick={async () => {
           const ok = await uxpConfirm("Reset all panel settings to defaults and clear the saved file?", "Reset");
           if (ok) onResetAll();
@@ -2719,11 +2745,11 @@ export function MatchTab() {
         </div>
       </div>
 
-      {/* Recent history (v1.20.0). Always rendered — empty buffer shows
-          dim placeholder slots (v1.20.2) so the user discovers the feature
-          even before their first Apply. As entries come in, placeholders
-          get replaced from the left until the buffer fills. Pinned entries
-          push placeholders out of the row. */}
+      {/* v1.20.63 — zone divider: separates the Apply/action zone above
+          from the history zone below. */}
+      <div style={{ borderTop: "1px solid #2a2a2a", marginTop: 8, marginBottom: 2 }} />
+      {/* Recent history. Empty state shows a single hint line; otherwise the
+          stored entries render as small palette-color thumbnails. */}
       {(() => {
         // Sort pinned entries to the FRONT (visually) so favorites are
         // always immediately reachable. Pinned entries have a gold border
@@ -2748,7 +2774,17 @@ export function MatchTab() {
             </span>
             <span>history ({recentHistory.length})</span>
           </div>
-          {historyOpen && (
+          {historyOpen && sorted.length === 0 && (
+            <div style={{
+              marginTop: 4, padding: "6px 8px",
+              fontSize: 9, color: "#666", fontStyle: "italic",
+              border: "1px dashed #333", borderRadius: 2,
+              textAlign: "center",
+            }}>
+              Apply a match — recent recipes will appear here. Pin or rename to keep.
+            </div>
+          )}
+          {historyOpen && sorted.length > 0 && (
             <div style={{ display: "flex", flexDirection: "row", gap: 4, marginTop: 4, flexWrap: "wrap" }}>
               {sorted.map(entry => {
                 const displayLabel = entry.customName || entry.label;
@@ -2845,17 +2881,11 @@ export function MatchTab() {
                   before their first Apply. Each placeholder is a thin
                   dashed-outline rectangle with a faint "—" centered.
                   Non-interactive (no click handler). */}
-              {Array.from({ length: placeholderCount }).map((_, i) => (
-                <div key={`ph-${i}`}
-                  title="Empty history slot — Apply a match to fill."
-                  style={{
-                    width: 60, height: 22, padding: 0,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    border: "1px dashed #3a3a3a", borderRadius: 2,
-                    background: "transparent",
-                    color: "#3a3a3a", fontSize: 9, lineHeight: 1,
-                    userSelect: "none", flexShrink: 0,
-                  }}>—</div>
+              {/* v1.20.63 — placeholder slots removed. The empty-state hint
+                  banner above handles discoverability; placeholders just
+                  ate vertical space once the user had a few entries. */}
+              {false && Array.from({ length: placeholderCount }).map((_, i) => (
+                <div key={`ph-${i}`} />
               ))}
               {/* Clear-history — only nukes the non-pinned recents; pinned
                   stay. Tooltip explains the distinction. Hidden when there
@@ -2919,6 +2949,9 @@ export function MatchTab() {
         );
       })()}
 
+      {/* v1.20.63 — zone divider: separates the history zone above from
+          the LUT-settings / diagnostic-curves zone below. */}
+      <div style={{ borderTop: "1px solid #2a2a2a", marginTop: 8, marginBottom: 2 }} />
       {/* LUT-specific knobs. v1.20.62 — always rendered (was gated on
           outputMode==='lut'). Keeping these slots reserved avoids the
           panel resizing when users flip between LUT and Curves modes;
@@ -2964,34 +2997,30 @@ export function MatchTab() {
               ))}
             </div>
           </div>
-          {/* Advanced disclosure (collapsed by default) housing the Dither toggle. */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            <div onClick={() => setLutAdvancedOpen(o => !o)}
-              style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, opacity: 0.5, cursor: "pointer", userSelect: "none", height: 14, lineHeight: "14px" }}
-              title="Advanced LUT options">
-              <span style={{ width: 8, display: "inline-block", textAlign: "center" }}>
-                {lutAdvancedOpen ? "▾" : "▸"}
-              </span>
-              <span>advanced</span>
-            </div>
-            {lutAdvancedOpen && (
-              <div onClick={() => setLutDither(!lutDither)}
-                style={{ display: "flex", alignItems: "center", gap: 6, paddingLeft: 14, fontSize: 9, color: "#cccccc", cursor: "pointer", height: 14, lineHeight: "14px" }}
-                title="Dither: PS Color Lookup's noise-injection field that hides quantization banding. Default ON, matches PS's own default. Turn off for a bit-exact LUT result and accept visible banding in subtle gradients.">
-                <input type="checkbox" checked={lutDither}
-                  onChange={e => setLutDither(e.target.checked)}
-                  style={{ margin: 0, width: 12, height: 12 }} />
-                <span>dither</span>
-              </div>
-            )}
+          {/* v1.20.63 — Dither shown inline (was behind "advanced ▸"). It's
+              not scary enough to warrant a disclosure for one checkbox. */}
+          <div onClick={() => setLutDither(!lutDither)}
+            style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 9, color: "#cccccc", cursor: "pointer", height: 14, lineHeight: "14px" }}
+            title="Dither: PS Color Lookup's noise-injection field that hides quantization banding. Default ON, matches PS's own default. Turn off for a bit-exact LUT result and accept visible banding in subtle gradients.">
+            <span style={{ fontSize: 9, opacity: 0.5, width: 38 }}>dither</span>
+            <input type="checkbox" checked={lutDither}
+              onChange={e => setLutDither(e.target.checked)}
+              style={{ margin: 0, width: 12, height: 12 }} />
           </div>
         </div>
         );
       })()}
 
       {/* Curves graph below Apply */}
-      <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7 }}>Fitted curves (R G B)</div>
-      <CurvesGraph curves={renderedCurves} />
+      {/* v1.20.63 — Fitted curves graph behind a disclosure. Diagnostic
+          information most users don't need to see continuously. */}
+      <div onClick={() => setCurvesGraphOpen(o => !o)}
+        style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 4, fontSize: 9, opacity: 0.6, cursor: "pointer", userSelect: "none" }}
+        title={curvesGraphOpen ? "Hide fitted-curves graph" : "Show fitted-curves graph (R G B channel transfer curves)"}>
+        <span style={{ width: 8, display: "inline-block", textAlign: "center" }}>{curvesGraphOpen ? "▾" : "▸"}</span>
+        <span>Fitted curves (R G B)</span>
+      </div>
+      {curvesGraphOpen && <CurvesGraph curves={renderedCurves} />}
 
       <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7, whiteSpace: "pre-wrap" }}>{status}</div>
 
