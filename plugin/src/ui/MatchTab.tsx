@@ -2059,6 +2059,43 @@ export function MatchTab() {
 
   return (
     <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+      {/* v1.20.67 — small inline wordmark at the top of the panel: bundled
+          plugin icon + "Color Smash" + version, with a ? help icon at the
+          right. Subtle (opacity 0.7) so it identifies the plugin without
+          competing for attention. */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: 6,
+        opacity: 0.7, height: 20, marginBottom: 2,
+      }}>
+        <img src="icons/icon-light.png" alt=""
+          style={{ width: 14, height: 14, flexShrink: 0, imageRendering: "auto" }} />
+        <span style={{
+          fontSize: 10, fontWeight: 600, letterSpacing: 0.5,
+          color: "#cccccc", userSelect: "none",
+        }}>Color Smash</span>
+        <span style={{
+          fontSize: 9, color: "#888", userSelect: "none",
+        }}>v1.20.67</span>
+        <span style={{ flex: 1 }} />
+        <span onClick={(e: any) => { e.stopPropagation(); e.preventDefault(); void uxpInfo("Color Smash — about", [
+          { heading: "What this is",
+            body: "Histogram-matching color grade between a source and target layer. Outputs editable Curves (RGB / Lab) or 3D Color Lookup adjustment layers, organized in a [Color Smash] group with masks and round-trippable XMP metadata." },
+          { heading: "Quick start",
+            body: "1. Pick a source layer (any open doc).\n2. Pick a target layer (the one to grade).\n3. Click Apply (or set up Multi for 3 banded layers).\n4. Pin recipes to history; export with ↑ EXPORT to share." },
+          { heading: "Workflow tips",
+            body: "+ on the Apply pill archives the current [Color Smash] session and starts a fresh one. RESTORE on any baked layer recovers the exact panel state that produced it. AUTO re-bakes the existing layer on every slider drag. MASK shows protected regions as red on the preview." },
+          { heading: "Version",
+            body: "Color Smash v1.20.67. Branch: master. Build cleanly on PS 25.0+." },
+        ]); }}
+          title="About Color Smash"
+          style={{
+            cursor: "pointer", fontSize: 9, fontWeight: 700, opacity: 0.7,
+            border: "1px solid #888", borderRadius: 8,
+            width: 14, height: 14,
+            display: "inline-flex", alignItems: "center", justifyContent: "center",
+            lineHeight: 1, userSelect: "none", flexShrink: 0, color: "#aaa",
+          }}>?</span>
+      </div>
       {/* Source picker — full width, doc dropdown + dense layer list + thumbnail right.
           Target lives below (above the preview) and reuses the preview itself for its
           visual feedback, so the target column no longer needs its own thumbnail. */}
