@@ -2934,7 +2934,9 @@ export function MatchTab() {
             const subState = (on: boolean) => {
               if (!on) return { bg: "transparent", fg: "#777", bd: "#3a3a3a" };
               if (active) return { bg: "#2f2f2f", fg: "#cccccc", bd: ACCENT };
-              return { bg: "transparent", fg: "#888", bd: "#555" };
+              // Dormant: partway between active and off — visible fill +
+              // mid-bright text + amber-tinted border at reduced intensity.
+              return { bg: "#242220", fg: "#aaa", bd: "#7a6a4a" };
             };
             const multiS = subState(cfg.multi);
             const blendS = subState(cfg.blendIf && cfg.multi);
