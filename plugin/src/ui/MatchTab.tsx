@@ -2801,8 +2801,27 @@ export function MatchTab() {
           const adaptApplicable = tabConfig[outputMode].multi;
           return (
             <div style={{ display: "flex", gap: 4, height: 16, marginBottom: 2 }}>
-              {/* Spacer aligned with column 1 below (76px). */}
-              <div style={{ width: 76, height: 16, flexShrink: 0 }} />
+              {/* v1.20.69 — + branch arm sits in the top strip, sharing the
+                  row with ADAPT/JUMP/ISOLATE and aligned with column 1
+                  (76px) of the main row below (which holds AUTO). */}
+              <div onClick={e => { e.stopPropagation(); setOverwriteOnApply(!overwriteOnApply); }}
+                title={overwriteOnApply
+                  ? "Click + to arm 'Branch' — next Apply (RGB/Lab/LUT tab click) hides the current [Color Smash] group and starts a fresh session."
+                  : "BRANCH ARMED — next Apply will collapse + hide the current [Color Smash] group (preserved, just invisible) and start a fresh session. Auto-disarms after that Apply. Click to cancel."}
+                style={{
+                  width: 76, height: 16, padding: 0, flexShrink: 0,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  background: overwriteOnApply ? "transparent" : "#1e3a1e",
+                  border: `1px solid ${overwriteOnApply ? "#444" : "#7ad87a"}`,
+                  borderRadius: 2,
+                  cursor: "pointer", userSelect: "none", boxSizing: "border-box",
+                  lineHeight: "14px",
+                }}>
+                <span style={{
+                  color: overwriteOnApply ? "#888" : "#7ad87a",
+                  fontSize: 13, fontWeight: 700, lineHeight: 1,
+                }}>+</span>
+              </div>
               {/* v1.20.61 — ADAPT sized to match a single tab pill (~1/3 of
                   the tab-area width). Two invisible filler divs fill the
                   remaining 2/3 so the strip's column structure mirrors the
@@ -2865,60 +2884,32 @@ export function MatchTab() {
           );
         })()}
         <div style={{ display: "flex", alignItems: "stretch", gap: 4 }}>
-        {/* v1.20.69 — column 1: stacked + (branch arm) above AUTO (armed
-            record indicator). 76px wide × 38px tall (two 18px rows + 2px
-            gap), matching the heights of [tab pill] (18) + [MULTI/BLEND]
-            (18) in the tabs grid to its right. Apply pill removed — tab
-            clicks (RGB/Lab/LUT) now both swap mode AND fire Apply. */}
-        <div style={{
-          display: "flex", flexDirection: "column",
-          width: 76, gap: 2, flexShrink: 0,
-        }}>
-          {/* Top row: + branch arm. */}
-          <div onClick={e => { e.stopPropagation(); setOverwriteOnApply(!overwriteOnApply); }}
-            title={overwriteOnApply
-              ? "Click + to arm 'Branch' — next Apply (RGB/Lab/LUT tab click) hides the current [Color Smash] group and starts a fresh session."
-              : "BRANCH ARMED — next Apply will collapse + hide the current [Color Smash] group (preserved, just invisible) and start a fresh session. Auto-disarms after that Apply. Click to cancel."}
-            style={{
-              height: 18, padding: 0,
-              display: "flex", alignItems: "center", justifyContent: "center",
-              background: overwriteOnApply ? "transparent" : "#1e3a1e",
-              border: `1px solid ${overwriteOnApply ? "#444" : "#7ad87a"}`,
-              borderRadius: 2,
-              cursor: "pointer", userSelect: "none", boxSizing: "border-box",
-              lineHeight: "16px",
-            }}>
-            <span style={{
-              color: overwriteOnApply ? "#888" : "#7ad87a",
-              fontSize: 14, fontWeight: 700, lineHeight: 1,
-            }}>+</span>
-          </div>
-          {/* Bottom row: AUTO as red record-armed indicator. Filled red
-              circle when armed (liveLut=true); hollow gray ring when off.
-              "Record-armed" mirrors music-DAW conventions. */}
-          <div onClick={() => setLiveLut(v => !v)}
-            title={liveLut
-              ? `AUTO ARMED — slider changes auto-update the existing Match ${outputMode === "lut" ? "LUT" : "Curves"} layer in real-time (debounced 300ms). Click to disarm.`
-              : `AUTO — click to arm real-time auto-bake. Match ${outputMode === "lut" ? "LUT" : "Curves"} layer will re-bake on every slider change once seeded by an Apply.`}
-            style={{
-              height: 18, padding: 0,
-              display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
-              background: liveLut ? "#3a1818" : "transparent",
-              border: `1px solid ${liveLut ? "#d84a4a" : "#444"}`,
-              color: liveLut ? "#ff8a8a" : "#888",
-              borderRadius: 2, cursor: "pointer", userSelect: "none",
-              fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
-              lineHeight: "16px", boxSizing: "border-box",
-            }}>
-            <span style={{
-              width: 8, height: 8, borderRadius: "50%",
-              background: liveLut ? "#ff3a3a" : "transparent",
-              border: liveLut ? "1px solid #ff8a8a" : "1.5px solid #888",
-              boxShadow: liveLut ? "0 0 4px #ff3a3a" : "none",
-              display: "inline-block", flexShrink: 0,
-            }} />
-            <span>AUTO</span>
-          </div>
+        {/* v1.20.69 — column 1: AUTO record-armed indicator, two rows tall
+            (matches the 18+2+18 = 38px column height of [tab pill] +
+            [MULTI/BLEND] in the tabs grid to its right). The + branch arm
+            lives in the top strip above, aligned over this same column. */}
+        <div onClick={() => setLiveLut(v => !v)}
+          title={liveLut
+            ? `AUTO ARMED — slider changes auto-update the existing Match ${outputMode === "lut" ? "LUT" : "Curves"} layer in real-time (debounced 300ms). Click to disarm.`
+            : `AUTO — click to arm real-time auto-bake. Match ${outputMode === "lut" ? "LUT" : "Curves"} layer will re-bake on every slider change once seeded by an Apply.`}
+          style={{
+            width: 76, padding: 0, flexShrink: 0,
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+            background: liveLut ? "#3a1818" : "transparent",
+            border: `1px solid ${liveLut ? "#d84a4a" : "#444"}`,
+            color: liveLut ? "#ff8a8a" : "#888",
+            borderRadius: 2, cursor: "pointer", userSelect: "none",
+            fontSize: 11, fontWeight: 700, letterSpacing: 0.4,
+            boxSizing: "border-box",
+          }}>
+          <span style={{
+            width: 10, height: 10, borderRadius: "50%",
+            background: liveLut ? "#ff3a3a" : "transparent",
+            border: liveLut ? "1px solid #ff8a8a" : "1.5px solid #888",
+            boxShadow: liveLut ? "0 0 5px #ff3a3a" : "none",
+            display: "inline-block", flexShrink: 0,
+          }} />
+          <span>AUTO</span>
         </div>
         {/* v1.20.59 — LIVE/ADAPT moved up into the thin top strip. */}
         <div style={{ display: "flex", flex: 1, gap: 0 }}>
