@@ -11,3 +11,4 @@ export * from './gamut';
 export * from './profile';
 export * from './audit';
 export * from './transform';
+export * from './lut';
