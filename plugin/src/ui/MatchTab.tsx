@@ -1919,7 +1919,9 @@ export function MatchTab() {
     panelLastSnapshotRef.current = prev;
     applyStateToPanel(prev);
     setUndoTick(t => t + 1);
-    setStatus("Panel state restored (undo).");
+    const remainingUndo = panelUndoStackRef.current.length;
+    const inRedo = panelRedoStackRef.current.length;
+    setStatus(`Undo — ${remainingUndo} more undoable, ${inRedo} redoable.`);
     // Release the gate after the snapshot effect has had a chance to
     // re-fire from the applied state. 350ms > the 250ms debounce.
     setTimeout(() => { isRestoringRef.current = false; }, 350);
@@ -1934,7 +1936,9 @@ export function MatchTab() {
     panelLastSnapshotRef.current = next;
     applyStateToPanel(next);
     setUndoTick(t => t + 1);
-    setStatus("Panel state restored (redo).");
+    const remainingRedo = panelRedoStackRef.current.length;
+    const inUndo = panelUndoStackRef.current.length;
+    setStatus(`Redo — ${remainingRedo} more redoable, ${inUndo} undoable.`);
     setTimeout(() => { isRestoringRef.current = false; }, 350);
   };
   // v1.20.70 — keyboard shortcut for panel undo / redo. Listens at
