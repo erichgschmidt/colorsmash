@@ -2940,6 +2940,15 @@ export function MatchTab() {
             };
             const multiS = subState(cfg.multi);
             const blendS = subState(cfg.blendIf && cfg.multi);
+            // Tab pill state: active wins; otherwise dormant if that mode
+            // has any non-default config (multi or blend been toggled on),
+            // else cold "never used this session".
+            const tabUsed = cfg.multi || cfg.blendIf;
+            const tabS = active
+              ? { bg: "#3a3a3a", fg: "#dddddd", bd: ACCENT }
+              : tabUsed
+                ? { bg: "#242220", fg: "#aaa", bd: "#7a6a4a" }
+                : { bg: "transparent", fg: "#888", bd: "#444" };
             return (
               <div key={val} style={{ flex: 1, display: "flex", flexDirection: "column", gap: 0, minWidth: 0 }}>
                 {/* Tab label pill. v1.20.69 — click swaps mode AND triggers Apply. */}
@@ -2948,9 +2957,9 @@ export function MatchTab() {
                     height: 18, padding: 0,
                     display: "flex", alignItems: "center", justifyContent: "center",
                     fontSize: 10, fontWeight: 700, letterSpacing: 0.4,
-                    background: active ? "#3a3a3a" : "transparent",
-                    color: active ? "#dddddd" : "#888",
-                    border: `1px solid ${active ? ACCENT : "#444"}`,
+                    background: tabS.bg,
+                    color: tabS.fg,
+                    border: `1px solid ${tabS.bd}`,
                     borderLeftWidth: isFirst ? 1 : 0,
                     borderRadius: 0,
                     cursor: "pointer", userSelect: "none",
