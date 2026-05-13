@@ -2886,11 +2886,19 @@ export function MatchTab() {
             return { val, label, tip, active, cfg, subDisabled, isFirst, multiS, blendS, tabS };
           });
           const adaptApplicable = tabConfig[outputMode].multi;
-          return (<>
-        {/* Main row: + + AUTO + disclosure + tabs. All three col-1 buttons
-            share the same row; disclosure stays single-row regardless of
-            MULTI/BLEND expansion. */}
+          return (
+        // v1.20.69 — shared 2-column outer layout: col-1 (74px) stacks
+        // the [+|○|▼] controls row above an optional ADAPT row; col-2
+        // (flex 1) stacks the tabs row above an optional MULTI/BLEND
+        // row. Because the col-1 and col-2 *outer columns* are the
+        // SAME flex children for both visual rows, their right edges
+        // align by construction — no sub-pixel rounding stagger
+        // possible between the [+|○|▼] block and ADAPT.
         <div style={{ display: "flex", alignItems: "flex-start", gap: 4 }}>
+          {/* Column 1 (74px wide, flexShrink:0). */}
+          <div style={{ width: 74, display: "flex", flexDirection: "column", gap: 0, flexShrink: 0 }}>
+            {/* Top sub-row inside col-1: + ○ ▼ buttons. */}
+            <div style={{ display: "flex", gap: 4, height: 18 }}>
           {/* v1.20.69 — + branch arm relocated into the main row so all
               three column-1 controls (+, ○ AUTO, ▶/▼ disclosure) live
               side-by-side. ADAPT then sits directly below them. */}
@@ -2952,10 +2960,34 @@ export function MatchTab() {
             }}>
             {multiExpanded ? "▼" : "▶"}
           </div>
+            </div>
+            {/* Bottom sub-row inside col-1: ADAPT (only when expanded).
+                Width 100% of the parent col-1 (74px) — no separate width
+                declaration needed, so ADAPT is guaranteed pixel-aligned
+                with the [+|○|▼] row above it. */}
+            {multiExpanded && (
+              <div onClick={() => setAdaptiveBands(!adaptiveBands)}
+                title={adaptiveBands
+                  ? `Adaptive ON (default) — multi-zone band peaks track the target histogram (P10/P50/P90) whenever MULTI is active for a tab. ${adaptApplicable && lumaBins ? `Current: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""} Click to disable.`
+                  : "Adaptive OFF — multi-zone band peaks fixed at 0/128/255. Click to re-enable percentile-driven peaks."}
+                style={{
+                  width: "100%", height: 18, padding: 0,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
+                  background: adaptiveBands ? "#3a3228" : "transparent",
+                  color: adaptiveBands ? "#e8c882" : "#888",
+                  border: `1px solid ${adaptiveBands ? "#d8b87a" : "#444"}`,
+                  borderRadius: 2, cursor: "pointer", userSelect: "none",
+                  lineHeight: "16px", boxSizing: "border-box",
+                }}>ADAPT</div>
+            )}
+          </div>
+          {/* Column 2 (flex 1): tabs row above, optional MULTI/BLEND row below. */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 0, flex: 1, minWidth: 0 }}>
           {/* Tabs row: RGB | Lab | LUT. overflow:hidden mirrors the
               multi row's container so both rows clip identically at
               narrow widths. */}
-          <div style={{ display: "flex", flex: 1, gap: 0, overflow: "hidden" }}>
+          <div style={{ display: "flex", gap: 0, overflow: "hidden" }}>
             {TABS.map(t => (
               <div key={t.val} onClick={() => onTabClick(t.val)} title={t.tip}
                 style={{
@@ -2974,34 +3006,13 @@ export function MatchTab() {
                 }}>{t.label}</div>
             ))}
           </div>
-        </div>
-        {/* MULTI/BLEND row + ADAPT — only when disclosure is expanded.
-            ADAPT lives in column 1 (spans AUTO+gap+disclosure = 48px)
-            because Adaptive bands is only meaningful when MULTI is on. */}
-        {multiExpanded && (
-          <div style={{ display: "flex", alignItems: "flex-start", gap: 4, marginTop: 0 }}>
-            <div onClick={() => setAdaptiveBands(!adaptiveBands)}
-              title={adaptiveBands
-                ? `Adaptive ON (default) — multi-zone band peaks track the target histogram (P10/P50/P90) whenever MULTI is active for a tab. ${adaptApplicable && lumaBins ? `Current: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""} Click to disable.`
-                : "Adaptive OFF — multi-zone band peaks fixed at 0/128/255. Click to re-enable percentile-driven peaks."}
-              style={{
-                width: 74, height: 18, padding: 0, flexShrink: 0,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
-                background: adaptiveBands ? "#3a3228" : "transparent",
-                color: adaptiveBands ? "#e8c882" : "#888",
-                border: `1px solid ${adaptiveBands ? "#d8b87a" : "#444"}`,
-                borderRadius: 2, cursor: "pointer", userSelect: "none",
-                lineHeight: "16px", boxSizing: "border-box",
-              }}>ADAPT</div>
-            {/* v1.20.69 — flat 6-cell layout (was 3 per-tab wrappers ×
-                2 cells each) so flex distribution matches the tabs row
-                above exactly. overflow: hidden clips MULTI/BLEND text
-                spillover at narrow panel widths (the labels are wider
-                than the cell when the panel is squished, and with the
-                default overflow: visible they'd push the row's apparent
-                right edge past where the tabs row above ends). */}
-            <div style={{ display: "flex", flex: 1, gap: 0, overflow: "hidden" }}>
+          {/* MULTI/BLEND row inside col-2 — only when disclosure is
+              expanded. Flat 6-cell layout (was 3 per-tab wrappers × 2
+              cells each) so flex distribution matches the tabs row
+              above exactly. overflow: hidden clips MULTI/BLEND text
+              spillover at narrow panel widths. */}
+          {multiExpanded && (
+            <div style={{ display: "flex", gap: 0, overflow: "hidden" }}>
               {TABS.flatMap((t, ti) => [
                 <div key={`${t.val}-multi`}
                   onClick={() => setTabConfig(prev => ({ ...prev, [t.val]: { ...prev[t.val], multi: !prev[t.val].multi } }))}
@@ -3048,9 +3059,10 @@ export function MatchTab() {
                 </div>,
               ])}
             </div>
+          )}
           </div>
-        )}
-          </>);
+        </div>
+          );
         })()}
       </div>
 
