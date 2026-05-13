@@ -2978,14 +2978,14 @@ export function MatchTab() {
                   // breathing room between ADAPT and MULTI (4px
                   // internal shave + 4px outer col-1→col-2 gap).
                   width: "calc(100% - 4px)", marginRight: 4,
-                  height: 28, padding: 0,
+                  height: 20, padding: 0,
                   display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 10, fontWeight: 700, letterSpacing: 0.4,
+                  fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
                   background: adaptiveBands ? "#3a3228" : "transparent",
                   color: adaptiveBands ? "#e8c882" : "#888",
                   border: `1px solid ${adaptiveBands ? "#d8b87a" : "#444"}`,
-                  borderRadius: 4, cursor: "pointer", userSelect: "none",
-                  lineHeight: "26px", boxSizing: "border-box",
+                  borderRadius: 3, cursor: "pointer", userSelect: "none",
+                  lineHeight: "18px", boxSizing: "border-box",
                 }}>ADAPT</div>
             )}
           </div>
@@ -3024,17 +3024,17 @@ export function MatchTab() {
                 <div key={`${t.val}-multi`}
                   onClick={() => setTabConfig(prev => ({ ...prev, [t.val]: { ...prev[t.val], multi: !prev[t.val].multi } }))}
                   style={{
-                    flex: "1 1 0", minWidth: 0, height: 28, padding: 0,
+                    flex: "1 1 0", minWidth: 0, height: 20, padding: 0,
                     display: "flex", alignItems: "center", justifyContent: "center",
                     overflow: "hidden", whiteSpace: "nowrap",
-                    fontSize: 10, fontWeight: 600, letterSpacing: 0.3,
+                    fontSize: 9, fontWeight: 600, letterSpacing: 0.3,
                     background: t.multiS.bg,
                     color: t.multiS.fg,
                     border: `1px solid ${t.multiS.bd}`,
                     borderLeftWidth: ti === 0 ? 1 : 0,
                     borderRadius: 0,
                     cursor: "pointer", userSelect: "none",
-                    lineHeight: "26px", boxSizing: "border-box",
+                    lineHeight: "18px", boxSizing: "border-box",
                   }}
                   title={`Multi (${t.label}): split this output into 3 luma-banded layers. Per-tab — RGB / Lab / LUT each remember their own Multi state.`}>
                   MULTI
@@ -3046,17 +3046,17 @@ export function MatchTab() {
                     return { ...prev, [t.val]: { ...cur, blendIf: !cur.blendIf } };
                   })}
                   style={{
-                    flex: "1 1 0", minWidth: 0, height: 28, padding: 0,
+                    flex: "1 1 0", minWidth: 0, height: 20, padding: 0,
                     display: "flex", alignItems: "center", justifyContent: "center",
                     overflow: "hidden", whiteSpace: "nowrap",
-                    fontSize: 10, fontWeight: 600, letterSpacing: 0.3,
+                    fontSize: 9, fontWeight: 600, letterSpacing: 0.3,
                     background: t.blendS.bg,
                     color: t.blendS.fg,
                     border: `1px solid ${t.blendS.bd}`,
                     borderLeftWidth: 0,
                     borderRadius: 0,
                     cursor: "pointer", userSelect: "none",
-                    lineHeight: "26px", boxSizing: "border-box",
+                    lineHeight: "18px", boxSizing: "border-box",
                     opacity: t.subDisabled ? 0.7 : 1,
                   }}
                   title={t.subDisabled
