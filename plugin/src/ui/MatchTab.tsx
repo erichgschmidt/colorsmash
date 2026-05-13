@@ -2971,11 +2971,11 @@ export function MatchTab() {
                   ? `Adaptive ON (default) — multi-zone band peaks track the target histogram (P10/P50/P90) whenever MULTI is active for a tab. ${adaptApplicable && lumaBins ? `Current: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""} Click to disable.`
                   : "Adaptive OFF — multi-zone band peaks fixed at 0/128/255. Click to re-enable percentile-driven peaks."}
                 style={{
-                  // v1.20.69 — full width of col-1 so ADAPT's right edge
-                  // is flush with ▼'s right edge. The 4px col-1→col-2
-                  // outer gap provides the visible breathing room
-                  // between ADAPT and MULTI.
-                  width: "100%",
+                  // v1.20.69 — shave 4px off ADAPT's right edge so it
+                  // visually indents inside col-1, giving 8px total
+                  // breathing room between ADAPT and MULTI (4px
+                  // internal shave + 4px outer col-1→col-2 gap).
+                  width: "calc(100% - 4px)", marginRight: 4,
                   height: 18, padding: 0,
                   display: "flex", alignItems: "center", justifyContent: "center",
                   fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
