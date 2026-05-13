@@ -253,11 +253,11 @@ export function MatchTab() {
   // re-inject every reload. Loaded from persistence; if absent the next
   // save writes it.
   const [starterPackVersion, setStarterPackVersion] = useState(0);
-  // v1.20.69 — Multi/Blend is a secondary feature; collapsed by default to
+  // v1.20.70 — Multi/Blend is a secondary feature; collapsed by default to
   // reduce visual density. A small disclosure (▶/▼) between AUTO and the
   // tabs reveals the MULTI/BLEND × 3 row when expanded.
   const [multiExpanded, setMultiExpanded] = useState(false);
-  // v1.20.69 — Settings drawer state + persisted prefs.
+  // v1.20.70 — Settings drawer state + persisted prefs.
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<{ general: boolean; lut: boolean; advanced: boolean; diag: boolean }>({
     general: true, lut: false, advanced: false, diag: false,
@@ -267,7 +267,7 @@ export function MatchTab() {
   const [autoDebounceMs, setAutoDebounceMs] = useState<number>(300);
   const [historyCap, setHistoryCap] = useState<number>(10);
   const [verboseStatus, setVerboseStatus] = useState<boolean>(false);
-  // v1.20.69 — was a hard-coded const 10; now driven by the Settings
+  // v1.20.70 — was a hard-coded const 10; now driven by the Settings
   // drawer's `historyCap` slider (range 5–30, persisted).
   const HISTORY_MAX = historyCap;
   // Default open in v1.20.1 — feedback was that the collapsed disclosure
@@ -389,7 +389,7 @@ export function MatchTab() {
   const [isolated, setIsolated] = useState(false);
   const isolationSnapshotRef = useRef<Map<number, boolean> | null>(null);
   const liveLutLayerIdRef = useRef<number | null>(null);
-  // v1.20.69 — when the user clicks a different output-mode tab (RGB/Lab/LUT),
+  // v1.20.70 — when the user clicks a different output-mode tab (RGB/Lab/LUT),
   // we want to (a) swap mode and (b) fire Apply for the new mode. Because the
   // fit + renderedCurves pipeline runs through useMemo + state, we can't just
   // call onApply synchronously after setOutputMode — the curves for the new
@@ -479,7 +479,7 @@ export function MatchTab() {
         // v1.20.66 — track which starter pack version this install has seen.
         if (typeof s.starterPackVersion === "number") setStarterPackVersion(s.starterPackVersion);
         if (typeof s.multiExpanded === "boolean") setMultiExpanded(s.multiExpanded);
-        // v1.20.69 — Settings-drawer prefs.
+        // v1.20.70 — Settings-drawer prefs.
         if (s.groupColor && ["none","red","orange","yellow","green","blue","violet","gray"].includes(s.groupColor)) {
           setGroupColor(s.groupColor as any);
         }
@@ -1770,7 +1770,7 @@ export function MatchTab() {
     }
   };
 
-  // v1.20.69 — sync the user's chosen group name to the photoshop
+  // v1.20.70 — sync the user's chosen group name to the photoshop
   // service module's mutable GROUP_NAME var. Runs on every change so
   // find/consolidate helpers + branch numbering pick up the new value.
   useEffect(() => {
@@ -1780,7 +1780,7 @@ export function MatchTab() {
     } catch { /* non-fatal */ }
   }, [groupName]);
 
-  // v1.20.69 — when the user renames the group via Settings, rename the
+  // v1.20.70 — when the user renames the group via Settings, rename the
   // existing canonical group in PS to match (best-effort; if no group
   // exists yet, the next Apply / consolidate will use the new name).
   useEffect(() => {
@@ -1813,7 +1813,7 @@ export function MatchTab() {
     return () => { cancelled = true; };
   }, [groupName, tgtDocId]);
 
-  // v1.20.69 — sync the user's chosen group color to PS whenever it
+  // v1.20.70 — sync the user's chosen group color to PS whenever it
   // changes (or when the target doc changes). Finds the canonical
   // [Color Smash] group in the target doc and applies the color tag
   // via setLayerColor. No-op if no group exists yet.
@@ -1846,7 +1846,7 @@ export function MatchTab() {
     return () => { cancelled = true; };
   }, [groupColor, tgtDocId]);
 
-  // v1.20.69 — REVERT shadow slot. Holds the panel state from JUST BEFORE
+  // v1.20.70 — REVERT shadow slot. Holds the panel state from JUST BEFORE
   // the last REVERT was applied. While non-null, the REVERT button styles
   // itself as "UN-REVERT" and clicking it restores the snapshot. Cleared
   // on UN-REVERT click or on a fresh REVERT from a different layer.
@@ -1874,7 +1874,7 @@ export function MatchTab() {
     await onRestoreFromLayer();
   };
 
-  // v1.20.69 — call PS's native undo/redo via batchPlay. Same as Ctrl/Cmd+Z
+  // v1.20.70 — call PS's native undo/redo via batchPlay. Same as Ctrl/Cmd+Z
   // but discoverable via header icons next to the plugin's REVERT button.
   const onPsUndo = async () => {
     try {
@@ -1915,7 +1915,7 @@ export function MatchTab() {
     // the old one so getOrCreateColorSmashGroup spawns a fresh empty one
     // for this Apply. Then disarm the + so subsequent Applies replace
     // within this new group.
-    // v1.20.69 — consolidate any stray [Color Smash] groups into one
+    // v1.20.70 — consolidate any stray [Color Smash] groups into one
     // canonical group at the doc root. Defensive: JUMP / ISOLATE / user
     // selection changes can cause PS's insertion-point to nest a new
     // group inside a sub-group on a subsequent create. Runs before the
@@ -2105,7 +2105,7 @@ export function MatchTab() {
     if (targetId == null) { setStatus("Pick target layer."); return; }
     if (srcMode === "layer" && sourceId == null) { setStatus("Pick source layer."); return; }
     // v1.20.54 — branch off when + is armed (see onApplyLut for context).
-    // v1.20.69 — consolidate any stray [Color Smash] groups into one
+    // v1.20.70 — consolidate any stray [Color Smash] groups into one
     // canonical group at the doc root. Defensive: JUMP / ISOLATE / user
     // selection changes can cause PS's insertion-point to nest a new
     // group inside a sub-group on a subsequent create. Runs before the
@@ -2193,7 +2193,7 @@ export function MatchTab() {
     } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
   };
 
-  // v1.20.69 — tab-click handler: clicking RGB/Lab/LUT swaps mode AND fires
+  // v1.20.70 — tab-click handler: clicking RGB/Lab/LUT swaps mode AND fires
   // Apply for that mode. If switching to a NEW mode, we can't call apply
   // synchronously — fit + renderedCurves run through useMemo on outputMode,
   // so the curves for the new mode aren't ready yet. We flip a ref flag and
@@ -2368,13 +2368,13 @@ export function MatchTab() {
     if (srcMode === "selection" && srcOverride) {
       try { setSrcOverride(await snapshotSelectionInner()); } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
     }
-    // v1.20.69 — force selection mask re-read. Folded in from the old
+    // v1.20.70 — force selection mask re-read. Folded in from the old
     // inline ↻ button (removed from the MASK row) so the main refresh
     // is the single sync entry point for everything PS-side.
     setSelectionTick(t => t + 1);
   };
 
-  // v1.20.69 — Diagnostics handlers (Settings drawer).
+  // v1.20.70 — Diagnostics handlers (Settings drawer).
   // Open the plugin's per-user data folder in the OS file browser.
   const onOpenDataFolder = async () => {
     try {
@@ -2434,9 +2434,29 @@ export function MatchTab() {
     }
   };
 
+  // v1.20.70 — section "island" styles. Each major section (Source,
+  // Target, Color/Tone/Envelope, Output, Mask, History, Fitted Curves)
+  // is wrapped in a softly-rounded frame with a slightly darker
+  // background — replaces the old heavy black-bar zone dividers and
+  // matches the Adobe panel aesthetic (each section reads as its own
+  // contained card).
+  const ISLAND: React.CSSProperties = {
+    background: "#222222",
+    border: "1px solid #2e2e2e",
+    borderRadius: 6,
+    padding: "8px 10px",
+    display: "flex", flexDirection: "column", gap: 4,
+    minWidth: 0,
+  };
+  const ISLAND_HEADER: React.CSSProperties = {
+    fontSize: 9, fontWeight: 700, letterSpacing: 0.8,
+    color: "#888", textTransform: "uppercase",
+    marginBottom: 4, userSelect: "none",
+  };
+
   return (
-    <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-      {/* v1.20.69 — header layout: [wordmark left] [↶ ↷ center, PS native
+    <div style={{ padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+      {/* v1.20.70 — header layout: [wordmark left] [↶ ↷ center, PS native
           undo/redo] [💾 REVERT ✕ ⟳ ⚙ ? right]. Plugin-action cluster
           moved here from the bottom action row so the body row carries
           only target-specific actions (JUMP, ISOLATE). The two arrow
@@ -2456,7 +2476,7 @@ export function MatchTab() {
           }}>Color Smash</span>
           <span style={{
             fontSize: 9, color: "#888", userSelect: "none", whiteSpace: "nowrap",
-          }}>v1.20.69</span>
+          }}>v1.20.70</span>
         </div>
         <span style={{ flex: 1 }} />
         {/* Center: PS-native ↶ undo / ↷ redo. Calls batchPlay { _obj: "undo" / "redo" }. */}
@@ -2555,7 +2575,7 @@ export function MatchTab() {
           { heading: "Header icons",
             body: "↶ ↷ — Photoshop native undo/redo (same as Ctrl/Cmd+Z). 💾 — export current preset as .CUBE LUT. REVERT — restore panel state from the active Match layer's XMP (clicking again 'un-reverts' from a one-shot in-memory shadow slot, plus a 'Before REVERT' history entry is auto-saved as a permanent safety net). ✕ — reset all panel settings. ⟳ — resync everything from PS. ⚙ — toggle settings persistence." },
           { heading: "Version",
-            body: "Color Smash v1.20.69. Branch: master. Build cleanly on PS 25.0+." },
+            body: "Color Smash v1.20.70. Branch: master. Build cleanly on PS 25.0+." },
         ]); }}
           title="About Color Smash"
           style={{
@@ -2567,7 +2587,7 @@ export function MatchTab() {
             boxSizing: "border-box",
           }}>?</span>
       </div>
-      {/* v1.20.69 — Settings drawer. Toggled by the ⚙ icon in the header.
+      {/* v1.20.70 — Settings drawer. Toggled by the ⚙ icon in the header.
           Inline (not modal) so it composes with the rest of the panel. */}
       {settingsOpen && (() => {
         // Reusable per-row layout: 80px label column, controls flex 1.
@@ -2822,6 +2842,9 @@ export function MatchTab() {
         );
       })()}
 
+      {/* SOURCE / REFERENCE island. v1.20.70. */}
+      <div style={ISLAND}>
+        <div style={ISLAND_HEADER}>SOURCE / REFERENCE</div>
       {/* Source picker — full width, doc dropdown + dense layer list + thumbnail right.
           Target lives below (above the preview) and reuses the preview itself for its
           visual feedback, so the target column no longer needs its own thumbnail. */}
@@ -2895,7 +2918,11 @@ export function MatchTab() {
             }
           />
         </div>
+      </div>{/* end SOURCE island */}
 
+      {/* TARGET / PREVIEW island. v1.20.70. */}
+      <div style={ISLAND}>
+        <div style={ISLAND_HEADER}>TARGET / PREVIEW</div>
       {/* Target selector — single horizontal row directly above the matched preview:
           [doc dropdown] [layer dropdown] [refresh]. Kept compact (no list, no thumbnail)
           because the preview pane itself shows the target via the Before/After badge. */}
@@ -2965,14 +2992,17 @@ export function MatchTab() {
           setAdaptive={setPaletteAdaptive}
           softness={targetSoftness}
           setSoftness={setTargetSoftness}
-          maskEnabled={targetMaskEnabled}
-          setMaskEnabled={setTargetMaskEnabled}
         />
       </div>
+      </div>{/* end TARGET island */}
 
-
+      {/* COLOR / TONE / ENVELOPE island. v1.20.70. The 3 inline section
+          dividers (each was a 1px gray rule) are removed — the island
+          frame already groups them, and inner separators inside the
+          island are softer. */}
+      <div style={ISLAND}>
+        <div style={ISLAND_HEADER}>TRANSFORM</div>
       {/* Accordion controls */}
-      <div style={{ borderTop: "1px solid #444", margin: "6px 0 0" }} />
       <div onClick={() => toggleSection("basic")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", cursor: "pointer", fontSize: 12, fontWeight: 700, color: enColor ? "#dddddd" : "#888", fontStyle: enColor ? "normal" : "italic" }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           <span onClick={(e: any) => { e.stopPropagation(); setEnColor(!enColor); }}
@@ -3038,7 +3068,6 @@ export function MatchTab() {
         </div>
       )}
 
-      <div style={{ borderTop: "1px solid #444" }} />
       <div onClick={() => toggleSection("dims")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", cursor: "pointer", fontSize: 12, fontWeight: 700, color: enTone ? "#dddddd" : "#888", fontStyle: enTone ? "normal" : "italic" }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           <span onClick={(e: any) => { e.stopPropagation(); setEnTone(!enTone); }}
@@ -3194,7 +3223,6 @@ export function MatchTab() {
         );
       })}
 
-      <div style={{ borderTop: "1px solid #444" }} />
       <div onClick={() => toggleSection("envelope")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", cursor: "pointer", fontSize: 12, fontWeight: 700, color: enEnvelope ? "#dddddd" : "#888", fontStyle: enEnvelope ? "normal" : "italic" }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           <span onClick={(e: any) => { e.stopPropagation(); setEnEnvelope(!enEnvelope); }}
@@ -3246,128 +3274,25 @@ export function MatchTab() {
           />
         </div>
       )}
+      </div>{/* end TRANSFORM island */}
 
-      {/* v1.20.43 — BottomActionBar dissolved; SAVE/✕/⟳ pills relocated
-          into the Apply row below for a single consolidated action cluster. */}
+      {/* OUTPUT island. v1.20.70 — header label + framed container. */}
+      <div style={ISLAND}>
+        <div style={ISLAND_HEADER}>OUTPUT</div>
 
-      {/* Apply (writes Curves layer to PS) and Export LUT (writes .CUBE to disk).
-          50/50 split. flexWrap:nowrap + overflow:hidden + minWidth:0 on each cell
-          guarantees the row stays single-line at any panel width — labels clip
-          silently inside their own button instead of wrapping the buttons to two
-          rows. Sp-button's internal text gets nowrap + overflow:hidden too. */}
-      {/* Output mode 3-way control. v1.15.0 placed this under the target
-          softness slider; v1.16.5 moved it above the Apply button row,
-          directly below the Multi / Blend If / Adaptive toggles — sits with
-          the other "what happens when I Apply" decisions instead of
-          floating between palette UI and the apply cluster. Mode change is
-          instant: preview re-renders to match the bake, Apply dispatches
-          to the right path (Curves vs Color Lookup), visibility sync
-          toggles existing outputs.
-
-          - RGB: separable per-channel curves → Curves layer (continuous, editable)
-          - Lab: perceptual L*a*b* match, projected back to RGB curves → Curves layer
-          - LUT: 33³ 3D transform with preset blend math baked in → Color Lookup layer */}
-      {/* v1.20.53 — MASK + marquee tristate now share a single row above
-          the output-mode block. MASK leads, then Off/Focus/Exclude pills,
-          then the ↻ selection-status icon. Hint banners (no selection
-          captured, source-mode disabled) render below this row when
-          relevant. */}
-      {/* v1.20.63 — zone divider: separates the transform sections
-          (Color/Tone/Envelope) above from the output/Apply zone below. */}
-      <div style={{ height: 2, background: "#0a0a0a", marginTop: 8, marginBottom: 6, boxShadow: "0 1px 0 #333" }} />
-      {(() => {
-        const marqueeDisabled = srcMode === "selection";
-        const disabledTip = "Disabled because the source is using the active marquee. Switch source to a layer or browsed image to use the marquee as an output mask.";
-        const showNoSelectionHint =
-          !marqueeDisabled &&
-          selectionMode !== "off" &&
-          !selectionPreviewMask;
-        return (
-          <>
-          {/* v1.20.69 — MASK row layout mirrors the output block: MASK
-              spans col-1 (92px) and Off/Focus/Exclude span col-2's tab
-              widths. The inline ↻ button is gone; its functionality
-              folded into the main ⟳ refresh in the action row below.
-              Off/Focus/Exclude run thinner (22px vs 28px) than the
-              primary RGB/Lab/LUT row so they yield visual hierarchy. */}
-          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 4 }}>
-            <div onClick={() => setShowMask(v => !v)}
-              title={showMask
-                ? "Show Mask ON — protected regions painted red on the matched preview (palette × selection composition). Click to disable."
-                : "Show Mask OFF — preview shows pure transform output. Click to enable: protected regions paint red."}
-              style={{
-                width: 88, height: 22, flexShrink: 0, marginRight: 4,
-                fontSize: 11, fontWeight: 700, letterSpacing: 0.4,
-                display: "inline-flex", alignItems: "center", justifyContent: "center",
-                background: showMask ? "#3a2828" : "transparent",
-                color: showMask ? "#e87a7a" : "#5a3a3a",
-                border: `1px solid ${showMask ? "#d87a7a" : "#5a3a3a"}`,
-                borderRadius: 4, cursor: "pointer", userSelect: "none",
-                lineHeight: "20px", boxSizing: "border-box",
-              }}>MASK</div>
-            <div style={{ display: "flex", flex: 1, gap: 0, opacity: marqueeDisabled ? 0.55 : 1, overflow: "hidden" }}>
-              {([
-                ["off",     "Off",     "Ignore the marquee — full-image apply (default). The marquee stays on the doc."],
-                ["focus",   "Focus",   "Use the active marquee as the layer mask — the Curves/LUT applies ONLY inside the marquee. Multiplied with the target-palette mask if both are active."],
-                ["exclude", "Exclude", "Use the INVERSE of the active marquee as the layer mask — the Curves/LUT applies everywhere OUTSIDE the marquee. Useful for protecting a chosen area."],
-              ] as Array<["off" | "focus" | "exclude", string, string]>).map(([val, label, tip], idx) => (
-                <div key={val}
-                  onClick={() => { if (!marqueeDisabled) setSelectionMode(val); }}
-                  title={marqueeDisabled ? disabledTip : tip}
-                  style={{
-                    flex: "1 1 0", minWidth: 0, height: 22, padding: 0,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    overflow: "hidden", whiteSpace: "nowrap",
-                    fontSize: 10, fontWeight: 600, letterSpacing: 0.3,
-                    background: !marqueeDisabled && selectionMode === val ? "#3a3a3a" : "transparent",
-                    color: !marqueeDisabled && selectionMode === val ? "#dddddd" : "#888",
-                    border: `1px solid ${!marqueeDisabled && selectionMode === val ? "#888" : "#444"}`,
-                    borderLeftWidth: idx === 0 ? 1 : 0,
-                    borderRadius: 0,
-                    cursor: marqueeDisabled ? "default" : "pointer",
-                    userSelect: "none",
-                    lineHeight: "20px", boxSizing: "border-box",
-                  }}>{label}</div>
-              ))}
-            </div>
-          </div>
-          {showNoSelectionHint && (
-            <div style={{
-              marginTop: 2, padding: "2px 6px",
-              fontSize: 9, color: "#d8b87a",
-              background: "transparent", border: "1px solid #5a4a2a", borderRadius: 2,
-              lineHeight: 1.3,
-            }}>
-              Marquee mode is <b>{selectionMode}</b> but no selection was captured. Draw a marquee on the target document, then click ↻ to refresh.{selectionMaskError ? <><br/><span style={{ opacity: 0.7 }}>{selectionMaskError}</span></> : null}
-            </div>
-          )}
-          {marqueeDisabled && (
-            <div style={{
-              marginTop: 2, padding: "2px 6px",
-              fontSize: 9, color: "#888",
-              background: "transparent", border: "1px solid #444", borderRadius: 2,
-              lineHeight: 1.3,
-            }}>
-              Disabled because your <b>source mode is "selection"</b> — the marquee is in use as source pixels. Switch source mode to "layer" to use the marquee here as an output mask.
-            </div>
-          )}
-          </>
-        );
-      })()}
-
-      {/* v1.20.69 — output block restructured again. Apply pill removed:
+      {/* v1.20.70 — output block restructured again. Apply pill removed:
           tab clicks (RGB/Lab/LUT) now BOTH swap output mode AND fire Apply.
           Column 1 (76px) is now the global-modifier stack:
             top row (aligned w/ RGB|Lab|LUT) = "+" branch arm
             bottom row (aligned w/ MULTI|BLEND) = AUTO armed-record indicator
           The thin top strip drops AUTO and keeps [ADAPT][JUMP][ISOLATE]. */}
       <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 0 }}>
-        {/* v1.20.69 — top strip removed. JUMP / ISOLATE moved DOWN into
+        {/* v1.20.70 — top strip removed. JUMP / ISOLATE moved DOWN into
             the action row at the bottom of the output block, alongside
-            REVERT / RESET / ⟳ / ⚙. ADAPT (was here pre-v1.20.69)
+            REVERT / RESET / ⟳ / ⚙. ADAPT (was here pre-v1.20.70)
             relocated into the MULTI/BLEND expandable row. */}
         {(() => {
-          // v1.20.69 — extracted per-tab meta so the tabs row and the
+          // v1.20.70 — extracted per-tab meta so the tabs row and the
           // (separate, optional) MULTI/BLEND row can both render from the
           // same source. ACCENT + subState formerly inlined inside the map.
           const ACCENT = "#d8b87a";
@@ -3397,7 +3322,7 @@ export function MatchTab() {
           });
           const adaptApplicable = tabConfig[outputMode].multi;
           return (
-        // v1.20.69 — shared 2-column outer layout: col-1 (74px) stacks
+        // v1.20.70 — shared 2-column outer layout: col-1 (74px) stacks
         // the [+|○|▼] controls row above an optional ADAPT row; col-2
         // (flex 1) stacks the tabs row above an optional MULTI/BLEND
         // row. Because the col-1 and col-2 *outer columns* are the
@@ -3406,12 +3331,12 @@ export function MatchTab() {
         // possible between the [+|○|▼] block and ADAPT.
         <div style={{ display: "flex", alignItems: "flex-start", gap: 4 }}>
           {/* Column 1 (92px wide = 28+4+28+4+28, flexShrink:0).
-              v1.20.69 — bumped from 74→92 to host 28px-wide buttons
+              v1.20.70 — bumped from 74→92 to host 28px-wide buttons
               that match the new 28px output-row height. */}
           <div style={{ width: 92, display: "flex", flexDirection: "column", gap: 0, flexShrink: 0 }}>
             {/* Top sub-row inside col-1: + ○ ▼ buttons. */}
             <div style={{ display: "flex", gap: 4, height: 28 }}>
-          {/* v1.20.69 — + branch arm relocated into the main row so all
+          {/* v1.20.70 — + branch arm relocated into the main row so all
               three column-1 controls (+, ○ AUTO, ▶/▼ disclosure) live
               side-by-side. ADAPT then sits directly below them. */}
           <div onClick={e => { e.stopPropagation(); setOverwriteOnApply(!overwriteOnApply); }}
@@ -3483,7 +3408,7 @@ export function MatchTab() {
                   ? `Adaptive ON (default) — multi-zone band peaks track the target histogram (P10/P50/P90) whenever MULTI is active for a tab. ${adaptApplicable && lumaBins ? `Current: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""} Click to disable.`
                   : "Adaptive OFF — multi-zone band peaks fixed at 0/128/255. Click to re-enable percentile-driven peaks."}
                 style={{
-                  // v1.20.69 — shave 4px off ADAPT's right edge so it
+                  // v1.20.70 — shave 4px off ADAPT's right edge so it
                   // visually indents inside col-1, giving 8px total
                   // breathing room between ADAPT and MULTI (4px
                   // internal shave + 4px outer col-1→col-2 gap).
@@ -3496,7 +3421,7 @@ export function MatchTab() {
                   border: `1px solid ${adaptiveBands ? "#d8b87a" : "#444"}`,
                   borderRadius: 3, cursor: "pointer", userSelect: "none",
                   lineHeight: "18px", boxSizing: "border-box",
-                }}>ADAPT</div>
+                }}>{"<>"}</div>
             )}
           </div>
           {/* Column 2 (flex 1): tabs row above, optional MULTI/BLEND row below. */}
@@ -3586,7 +3511,7 @@ export function MatchTab() {
       {/* v1.20.53 — marquee tristate was relocated up alongside MASK
           (above the output-mode block). This slot is now empty. */}
 
-      {/* v1.20.69 — body action row carries only target-specific actions
+      {/* v1.20.70 — body action row carries only target-specific actions
           (JUMP / ISOLATE). The plugin-level cluster (💾 REVERT ✕ ⟳ ⚙ ?)
           lives in the header, with PS native ↶ ↷ in the header center. */}
       <div style={{ display: "flex", flexWrap: "nowrap", gap: 4, marginTop: 6, width: "100%", alignItems: "center" }}>
@@ -3625,10 +3550,100 @@ export function MatchTab() {
             lineHeight: "20px", boxSizing: "border-box",
           }}>ISOLATE</div>
       </div>
+      </div>{/* end OUTPUT island */}
 
-      {/* v1.20.63 — zone divider: separates the Apply/action zone above
-          from the history zone below. */}
-      <div style={{ height: 2, background: "#0a0a0a", marginTop: 8, marginBottom: 6, boxShadow: "0 1px 0 #333" }} />
+      {/* MASK island. v1.20.70 — moved BELOW the output block (was above
+          pre-v1.20.70). MASK button toggles BOTH the visualization
+          overlay (showMask) and the per-cluster attenuation gate
+          (targetMaskEnabled), unifying what was two separate toggles.
+          The old per-palette mask pill in PaletteStrip is gone — this
+          is now the single source of mask control. */}
+      <div style={ISLAND}>
+        <div style={ISLAND_HEADER}>MASK</div>
+      {(() => {
+        const marqueeDisabled = srcMode === "selection";
+        const disabledTip = "Disabled because the source is using the active marquee. Switch source to a layer or browsed image to use the marquee as an output mask.";
+        const maskOn = showMask && targetMaskEnabled;
+        const showNoSelectionHint =
+          !marqueeDisabled &&
+          selectionMode !== "off" &&
+          !selectionPreviewMask;
+        return (
+          <>
+          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <div onClick={() => {
+              // v1.20.70 — toggle BOTH the per-cluster attenuation gate
+              // and the red preview overlay together. Default ON.
+              const next = !maskOn;
+              setShowMask(next);
+              setTargetMaskEnabled(next);
+            }}
+              title={maskOn
+                ? "MASK ON — per-cluster target attenuation is active (preview AND bake honor the target-palette weights). Protected regions show red on the preview. Click to disable: preview shows pure transform, bake produces an unmasked Curves/LUT layer."
+                : "MASK OFF — preview shows pure transform output and bake produces an unmasked Curves/LUT layer. Click to enable: per-cluster mask attenuates the transform + paints protected regions red on the preview."}
+              style={{
+                width: 88, height: 22, flexShrink: 0, marginRight: 4,
+                fontSize: 11, fontWeight: 700, letterSpacing: 0.4,
+                display: "inline-flex", alignItems: "center", justifyContent: "center",
+                background: maskOn ? "#3a2828" : "transparent",
+                color: maskOn ? "#e87a7a" : "#5a3a3a",
+                border: `1px solid ${maskOn ? "#d87a7a" : "#5a3a3a"}`,
+                borderRadius: 4, cursor: "pointer", userSelect: "none",
+                lineHeight: "20px", boxSizing: "border-box",
+              }}>MASK</div>
+            <div style={{ display: "flex", flex: 1, gap: 0, opacity: marqueeDisabled ? 0.55 : 1, overflow: "hidden" }}>
+              {([
+                ["off",     "Off",     "Ignore the marquee — full-image apply (default). The marquee stays on the doc."],
+                ["focus",   "Focus",   "Use the active marquee as the layer mask — the Curves/LUT applies ONLY inside the marquee. Multiplied with the target-palette mask if both are active."],
+                ["exclude", "Exclude", "Use the INVERSE of the active marquee as the layer mask — the Curves/LUT applies everywhere OUTSIDE the marquee. Useful for protecting a chosen area."],
+              ] as Array<["off" | "focus" | "exclude", string, string]>).map(([val, label, tip], idx) => (
+                <div key={val}
+                  onClick={() => { if (!marqueeDisabled) setSelectionMode(val); }}
+                  title={marqueeDisabled ? disabledTip : tip}
+                  style={{
+                    flex: "1 1 0", minWidth: 0, height: 22, padding: 0,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    overflow: "hidden", whiteSpace: "nowrap",
+                    fontSize: 10, fontWeight: 600, letterSpacing: 0.3,
+                    background: !marqueeDisabled && selectionMode === val ? "#3a3a3a" : "transparent",
+                    color: !marqueeDisabled && selectionMode === val ? "#dddddd" : "#888",
+                    border: `1px solid ${!marqueeDisabled && selectionMode === val ? "#888" : "#444"}`,
+                    borderLeftWidth: idx === 0 ? 1 : 0,
+                    borderRadius: 0,
+                    cursor: marqueeDisabled ? "default" : "pointer",
+                    userSelect: "none",
+                    lineHeight: "20px", boxSizing: "border-box",
+                  }}>{label}</div>
+              ))}
+            </div>
+          </div>
+          {showNoSelectionHint && (
+            <div style={{
+              marginTop: 4, padding: "2px 6px",
+              fontSize: 9, color: "#d8b87a",
+              background: "transparent", border: "1px solid #5a4a2a", borderRadius: 2,
+              lineHeight: 1.3,
+            }}>
+              Marquee mode is <b>{selectionMode}</b> but no selection was captured. Draw a marquee on the target doc and click ⟳ to refresh.{selectionMaskError ? <><br/><span style={{ opacity: 0.7 }}>{selectionMaskError}</span></> : null}
+            </div>
+          )}
+          {marqueeDisabled && (
+            <div style={{
+              marginTop: 4, padding: "2px 6px",
+              fontSize: 9, color: "#888",
+              background: "transparent", border: "1px solid #444", borderRadius: 2,
+              lineHeight: 1.3,
+            }}>
+              Disabled because your <b>source mode is "selection"</b> — the marquee is in use as source pixels. Switch source mode to "layer" to use the marquee here as an output mask.
+            </div>
+          )}
+          </>
+        );
+      })()}
+      </div>{/* end MASK island */}
+
+      {/* HISTORY island. */}
+      <div style={ISLAND}>
       {/* Recent history. Empty state shows a single hint line; otherwise the
           stored entries render as small palette-color thumbnails. */}
       {(() => {
@@ -3648,15 +3663,15 @@ export function MatchTab() {
         <div style={{ marginTop: 6 }}>
           {/* v1.20.65 — header row: disclosure on the left, import/export
               tiny icons on the right. Cross-machine recipe portability. */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", height: 14, lineHeight: "14px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", height: 16, lineHeight: "14px", marginBottom: 4 }}>
             <div onClick={() => setHistoryOpen(o => !o)}
-              style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, opacity: 0.65,
+              style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, fontWeight: 700, letterSpacing: 0.8, color: "#888",
                        cursor: "pointer", userSelect: "none" }}
               title={historyOpen ? "Hide recent applies" : "Show recent applies — click any thumbnail to restore that state"}>
               <span style={{ width: 8, display: "inline-block", textAlign: "center" }}>
                 {historyOpen ? "▾" : "▸"}
               </span>
-              <span>history ({recentHistory.length})</span>
+              <span>HISTORY ({recentHistory.length})</span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
               <div onClick={onImportRecipes}
@@ -3853,22 +3868,19 @@ export function MatchTab() {
         </div>
         );
       })()}
+      </div>{/* end HISTORY island */}
 
-      {/* v1.20.69 — LUT settings (strength / quality / dither) moved into
-          the Settings drawer (⚙ in the header). */}
-
-      {/* Curves graph below Apply */}
-      {/* v1.20.63 — Fitted curves graph behind a disclosure. Diagnostic
-          information most users don't need to see continuously. */}
-      <div onClick={() => setCurvesGraphOpen(o => !o)}
-        style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 4, fontSize: 9, opacity: 0.6, cursor: "pointer", userSelect: "none" }}
-        title={curvesGraphOpen ? "Hide fitted-curves graph" : "Show fitted-curves graph (R G B channel transfer curves)"}>
-        <span style={{ width: 8, display: "inline-block", textAlign: "center" }}>{curvesGraphOpen ? "▾" : "▸"}</span>
-        <span>Fitted curves (R G B)</span>
-      </div>
-      {curvesGraphOpen && <CurvesGraph curves={renderedCurves} />}
-
-      <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7, whiteSpace: "pre-wrap" }}>{status}</div>
+      {/* FITTED CURVES island. v1.20.70. */}
+      <div style={ISLAND}>
+        <div onClick={() => setCurvesGraphOpen(o => !o)}
+          style={{ display: "flex", alignItems: "center", gap: 4, ...ISLAND_HEADER, marginBottom: curvesGraphOpen ? 4 : 0, cursor: "pointer" }}
+          title={curvesGraphOpen ? "Hide fitted-curves graph" : "Show fitted-curves graph (R G B channel transfer curves)"}>
+          <span style={{ width: 8, display: "inline-block", textAlign: "center" }}>{curvesGraphOpen ? "▾" : "▸"}</span>
+          <span>FITTED CURVES (R G B)</span>
+        </div>
+        {curvesGraphOpen && <CurvesGraph curves={renderedCurves} />}
+        <div style={{ marginTop: 2, fontSize: 10, opacity: 0.7, whiteSpace: "pre-wrap" }}>{status}</div>
+      </div>{/* end FITTED CURVES island */}
 
       {/* Diagnostic-only doc-rename probe. Read-only; never mutates srcDocId / srcMode /
           targetId / etc. Logs every name-shaped value across every API surface so we can
