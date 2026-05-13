@@ -2903,13 +2903,12 @@ export function MatchTab() {
             boxSizing: "border-box",
           }}>
           <span style={{
-            width: 10, height: 10, borderRadius: "50%",
+            width: 12, height: 12, borderRadius: "50%",
             background: liveLut ? "#ff3a3a" : "transparent",
             border: liveLut ? "1px solid #ff8a8a" : "1.5px solid #888",
-            boxShadow: liveLut ? "0 0 5px #ff3a3a" : "none",
+            boxShadow: liveLut ? "0 0 6px #ff3a3a" : "none",
             display: "inline-block", flexShrink: 0,
           }} />
-          <span>AUTO</span>
         </div>
         {/* v1.20.59 — LIVE/ADAPT moved up into the thin top strip. */}
         <div style={{ display: "flex", flex: 1, gap: 0 }}>
