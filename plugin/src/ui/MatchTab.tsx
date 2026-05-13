@@ -2802,14 +2802,14 @@ export function MatchTab() {
             bottom row (aligned w/ MULTI|BLEND) = AUTO armed-record indicator
           The thin top strip drops AUTO and keeps [ADAPT][JUMP][ISOLATE]. */}
       <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 0 }}>
-        {/* Thin top strip: ADAPT + JUMP + ISOLATE (AUTO moved down). */}
+        {/* Thin top strip: JUMP + ISOLATE. ADAPT removed in v1.20.69 —
+            it's only meaningful when MULTI is active, so it moved into
+            the (expandable) MULTI/BLEND row below. */}
         {(() => {
-          const adaptApplicable = tabConfig[outputMode].multi;
           return (
             <div style={{ display: "flex", gap: 4, height: 16, marginBottom: 2 }}>
-              {/* v1.20.69 — + branch arm sits in the top strip, sharing the
-                  row with ADAPT/JUMP/ISOLATE and aligned with column 1
-                  (76px) of the main row below (which holds AUTO). */}
+              {/* v1.20.69 — + branch arm sits in the top strip aligned over
+                  column 1 of the main row below (which holds AUTO). */}
               <div onClick={e => { e.stopPropagation(); setOverwriteOnApply(!overwriteOnApply); }}
                 title={overwriteOnApply
                   ? "Click + to arm 'Branch' — next Apply (RGB/Lab/LUT tab click) hides the current [Color Smash] group and starts a fresh session."
@@ -2828,25 +2828,10 @@ export function MatchTab() {
                   fontSize: 13, fontWeight: 700, lineHeight: 1,
                 }}>+</span>
               </div>
-              {/* v1.20.61 — ADAPT sized to match a single tab pill (~1/3 of
-                  the tab-area width). Two invisible filler divs fill the
-                  remaining 2/3 so the strip's column structure mirrors the
-                  RGB | Lab | LUT row below. */}
+              {/* Spacer matches the disclosure column below (22px + 4 gap
+                  on either side rolls up into the parent's gap). */}
+              <div style={{ width: 22, height: 16, flexShrink: 0 }} />
               <div style={{ display: "flex", flex: 1, gap: 0 }}>
-                <div onClick={() => setAdaptiveBands(!adaptiveBands)}
-                  title={adaptiveBands
-                    ? `Adaptive ON (default) — multi-zone band peaks track the target histogram (P10/P50/P90) whenever MULTI is active for a tab. ${adaptApplicable && lumaBins ? `Current: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""} Click to disable.`
-                    : "Adaptive OFF — multi-zone band peaks fixed at 0/128/255. Click to re-enable percentile-driven peaks."}
-                  style={{
-                    flex: 1, height: 16, padding: 0,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
-                    background: adaptiveBands ? "#3a3228" : "transparent",
-                    color: adaptiveBands ? "#e8c882" : "#888",
-                    border: `1px solid ${adaptiveBands ? "#d8b87a" : "#444"}`,
-                    borderRadius: 2, cursor: "pointer", userSelect: "none",
-                    lineHeight: "14px", boxSizing: "border-box",
-                  }}>ADAPT</div>
                 {/* v1.20.68 — JUMP: select the target layer in PS Layers
                     panel. Quick navigation when the target dropdown
                     points at a layer buried in a group. */}
@@ -2889,57 +2874,12 @@ export function MatchTab() {
             </div>
           );
         })()}
-        <div style={{ display: "flex", alignItems: "stretch", gap: 4 }}>
-        {/* v1.20.69 — column 1: AUTO record-armed indicator. Height matches
-            the rows to its right: 18px (1 row) when MULTI/BLEND is
-            collapsed, 38px (2 rows) when expanded. The + branch arm lives
-            in the top strip above, aligned over this same column. */}
-        <div onClick={() => setLiveLut(v => !v)}
-          title={liveLut
-            ? `AUTO ARMED — slider changes auto-update the existing Match ${outputMode === "lut" ? "LUT" : "Curves"} layer in real-time (debounced 300ms). Click to disarm.`
-            : `AUTO — click to arm real-time auto-bake. Match ${outputMode === "lut" ? "LUT" : "Curves"} layer will re-bake on every slider change once seeded by an Apply.`}
-          style={{
-            width: 22, padding: 0, flexShrink: 0,
-            display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-            background: liveLut ? "#3a1818" : "transparent",
-            border: `1px solid ${liveLut ? "#d84a4a" : "#444"}`,
-            color: liveLut ? "#ff8a8a" : "#888",
-            borderRadius: 2, cursor: "pointer", userSelect: "none",
-            fontSize: 11, fontWeight: 700, letterSpacing: 0.4,
-            boxSizing: "border-box",
-          }}>
-          <span style={{
-            width: 12, height: 12, borderRadius: "50%",
-            background: liveLut ? "#ff3a3a" : "transparent",
-            border: liveLut ? "1px solid #ff8a8a" : "1.5px solid #888",
-            boxShadow: liveLut ? "0 0 6px #ff3a3a" : "none",
-            display: "inline-block", flexShrink: 0,
-          }} />
-        </div>
-        {/* v1.20.69 — disclosure column: shows/hides the MULTI/BLEND row.
-            Sits between AUTO and the RGB/Lab/LUT tabs. Same width as AUTO
-            (22px); matches AUTO's height (1 or 2 rows) so the column
-            grid stays consistent. */}
-        <div onClick={() => setMultiExpanded(v => !v)}
-          title={multiExpanded
-            ? "Collapse MULTI/BLEND row. Per-tab Multi state is preserved — just hidden."
-            : "Expand MULTI/BLEND row. Per-tab toggles to split output into 3 luma-banded layers (shadow/mid/highlight)."}
-          style={{
-            width: 22, padding: 0, flexShrink: 0,
-            display: "flex", alignItems: "center", justifyContent: "center",
-            background: "transparent",
-            border: "1px solid #444",
-            color: "#aaa",
-            borderRadius: 2, cursor: "pointer", userSelect: "none",
-            fontSize: 9, lineHeight: 1,
-            boxSizing: "border-box",
-          }}>
-          {multiExpanded ? "▼" : "▶"}
-        </div>
-        {/* Tabs + (optional) MULTI/BLEND row stack to the right. */}
-        <div style={{ display: "flex", flexDirection: "column", flex: 1, gap: 0, minWidth: 0 }}>
-        <div style={{ display: "flex", flex: 1, gap: 0 }}>
-          {([
+        {(() => {
+          // v1.20.69 — extracted per-tab meta so the tabs row and the
+          // (separate, optional) MULTI/BLEND row can both render from the
+          // same source. ACCENT + subState formerly inlined inside the map.
+          const ACCENT = "#d8b87a";
+          const TABS = ([
             ["rgb", "RGB", "RGB — separable per-channel Curves layer. Click to switch mode AND Apply (bakes a new Curves layer)."],
             ["lab", "Lab", "Lab — perceptual histogram match, projected to per-channel Curves layer. Click to switch mode AND Apply."],
             ["lut", "LUT", "LUT — 33³ Color Lookup adjustment with preset blend math baked in. Click to switch mode AND Apply."],
@@ -2947,108 +2887,154 @@ export function MatchTab() {
             const active = outputMode === val;
             const cfg = tabConfig[val];
             const subDisabled = !cfg.multi;
-            // Each column is its own little vertical group sharing borders
-            // with neighbors (no-gap segmented block).
             const isFirst = idx === 0;
-            // v1.20.69 — accent the active tab + its sub-toggles with an
-            // amber border so the user can tell at a glance which column
-            // is the current output mode. Three visual states per toggle:
-            //   ACTIVE + on   → filled bg, bright fg, amber border
-            //   INACTIVE + on → no fill, dim fg, dim solid border (dormant:
-            //                   "used this session but not the current mode")
-            //   off (any tab) → no fill, muted fg, very dim border (cold)
-            const ACCENT = "#d8b87a";
             const subState = (on: boolean) => {
               if (!on) return { bg: "transparent", fg: "#777", bd: "#3a3a3a" };
               if (active) return { bg: "#2f2f2f", fg: "#cccccc", bd: ACCENT };
-              // Dormant: partway between active and off — visible fill +
-              // mid-bright text + amber-tinted border at reduced intensity.
               return { bg: "#242220", fg: "#aaa", bd: "#7a6a4a" };
             };
             const multiS = subState(cfg.multi);
             const blendS = subState(cfg.blendIf && cfg.multi);
-            // Tab pill state: active wins; otherwise dormant if that mode
-            // has any non-default config (multi or blend been toggled on),
-            // else cold "never used this session".
             const tabUsed = cfg.multi || cfg.blendIf;
             const tabS = active
               ? { bg: "#3a3a3a", fg: "#dddddd", bd: ACCENT }
               : tabUsed
                 ? { bg: "#242220", fg: "#aaa", bd: "#7a6a4a" }
                 : { bg: "transparent", fg: "#888", bd: "#444" };
-            return (
-              <div key={val} style={{ flex: 1, display: "flex", flexDirection: "column", gap: 0, minWidth: 0 }}>
-                {/* Tab label pill. v1.20.69 — click swaps mode AND triggers Apply. */}
-                <div onClick={() => onTabClick(val)} title={tip}
-                  style={{
-                    height: 18, padding: 0,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: 10, fontWeight: 700, letterSpacing: 0.4,
-                    background: tabS.bg,
-                    color: tabS.fg,
-                    border: `1px solid ${tabS.bd}`,
-                    borderLeftWidth: isFirst ? 1 : 0,
-                    borderRadius: 0,
-                    cursor: "pointer", userSelect: "none",
-                    lineHeight: "16px", boxSizing: "border-box",
-                  }}>{label}</div>
-                {/* Sub-toggles row: MULTI + BLEND IF for THIS tab. Only
-                    rendered when the disclosure is expanded. */}
-                {multiExpanded && (
-                <div style={{ display: "flex", flex: 1, gap: 0, height: 18 }}>
-                  <div onClick={() => setTabConfig(prev => ({ ...prev, [val]: { ...prev[val], multi: !prev[val].multi } }))}
+            return { val, label, tip, active, cfg, subDisabled, isFirst, multiS, blendS, tabS };
+          });
+          const adaptApplicable = tabConfig[outputMode].multi;
+          return (<>
+        {/* Main row: AUTO + disclosure + tabs. AUTO/disclosure stay
+            single-row (18px) regardless of MULTI/BLEND expansion. */}
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 4 }}>
+          <div onClick={() => setLiveLut(v => !v)}
+            title={liveLut
+              ? `AUTO ARMED — slider changes auto-update the existing Match ${outputMode === "lut" ? "LUT" : "Curves"} layer in real-time (debounced 300ms). Click to disarm.`
+              : `AUTO — click to arm real-time auto-bake. Match ${outputMode === "lut" ? "LUT" : "Curves"} layer will re-bake on every slider change once seeded by an Apply.`}
+            style={{
+              width: 22, height: 18, padding: 0, flexShrink: 0,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              background: liveLut ? "#3a1818" : "transparent",
+              border: `1px solid ${liveLut ? "#d84a4a" : "#444"}`,
+              color: liveLut ? "#ff8a8a" : "#888",
+              borderRadius: 2, cursor: "pointer", userSelect: "none",
+              boxSizing: "border-box",
+            }}>
+            <span style={{
+              width: 12, height: 12, borderRadius: "50%",
+              background: liveLut ? "#ff3a3a" : "transparent",
+              border: liveLut ? "1px solid #ff8a8a" : "1.5px solid #888",
+              boxShadow: liveLut ? "0 0 6px #ff3a3a" : "none",
+              display: "inline-block", flexShrink: 0,
+            }} />
+          </div>
+          {/* Disclosure column: shows/hides the MULTI/BLEND row + ADAPT
+              (which only makes sense in multi mode). 22px wide × 18px. */}
+          <div onClick={() => setMultiExpanded(v => !v)}
+            title={multiExpanded
+              ? "Collapse MULTI/BLEND row. Per-tab Multi state is preserved — just hidden."
+              : "Expand MULTI/BLEND row. Per-tab toggles to split output into 3 luma-banded layers + ADAPT (multi-only histogram tracking)."}
+            style={{
+              width: 22, height: 18, padding: 0, flexShrink: 0,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              background: "transparent",
+              border: "1px solid #444",
+              color: "#aaa",
+              borderRadius: 2, cursor: "pointer", userSelect: "none",
+              fontSize: 9, lineHeight: 1,
+              boxSizing: "border-box",
+            }}>
+            {multiExpanded ? "▼" : "▶"}
+          </div>
+          {/* Tabs row: RGB | Lab | LUT */}
+          <div style={{ display: "flex", flex: 1, gap: 0 }}>
+            {TABS.map(t => (
+              <div key={t.val} onClick={() => onTabClick(t.val)} title={t.tip}
+                style={{
+                  flex: 1, height: 18, padding: 0,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 10, fontWeight: 700, letterSpacing: 0.4,
+                  background: t.tabS.bg,
+                  color: t.tabS.fg,
+                  border: `1px solid ${t.tabS.bd}`,
+                  borderLeftWidth: t.isFirst ? 1 : 0,
+                  borderRadius: 0,
+                  cursor: "pointer", userSelect: "none",
+                  lineHeight: "16px", boxSizing: "border-box",
+                  minWidth: 0,
+                }}>{t.label}</div>
+            ))}
+          </div>
+        </div>
+        {/* MULTI/BLEND row + ADAPT — only when disclosure is expanded.
+            ADAPT lives in column 1 (spans AUTO+gap+disclosure = 48px)
+            because Adaptive bands is only meaningful when MULTI is on. */}
+        {multiExpanded && (
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 4, marginTop: 0 }}>
+            <div onClick={() => setAdaptiveBands(!adaptiveBands)}
+              title={adaptiveBands
+                ? `Adaptive ON (default) — multi-zone band peaks track the target histogram (P10/P50/P90) whenever MULTI is active for a tab. ${adaptApplicable && lumaBins ? `Current: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""} Click to disable.`
+                : "Adaptive OFF — multi-zone band peaks fixed at 0/128/255. Click to re-enable percentile-driven peaks."}
+              style={{
+                width: 48, height: 18, padding: 0, flexShrink: 0,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
+                background: adaptiveBands ? "#3a3228" : "transparent",
+                color: adaptiveBands ? "#e8c882" : "#888",
+                border: `1px solid ${adaptiveBands ? "#d8b87a" : "#444"}`,
+                borderRadius: 2, cursor: "pointer", userSelect: "none",
+                lineHeight: "16px", boxSizing: "border-box",
+              }}>ADAPT</div>
+            <div style={{ display: "flex", flex: 1, gap: 0 }}>
+              {TABS.map(t => (
+                <div key={t.val} style={{ flex: 1, display: "flex", gap: 0, minWidth: 0 }}>
+                  <div onClick={() => setTabConfig(prev => ({ ...prev, [t.val]: { ...prev[t.val], multi: !prev[t.val].multi } }))}
                     style={{
                       flex: 1, height: 18, padding: 0,
                       display: "flex", alignItems: "center", justifyContent: "center",
                       fontSize: 8, fontWeight: 600, letterSpacing: 0.3,
-                      background: multiS.bg,
-                      color: multiS.fg,
-                      border: `1px solid ${multiS.bd}`,
-                      borderLeftWidth: isFirst ? 1 : 0,
-                      borderTopWidth: 0,
+                      background: t.multiS.bg,
+                      color: t.multiS.fg,
+                      border: `1px solid ${t.multiS.bd}`,
+                      borderLeftWidth: t.isFirst ? 1 : 0,
                       borderRadius: 0,
                       cursor: "pointer", userSelect: "none",
                       lineHeight: "16px", boxSizing: "border-box",
                     }}
-                    title={`Multi (${label}): split this output into 3 luma-banded layers. Per-tab — RGB / Lab / LUT each remember their own Multi state.`}>
+                    title={`Multi (${t.label}): split this output into 3 luma-banded layers. Per-tab — RGB / Lab / LUT each remember their own Multi state.`}>
                     MULTI
                   </div>
                   <div onClick={() => setTabConfig(prev => {
-                      const cur = prev[val];
-                      // v1.20.69 — clicking BLEND auto-engages MULTI if it's
-                      // off (Blend is a no-op without Multi splitting the
-                      // output into bands first). If both already on, toggle
-                      // BLEND off but leave MULTI alone.
-                      if (!cur.multi) return { ...prev, [val]: { multi: true, blendIf: true } };
-                      return { ...prev, [val]: { ...cur, blendIf: !cur.blendIf } };
+                      const cur = prev[t.val];
+                      if (!cur.multi) return { ...prev, [t.val]: { multi: true, blendIf: true } };
+                      return { ...prev, [t.val]: { ...cur, blendIf: !cur.blendIf } };
                     })}
                     style={{
                       flex: 1, height: 18, padding: 0,
                       display: "flex", alignItems: "center", justifyContent: "center",
                       fontSize: 8, fontWeight: 600, letterSpacing: 0.3,
-                      background: blendS.bg,
-                      color: blendS.fg,
-                      border: `1px solid ${blendS.bd}`,
+                      background: t.blendS.bg,
+                      color: t.blendS.fg,
+                      border: `1px solid ${t.blendS.bd}`,
                       borderLeftWidth: 0,
-                      borderTopWidth: 0,
                       borderRadius: 0,
                       cursor: "pointer", userSelect: "none",
                       lineHeight: "16px", boxSizing: "border-box",
-                      opacity: subDisabled ? 0.7 : 1,
+                      opacity: t.subDisabled ? 0.7 : 1,
                     }}
-                    title={subDisabled
-                      ? `Blend (${label}): click to enable — auto-engages Multi (Blend needs Multi's 3 band layers to operate on).`
-                      : `Blend (${label}): use Blending Options sliders instead of layer masks for the 3 band layers.`}>
+                    title={t.subDisabled
+                      ? `Blend (${t.label}): click to enable — auto-engages Multi (Blend needs Multi's 3 band layers to operate on).`
+                      : `Blend (${t.label}): use Blending Options sliders instead of layer masks for the 3 band layers.`}>
                     BLEND
                   </div>
                 </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-        </div>
-      </div>
+              ))}
+            </div>
+          </div>
+        )}
+          </>);
+        })()}
       </div>
 
       {/* v1.20.53 — marquee tristate was relocated up alongside MASK
