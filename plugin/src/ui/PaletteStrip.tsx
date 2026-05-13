@@ -333,16 +333,16 @@ export function PaletteStrip(props: PaletteStripProps) {
       title={isNeutral ? "Weights are neutral" : "Reset all weights to natural ratios"}
       style={{
         // v1.20.70 — icon-only reset, mirrors the header's RESET ✕.
-        // Solid red bg + white ✕ when active, dim/transparent when
-        // neutral. 14×14 square, no text — most compact form.
+        // Solid bright red bg + white ✕ when active; dim transparent
+        // when neutral. ✕ glyph at fontSize 12 (was 10) for legibility.
         width: 14, height: 14, flexShrink: 0,
         display: "inline-flex", alignItems: "center", justifyContent: "center",
-        background: isNeutral ? "transparent" : "#e66666",
-        color: isNeutral ? "#5a3a3a" : "#fff",
-        border: `1px solid ${isNeutral ? "#5a3a3a" : "#b34a4a"}`,
+        background: isNeutral ? "transparent" : "#ff5050",
+        color: isNeutral ? "#5a3a3a" : "#ffffff",
+        border: `1px solid ${isNeutral ? "#5a3a3a" : "#ff5050"}`,
         borderRadius: 2,
         cursor: isNeutral ? "default" : "pointer", userSelect: "none",
-        fontSize: 10, fontWeight: 700, lineHeight: 1,
+        fontSize: 12, fontWeight: 700, lineHeight: 1,
         boxSizing: "border-box",
       }}>
       <span style={{ marginTop: -1 }}>✕</span>
