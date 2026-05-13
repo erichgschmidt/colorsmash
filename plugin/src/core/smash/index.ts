@@ -4,3 +4,5 @@
 // `core/smash/`. See README.md.
 
 export * from './types';
+export * from './features';
+export * from './bands';
