@@ -9,7 +9,7 @@ import type { ImagePairProfile, SmashControls, SmashAudit, PixelFeatures, Vec3 }
 import { createAudit, withTraitContribution, withBandUsed, finalize } from './audit';
 import { acesGamutCompress } from './gamut';
 import { perceptualLuma } from '../perceptual/luma';
-import { srgbByteToOklab } from '../perceptual/oklab';
+import { srgbByteToOklab, oklabToSrgbByte } from '../perceptual/oklab';
 
 // ────────── constants ──────────
 
@@ -96,10 +96,8 @@ function featuresToRgba(features: readonly PixelFeatures[]): Uint8Array | null {
   return buf;
 }
 
-/** Linear interpolation between two scalar values. */
-function lerp(a: number, b: number, t: number): number {
-  return a + (b - a) * t;
-}
+// (lerp helper removed in Phase 2b — output is reconstructed in OkLCh
+// rather than RGB-mixed, so the only lerps are inline component deltas.)
 
 // ────────── public API ──────────
 
@@ -268,35 +266,77 @@ export function applyTransform(
   const smashG = Math.max(0, Math.min(255, Math.round(compressed[1] * 255)));
   const smashB = Math.max(0, Math.min(255, Math.round(compressed[2] * 255)));
 
-  // Phase 2 — apply trait amounts.
+  // ───── Phase 2b — perceptual decomposition gated per trait ─────
   //
-  // For Phase 2a, two traits differentially affect the output:
-  //   - traits.value: scales the entire transfer strength (master gate).
-  //   - traits.neutral: protects near-neutral input pixels by pulling the
-  //     mix back toward identity in proportion to the input's neutralness
-  //     (Oklab chroma below 0.15 means "near neutral").
+  // The per-band curve fit above produces a "fully smashed" RGB triple.
+  // To honor each trait amount independently, we convert both input and
+  // smashed pixels to OkLCh and gate the four perceptual deltas separately:
   //
-  // The other four traits (hue, saturation, chroma, accent) are recorded in
-  // the audit during smash() but are no-ops in applyTransform until Phase 2b
-  // factors the per-band fit into perceptual components that can be gated
-  // separately. The UI surfaces all six so users can see the future control
-  // surface; transparent docs note the partial coverage.
+  //   traits.value      → ΔL  (perceptual lightness shift)
+  //   traits.hue        → Δh  (hue angle rotation, circular)
+  //   traits.chroma     → ΔC  (chroma magnitude shift, absolute)
+  //   traits.saturation → ΔS  (chroma/L ratio shift, applied after value+chroma
+  //                            so it adjusts vibrancy at the new lightness)
+  //
+  // traits.neutral and traits.accent modulate the master gate (controls.global)
+  // per-pixel based on the INPUT's chroma:
+  //   neutralProtect = neutralness × traits.neutral  → pulls gate down on
+  //                                                    near-neutral inputs
+  //   accentBoost    = accentScore × traits.accent   → pushes gate up on
+  //                                                    rare/vivid inputs
+  //
+  // At default trait amounts (value=1, hue=1, sat=1, chroma=1, neutral=0.5,
+  // accent=0), the Phase 1 output is recovered modulo the small adjustment
+  // from neutral protection on grays — same envelope as Phase 2a.
   const traits = controls.traits;
-  const valueGate = Math.max(0, Math.min(1, traits.value));
-  const baseMix = Math.max(0, Math.min(1, controls.global)) * valueGate;
+  const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
-  // Neutral protection: compute input chroma in Oklab. Low chroma → strong
-  // neutralness signal. Multiply by traits.neutral so the slider scales how
-  // much we protect. protectionFactor ∈ [0, 1]; 1 means full identity here.
-  const [, aIn, bIn] = srgbByteToOklab(r, g, b);
-  const inputChroma = Math.sqrt(aIn * aIn + bIn * bIn);
-  const neutralness = 1 - Math.min(1, inputChroma / 0.15);
-  const protectionFactor = Math.max(0, Math.min(1, traits.neutral)) * neutralness;
-  const finalMix = baseMix * (1 - protectionFactor);
+  const [Lin, aIn, bIn] = srgbByteToOklab(r, g, b);
+  const [Lsm, aSm, bSm] = srgbByteToOklab(smashR, smashG, smashB);
 
-  const finalR = Math.max(0, Math.min(255, Math.round(lerp(r, smashR, finalMix))));
-  const finalG = Math.max(0, Math.min(255, Math.round(lerp(g, smashG, finalMix))));
-  const finalB = Math.max(0, Math.min(255, Math.round(lerp(b, smashB, finalMix))));
+  const Cin = Math.sqrt(aIn * aIn + bIn * bIn);
+  const Csm = Math.sqrt(aSm * aSm + bSm * bSm);
+  // Use the smashed hue when input chroma is near zero — atan2(0, 0) is
+  // ambiguous and would propagate noise.
+  const hin = Cin > 1e-6 ? Math.atan2(bIn, aIn) : (Csm > 1e-6 ? Math.atan2(bSm, aSm) : 0);
+  const hsm = Csm > 1e-6 ? Math.atan2(bSm, aSm) : hin;
+
+  // Per-pixel modulation of the master gate.
+  const neutralness = 1 - Math.min(1, Cin / 0.15);
+  const neutralProtect = neutralness * clamp01(traits.neutral);
+  const accentScore = Math.min(1, Math.max(0, (Cin - 0.10) / 0.15));
+  const accentBoost = accentScore * clamp01(traits.accent);
+  const masterGate = clamp01(controls.global * (1 - neutralProtect) * (1 + accentBoost));
+
+  // Per-trait gates.
+  const valueGate  = masterGate * clamp01(traits.value);
+  const hueGate    = masterGate * clamp01(traits.hue);
+  const chromaGate = masterGate * clamp01(traits.chroma);
+  const satGate    = masterGate * clamp01(traits.saturation);
+
+  // Apply perceptual deltas.
+  const Lout = Lin + (Lsm - Lin) * valueGate;
+  // Circular hue lerp via shortest-arc Δh.
+  let dh = hsm - hin;
+  if (dh > Math.PI) dh -= 2 * Math.PI;
+  if (dh < -Math.PI) dh += 2 * Math.PI;
+  const hout = hin + dh * hueGate;
+  let Cout = Cin + (Csm - Cin) * chromaGate;
+
+  // Saturation gate: targets S = C/L of the smashed pixel, applied AFTER
+  // value and chroma so it adjusts vibrancy at the newly-decided L. Skipped
+  // when both pixels are near black (L close to zero) to avoid divide noise.
+  if (Lin > 1e-3 && Lout > 1e-3) {
+    const Sin = Cout / Math.max(Lout, 1e-3);
+    const Ssm = Csm / Math.max(Lsm, 1e-3);
+    const Sout = Sin + (Ssm - Sin) * satGate;
+    Cout = Math.max(0, Sout * Lout);
+  }
+
+  // Reconstruct Oklab and convert back to bytes.
+  const aOut = Cout * Math.cos(hout);
+  const bOut = Cout * Math.sin(hout);
+  const [finalR, finalG, finalB] = oklabToSrgbByte(Lout, aOut, bOut);
 
   return [finalR, finalG, finalB];
 }
