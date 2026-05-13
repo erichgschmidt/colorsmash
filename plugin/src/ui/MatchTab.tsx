@@ -196,7 +196,12 @@ export function MatchTab() {
   // v1.20.51 — derived per-tab toggles. Reading these stays the same as
   // before for the rest of the file; setters route the change to the
   // currently-active tab's slot in tabConfig.
-  const multiZone = tabConfig[outputMode].multi;
+  // v1.20.70 — multi-zone output retired. Force multiZone to false so
+  // the apply paths always take the single-layer branch even if
+  // persisted settings or a restored XMP/recipe still carries
+  // multi:true. Underlying logic stays in applyMatch / applyLut for
+  // recipe-compat; just unreachable from the UI now.
+  const multiZone = false; // was: tabConfig[outputMode].multi
   const multiZoneLimit: "mask" | "blendIf" | "both" =
     tabConfig[outputMode].blendIf ? "blendIf" : "mask";
   const setMultiZone = (v: boolean) =>
@@ -2949,15 +2954,9 @@ export function MatchTab() {
                     style={{ flex: 1, minWidth: 0, margin: 0, cursor: "pointer" }} />
                   <span style={{ fontSize: 10, color: "#aaa", width: 48, textAlign: "right", flexShrink: 0 }}>{historyCap}</span>
                 </div>
-                <div style={ROW}>
-                  <span style={LABEL} title="ADAPT default — when ON, multi-zone band peaks track the target histogram (P10/P50/P90) instead of fixed 0/128/255 points. Same toggle as the ADAPT pill in the MULTI/BLEND row.">Adaptive bands</span>
-                  <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none", fontSize: 10, color: "#bbb" }}>
-                    <input type="checkbox" checked={adaptiveBands}
-                      onChange={e => setAdaptiveBands(e.target.checked)}
-                      style={{ margin: 0, width: 14, height: 14 }} />
-                    <span>{adaptiveBands ? "ON — peaks track histogram" : "OFF — peaks fixed at 0/128/255"}</span>
-                  </label>
-                </div>
+                {/* v1.20.70 — "Adaptive bands" toggle removed alongside
+                    the multi-zone UI. State stays in place for recipe
+                    compat but is no longer user-exposed. */}
               </div>
             )}
 
@@ -3423,7 +3422,6 @@ export function MatchTab() {
                 : { bg: "transparent", fg: "#888", bd: "#444" };
             return { val, label, tip, active, cfg, subDisabled, isFirst, multiS, blendS, tabS };
           });
-          const adaptApplicable = tabConfig[outputMode].multi;
           return (
         // v1.20.70 — shared 2-column outer layout: col-1 (74px) stacks
         // the [+|○|▼] controls row above an optional ADAPT row; col-2
@@ -3433,11 +3431,14 @@ export function MatchTab() {
         // align by construction — no sub-pixel rounding stagger
         // possible between the [+|○|▼] block and ADAPT.
         <div style={{ display: "flex", alignItems: "flex-start", gap: 4 }}>
-          {/* Column 1 (92px wide = 28+4+28+4+28, flexShrink:0).
-              v1.20.70 — bumped from 74→92 to host 28px-wide buttons
-              that match the new 28px output-row height. */}
-          <div style={{ width: 92, display: "flex", flexDirection: "column", gap: 0, flexShrink: 0 }}>
-            {/* Top sub-row inside col-1: + ○ ▼ buttons. */}
+          {/* Column 1 (60px wide = 28+4+28, flexShrink:0).
+              v1.20.70 — was 92 (3 buttons + 2 gaps) when the ▾/▸
+              multi-disclosure was the third button. Multi-zone output
+              was removed late v1.20.70 to focus the panel on single-
+              layer RGB/Lab/LUT bakes, so col-1 now holds just
+              [+ branch][○ AUTO] = 28+4+28 = 60. */}
+          <div style={{ width: 60, display: "flex", flexDirection: "column", gap: 0, flexShrink: 0 }}>
+            {/* Top sub-row inside col-1: + ○ buttons. */}
             <div style={{ display: "flex", gap: 4, height: 28 }}>
           {/* v1.20.70 — + branch arm relocated into the main row so all
               three column-1 controls (+, ○ AUTO, ▶/▼ disclosure) live
@@ -3482,57 +3483,17 @@ export function MatchTab() {
               display: "inline-block", flexShrink: 0,
             }} />
           </div>
-          {/* Disclosure column: shows/hides the MULTI/BLEND row + ADAPT
-              (which only makes sense in multi mode). 22px wide × 18px. */}
-          <div onClick={() => setMultiExpanded(v => !v)}
-            title={multiExpanded
-              ? "Collapse MULTI/BLEND row. Per-tab Multi state is preserved — just hidden."
-              : "Expand MULTI/BLEND row. Per-tab toggles to split output into 3 luma-banded layers + ADAPT (multi-only histogram tracking)."}
-            style={{
-              width: 28, height: 28, padding: 0, flexShrink: 0,
-              display: "flex", alignItems: "center", justifyContent: "center",
-              background: "transparent",
-              border: "1px solid #444",
-              color: "#aaa",
-              borderRadius: 4, cursor: "pointer", userSelect: "none",
-              fontSize: 12, lineHeight: 1,
-              boxSizing: "border-box",
-            }}>
-            {multiExpanded ? "▼" : "▶"}
-          </div>
             </div>
-            {/* Bottom sub-row inside col-1: ADAPT (only when expanded).
-                Width 100% of the parent col-1 (74px) — no separate width
-                declaration needed, so ADAPT is guaranteed pixel-aligned
-                with the [+|○|▼] row above it. */}
-            {multiExpanded && (
-              <div onClick={() => setAdaptiveBands(!adaptiveBands)}
-                title={adaptiveBands
-                  ? `Adaptive ON (default) — multi-zone band peaks track the target histogram (P10/P50/P90) whenever MULTI is active for a tab. ${adaptApplicable && lumaBins ? `Current: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""} Click to disable.`
-                  : "Adaptive OFF — multi-zone band peaks fixed at 0/128/255. Click to re-enable percentile-driven peaks."}
-                style={{
-                  // v1.20.70 — shave 4px off ADAPT's right edge so it
-                  // visually indents inside col-1, giving 8px total
-                  // breathing room between ADAPT and MULTI (4px
-                  // internal shave + 4px outer col-1→col-2 gap).
-                  width: "calc(100% - 4px)", marginRight: 4,
-                  height: 20, padding: 0,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
-                  background: adaptiveBands ? "#3a3228" : "transparent",
-                  color: adaptiveBands ? "#e8c882" : "#888",
-                  border: `1px solid ${adaptiveBands ? "#d8b87a" : "#444"}`,
-                  borderRadius: 3, cursor: "pointer", userSelect: "none",
-                  lineHeight: "18px", boxSizing: "border-box",
-                }}>ADAPT</div>
-            )}
+            {/* v1.20.70 — Multi/Blend disclosure + ADAPT button removed.
+                Multi-zone output (3-band stacking) was retired late
+                v1.20.70 to focus on single-layer RGB/Lab/LUT bakes
+                with palette + selection masks. Multi-zone bake paths
+                stay in applyMatch/applyLut.ts for now (recipe
+                compatibility) but are unreachable from the UI. */}
           </div>
-          {/* Column 2 (flex 1): tabs row above, optional MULTI/BLEND row below. */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 0, flex: 1, minWidth: 0 }}>
-          {/* Tabs row: RGB | Lab | LUT. overflow:hidden mirrors the
-              multi row's container so both rows clip identically at
-              narrow widths. */}
-          <div style={{ display: "flex", gap: 0, overflow: "hidden" }}>
+          {/* Tabs row: RGB | Lab | LUT. overflow:hidden so tab labels
+              clip at narrow widths instead of overflowing the row. */}
+          <div style={{ display: "flex", gap: 0, overflow: "hidden", flex: 1, minWidth: 0 }}>
             {TABS.map(t => (
               <div key={t.val} onClick={() => onTabClick(t.val)} title={t.tip}
                 style={{
@@ -3550,61 +3511,6 @@ export function MatchTab() {
                   minWidth: 0,
                 }}>{t.label}</div>
             ))}
-          </div>
-          {/* MULTI/BLEND row inside col-2 — only when disclosure is
-              expanded. Flat 6-cell layout (was 3 per-tab wrappers × 2
-              cells each) so flex distribution matches the tabs row
-              above exactly. overflow: hidden clips MULTI/BLEND text
-              spillover at narrow panel widths. */}
-          {multiExpanded && (
-            <div style={{ display: "flex", gap: 0, overflow: "hidden" }}>
-              {TABS.flatMap((t, ti) => [
-                <div key={`${t.val}-multi`}
-                  onClick={() => setTabConfig(prev => ({ ...prev, [t.val]: { ...prev[t.val], multi: !prev[t.val].multi } }))}
-                  style={{
-                    flex: "1 1 0", minWidth: 0, height: 20, padding: 0,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    overflow: "hidden", whiteSpace: "nowrap",
-                    fontSize: 9, fontWeight: 600, letterSpacing: 0.3,
-                    background: t.multiS.bg,
-                    color: t.multiS.fg,
-                    border: `1px solid ${t.multiS.bd}`,
-                    borderLeftWidth: ti === 0 ? 1 : 0,
-                    borderRadius: 0,
-                    cursor: "pointer", userSelect: "none",
-                    lineHeight: "18px", boxSizing: "border-box",
-                  }}
-                  title={`Multi (${t.label}): split this output into 3 luma-banded layers. Per-tab — RGB / Lab / LUT each remember their own Multi state.`}>
-                  MULTI
-                </div>,
-                <div key={`${t.val}-blend`}
-                  onClick={() => setTabConfig(prev => {
-                    const cur = prev[t.val];
-                    if (!cur.multi) return { ...prev, [t.val]: { multi: true, blendIf: true } };
-                    return { ...prev, [t.val]: { ...cur, blendIf: !cur.blendIf } };
-                  })}
-                  style={{
-                    flex: "1 1 0", minWidth: 0, height: 20, padding: 0,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    overflow: "hidden", whiteSpace: "nowrap",
-                    fontSize: 9, fontWeight: 600, letterSpacing: 0.3,
-                    background: t.blendS.bg,
-                    color: t.blendS.fg,
-                    border: `1px solid ${t.blendS.bd}`,
-                    borderLeftWidth: 0,
-                    borderRadius: 0,
-                    cursor: "pointer", userSelect: "none",
-                    lineHeight: "18px", boxSizing: "border-box",
-                    opacity: t.subDisabled ? 0.7 : 1,
-                  }}
-                  title={t.subDisabled
-                    ? `Blend (${t.label}): click to enable — auto-engages Multi (Blend needs Multi's 3 band layers to operate on).`
-                    : `Blend (${t.label}): use Blending Options sliders instead of layer masks for the 3 band layers.`}>
-                  BLEND
-                </div>,
-              ])}
-            </div>
-          )}
           </div>
         </div>
           );
@@ -3691,7 +3597,7 @@ export function MatchTab() {
                 ? "MASK ON — per-cluster target attenuation is active (preview AND bake honor the target-palette weights). Protected regions show red on the preview. Click to disable: preview shows pure transform, bake produces an unmasked Curves/LUT layer."
                 : "MASK OFF — preview shows pure transform output and bake produces an unmasked Curves/LUT layer. Click to enable: per-cluster mask attenuates the transform + paints protected regions red on the preview."}
               style={{
-                width: 88, height: 22, flexShrink: 0, marginRight: 4,
+                width: 56, height: 22, flexShrink: 0, marginRight: 4,
                 fontSize: 11, fontWeight: 700, letterSpacing: 0.4,
                 display: "inline-flex", alignItems: "center", justifyContent: "center",
                 background: maskOn ? "#3a2828" : "transparent",
