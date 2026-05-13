@@ -2952,13 +2952,16 @@ export function MatchTab() {
             }}>
             {multiExpanded ? "▼" : "▶"}
           </div>
-          {/* Tabs row: RGB | Lab | LUT */}
-          <div style={{ display: "flex", flex: 1, gap: 0 }}>
+          {/* Tabs row: RGB | Lab | LUT. overflow:hidden mirrors the
+              multi row's container so both rows clip identically at
+              narrow widths. */}
+          <div style={{ display: "flex", flex: 1, gap: 0, overflow: "hidden" }}>
             {TABS.map(t => (
               <div key={t.val} onClick={() => onTabClick(t.val)} title={t.tip}
                 style={{
                   flex: "1 1 0", height: 18, padding: 0,
                   display: "flex", alignItems: "center", justifyContent: "center",
+                  overflow: "hidden", whiteSpace: "nowrap",
                   fontSize: 10, fontWeight: 700, letterSpacing: 0.4,
                   background: t.tabS.bg,
                   color: t.tabS.fg,
@@ -2993,15 +2996,19 @@ export function MatchTab() {
               }}>ADAPT</div>
             {/* v1.20.69 — flat 6-cell layout (was 3 per-tab wrappers ×
                 2 cells each) so flex distribution matches the tabs row
-                above exactly. Per-tab wrapper introduced sub-pixel
-                rounding that made column boundaries stagger by ~1px. */}
-            <div style={{ display: "flex", flex: 1, gap: 0 }}>
+                above exactly. overflow: hidden clips MULTI/BLEND text
+                spillover at narrow panel widths (the labels are wider
+                than the cell when the panel is squished, and with the
+                default overflow: visible they'd push the row's apparent
+                right edge past where the tabs row above ends). */}
+            <div style={{ display: "flex", flex: 1, gap: 0, overflow: "hidden" }}>
               {TABS.flatMap((t, ti) => [
                 <div key={`${t.val}-multi`}
                   onClick={() => setTabConfig(prev => ({ ...prev, [t.val]: { ...prev[t.val], multi: !prev[t.val].multi } }))}
                   style={{
                     flex: "1 1 0", minWidth: 0, height: 18, padding: 0,
                     display: "flex", alignItems: "center", justifyContent: "center",
+                    overflow: "hidden", whiteSpace: "nowrap",
                     fontSize: 8, fontWeight: 600, letterSpacing: 0.3,
                     background: t.multiS.bg,
                     color: t.multiS.fg,
@@ -3023,6 +3030,7 @@ export function MatchTab() {
                   style={{
                     flex: "1 1 0", minWidth: 0, height: 18, padding: 0,
                     display: "flex", alignItems: "center", justifyContent: "center",
+                    overflow: "hidden", whiteSpace: "nowrap",
                     fontSize: 8, fontWeight: 600, letterSpacing: 0.3,
                     background: t.blendS.bg,
                     color: t.blendS.fg,
