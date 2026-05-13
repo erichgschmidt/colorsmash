@@ -67,14 +67,16 @@ function swatchColor(s: PaletteSwatch, preset: Preset | undefined): string {
 
 // Count toggle styling. v1.20.70 — slimmer (padding 1×4 vs 1×6) so the
 // adapt / 3-5-7 / reset cluster eats less horizontal space and leaves
-// the palette ratio bar wider.
+// the palette ratio bar wider. Height matches BAR_HEIGHT so the
+// buttons sit flush with the slider on the shared row.
 const countBtnStyle = (active: boolean): React.CSSProperties => ({
-  padding: "1px 4px", fontSize: 9, fontWeight: 600,
+  padding: "0 5px", fontSize: 10, fontWeight: 600,
   background: active ? "#1473e6" : "transparent",
   color: active ? "#fff" : "#888",
   border: `1px solid ${active ? "#1473e6" : "#444"}`,
   borderRadius: 2, cursor: "pointer", userSelect: "none",
-  height: 14, lineHeight: "12px", boxSizing: "border-box",
+  height: 24, lineHeight: "22px", boxSizing: "border-box",
+  display: "inline-flex", alignItems: "center", justifyContent: "center",
 });
 
 const BAR_HEIGHT = 24;
@@ -299,12 +301,11 @@ export function PaletteStrip(props: PaletteStripProps) {
       style={{
         // v1.20.70 — icon-only adapt button. ↔ communicates the "scale
         // / redistribute between" idea more directly than the text
-        // "adapt" or the earlier <> glyph. Slimmer than the text
-        // version, eats less horizontal space.
+        // "adapt" or the earlier <> glyph. fontSize bumped to 14 to
+        // fill the 24-tall button cleanly.
         ...countBtnStyle(adaptive),
-        padding: "1px 5px",
-        fontSize: 11,
-        lineHeight: "12px",
+        padding: "0 5px",
+        fontSize: 14,
       }}>
       ↔
     </div>
@@ -333,16 +334,17 @@ export function PaletteStrip(props: PaletteStripProps) {
       title={isNeutral ? "Weights are neutral" : "Reset all weights to natural ratios"}
       style={{
         // v1.20.70 — icon-only reset, mirrors the header's RESET ✕.
-        // Solid bright red bg + white ✕ when active; dim transparent
-        // when neutral. ✕ glyph at fontSize 12 (was 10) for legibility.
-        width: 14, height: 14, flexShrink: 0,
+        // Sized to match BAR_HEIGHT (24) so it sits flush with the
+        // slider + the other cluster buttons. Solid bright red bg +
+        // white ✕ when active; dim transparent when neutral.
+        width: 22, height: 24, flexShrink: 0,
         display: "inline-flex", alignItems: "center", justifyContent: "center",
         background: isNeutral ? "transparent" : "#ff5050",
         color: isNeutral ? "#5a3a3a" : "#ffffff",
         border: `1px solid ${isNeutral ? "#5a3a3a" : "#ff5050"}`,
         borderRadius: 2,
         cursor: isNeutral ? "default" : "pointer", userSelect: "none",
-        fontSize: 12, fontWeight: 700, lineHeight: 1,
+        fontSize: 14, fontWeight: 700, lineHeight: 1,
         boxSizing: "border-box",
       }}>
       <span style={{ marginTop: -1 }}>✕</span>
