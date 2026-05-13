@@ -300,12 +300,13 @@ export function PaletteStrip(props: PaletteStripProps) {
         : "Handle mode: drag the white dividers to redistribute weight between adjacent neighbors. Click to switch to adaptive (drag swatch body)."}
       style={{
         // v1.20.70 — icon-only adapt button. ↔ communicates the "scale
-        // / redistribute between" idea more directly than the text
-        // "adapt" or the earlier <> glyph. fontSize bumped to 14 to
-        // fill the 24-tall button cleanly.
+        // / redistribute between" idea. Padding tightened to "0 2px"
+        // (was "0 5px") so the button width matches the 3/5/7 digit
+        // buttons — the ↔ glyph itself is wider than a digit, so less
+        // horizontal padding levels the visual widths.
         ...countBtnStyle(adaptive),
-        padding: "0 5px",
-        fontSize: 14,
+        padding: "0 2px",
+        fontSize: 13,
       }}>
       ↔
     </div>
@@ -362,7 +363,7 @@ export function PaletteStrip(props: PaletteStripProps) {
   if (swatches.length === 0) {
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <div style={{ display: "flex", flex: 1, height: BAR_HEIGHT, gap: 2, opacity: 0.4, minWidth: 0 }}>
             {Array.from({ length: count }, (_, i) => (
               <div key={i} style={{ flex: 1, background: "#1a1a1a", border: "1px solid #333", borderRadius: 2 }} />
@@ -382,8 +383,10 @@ export function PaletteStrip(props: PaletteStripProps) {
     <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
       {/* v1.20.70 — bar + controls share a row. Bar is flex:1 (with
           minWidth:0 so it can shrink at narrow panel widths), controls
-          cluster sits on the right at fixed width. */}
-      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          cluster sits on the right at fixed width. v1.20.70 — gap
+          bumped 4→8 so the slider bar doesn't visually touch the
+          first cluster button. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
       {/* The bar: positioned segments + absolutely-placed handles between them.
           We use position:relative on the outer + absolute children so the handle
           sit exactly at boundary edges without flex math drifting. */}
