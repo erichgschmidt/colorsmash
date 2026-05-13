@@ -14,8 +14,11 @@ export const matchStyles = {
     // PS dark-theme dropdown chrome (matched against eyedropper-sampling the host UI):
     //   bg #3a3a3a, border #4a4a4a, 1px radius. Custom SVG chevron in the right gutter
     //   replaces the UA default (which is OS-themed and looks foreign in PS).
-    background: "#3a3a3a url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'><path d='M0 0l4 5 4-5z' fill='%23a0a0a0'/></svg>\") no-repeat right 5px center",
-    color: "#dddddd", border: "1px solid #4a4a4a", borderRadius: 1,
+    // v1.20.70 — dropdown bg darkened from #3a3a3a → #1f1f1f so the
+    // dropdowns are the DARKEST element on screen, sinking into the
+    // island (#2c2c2c) which sinks into the panel BG (UXP default).
+    background: "#1f1f1f url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'><path d='M0 0l4 5 4-5z' fill='%23a0a0a0'/></svg>\") no-repeat right 5px center",
+    color: "#dddddd", border: "1px solid #3a3a3a", borderRadius: 2,
     margin: 0, boxSizing: "border-box",
     appearance: "none" as any, WebkitAppearance: "none" as any,
     // Inherit Photoshop's panel font instead of the UA default — without this, native

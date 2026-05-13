@@ -2441,13 +2441,14 @@ export function MatchTab() {
   // matches the Adobe panel aesthetic (each section reads as its own
   // contained card).
   const ISLAND: React.CSSProperties = {
-    // v1.20.70 — island bg sits ABOVE the dropdown/control bg (#3a3a3a)
-    // so the dropdowns and inputs visually recess INTO the island
-    // rather than floating on top of it. Reference reads as: panel
-    // dark → island mid → control dark. Border barely visible so the
-    // island reads as a soft elevated pad, not a framed box.
-    background: "#424242",
-    border: "1px solid #4c4c4c",
+    // v1.20.70 — three-step brightness palette, OUTSIDE-IN darker:
+    //   panel bg (UXP default, lightest)
+    //   ↓ island bg (mid)        ← this
+    //   ↓ dropdown / input bg (darkest, see MatchSliders.sel)
+    // Each level recesses into the next. Border just barely visible
+    // so the island reads as a soft inset pad, not a framed box.
+    background: "#2c2c2c",
+    border: "1px solid #383838",
     borderRadius: 6,
     padding: "8px 10px",
     display: "flex", flexDirection: "column", gap: 4,
