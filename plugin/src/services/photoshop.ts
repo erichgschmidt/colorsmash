@@ -302,6 +302,58 @@ export async function deleteChannel(name: string): Promise<void> {
 }
 
 /**
+ * v1.20.69 — consolidate stray [Color Smash] groups into a single
+ * canonical group at the doc root.
+ *
+ * Background: JUMP / ISOLATE / user clicking around in the Layers panel
+ * change PS's "insertion point" — `doc.createLayerGroup` parents the
+ * new group at the current selection's container. Combined with the
+ * `findCSGroupRecursive` lookup's "prefer top-level" rule, this means
+ * stray nested [Color Smash] groups can accumulate over time if a bake
+ * ran while the selection was inside a sub-group.
+ *
+ * This helper finds ALL [Color Smash] groups (exact name match, at any
+ * depth — NOT the renamed _NN archives created by branchColorSmashGroup).
+ * If more than one exists, all children are moved into the top-most
+ * (or first-found) instance and the duplicates are deleted. Returns the
+ * surviving canonical group, or null if none existed.
+ *
+ * Idempotent — safe to call on every Apply.
+ */
+export async function consolidateColorSmashGroups(docId: number): Promise<void> {
+  try {
+    const doc = (app.documents ?? []).find((d: any) => d.id === docId);
+    if (!doc) return;
+    const found: Array<{ group: any; depth: number }> = [];
+    const walk = (layers: any[], depth: number) => {
+      for (const l of layers) {
+        if (!l) continue;
+        if (l.name === GROUP_NAME && Array.isArray(l.layers)) {
+          found.push({ group: l, depth });
+        }
+        if (Array.isArray(l.layers)) walk(l.layers, depth + 1);
+      }
+    };
+    walk(doc.layers ?? [], 0);
+    if (found.length < 2) return;
+    // Pick the canonical group: prefer the SHALLOWEST (top-level if
+    // any), then the first-found at that depth.
+    found.sort((a, b) => a.depth - b.depth);
+    const canonical = found[0].group;
+    // Move every child of every duplicate INTO the canonical group,
+    // then delete the now-empty duplicate.
+    for (let i = 1; i < found.length; i++) {
+      const dup = found[i].group;
+      const children = Array.isArray(dup.layers) ? [...dup.layers] : [];
+      for (const child of children) {
+        try { await child.move(canonical, "placeInside"); } catch { /* ignore */ }
+      }
+      try { await dup.delete(); } catch { /* ignore */ }
+    }
+  } catch { /* non-fatal */ }
+}
+
+/**
  * v1.20.58 — "branch off" the current [Color Smash] working group.
  * Renames the active [Color Smash] to [Color Smash _<NN>] with NN being
  * the next sequence number (scans the doc for existing archived groups,

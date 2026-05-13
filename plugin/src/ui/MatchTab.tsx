@@ -46,6 +46,7 @@ import { syncOutputVisibilityToMode, repositionGroupAboveTarget } from "../app/o
 import {
   app, action as psAction, readLayerPixels, executeAsModal, getActiveDoc, getSelectionBounds, readSelectionMaskBytes,
   branchColorSmashGroup,
+  consolidateColorSmashGroups,
 } from "../services/photoshop";
 import { downsampleToMaxEdge } from "../core/downsample";
 
@@ -1817,6 +1818,14 @@ export function MatchTab() {
     // the old one so getOrCreateColorSmashGroup spawns a fresh empty one
     // for this Apply. Then disarm the + so subsequent Applies replace
     // within this new group.
+    // v1.20.69 — consolidate any stray [Color Smash] groups into one
+    // canonical group at the doc root. Defensive: JUMP / ISOLATE / user
+    // selection changes can cause PS's insertion-point to nest a new
+    // group inside a sub-group on a subsequent create. Runs before the
+    // branch path so it operates on a clean slate.
+    if (tgtDocId != null) {
+      try { await consolidateColorSmashGroups(tgtDocId); } catch { /* non-fatal */ }
+    }
     if (!overwriteOnApply && tgtDocId != null) {
       try { await branchColorSmashGroup(tgtDocId); } catch { /* non-fatal */ }
       // v1.20.64 — clear the live-LUT layer pointer so AUTO doesn't keep
@@ -1999,6 +2008,14 @@ export function MatchTab() {
     if (targetId == null) { setStatus("Pick target layer."); return; }
     if (srcMode === "layer" && sourceId == null) { setStatus("Pick source layer."); return; }
     // v1.20.54 — branch off when + is armed (see onApplyLut for context).
+    // v1.20.69 — consolidate any stray [Color Smash] groups into one
+    // canonical group at the doc root. Defensive: JUMP / ISOLATE / user
+    // selection changes can cause PS's insertion-point to nest a new
+    // group inside a sub-group on a subsequent create. Runs before the
+    // branch path so it operates on a clean slate.
+    if (tgtDocId != null) {
+      try { await consolidateColorSmashGroups(tgtDocId); } catch { /* non-fatal */ }
+    }
     if (!overwriteOnApply && tgtDocId != null) {
       try { await branchColorSmashGroup(tgtDocId); } catch { /* non-fatal */ }
       // v1.20.64 — clear the live-LUT layer pointer so AUTO doesn't keep

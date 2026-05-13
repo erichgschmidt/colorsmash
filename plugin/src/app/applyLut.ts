@@ -101,7 +101,11 @@ function collectMatches(parent: any, prefix: string, out: any[]) {
   }
 }
 
-/** Find or create the [Color Smash] group at the doc root. */
+/** Find or create the [Color Smash] group at the doc root.
+ *  v1.20.69 — when creating fresh, clear the layer selection first
+ *  via selectNoLayers so PS doesn't nest the new group inside whatever
+ *  sub-group currently owns the active layer (e.g. after JUMP set the
+ *  insertion point inside an existing group). */
 async function getOrCreateColorSmashGroup(doc: any): Promise<any> {
   const findCS = (layers: any[]): any | null => {
     for (const l of layers) {
@@ -112,6 +116,9 @@ async function getOrCreateColorSmashGroup(doc: any): Promise<any> {
   };
   const existing = findCS(doc.layers ?? []);
   if (existing) return existing;
+  try {
+    await action.batchPlay([{ _obj: "selectNoLayers", _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }] }], {});
+  } catch { /* not critical */ }
   return await doc.createLayerGroup({ name: GROUP_NAME });
 }
 
