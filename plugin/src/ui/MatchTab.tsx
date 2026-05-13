@@ -2447,8 +2447,8 @@ export function MatchTab() {
     //   ↓ dropdown / input bg (darkest, see MatchSliders.sel)
     // Each level recesses into the next. Border just barely visible
     // so the island reads as a soft inset pad, not a framed box.
-    background: "#363636",
-    border: "1px solid #404040",
+    background: "#444444",
+    border: "1px solid #4c4c4c",
     borderRadius: 6,
     padding: "8px 10px",
     display: "flex", flexDirection: "column", gap: 4,
@@ -2461,7 +2461,11 @@ export function MatchTab() {
   };
 
   return (
-    <div style={{ padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+    // v1.20.70 — three-step palette, OUTSIDE-IN light→dark per reference:
+    //   outer wrapper bg #555555 (lightest)
+    //   island bg       #444444 (mid)
+    //   dropdown/control #2e2e2e (darkest)
+    <div style={{ padding: 8, background: "#555555", display: "flex", flexDirection: "column", gap: 6 }}>
       {/* v1.20.70 — header layout: [wordmark left] [↶ ↷ center, PS native
           undo/redo] [💾 REVERT ✕ ⟳ ⚙ ? right]. Plugin-action cluster
           moved here from the bottom action row so the body row carries
