@@ -332,19 +332,21 @@ export function PaletteStrip(props: PaletteStripProps) {
     <div onClick={isNeutral ? undefined : resetWeights}
       title={isNeutral ? "Weights are neutral" : "Reset all weights to natural ratios"}
       style={{
-        // v1.20.70 — brighter red (was coral #d87a7a) so it reads
-        // clearly as the destructive option in the cluster. Padding
-        // dropped 1×6→1×4 to match the slimmer 3-5-7 / ↔ buttons.
-        // Height matches the count buttons (14) instead of the bar
-        // height so the cluster sits as a uniform horizontal row.
-        padding: "1px 5px", fontSize: 9, fontWeight: 600,
-        background: "transparent",
-        color: isNeutral ? "#5a3a3a" : "#ff5050",
-        border: `1px solid ${isNeutral ? "#5a3a3a" : "#ff5050"}`,
-        borderRadius: 2, cursor: isNeutral ? "default" : "pointer", userSelect: "none",
-        height: 14, lineHeight: "12px", boxSizing: "border-box",
-        flexShrink: 0,
-      }}>reset</div>
+        // v1.20.70 — icon-only reset, mirrors the header's RESET ✕.
+        // Solid red bg + white ✕ when active, dim/transparent when
+        // neutral. 14×14 square, no text — most compact form.
+        width: 14, height: 14, flexShrink: 0,
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        background: isNeutral ? "transparent" : "#e66666",
+        color: isNeutral ? "#5a3a3a" : "#fff",
+        border: `1px solid ${isNeutral ? "#5a3a3a" : "#b34a4a"}`,
+        borderRadius: 2,
+        cursor: isNeutral ? "default" : "pointer", userSelect: "none",
+        fontSize: 10, fontWeight: 700, lineHeight: 1,
+        boxSizing: "border-box",
+      }}>
+      <span style={{ marginTop: -1 }}>✕</span>
+    </div>
   );
   const controlsCluster = (
     <div style={{ display: "flex", alignItems: "center", gap: 3, flexShrink: 0 }}>
