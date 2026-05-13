@@ -3405,10 +3405,10 @@ export function MatchTab() {
               boxSizing: "border-box",
             }}>
             <span style={{
-              width: 16, height: 16, borderRadius: "50%",
+              width: 12, height: 12, borderRadius: "50%",
               background: liveLut ? "#ff3a3a" : "transparent",
               border: liveLut ? "1px solid #ff8a8a" : "1.5px solid #888",
-              boxShadow: liveLut ? "0 0 7px #ff3a3a" : "none",
+              boxShadow: liveLut ? "0 0 6px #ff3a3a" : "none",
               display: "inline-block", flexShrink: 0,
             }} />
           </div>
