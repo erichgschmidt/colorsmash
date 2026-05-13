@@ -2809,7 +2809,7 @@ export function MatchTab() {
                   ? "Click + to arm 'Branch' — next Apply (RGB/Lab/LUT tab click) hides the current [Color Smash] group and starts a fresh session."
                   : "BRANCH ARMED — next Apply will collapse + hide the current [Color Smash] group (preserved, just invisible) and start a fresh session. Auto-disarms after that Apply. Click to cancel."}
                 style={{
-                  width: 76, height: 16, padding: 0, flexShrink: 0,
+                  width: 22, height: 16, padding: 0, flexShrink: 0,
                   display: "flex", alignItems: "center", justifyContent: "center",
                   background: overwriteOnApply ? "transparent" : "#1e3a1e",
                   border: `1px solid ${overwriteOnApply ? "#444" : "#7ad87a"}`,
@@ -2893,7 +2893,7 @@ export function MatchTab() {
             ? `AUTO ARMED — slider changes auto-update the existing Match ${outputMode === "lut" ? "LUT" : "Curves"} layer in real-time (debounced 300ms). Click to disarm.`
             : `AUTO — click to arm real-time auto-bake. Match ${outputMode === "lut" ? "LUT" : "Curves"} layer will re-bake on every slider change once seeded by an Apply.`}
           style={{
-            width: 76, padding: 0, flexShrink: 0,
+            width: 22, padding: 0, flexShrink: 0,
             display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
             background: liveLut ? "#3a1818" : "transparent",
             border: `1px solid ${liveLut ? "#d84a4a" : "#444"}`,
