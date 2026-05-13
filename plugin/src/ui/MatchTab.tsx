@@ -3388,7 +3388,7 @@ export function MatchTab() {
             <span style={{
               color: overwriteOnApply ? "#888" : "#7ad87a",
               fontSize: 22, fontWeight: 700, lineHeight: 1,
-              display: "block", marginTop: -2,
+              display: "block", marginTop: -3, marginLeft: 1,
             }}>+</span>
           </div>
           <div onClick={() => setLiveLut(v => !v)}

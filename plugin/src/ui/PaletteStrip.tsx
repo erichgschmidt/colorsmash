@@ -362,14 +362,17 @@ export function PaletteStrip(props: PaletteStripProps) {
 
   if (swatches.length === 0) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{ display: "flex", flex: 1, height: BAR_HEIGHT, gap: 2, opacity: 0.4, minWidth: 0 }}>
-            {Array.from({ length: count }, (_, i) => (
-              <div key={i} style={{ flex: 1, background: "#1a1a1a", border: "1px solid #333", borderRadius: 2 }} />
-            ))}
-          </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 10 }}>
+        {/* v1.20.70 — empty-state mirrors the new Option 2 layout:
+            toolbar on top (cluster only — no softness rendered since
+            there are no swatches to feather), placeholder bar below. */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8 }}>
           {controlsCluster}
+        </div>
+        <div style={{ display: "flex", height: BAR_HEIGHT, gap: 2, opacity: 0.4, width: "100%" }}>
+          {Array.from({ length: count }, (_, i) => (
+            <div key={i} style={{ flex: 1, background: "#1a1a1a", border: "1px solid #333", borderRadius: 2 }} />
+          ))}
         </div>
       </div>
     );
@@ -380,18 +383,40 @@ export function PaletteStrip(props: PaletteStripProps) {
                      :                          "dominant colors (preset: Full)";
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
-      {/* v1.20.70 — bar + controls share a row. Bar is flex:1 (with
-          minWidth:0 so it can shrink at narrow panel widths), controls
-          cluster sits on the right at fixed width. v1.20.70 — gap
-          bumped 4→8 so the slider bar doesn't visually touch the
-          first cluster button. */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 10 }}>
+      {/* v1.20.70 — Option 2 layout: top toolbar row (softness slider
+          + controls cluster ↔ 3 5 7 ✕) sits ABOVE the bar. Bar
+          occupies its own full-width row below. Result: bar gets
+          maximum horizontal real estate (no buttons cutting into the
+          swatches), softness + count controls cluster together as
+          "palette behavior" toolbar. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        {setSoftness && (
+          <>
+            <span style={{ fontSize: 9, opacity: 0.5, flexShrink: 0 }}
+              title={`Softness: ${Math.round(softness)} — falloff between cluster regions (0 = hard, 100 = smooth blend)`}>softness</span>
+            <input type="range" min={0} max={100} step={1} value={softness}
+              onInput={e => onSoftnessInput(parseFloat((e.target as HTMLInputElement).value))}
+              onChange={e => {
+                if (softnessCommitRef.current) { clearTimeout(softnessCommitRef.current); softnessCommitRef.current = null; }
+                const v = parseFloat((e.target as HTMLInputElement).value);
+                setLocalSoftness(v);
+                setSoftness(v);
+                draggingRef.current = false;
+              }}
+              title={`Softness: ${Math.round(softness)} — falloff between cluster regions (0 = hard, 100 = smooth blend)`}
+              style={{ flex: 1, minWidth: 0, margin: 0, cursor: "pointer", height: 12 }} />
+            <span style={{ fontSize: 9, opacity: 0.5, width: 22, textAlign: "right", flexShrink: 0 }}>{Math.round(softness)}</span>
+          </>
+        )}
+        {controlsCluster}
+      </div>
       {/* The bar: positioned segments + absolutely-placed handles between them.
           We use position:relative on the outer + absolute children so the handle
-          sit exactly at boundary edges without flex math drifting. */}
+          sit exactly at boundary edges without flex math drifting.
+          v1.20.70 — bar gets its own full-width row. */}
       <div ref={barRef}
-        style={{ position: "relative", height: BAR_HEIGHT, flex: 1, minWidth: 0, userSelect: "none" }}
+        style={{ position: "relative", height: BAR_HEIGHT, width: "100%", userSelect: "none" }}
         title={`Source palette — ${tipForPreset} ${adaptive ? "(drag swatch body — others rebalance)" : "(drag handles to weight)"}`}>
         {/* Segments. With softness=0 each segment is a solid color block, so
             adjacent segments meet at hard boundaries (the existing v1.7
@@ -480,37 +505,9 @@ export function PaletteStrip(props: PaletteStripProps) {
           );
         })}
       </div>
-        {/* v1.20.70 — controls cluster lives to the right of the bar
-            on the same row (was: above the bar on its own row). */}
-        {controlsCluster}
-      </div>
-
-      {/* Softness slider: thin range below the bar. Drives the gradient feathering
-          on the bar above (visible immediately) AND the runtime softness used by
-          synthesize/apply (per-pixel cluster blend strength). 0 = hard nearest-
-          cluster boundaries (existing behavior); 100 = smooth blend across all
-          clusters → gradient mask. Tooltip shows the current value. Hidden when
-          no setSoftness handler is provided (caller can opt out). */}
-      {setSoftness && (
-        <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 2, height: 12 }}
-          title={`Softness: ${Math.round(softness)} — falloff between cluster regions (0 = hard, 100 = smooth blend)`}>
-          <span style={{ fontSize: 9, opacity: 0.5, width: 38 }}>softness</span>
-          <input type="range" min={0} max={100} step={1} value={softness}
-            onInput={e => onSoftnessInput(parseFloat((e.target as HTMLInputElement).value))}
-            onChange={e => {
-              // mouseup: clear pending throttle, commit final value to parent,
-              // and lower the dragging flag so subsequent prop updates can
-              // sync down again normally.
-              if (softnessCommitRef.current) { clearTimeout(softnessCommitRef.current); softnessCommitRef.current = null; }
-              const v = parseFloat((e.target as HTMLInputElement).value);
-              setLocalSoftness(v);
-              setSoftness(v);
-              draggingRef.current = false;
-            }}
-            style={{ flex: 1, margin: 0, cursor: "pointer", height: 12 }} />
-          <span style={{ fontSize: 9, opacity: 0.5, width: 22, textAlign: "right" }}>{Math.round(softness)}</span>
-        </div>
-      )}
+      {/* v1.20.70 — softness slider + controls cluster moved to a
+          TOOLBAR ROW ABOVE the bar. Old below-the-bar softness row
+          deleted, old controls-on-bar-row wrapper removed too. */}
     </div>
   );
 }
