@@ -2178,6 +2178,30 @@ export function MatchTab() {
     liveBakeTimerRef.current = setTimeout(async () => {
       liveBakeTimerRef.current = null;
       try {
+        // v1.20.70 — stale-layer guard. If the user did Cmd+Z in PS to
+        // undo a prior bake, liveLutLayerIdRef.current still points at
+        // the (now-deleted) layer. The next live-bake would try to
+        // update-in-place and silently fail. Resolve the id against
+        // the live target doc; if it doesn't exist, clear the ref so
+        // AUTO takes the create path on this fire.
+        if (liveLutLayerIdRef.current != null && tgtDocId != null) {
+          try {
+            const ps = require("photoshop");
+            const doc = (ps.app.documents ?? []).find((d: any) => d.id === tgtDocId);
+            if (doc) {
+              const findById = (layers: any[]): any | null => {
+                for (const l of layers ?? []) {
+                  if (l?.id === liveLutLayerIdRef.current) return l;
+                  if (Array.isArray(l?.layers)) { const f = findById(l.layers); if (f) return f; }
+                }
+                return null;
+              };
+              if (!findById(doc.layers ?? [])) {
+                liveLutLayerIdRef.current = null;
+              }
+            }
+          } catch { /* non-fatal */ }
+        }
         // Mode-aware dispatch (v1.16.4). LIVE used to only handle LUT mode —
         // in RGB/Lab mode it was creating Color Lookup layers, which is wrong
         // (those modes produce Curves layers). Branch by outputMode so LIVE
