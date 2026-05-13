@@ -3057,16 +3057,18 @@ export function MatchTab() {
           }}>ISOLATE</div>
         {/* Spring pushes the right cluster flush-right. */}
         <div style={{ flex: 1 }} />
-        {/* Right cluster: 💾 / REVERT / RESET / ⟳ / ⚙. */}
+        {/* Right cluster: 💾 / REVERT / RESET / ⟳ / ⚙. v1.20.69 —
+            shrunk from 28→22px tall to match JUMP/ISOLATE on the left
+            (consistent secondary-row hierarchy). */}
         <div onClick={onExportLut}
           title="Export the current preset to disk as a portable 33³ .CUBE 3D LUT (loadable in PS, Premiere, Resolve, etc.)."
           style={{
-            width: 28, height: 28,
+            width: 22, height: 22,
             display: "inline-flex", alignItems: "center", justifyContent: "center",
             background: "transparent", color: "#aaa",
             border: "1px solid #666",
             borderRadius: 4, cursor: "pointer", userSelect: "none",
-            fontSize: 14, lineHeight: 1,
+            fontSize: 12, lineHeight: 1,
             boxSizing: "border-box", flexShrink: 0,
           }}>💾</div>
         <div onClick={canRestore ? onRestoreFromLayer : undefined}
@@ -3080,7 +3082,7 @@ export function MatchTab() {
             border: `1px solid ${canRestore ? "#7aa8d8" : "#666"}`,
             borderRadius: 4, cursor: canRestore ? "pointer" : "default", userSelect: "none",
             display: "flex", alignItems: "center", justifyContent: "center",
-            height: 28, lineHeight: "26px", boxSizing: "border-box",
+            height: 22, lineHeight: "20px", boxSizing: "border-box",
             flex: "0 0 auto",
             opacity: canRestore ? 1 : 0.7,
           }}>REVERT</div>
@@ -3090,8 +3092,8 @@ export function MatchTab() {
         }}
           title="Reset all settings to defaults and clear the saved file"
           style={{
-            padding: "0 10px", height: 28, display: "inline-flex", alignItems: "center", justifyContent: "center",
-            background: "#e66666", color: "#fff", fontWeight: 700, fontSize: 11, letterSpacing: 0.3, lineHeight: "26px",
+            padding: "0 10px", height: 22, display: "inline-flex", alignItems: "center", justifyContent: "center",
+            background: "#e66666", color: "#fff", fontWeight: 700, fontSize: 10, letterSpacing: 0.3, lineHeight: "20px",
             border: "none", borderRadius: 4, cursor: "pointer", boxSizing: "border-box", flexShrink: 0,
           }}>RESET</div>
         <div onClick={onRefreshAll}
@@ -3099,26 +3101,26 @@ export function MatchTab() {
             ? "Photoshop changed since last refresh — click to resync everything (docs, layer lists, source/target previews, selection mask)."
             : "In sync. Click to force-refresh source + target previews + layer lists + selection mask."}
           style={{
-            width: 28, height: 28, display: "inline-flex", alignItems: "center", justifyContent: "center",
+            width: 22, height: 22, display: "inline-flex", alignItems: "center", justifyContent: "center",
             background: stale ? "#c19a3a" : "transparent",
             color: stale ? "#fff" : "#aaa",
             border: `1px solid ${stale ? "#c19a3a" : "#666"}`,
-            borderRadius: 4, cursor: "pointer", boxSizing: "border-box", flexShrink: 0, fontSize: 16, userSelect: "none",
+            borderRadius: 4, cursor: "pointer", boxSizing: "border-box", flexShrink: 0, fontSize: 13, userSelect: "none",
           }}>
-          <span style={{ marginTop: -2, lineHeight: 1 }}>⟳</span>
+          <span style={{ marginTop: -1, lineHeight: 1 }}>⟳</span>
         </div>
         <div onClick={() => setRemember(!remember)}
           title={remember
             ? "PREFS ON — panel settings (sliders, palette weights, envelope, output mode, LUT options) are persisted across reloads. Click to disable."
             : "PREFS OFF — panel settings reset to defaults on next reload. Click to enable persistence."}
           style={{
-            width: 28, height: 28,
+            width: 22, height: 22,
             display: "inline-flex", alignItems: "center", justifyContent: "center",
             background: remember ? "#3a3a3a" : "transparent",
             color: remember ? "#dddddd" : "#888",
             border: `1px solid ${remember ? "#888" : "#666"}`,
             borderRadius: 4, cursor: "pointer", userSelect: "none",
-            fontSize: 14, lineHeight: 1,
+            fontSize: 12, lineHeight: 1,
             boxSizing: "border-box", flexShrink: 0,
           }}>⚙</div>
       </div>
