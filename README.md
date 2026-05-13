@@ -24,7 +24,7 @@ The panel renders as a stack of soft-cornered "island" sections. SOURCE and TARG
 | **SOURCE / REFERENCE** | Source doc + layer picker. Preset strip below (Full / Color / Hue / Saturation / Contrast) — click a swatch to stage that preset's transform. Source palette weight bar with softness / ↔ / 3-5-7 / ✕ toolbar above it. |
 | **TARGET / PREVIEW** | Target doc + layer picker, before/after preview pane with log2-zoom + pan + background-color toggle, ⇄ swap source↔target, target palette weight bar. |
 | **TRANSFORM** | Three sub-sections (Color / Tone / Envelope), each with its own enable checkbox and `(i)` help button. Collapsed by default. |
-| **OUTPUT** | `[+] [○] [▾/▸]` column-1 cluster on the left, `RGB | Lab | LUT` tabs on the right. Expandable `MULTI | BLEND` row below each tab for 3-band stacking. `JUMP | ISOLATE` row at the bottom (target-specific actions). |
+| **OUTPUT** | `[+] [○]` column-1 cluster on the left, `RGB | Lab | LUT` tabs on the right. Clicking a tab swaps the output mode AND applies in one click. `JUMP | ISOLATE` row at the bottom (target-specific actions). |
 | **MASK** | Single MASK button + Off / Focus / Exclude tristate. Collapsed by default. |
 | **HISTORY** | Recent recipe strip with pin / rename, ↓ IMPORT / ↑ EXPORT. Collapsed by default. |
 | **FITTED CURVES** | Diagnostic R/G/B channel transfer-curve graph + status line. Collapsed by default. |
@@ -45,11 +45,7 @@ The OUTPUT island consolidates Apply, output-mode selection, branching, and live
 
 - **`+` (column 1, top)** — branch arm. When armed (green), the next tab click archives the current `[Color Smash]` group (renames it `[Color Smash] _NN`, hides it) and starts a fresh one. Auto-disarms after that click.
 - **`○` AUTO** — record-armed indicator. When ON (filled red), slider changes auto-update the existing output layer in real-time (debounced, configurable in Settings). Click an output tab once to seed the layer, then drag sliders to live-update.
-- **`▾/▸` disclosure** — expands the optional MULTI / BLEND per-tab row + ADAPT toggle.
 - **RGB / Lab / LUT tabs** — click to swap output mode AND apply. The active tab has an amber border; previously-used-this-session modes show a dim "dormant" warm tint.
-- **MULTI × 3** — per-tab toggles that split the output into 3 luma-banded layers (Shadows / Mids / Highlights). Each tab remembers its own MULTI state.
-- **BLEND × 3** — per-tab toggles that swap the band-limiting from a layer mask to Blending Options' "Blend If" sliders. BLEND auto-engages MULTI (no need to enable MULTI first).
-- **ADAPT** — when ON (default), multi-zone band peaks track the target histogram's P10/P50/P90 instead of fixed 0/128/255.
 - **JUMP** — select the target layer in PS Layers panel and scroll it into view.
 - **ISOLATE** — A/B compare via hide-other-layers. Snapshots prior visibility, hides everything except the target's ancestor chain and the `[Color Smash]` group. Click again to restore.
 
@@ -67,7 +63,7 @@ Click the gear icon in the header to expand the inline Settings drawer. Four sec
 
 - **GENERAL** — Group color (8 PS color tags), Group name (rename `[Color Smash]` to anything), Persistence (save settings across reloads).
 - **LUT** — Strength (lerp toward identity), Quality (17³ / 33³ / 65³ grid), Dither.
-- **ADVANCED** — AUTO debounce (60–1000 ms), History capacity (5–30), Adaptive bands default.
+- **ADVANCED** — AUTO debounce (60–1000 ms), History capacity (5–30).
 - **DIAGNOSTICS** — Verbose status, Reveal data folder, Export / Import config JSON.
 
 ## HISTORY island
@@ -82,7 +78,7 @@ Every bake lands in a single canonical `[Color Smash]` group at the doc root, co
 
 Inside the group, each output mode keeps its own layer prefix and they coexist for A/B comparison:
 
-- `Match RGB` — RGB-mode Curves layer (or `Match RGB` sub-group containing band layers when MULTI is on).
+- `Match RGB` — RGB-mode Curves layer.
 - `Match Lab` — Lab-mode Curves layer.
 - `Match LUT [preset]` — LUT-mode Color Lookup layer.
 
@@ -119,20 +115,9 @@ The plugin requests `localFileSystem` permission so the **Browse Image…** sour
 3. **SOURCE / REFERENCE** — pick the source doc and layer, OR `Use Selection` (marquee — has Auto / Merge / Lock sub-toggles), OR `Browse Image…` (file picker). The preset strip below the dropdowns shows the source rendered through each preset; click a swatch to stage it.
 4. **TARGET / PREVIEW** — pick the target doc and layer. `Merged` uses the document composite. The matched preview updates live as you tweak.
 5. **OUTPUT** — click `RGB`, `Lab`, or `LUT` to apply. The active mode shows an amber border. To stack multiple modes, click each tab in sequence — they coexist inside the `[Color Smash]` group.
-6. To split the output into 3 luma-banded layers, expand the `▾/▸` row in OUTPUT, click `MULTI` for the active mode, then click the output tab again.
-7. To protect part of the target from being matched, drag a swatch in the target palette bar toward zero (its cluster region stops receiving the transform).
-8. To localize the apply to a marquee, draw the marquee on the target doc, then expand the MASK island and click `Focus` (apply inside) or `Exclude` (apply outside).
-9. To revert to a previous state, click a baked Match layer in PS Layers, then hit **REVERT** in the header. To recover from accidental REVERT, click it again immediately (UN-REVERT) — or use the auto-saved `Before REVERT` history entry.
-
-### MULTI (3-band) output
-
-Open the MULTI/BLEND row under any output tab via the `▾/▸` disclosure. Per-tab toggles let you split the output into Shadows / Mids / Highlights bands, each fitted from only the pixels in that band.
-
-- **MULTI** — turn on to emit 3 stacked layers instead of 1.
-- **BLEND** — per band, use Blending Options' luma sliders instead of a paintable layer mask. Lighter file, editable from the Blend If dialog. Auto-engages MULTI if off.
-- **ADAPT** (column-1 row) — band peaks track the target's P10/P50/P90 luma instead of fixed 0/128/255. Default ON.
-
-The 3 layers land in a sub-group named `Match RGB`, `Match Lab`, or `Match LUT [preset]` depending on the mode, all clipped to the target.
+6. To protect part of the target from being matched, drag a swatch in the target palette bar toward zero (its cluster region stops receiving the transform).
+7. To localize the apply to a marquee, draw the marquee on the target doc, then expand the MASK island and click `Focus` (apply inside) or `Exclude` (apply outside).
+8. To revert to a previous state, click a baked Match layer in PS Layers, then hit **REVERT** in the header. To recover from accidental REVERT, click it again immediately (UN-REVERT) — or use the auto-saved `Before REVERT` history entry.
 
 ### Cross-document
 
