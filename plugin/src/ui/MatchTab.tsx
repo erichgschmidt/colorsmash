@@ -3353,9 +3353,9 @@ export function MatchTab() {
         );
       })()}
 
-      {/* v1.20.63 — zone divider: separates the history zone above from
-          the LUT-settings / diagnostic-curves zone below. */}
-      <div style={{ height: 2, background: "#0a0a0a", marginTop: 8, marginBottom: 6, boxShadow: "0 1px 0 #333" }} />
+      {/* v1.20.69 — divider between history and LUT-settings removed;
+          the two zones read fine without an explicit separator and the
+          extra rule competes with the heavier zone dividers above. */}
       {/* LUT-specific knobs. v1.20.62 — always rendered (was gated on
           outputMode==='lut'). Keeping these slots reserved avoids the
           panel resizing when users flip between LUT and Curves modes;
