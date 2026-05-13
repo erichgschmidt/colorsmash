@@ -2715,21 +2715,23 @@ export function MatchTab() {
           {/* v1.20.69 — MASK row layout mirrors the output block: MASK
               spans col-1 (92px) and Off/Focus/Exclude span col-2's tab
               widths. The inline ↻ button is gone; its functionality
-              folded into the main ⟳ refresh in the action row below. */}
-          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 4, height: 28, lineHeight: "26px" }}>
+              folded into the main ⟳ refresh in the action row below.
+              Off/Focus/Exclude run thinner (22px vs 28px) than the
+              primary RGB/Lab/LUT row so they yield visual hierarchy. */}
+          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 4 }}>
             <div onClick={() => setShowMask(v => !v)}
               title={showMask
                 ? "Show Mask ON — protected regions painted red on the matched preview (palette × selection composition). Click to disable."
                 : "Show Mask OFF — preview shows pure transform output. Click to enable: protected regions paint red."}
               style={{
-                width: 92, height: 28, flexShrink: 0,
+                width: 88, height: 22, flexShrink: 0, marginRight: 4,
                 fontSize: 11, fontWeight: 700, letterSpacing: 0.4,
                 display: "inline-flex", alignItems: "center", justifyContent: "center",
                 background: showMask ? "#3a2828" : "transparent",
                 color: showMask ? "#e87a7a" : "#5a3a3a",
                 border: `1px solid ${showMask ? "#d87a7a" : "#5a3a3a"}`,
                 borderRadius: 4, cursor: "pointer", userSelect: "none",
-                lineHeight: "26px", boxSizing: "border-box",
+                lineHeight: "20px", boxSizing: "border-box",
               }}>MASK</div>
             <div style={{ display: "flex", flex: 1, gap: 0, opacity: marqueeDisabled ? 0.55 : 1, overflow: "hidden" }}>
               {([
@@ -2741,10 +2743,10 @@ export function MatchTab() {
                   onClick={() => { if (!marqueeDisabled) setSelectionMode(val); }}
                   title={marqueeDisabled ? disabledTip : tip}
                   style={{
-                    flex: "1 1 0", minWidth: 0, height: 28, padding: 0,
+                    flex: "1 1 0", minWidth: 0, height: 22, padding: 0,
                     display: "flex", alignItems: "center", justifyContent: "center",
                     overflow: "hidden", whiteSpace: "nowrap",
-                    fontSize: 11, fontWeight: 700, letterSpacing: 0.4,
+                    fontSize: 10, fontWeight: 600, letterSpacing: 0.3,
                     background: !marqueeDisabled && selectionMode === val ? "#3a3a3a" : "transparent",
                     color: !marqueeDisabled && selectionMode === val ? "#dddddd" : "#888",
                     border: `1px solid ${!marqueeDisabled && selectionMode === val ? "#888" : "#444"}`,
@@ -2752,7 +2754,7 @@ export function MatchTab() {
                     borderRadius: 0,
                     cursor: marqueeDisabled ? "default" : "pointer",
                     userSelect: "none",
-                    lineHeight: "26px", boxSizing: "border-box",
+                    lineHeight: "20px", boxSizing: "border-box",
                   }}>{label}</div>
               ))}
             </div>
@@ -2934,7 +2936,7 @@ export function MatchTab() {
             {TABS.map(t => (
               <div key={t.val} onClick={() => onTabClick(t.val)} title={t.tip}
                 style={{
-                  flex: "1 1 0", height: 28, padding: "0 4px 0 0",
+                  flex: "1 1 0", height: 28, padding: 0,
                   display: "flex", alignItems: "center", justifyContent: "center",
                   overflow: "hidden", whiteSpace: "nowrap",
                   fontSize: 11, fontWeight: 700, letterSpacing: 0.4,
@@ -2946,26 +2948,7 @@ export function MatchTab() {
                   cursor: "pointer", userSelect: "none",
                   lineHeight: "26px", boxSizing: "border-box",
                   minWidth: 0,
-                  position: "relative",
-                }}>
-                <span style={{ flex: 1, textAlign: "center" }}>{t.label}</span>
-                {/* v1.20.69 — inline save icon on each tab. Triggers
-                    onExportLut (universal .CUBE export — captures the
-                    current preset's full transform regardless of which
-                    output mode is staged). Stops propagation so a
-                    click on the icon doesn't also fire the tab swap. */}
-                <span onClick={e => { e.stopPropagation(); onExportLut(); }}
-                  title="Export the current preset to disk as a portable 33³ .CUBE 3D LUT (loadable in PS, Premiere, Resolve, etc.). Universal — works from any output mode (RGB / Lab / LUT)."
-                  style={{
-                    width: 16, height: 18,
-                    display: "inline-flex", alignItems: "center", justifyContent: "center",
-                    fontSize: 11, lineHeight: 1,
-                    color: t.tabS.fg,
-                    opacity: 0.75,
-                    cursor: "pointer",
-                    flexShrink: 0,
-                  }}>💾</span>
-              </div>
+                }}>{t.label}</div>
             ))}
           </div>
           {/* MULTI/BLEND row inside col-2 — only when disclosure is
@@ -3071,7 +3054,18 @@ export function MatchTab() {
           }}>ISOLATE</div>
         {/* Spring pushes the right cluster flush-right. */}
         <div style={{ flex: 1 }} />
-        {/* Right cluster: REVERT / RESET / ⟳ / ⚙. */}
+        {/* Right cluster: 💾 / REVERT / RESET / ⟳ / ⚙. */}
+        <div onClick={onExportLut}
+          title="Export the current preset to disk as a portable 33³ .CUBE 3D LUT (loadable in PS, Premiere, Resolve, etc.)."
+          style={{
+            width: 28, height: 28,
+            display: "inline-flex", alignItems: "center", justifyContent: "center",
+            background: "transparent", color: "#aaa",
+            border: "1px solid #666",
+            borderRadius: 4, cursor: "pointer", userSelect: "none",
+            fontSize: 14, lineHeight: 1,
+            boxSizing: "border-box", flexShrink: 0,
+          }}>💾</div>
         <div onClick={canRestore ? onRestoreFromLayer : undefined}
           title={canRestore
             ? "Revert panel state to the snapshot stored in the selected Match layer's XMP metadata. Snaps every slider, preset, palette weight, and doc/layer choice back to the state that produced this layer."
