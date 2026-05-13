@@ -253,6 +253,10 @@ export function MatchTab() {
   // re-inject every reload. Loaded from persistence; if absent the next
   // save writes it.
   const [starterPackVersion, setStarterPackVersion] = useState(0);
+  // v1.20.69 — Multi/Blend is a secondary feature; collapsed by default to
+  // reduce visual density. A small disclosure (▶/▼) between AUTO and the
+  // tabs reveals the MULTI/BLEND × 3 row when expanded.
+  const [multiExpanded, setMultiExpanded] = useState(false);
   // Default open in v1.20.1 — feedback was that the collapsed disclosure
   // was easy to miss, and the strip is small enough to live exposed.
   const [historyOpen, setHistoryOpen] = useState(true);
@@ -461,6 +465,7 @@ export function MatchTab() {
         }
         // v1.20.66 — track which starter pack version this install has seen.
         if (typeof s.starterPackVersion === "number") setStarterPackVersion(s.starterPackVersion);
+        if (typeof s.multiExpanded === "boolean") setMultiExpanded(s.multiExpanded);
         // deselectOnApply removed in v1.20.25 — ignore any old persisted value.
         if (s.overwriteOnApply != null) setOverwriteOnApply(s.overwriteOnApply);
         if (s.openSection !== undefined) setOpenSection(s.openSection);
@@ -509,6 +514,7 @@ export function MatchTab() {
       // v1.20.66 — once the starter pack has been injected, this prevents
       // re-injection on every reload.
       starterPackVersion,
+      multiExpanded,
       overwriteOnApply,
       openSection,
       zones: zonesLabel, lockZoneTotal,
@@ -522,7 +528,7 @@ export function MatchTab() {
       recentHistory,
     };
     saveDebouncedRef.current!(snapshot);
-  }, [remember, matchMode, multiZone, multiZoneLimit, adaptiveBands, tabConfig, starterPackVersion, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
+  }, [remember, matchMode, multiZone, multiZoneLimit, adaptiveBands, tabConfig, starterPackVersion, multiExpanded, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
       colorSpace, outputMode, lutStrength, lutGrid, lutDither, selectionMode, overwriteOnApply, openSection,
       zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel, paletteCount, paletteAdaptive, sourceSoftness, targetSoftness, targetMaskEnabled, recentHistory]);
 
@@ -2884,10 +2890,10 @@ export function MatchTab() {
           );
         })()}
         <div style={{ display: "flex", alignItems: "stretch", gap: 4 }}>
-        {/* v1.20.69 — column 1: AUTO record-armed indicator, two rows tall
-            (matches the 18+2+18 = 38px column height of [tab pill] +
-            [MULTI/BLEND] in the tabs grid to its right). The + branch arm
-            lives in the top strip above, aligned over this same column. */}
+        {/* v1.20.69 — column 1: AUTO record-armed indicator. Height matches
+            the rows to its right: 18px (1 row) when MULTI/BLEND is
+            collapsed, 38px (2 rows) when expanded. The + branch arm lives
+            in the top strip above, aligned over this same column. */}
         <div onClick={() => setLiveLut(v => !v)}
           title={liveLut
             ? `AUTO ARMED — slider changes auto-update the existing Match ${outputMode === "lut" ? "LUT" : "Curves"} layer in real-time (debounced 300ms). Click to disarm.`
@@ -2910,7 +2916,28 @@ export function MatchTab() {
             display: "inline-block", flexShrink: 0,
           }} />
         </div>
-        {/* v1.20.59 — LIVE/ADAPT moved up into the thin top strip. */}
+        {/* v1.20.69 — disclosure column: shows/hides the MULTI/BLEND row.
+            Sits between AUTO and the RGB/Lab/LUT tabs. Same width as AUTO
+            (22px); matches AUTO's height (1 or 2 rows) so the column
+            grid stays consistent. */}
+        <div onClick={() => setMultiExpanded(v => !v)}
+          title={multiExpanded
+            ? "Collapse MULTI/BLEND row. Per-tab Multi state is preserved — just hidden."
+            : "Expand MULTI/BLEND row. Per-tab toggles to split output into 3 luma-banded layers (shadow/mid/highlight)."}
+          style={{
+            width: 22, padding: 0, flexShrink: 0,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            background: "transparent",
+            border: "1px solid #444",
+            color: "#aaa",
+            borderRadius: 2, cursor: "pointer", userSelect: "none",
+            fontSize: 9, lineHeight: 1,
+            boxSizing: "border-box",
+          }}>
+          {multiExpanded ? "▼" : "▶"}
+        </div>
+        {/* Tabs + (optional) MULTI/BLEND row stack to the right. */}
+        <div style={{ display: "flex", flexDirection: "column", flex: 1, gap: 0, minWidth: 0 }}>
         <div style={{ display: "flex", flex: 1, gap: 0 }}>
           {([
             ["rgb", "RGB", "RGB — separable per-channel Curves layer. Click to switch mode AND Apply (bakes a new Curves layer)."],
@@ -2965,7 +2992,9 @@ export function MatchTab() {
                     cursor: "pointer", userSelect: "none",
                     lineHeight: "16px", boxSizing: "border-box",
                   }}>{label}</div>
-                {/* Sub-toggles row: MULTI + BLEND IF for THIS tab. */}
+                {/* Sub-toggles row: MULTI + BLEND IF for THIS tab. Only
+                    rendered when the disclosure is expanded. */}
+                {multiExpanded && (
                 <div style={{ display: "flex", flex: 1, gap: 0, height: 18 }}>
                   <div onClick={() => setTabConfig(prev => ({ ...prev, [val]: { ...prev[val], multi: !prev[val].multi } }))}
                     style={{
@@ -2984,7 +3013,15 @@ export function MatchTab() {
                     title={`Multi (${label}): split this output into 3 luma-banded layers. Per-tab — RGB / Lab / LUT each remember their own Multi state.`}>
                     MULTI
                   </div>
-                  <div onClick={() => { if (cfg.multi) setTabConfig(prev => ({ ...prev, [val]: { ...prev[val], blendIf: !prev[val].blendIf } })); }}
+                  <div onClick={() => setTabConfig(prev => {
+                      const cur = prev[val];
+                      // v1.20.69 — clicking BLEND auto-engages MULTI if it's
+                      // off (Blend is a no-op without Multi splitting the
+                      // output into bands first). If both already on, toggle
+                      // BLEND off but leave MULTI alone.
+                      if (!cur.multi) return { ...prev, [val]: { multi: true, blendIf: true } };
+                      return { ...prev, [val]: { ...cur, blendIf: !cur.blendIf } };
+                    })}
                     style={{
                       flex: 1, height: 18, padding: 0,
                       display: "flex", alignItems: "center", justifyContent: "center",
@@ -2995,19 +3032,21 @@ export function MatchTab() {
                       borderLeftWidth: 0,
                       borderTopWidth: 0,
                       borderRadius: 0,
-                      cursor: subDisabled ? "default" : "pointer", userSelect: "none",
+                      cursor: "pointer", userSelect: "none",
                       lineHeight: "16px", boxSizing: "border-box",
-                      opacity: subDisabled ? 0.55 : 1,
+                      opacity: subDisabled ? 0.7 : 1,
                     }}
                     title={subDisabled
-                      ? "Blend is only meaningful when Multi is on for this tab."
+                      ? `Blend (${label}): click to enable — auto-engages Multi (Blend needs Multi's 3 band layers to operate on).`
                       : `Blend (${label}): use Blending Options sliders instead of layer masks for the 3 band layers.`}>
                     BLEND
                   </div>
                 </div>
+                )}
               </div>
             );
           })}
+        </div>
         </div>
       </div>
       </div>

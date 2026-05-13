@@ -33,6 +33,10 @@ export interface PersistedSettings {
   // re-inject on every reload. Bump the value (1 → 2) if/when the pack
   // ships new starters and you want them to land in old installs.
   starterPackVersion?: number;
+  // v1.20.69 — Multi/Blend disclosure state. Collapsed by default since
+  // these are secondary toggles; persisted so a power user who uses Multi
+  // a lot doesn't have to re-expand every session.
+  multiExpanded?: boolean;
   // Apply behavior
   deselectOnApply?: boolean;
   overwriteOnApply?: boolean;
