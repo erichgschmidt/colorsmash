@@ -3094,7 +3094,7 @@ export function MatchTab() {
           style={{
             padding: "0 10px", height: 22, display: "inline-flex", alignItems: "center", justifyContent: "center",
             background: "#e66666", color: "#fff", fontWeight: 700, fontSize: 10, letterSpacing: 0.3, lineHeight: "20px",
-            border: "none", borderRadius: 4, cursor: "pointer", boxSizing: "border-box", flexShrink: 0,
+            border: "1px solid #666", borderRadius: 4, cursor: "pointer", boxSizing: "border-box", flexShrink: 0,
           }}>RESET</div>
         <div onClick={onRefreshAll}
           title={stale
