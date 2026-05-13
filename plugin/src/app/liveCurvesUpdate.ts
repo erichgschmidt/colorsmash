@@ -17,7 +17,7 @@
 import {
   ChannelCurves, Preset, sampleControlPoints, transformCurvesForPreset,
 } from "../core/histogramMatch";
-import { GROUP_NAME, action, app, executeAsModal } from "../services/photoshop";
+import { action, app, executeAsModal, isColorSmashGroupName } from "../services/photoshop";
 
 // v1.20.57 — Curves bakes now use per-colorSpace names: 'Match RGB' and
 // 'Match Lab'. We match either prefix for the LIVE update path.
@@ -53,7 +53,7 @@ function findSingleMatchCurvesLayer(parent: { layers?: LayerNode[] }): LayerNode
 function findColorSmashGroup(doc: any): any | null {
   const search = (layers: any[]): any | null => {
     for (const l of layers) {
-      if (l?.name === GROUP_NAME && (l.kind === "group" || Array.isArray(l.layers))) return l;
+      if (l?.name && isColorSmashGroupName(l.name) && (l.kind === "group" || Array.isArray(l.layers))) return l;
       if (Array.isArray(l.layers)) {
         const found = search(l.layers);
         if (found) return found;

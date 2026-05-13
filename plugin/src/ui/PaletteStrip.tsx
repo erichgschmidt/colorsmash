@@ -65,14 +65,18 @@ function swatchColor(s: PaletteSwatch, preset: Preset | undefined): string {
   return `rgb(${s.r}, ${s.g}, ${s.b})`;
 }
 
-// Count toggle styling.
+// Count toggle styling. v1.20.70 — slimmer (padding 1×4 vs 1×6) so the
+// adapt / 3-5-7 / reset cluster eats less horizontal space and leaves
+// the palette ratio bar wider. Height matches BAR_HEIGHT so the
+// buttons sit flush with the slider on the shared row.
 const countBtnStyle = (active: boolean): React.CSSProperties => ({
-  padding: "1px 6px", fontSize: 9, fontWeight: 600,
+  padding: "0 5px", fontSize: 10, fontWeight: 600,
   background: active ? "#1473e6" : "transparent",
   color: active ? "#fff" : "#888",
   border: `1px solid ${active ? "#1473e6" : "#444"}`,
   borderRadius: 2, cursor: "pointer", userSelect: "none",
-  height: 14, lineHeight: "12px", boxSizing: "border-box",
+  height: 24, lineHeight: "22px", boxSizing: "border-box",
+  display: "inline-flex", alignItems: "center", justifyContent: "center",
 });
 
 const BAR_HEIGHT = 24;
@@ -294,8 +298,17 @@ export function PaletteStrip(props: PaletteStripProps) {
       title={adaptive
         ? "Adaptive: drag a swatch body to grow/shrink it; others rebalance proportionally. Click to switch to handle mode."
         : "Handle mode: drag the white dividers to redistribute weight between adjacent neighbors. Click to switch to adaptive (drag swatch body)."}
-      style={countBtnStyle(adaptive)}>
-      adapt
+      style={{
+        // v1.20.70 — icon-only adapt button. ↔ communicates the "scale
+        // / redistribute between" idea. Padding tightened to "0 2px"
+        // (was "0 5px") so the button width matches the 3/5/7 digit
+        // buttons — the ↔ glyph itself is wider than a digit, so less
+        // horizontal padding levels the visual widths.
+        ...countBtnStyle(adaptive),
+        padding: "0 2px",
+        fontSize: 13,
+      }}>
+      ↔
     </div>
   ) : null;
 
@@ -313,14 +326,50 @@ export function PaletteStrip(props: PaletteStripProps) {
     </div>
   ) : null;
 
+  // v1.20.70 — shared controls cluster (adapt / count 3-5-7 / reset)
+  // that rides on the SAME ROW as the palette bar instead of stacking
+  // above it. Reduces vertical density and matches the new island
+  // mockup.
+  const resetBtn = (
+    <div onClick={isNeutral ? undefined : resetWeights}
+      title={isNeutral ? "Weights are neutral" : "Reset all weights to natural ratios"}
+      style={{
+        // v1.20.70 — icon-only reset, mirrors the header's RESET ✕.
+        // Sized to match BAR_HEIGHT (24) so it sits flush with the
+        // slider + the other cluster buttons. Width tightened 22→17
+        // to match the visual width of the 3/5/7 digit buttons.
+        width: 17, height: 24, flexShrink: 0,
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        background: isNeutral ? "transparent" : "#ff5050",
+        color: isNeutral ? "#5a3a3a" : "#ffffff",
+        border: `1px solid ${isNeutral ? "#5a3a3a" : "#ff5050"}`,
+        borderRadius: 2,
+        cursor: isNeutral ? "default" : "pointer", userSelect: "none",
+        fontSize: 14, fontWeight: 700, lineHeight: 1,
+        boxSizing: "border-box",
+      }}>
+      <span style={{ marginTop: -1 }}>✕</span>
+    </div>
+  );
+  const controlsCluster = (
+    <div style={{ display: "flex", alignItems: "center", gap: 3, flexShrink: 0 }}>
+      {maskToggle}
+      {adaptiveToggle}
+      {countToggle}
+      {resetBtn}
+    </div>
+  );
+
   if (swatches.length === 0) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 10 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <span />{/* spacer — was 'palette' label, removed as self-evident */}
-          {countToggle}
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 10 }}>
+        {/* v1.20.70 — empty-state mirrors the new Option 2 layout:
+            toolbar on top (cluster only — no softness rendered since
+            there are no swatches to feather), placeholder bar below. */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8 }}>
+          {controlsCluster}
         </div>
-        <div style={{ display: "flex", height: BAR_HEIGHT, gap: 2, opacity: 0.4 }}>
+        <div style={{ display: "flex", height: BAR_HEIGHT, gap: 2, opacity: 0.4, width: "100%" }}>
           {Array.from({ length: count }, (_, i) => (
             <div key={i} style={{ flex: 1, background: "#1a1a1a", border: "1px solid #333", borderRadius: 2 }} />
           ))}
@@ -334,33 +383,38 @@ export function PaletteStrip(props: PaletteStripProps) {
                      :                          "dominant colors (preset: Full)";
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 10 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 4 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          {maskToggle}
-          {adaptiveToggle}
-          {countToggle}
-          {/* Reset moved RIGHT of the count toggle to read as "the destructive
-              option at the end" — and tinted a soft coral so it's visually
-              distinct from the dim mode-toggle buttons. Same opacity scheme:
-              dim when neutral (nothing to reset), full color when there's
-              something to undo. */}
-          <div onClick={isNeutral ? undefined : resetWeights}
-            title={isNeutral ? "Weights are neutral" : "Reset all weights to natural ratios"}
-            style={{
-              padding: "1px 6px", fontSize: 9, fontWeight: 600,
-              background: "transparent",
-              color: isNeutral ? "#5a3a3a" : "#d87a7a",
-              border: `1px solid ${isNeutral ? "#5a3a3a" : "#d87a7a"}`,
-              borderRadius: 2, cursor: isNeutral ? "default" : "pointer", userSelect: "none",
-              height: 14, lineHeight: "12px", boxSizing: "border-box",
-            }}>reset</div>
-        </div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 10 }}>
+      {/* v1.20.70 — Option 2 layout: top toolbar row (softness slider
+          + controls cluster ↔ 3 5 7 ✕) sits ABOVE the bar. Bar
+          occupies its own full-width row below. Result: bar gets
+          maximum horizontal real estate (no buttons cutting into the
+          swatches), softness + count controls cluster together as
+          "palette behavior" toolbar. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        {setSoftness && (
+          <>
+            <span style={{ fontSize: 9, opacity: 0.5, flexShrink: 0, paddingRight: 4 }}
+              title={`Softness: ${Math.round(softness)} — falloff between cluster regions (0 = hard, 100 = smooth blend)`}>softness</span>
+            <input type="range" min={0} max={100} step={1} value={softness}
+              onInput={e => onSoftnessInput(parseFloat((e.target as HTMLInputElement).value))}
+              onChange={e => {
+                if (softnessCommitRef.current) { clearTimeout(softnessCommitRef.current); softnessCommitRef.current = null; }
+                const v = parseFloat((e.target as HTMLInputElement).value);
+                setLocalSoftness(v);
+                setSoftness(v);
+                draggingRef.current = false;
+              }}
+              title={`Softness: ${Math.round(softness)} — falloff between cluster regions (0 = hard, 100 = smooth blend)`}
+              style={{ flex: 1, minWidth: 0, margin: 0, cursor: "pointer", height: 12 }} />
+            <span style={{ fontSize: 9, opacity: 0.5, width: 22, textAlign: "right", flexShrink: 0, paddingRight: 6 }}>{Math.round(softness)}</span>
+          </>
+        )}
+        {controlsCluster}
       </div>
-
       {/* The bar: positioned segments + absolutely-placed handles between them.
           We use position:relative on the outer + absolute children so the handle
-          sit exactly at boundary edges without flex math drifting. */}
+          sit exactly at boundary edges without flex math drifting.
+          v1.20.70 — bar gets its own full-width row. */}
       <div ref={barRef}
         style={{ position: "relative", height: BAR_HEIGHT, width: "100%", userSelect: "none" }}
         title={`Source palette — ${tipForPreset} ${adaptive ? "(drag swatch body — others rebalance)" : "(drag handles to weight)"}`}>
@@ -451,33 +505,9 @@ export function PaletteStrip(props: PaletteStripProps) {
           );
         })}
       </div>
-
-      {/* Softness slider: thin range below the bar. Drives the gradient feathering
-          on the bar above (visible immediately) AND the runtime softness used by
-          synthesize/apply (per-pixel cluster blend strength). 0 = hard nearest-
-          cluster boundaries (existing behavior); 100 = smooth blend across all
-          clusters → gradient mask. Tooltip shows the current value. Hidden when
-          no setSoftness handler is provided (caller can opt out). */}
-      {setSoftness && (
-        <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 2, height: 12 }}
-          title={`Softness: ${Math.round(softness)} — falloff between cluster regions (0 = hard, 100 = smooth blend)`}>
-          <span style={{ fontSize: 9, opacity: 0.5, width: 38 }}>softness</span>
-          <input type="range" min={0} max={100} step={1} value={softness}
-            onInput={e => onSoftnessInput(parseFloat((e.target as HTMLInputElement).value))}
-            onChange={e => {
-              // mouseup: clear pending throttle, commit final value to parent,
-              // and lower the dragging flag so subsequent prop updates can
-              // sync down again normally.
-              if (softnessCommitRef.current) { clearTimeout(softnessCommitRef.current); softnessCommitRef.current = null; }
-              const v = parseFloat((e.target as HTMLInputElement).value);
-              setLocalSoftness(v);
-              setSoftness(v);
-              draggingRef.current = false;
-            }}
-            style={{ flex: 1, margin: 0, cursor: "pointer", height: 12 }} />
-          <span style={{ fontSize: 9, opacity: 0.5, width: 22, textAlign: "right" }}>{Math.round(softness)}</span>
-        </div>
-      )}
+      {/* v1.20.70 — softness slider + controls cluster moved to a
+          TOOLBAR ROW ABOVE the bar. Old below-the-bar softness row
+          deleted, old controls-on-bar-row wrapper removed too. */}
     </div>
   );
 }

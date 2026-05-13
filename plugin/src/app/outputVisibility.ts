@@ -15,7 +15,7 @@
 // We match by name prefix so all variants are caught regardless of multi-
 // zone / mask sub-grouping.
 
-import { GROUP_NAME, app, action, executeAsModal } from "../services/photoshop";
+import { app, action, executeAsModal, isColorSmashGroupName } from "../services/photoshop";
 
 // v1.20.62 — per-colorSpace prefixes after the v1.20.57 rename. Each mode
 // has its own layer family; visibility sync needs to know all three plus
@@ -51,7 +51,7 @@ function collectByPrefix(root: { layers?: LayerNode[] }, prefix: string, out: La
 function findColorSmashGroup(doc: any): any | null {
   const search = (layers: any[]): any | null => {
     for (const l of layers) {
-      if (l?.name === GROUP_NAME && (l.kind === "group" || Array.isArray(l.layers))) return l;
+      if (l?.name && isColorSmashGroupName(l.name) && (l.kind === "group" || Array.isArray(l.layers))) return l;
       if (Array.isArray(l.layers)) {
         const found = search(l.layers);
         if (found) return found;

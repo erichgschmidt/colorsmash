@@ -38,11 +38,15 @@ import {
   dedupKey,
 } from "../app/recentHistory";
 import { serializeRecipes, parseRecipes, mergeImportedRecipes } from "../app/recipeIO";
+import { buildStarterRecipes } from "../app/starterRecipes";
+
+const STARTER_PACK_VERSION = 1;
 import { lutGradientCSS } from "../app/historyThumbnail";
 import { syncOutputVisibilityToMode, repositionGroupAboveTarget } from "../app/outputVisibility";
 import {
   app, action as psAction, readLayerPixels, executeAsModal, getActiveDoc, getSelectionBounds, readSelectionMaskBytes,
   branchColorSmashGroup,
+  consolidateColorSmashGroups,
 } from "../services/photoshop";
 import { downsampleToMaxEdge } from "../core/downsample";
 
@@ -244,11 +248,39 @@ export function MatchTab() {
   // snapshot of the panel state. UI shows the last N (default 5) as small
   // palette-strip thumbnails near the Apply area; click an entry to restore.
   // Stored in PersistedSettings so the history survives panel reloads.
-  const HISTORY_MAX = 10;
   const [recentHistory, setRecentHistory] = useState<HistoryEntry[]>([]);
+  // v1.20.66 — track which starter-pack version this user is on so we don't
+  // re-inject every reload. Loaded from persistence; if absent the next
+  // save writes it.
+  const [starterPackVersion, setStarterPackVersion] = useState(0);
+  // v1.20.70 — Multi/Blend is a secondary feature; collapsed by default to
+  // reduce visual density. A small disclosure (▶/▼) between AUTO and the
+  // tabs reveals the MULTI/BLEND × 3 row when expanded.
+  const [multiExpanded, setMultiExpanded] = useState(false);
+  // v1.20.70 — Settings drawer state + persisted prefs.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<{ general: boolean; lut: boolean; advanced: boolean; diag: boolean }>({
+    general: true, lut: false, advanced: false, diag: false,
+  });
+  const [groupColor, setGroupColor] = useState<"none" | "red" | "orange" | "yellow" | "green" | "blue" | "violet" | "gray">("orange");
+  const [groupName, setGroupName] = useState<string>("[Color Smash]");
+  const [autoDebounceMs, setAutoDebounceMs] = useState<number>(300);
+  const [historyCap, setHistoryCap] = useState<number>(10);
+  const [verboseStatus, setVerboseStatus] = useState<boolean>(false);
+  // v1.20.70 — was a hard-coded const 10; now driven by the Settings
+  // drawer's `historyCap` slider (range 5–30, persisted).
+  const HISTORY_MAX = historyCap;
   // Default open in v1.20.1 — feedback was that the collapsed disclosure
   // was easy to miss, and the strip is small enough to live exposed.
-  const [historyOpen, setHistoryOpen] = useState(true);
+  // v1.20.70 — collapse defaults: only OUTPUT opens by default. All
+  // other optional sections (TRANSFORM / MASK / HISTORY / FITTED
+  // CURVES) start collapsed so the panel boots compact; click a
+  // section header ▾/▸ to reveal. Source / Target islands have no
+  // toggle (always visible — they're the input surface).
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [maskOpen, setMaskOpen] = useState(false);
+  const [transformOpen, setTransformOpen] = useState(false);
+  const [outputOpen, setOutputOpen] = useState(true);
   // v1.20.3 — when set to an entry id, the thumbnail's title area swaps to
   // a small text input for renaming. Pinned entries only; recents use the
   // auto-generated label. Saved on blur / Enter; canceled on Escape.
@@ -357,7 +389,22 @@ export function MatchTab() {
   // it modifies a PS layer continuously while the user adjusts sliders, which
   // is a stronger contract than the one-shot Apply button.
   const [liveLut, setLiveLut] = useState(false);
+  // v1.20.68 — isolation toggle. When on, all top-level layers in the
+  // target doc except the target's ancestor chain and the [Color Smash]
+  // group are hidden, giving the user a quick "see just the matched
+  // result" view. Snapshot of prior visibility is stored in a ref so we
+  // can flip back cleanly. Toggling off restores the saved state.
+  const [isolated, setIsolated] = useState(false);
+  const isolationSnapshotRef = useRef<Map<number, boolean> | null>(null);
   const liveLutLayerIdRef = useRef<number | null>(null);
+  // v1.20.70 — when the user clicks a different output-mode tab (RGB/Lab/LUT),
+  // we want to (a) swap mode and (b) fire Apply for the new mode. Because the
+  // fit + renderedCurves pipeline runs through useMemo + state, we can't just
+  // call onApply synchronously after setOutputMode — the curves for the new
+  // mode haven't been computed yet. Instead we set this flag and let an
+  // effect that depends on [outputMode, renderedCurves] fire Apply once both
+  // have settled into the new mode.
+  const pendingApplyRef = useRef(false);
   // (liveUpdates and stale state declared above, before the hooks that consume them.)
 
   const [openSection, setOpenSection] = useState<"basic" | "dims" | "zones" | "envelope" | null>(null);
@@ -437,6 +484,17 @@ export function MatchTab() {
         if (Array.isArray(s.recentHistory)) {
           setRecentHistory(pruneHistory(s.recentHistory, HISTORY_MAX));
         }
+        // v1.20.66 — track which starter pack version this install has seen.
+        if (typeof s.starterPackVersion === "number") setStarterPackVersion(s.starterPackVersion);
+        if (typeof s.multiExpanded === "boolean") setMultiExpanded(s.multiExpanded);
+        // v1.20.70 — Settings-drawer prefs.
+        if (s.groupColor && ["none","red","orange","yellow","green","blue","violet","gray"].includes(s.groupColor)) {
+          setGroupColor(s.groupColor as any);
+        }
+        if (typeof s.groupName === "string" && s.groupName.trim().length > 0) setGroupName(s.groupName);
+        if (typeof s.autoDebounceMs === "number" && s.autoDebounceMs >= 60 && s.autoDebounceMs <= 1000) setAutoDebounceMs(s.autoDebounceMs);
+        if (typeof s.historyCap === "number" && s.historyCap >= 5 && s.historyCap <= 30) setHistoryCap(s.historyCap);
+        if (typeof s.verboseStatus === "boolean") setVerboseStatus(s.verboseStatus);
         // deselectOnApply removed in v1.20.25 — ignore any old persisted value.
         if (s.overwriteOnApply != null) setOverwriteOnApply(s.overwriteOnApply);
         if (s.openSection !== undefined) setOpenSection(s.openSection);
@@ -447,6 +505,25 @@ export function MatchTab() {
           envelopeRef.current = s.envelope as EnvelopePoint[];
           setEnvelopeLabel(s.envelope as EnvelopePoint[]);
         }
+      }
+      // v1.20.66 — first-run starter pack injection. If this install hasn't
+      // seen the current starter pack version yet AND has no prior pinned
+      // recipes (so we don't clobber a user's curated library), inject
+      // the bundled set + mark this version as installed. starterPackVersion
+      // saves on the next debounced persistence flush.
+      const loadedVersion = (s && typeof s.starterPackVersion === "number") ? s.starterPackVersion : 0;
+      if (loadedVersion < STARTER_PACK_VERSION) {
+        setRecentHistory(prev => {
+          const hasPinned = prev.some(e => e.pinned);
+          if (hasPinned) return prev; // respect the user's curated state
+          const starters = buildStarterRecipes();
+          // Filter out any starter with an id that already exists (defensive
+          // — handles weird reload states).
+          const existingIds = new Set(prev.map(e => e.id));
+          const fresh = starters.filter(s2 => !existingIds.has(s2.id));
+          return [...fresh, ...prev];
+        });
+        setStarterPackVersion(STARTER_PACK_VERSION);
       }
       loadedRef.current = true;
     })();
@@ -463,6 +540,11 @@ export function MatchTab() {
       // v1.20.64 — persist the full per-tab record so each output mode's
       // Multi/BlendIf settings survive panel reloads.
       tabConfig,
+      // v1.20.66 — once the starter pack has been injected, this prevents
+      // re-injection on every reload.
+      starterPackVersion,
+      multiExpanded,
+      groupColor, groupName, autoDebounceMs, historyCap, verboseStatus,
       overwriteOnApply,
       openSection,
       zones: zonesLabel, lockZoneTotal,
@@ -476,7 +558,7 @@ export function MatchTab() {
       recentHistory,
     };
     saveDebouncedRef.current!(snapshot);
-  }, [remember, matchMode, multiZone, multiZoneLimit, adaptiveBands, tabConfig, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
+  }, [remember, matchMode, multiZone, multiZoneLimit, adaptiveBands, tabConfig, starterPackVersion, multiExpanded, groupColor, groupName, autoDebounceMs, historyCap, verboseStatus, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
       colorSpace, outputMode, lutStrength, lutGrid, lutDither, selectionMode, overwriteOnApply, openSection,
       zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel, paletteCount, paletteAdaptive, sourceSoftness, targetSoftness, targetMaskEnabled, recentHistory]);
 
@@ -1696,6 +1778,131 @@ export function MatchTab() {
     }
   };
 
+  // v1.20.70 — sync the user's chosen group name to the photoshop
+  // service module's mutable GROUP_NAME var. Runs on every change so
+  // find/consolidate helpers + branch numbering pick up the new value.
+  useEffect(() => {
+    try {
+      const { setGroupName: setSvc } = require("../services/photoshop");
+      setSvc(groupName);
+    } catch { /* non-fatal */ }
+  }, [groupName]);
+
+  // v1.20.70 — when the user renames the group via Settings, rename the
+  // existing canonical group in PS to match (best-effort; if no group
+  // exists yet, the next Apply / consolidate will use the new name).
+  useEffect(() => {
+    if (tgtDocId == null) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const ps = require("photoshop");
+        const { executeAsModal } = ps.core ?? {};
+        const doc = (ps.app.documents ?? []).find((d: any) => d.id === tgtDocId);
+        if (!doc) return;
+        const findCS = (layers: any[]): any | null => {
+          for (const l of layers ?? []) {
+            if (l?.name && (l.name === groupName || l.name === "[Color Smash]") && Array.isArray(l.layers)) return l;
+            if (Array.isArray(l?.layers)) { const f = findCS(l.layers); if (f) return f; }
+          }
+          return null;
+        };
+        const group = findCS(doc.layers ?? []);
+        if (!group || cancelled) return;
+        if (group.name !== groupName) {
+          if (executeAsModal) {
+            await executeAsModal(async () => { try { group.name = groupName; } catch { /* */ } }, { commandName: "Rename Color Smash group" });
+          } else {
+            try { group.name = groupName; } catch { /* */ }
+          }
+        }
+      } catch { /* non-fatal */ }
+    })();
+    return () => { cancelled = true; };
+  }, [groupName, tgtDocId]);
+
+  // v1.20.70 — sync the user's chosen group color to PS whenever it
+  // changes (or when the target doc changes). Finds the canonical
+  // [Color Smash] group in the target doc and applies the color tag
+  // via setLayerColor. No-op if no group exists yet.
+  useEffect(() => {
+    if (tgtDocId == null) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const ps = require("photoshop");
+        const { setLayerColor } = require("../services/photoshop");
+        const { executeAsModal } = require("photoshop").core ?? {};
+        const doc = (ps.app.documents ?? []).find((d: any) => d.id === tgtDocId);
+        if (!doc) return;
+        const findCS = (layers: any[]): any | null => {
+          for (const l of layers ?? []) {
+            if (l?.name && (l.name === groupName || l.name === "[Color Smash]") && Array.isArray(l.layers)) return l;
+            if (Array.isArray(l?.layers)) { const f = findCS(l.layers); if (f) return f; }
+          }
+          return null;
+        };
+        const group = findCS(doc.layers ?? []);
+        if (!group || cancelled) return;
+        if (executeAsModal) {
+          await executeAsModal(() => setLayerColor(group.id, groupColor), { commandName: "Update group color" });
+        } else {
+          await setLayerColor(group.id, groupColor);
+        }
+      } catch { /* non-fatal — color is decorative */ }
+    })();
+    return () => { cancelled = true; };
+  }, [groupColor, tgtDocId]);
+
+  // v1.20.70 — REVERT shadow slot. Holds the panel state from JUST BEFORE
+  // the last REVERT was applied. While non-null, the REVERT button styles
+  // itself as "UN-REVERT" and clicking it restores the snapshot. Cleared
+  // on UN-REVERT click or on a fresh REVERT from a different layer.
+  const [preRevertSnapshot, setPreRevertSnapshot] = useState<LutLayerState | null>(null);
+  const onRevertClick = async () => {
+    if (preRevertSnapshot) {
+      // Un-revert: restore the shadow slot.
+      const slot = preRevertSnapshot;
+      setPreRevertSnapshot(null);
+      applyStateToPanel(slot);
+      setStatus("Pre-revert state restored.");
+      return;
+    }
+    if (!canRestore) return;
+    // Snapshot current state into shadow slot AND push to history as a
+    // safety entry the user can recover from even after the slot clears.
+    const snap = buildXmpState();
+    setPreRevertSnapshot(snap);
+    try {
+      const safety = makeHistoryEntry(snap);
+      safety.customName = `Before REVERT @ ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+      safety.pinned = true;
+      setRecentHistory(prev => pushHistoryEntry(prev, safety, HISTORY_MAX));
+    } catch { /* non-fatal */ }
+    await onRestoreFromLayer();
+  };
+
+  // v1.20.70 — call PS's native undo/redo via batchPlay. Same as Ctrl/Cmd+Z
+  // but discoverable via header icons next to the plugin's REVERT button.
+  const onPsUndo = async () => {
+    try {
+      await executeAsModal("Undo", async () => {
+        await psAction.batchPlay([{ _obj: "undo" }], {});
+      });
+    } catch (e: any) {
+      setStatus(`Undo failed: ${e?.message ?? e}`);
+    }
+  };
+  const onPsRedo = async () => {
+    try {
+      await executeAsModal("Redo", async () => {
+        await psAction.batchPlay([{ _obj: "redo" }], {});
+      });
+    } catch (e: any) {
+      setStatus(`Redo failed: ${e?.message ?? e}`);
+    }
+  };
+
   // Apply LUT — bake the staged preset into a Color Lookup adjustment layer
   // automatically, no file dialog. The .cube goes to the plugin's temp folder
   // (PS references it from there) and the layer lands in the [Color Smash]
@@ -1716,6 +1923,14 @@ export function MatchTab() {
     // the old one so getOrCreateColorSmashGroup spawns a fresh empty one
     // for this Apply. Then disarm the + so subsequent Applies replace
     // within this new group.
+    // v1.20.70 — consolidate any stray [Color Smash] groups into one
+    // canonical group at the doc root. Defensive: JUMP / ISOLATE / user
+    // selection changes can cause PS's insertion-point to nest a new
+    // group inside a sub-group on a subsequent create. Runs before the
+    // branch path so it operates on a clean slate.
+    if (tgtDocId != null) {
+      try { await consolidateColorSmashGroups(tgtDocId); } catch { /* non-fatal */ }
+    }
     if (!overwriteOnApply && tgtDocId != null) {
       try { await branchColorSmashGroup(tgtDocId); } catch { /* non-fatal */ }
       // v1.20.64 — clear the live-LUT layer pointer so AUTO doesn't keep
@@ -1888,16 +2103,24 @@ export function MatchTab() {
       } catch (e: any) {
         setStatus(`Live update skipped: ${e?.message ?? e}`);
       }
-    }, 300);
+    }, autoDebounceMs);
     return () => {
       if (liveBakeTimerRef.current) { clearTimeout(liveBakeTimerRef.current); liveBakeTimerRef.current = null; }
     };
-  }, [liveLut, renderedCurves, activePreset, targetId, targetPaletteWeights, targetSoftness, multiZone, outputMode]);
+  }, [liveLut, renderedCurves, activePreset, targetId, targetPaletteWeights, targetSoftness, multiZone, outputMode, autoDebounceMs]);
 
   const onApply = async () => {
     if (targetId == null) { setStatus("Pick target layer."); return; }
     if (srcMode === "layer" && sourceId == null) { setStatus("Pick source layer."); return; }
     // v1.20.54 — branch off when + is armed (see onApplyLut for context).
+    // v1.20.70 — consolidate any stray [Color Smash] groups into one
+    // canonical group at the doc root. Defensive: JUMP / ISOLATE / user
+    // selection changes can cause PS's insertion-point to nest a new
+    // group inside a sub-group on a subsequent create. Runs before the
+    // branch path so it operates on a clean slate.
+    if (tgtDocId != null) {
+      try { await consolidateColorSmashGroups(tgtDocId); } catch { /* non-fatal */ }
+    }
     if (!overwriteOnApply && tgtDocId != null) {
       try { await branchColorSmashGroup(tgtDocId); } catch { /* non-fatal */ }
       // v1.20.64 — clear the live-LUT layer pointer so AUTO doesn't keep
@@ -1978,8 +2201,137 @@ export function MatchTab() {
     } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
   };
 
+  // v1.20.70 — tab-click handler: clicking RGB/Lab/LUT swaps mode AND fires
+  // Apply for that mode. If switching to a NEW mode, we can't call apply
+  // synchronously — fit + renderedCurves run through useMemo on outputMode,
+  // so the curves for the new mode aren't ready yet. We flip a ref flag and
+  // a useEffect (below) waits for outputMode to commit + renderedCurves to
+  // refresh, then dispatches to the appropriate handler.
+  const onTabClick = (val: "rgb" | "lab" | "lut") => {
+    if (val === outputMode) {
+      // Same tab clicked → fire apply right away with current curves.
+      (val === "lut" ? onApplyLut : onApply)();
+      return;
+    }
+    pendingApplyRef.current = true;
+    setOutputMode(val);
+  };
+  useEffect(() => {
+    if (!pendingApplyRef.current) return;
+    pendingApplyRef.current = false;
+    // Defer one tick so fit/useMemo for the new colorSpace has propagated
+    // into renderedCurves before Apply reads it via curvesPendingRef.
+    const t = setTimeout(() => {
+      (outputMode === "lut" ? onApplyLut : onApply)();
+    }, 40);
+    return () => clearTimeout(t);
+  }, [outputMode, renderedCurves]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const sel = matchStyles.sel;
   const tinyBtn = matchStyles.tinyBtn;
+
+  // v1.20.68 — jump to target layer in PS Layers panel. Quality-of-life:
+  // when the panel target dropdown points at a layer buried in a group,
+  // this saves the user a click+expand to actually open + edit it.
+  const onJumpToTarget = async () => {
+    if (targetId == null || targetId === MERGED_LAYER_ID) {
+      setStatus("No specific target layer to jump to.");
+      return;
+    }
+    try {
+      await executeAsModal("Color Smash jump to target", async () => {
+        await psAction.batchPlay([{
+          _obj: "select",
+          _target: [{ _ref: "layer", _id: targetId }],
+          makeVisible: true,
+        }], {});
+      });
+    } catch (e: any) {
+      setStatus(`Jump failed: ${e?.message ?? e}`);
+    }
+  };
+
+  // v1.20.68 — isolation toggle. When activated, snapshots the current
+  // visibility of every layer in the target doc, then hides everything
+  // EXCEPT the target's ancestor chain and the [Color Smash] group's
+  // ancestor chain. Toggling off restores the snapshot exactly.
+  // Acts as an A/B compare: see the matched output without surrounding
+  // context, then flip back to the full comp.
+  const onToggleIsolation = async () => {
+    if (tgtDocId == null) { setStatus("Pick a target doc first."); return; }
+    try {
+      await executeAsModal("Color Smash isolate", async () => {
+        const ps = require("photoshop");
+        const doc = (ps.app.documents ?? []).find((d: any) => d.id === tgtDocId);
+        if (!doc) return;
+        if (!isolated) {
+          // Build the keep-visible set: target layer + its ancestor chain,
+          // plus [Color Smash] group + its ancestor chain.
+          const keep = new Set<number>();
+          const addAncestors = (id: number) => {
+            const findPath = (layers: any[], path: any[]): any[] | null => {
+              for (const l of layers) {
+                if (l.id === id) return [...path, l];
+                if (Array.isArray(l.layers)) {
+                  const p = findPath(l.layers, [...path, l]);
+                  if (p) return p;
+                }
+              }
+              return null;
+            };
+            const path = findPath(doc.layers ?? [], []);
+            if (path) for (const node of path) keep.add(node.id);
+          };
+          if (targetId != null && targetId !== MERGED_LAYER_ID) addAncestors(targetId);
+          // Find [Color Smash] group + add its ancestor chain.
+          const findCS = (layers: any[]): any | null => {
+            for (const l of layers) {
+              if ((l.name === groupName || l.name === "[Color Smash]") && Array.isArray(l.layers)) return l;
+              if (Array.isArray(l.layers)) { const f = findCS(l.layers); if (f) return f; }
+            }
+            return null;
+          };
+          const csGroup = findCS(doc.layers ?? []);
+          if (csGroup) addAncestors(csGroup.id);
+          // Snapshot + hide the others.
+          const snap = new Map<number, boolean>();
+          const walk = (layers: any[]) => {
+            for (const l of layers) {
+              snap.set(l.id, !!l.visible);
+              if (!keep.has(l.id)) {
+                try { l.visible = false; } catch { /* ignore */ }
+              } else {
+                try { l.visible = true; } catch { /* ignore */ }
+              }
+              if (Array.isArray(l.layers)) walk(l.layers);
+            }
+          };
+          walk(doc.layers ?? []);
+          isolationSnapshotRef.current = snap;
+          setIsolated(true);
+        } else {
+          // Restore from snapshot.
+          const snap = isolationSnapshotRef.current;
+          if (snap) {
+            const walk = (layers: any[]) => {
+              for (const l of layers) {
+                const prev = snap.get(l.id);
+                if (typeof prev === "boolean") {
+                  try { l.visible = prev; } catch { /* ignore */ }
+                }
+                if (Array.isArray(l.layers)) walk(l.layers);
+              }
+            };
+            walk(doc.layers ?? []);
+          }
+          isolationSnapshotRef.current = null;
+          setIsolated(false);
+        }
+      });
+    } catch (e: any) {
+      setStatus(`Isolate toggle failed: ${e?.message ?? e}`);
+    }
+  };
 
   // Full reset: every persisted setting back to its default + delete the saved file.
   // Triggered by the red ✕ in the bottom bar.
@@ -2024,10 +2376,493 @@ export function MatchTab() {
     if (srcMode === "selection" && srcOverride) {
       try { setSrcOverride(await snapshotSelectionInner()); } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
     }
+    // v1.20.70 — force selection mask re-read. Folded in from the old
+    // inline ↻ button (removed from the MASK row) so the main refresh
+    // is the single sync entry point for everything PS-side.
+    setSelectionTick(t => t + 1);
+  };
+
+  // v1.20.70 — Diagnostics handlers (Settings drawer).
+  // Open the plugin's per-user data folder in the OS file browser.
+  const onOpenDataFolder = async () => {
+    try {
+      const { storage, shell } = require("uxp");
+      const folder = await storage.localFileSystem.getDataFolder();
+      const native = (folder as any).nativePath ?? (folder as any).url ?? folder;
+      // Try shell.openPath (modern); fall back to openExternal with file:// URL.
+      if (shell?.openPath) await shell.openPath(native);
+      else if (shell?.openExternal && native) await shell.openExternal(`file://${native}`);
+      setStatus(`Data folder: ${native}`);
+    } catch (e: any) {
+      setStatus(`Open data folder failed: ${e?.message ?? e}`);
+    }
+  };
+  // Export the entire persisted-settings file to a user-chosen location.
+  const onExportConfig = async () => {
+    try {
+      const uxp = require("uxp");
+      const stamp = new Date().toISOString().slice(0, 10);
+      const fname = `color-smash-config-${stamp}.json`;
+      const target = await uxp.storage.localFileSystem.getFileForSaving(fname, {
+        types: ["json"],
+      });
+      if (!target) return;
+      // Read current saved-settings file content; if missing, build from live state.
+      const dataFolder = await uxp.storage.localFileSystem.getDataFolder();
+      const entries = await dataFolder.getEntries();
+      const settingsFile = entries.find((e: any) => e.name === "color-smash-settings.json");
+      let payload: string;
+      if (settingsFile) {
+        payload = await settingsFile.read({ format: uxp.storage.formats.utf8 });
+      } else {
+        payload = JSON.stringify({ note: "No persisted settings file found — start the plugin with Persistence ON, change a setting, and try again." }, null, 2);
+      }
+      await target.write(payload, { format: uxp.storage.formats.utf8 });
+      setStatus(`Config exported: ${target.name}`);
+    } catch (e: any) {
+      setStatus(`Export config failed: ${e?.message ?? e}`);
+    }
+  };
+  // Import a previously-exported config JSON, overwriting current settings.
+  const onImportConfig = async () => {
+    try {
+      const uxp = require("uxp");
+      const file = await uxp.storage.localFileSystem.getFileForOpening({ types: ["json"] });
+      if (!file) return;
+      const text = await file.read({ format: uxp.storage.formats.utf8 });
+      const parsed = JSON.parse(text);
+      if (!parsed || typeof parsed !== "object") throw new Error("Not a JSON object.");
+      // Write into the plugin's settings file. The next reload will pick it up.
+      const dataFolder = await uxp.storage.localFileSystem.getDataFolder();
+      const target = await dataFolder.createFile("color-smash-settings.json", { overwrite: true });
+      await target.write(JSON.stringify(parsed), { format: uxp.storage.formats.utf8 });
+      setStatus("Config imported. Reload the panel to apply.");
+    } catch (e: any) {
+      setStatus(`Import config failed: ${e?.message ?? e}`);
+    }
+  };
+
+  // v1.20.70 — section "island" styles. Each major section (Source,
+  // Target, Color/Tone/Envelope, Output, Mask, History, Fitted Curves)
+  // is wrapped in a softly-rounded frame with a slightly darker
+  // background — replaces the old heavy black-bar zone dividers and
+  // matches the Adobe panel aesthetic (each section reads as its own
+  // contained card).
+  const ISLAND: React.CSSProperties = {
+    // v1.20.70 — three-step brightness palette, OUTSIDE-IN darker:
+    //   panel bg (UXP default, lightest)
+    //   ↓ island bg (mid)        ← this
+    //   ↓ dropdown / input bg (darkest, see MatchSliders.sel)
+    // Each level recesses into the next. Border just barely visible
+    // so the island reads as a soft inset pad, not a framed box.
+    background: "#4a4a4a",
+    border: "1px solid #525252",
+    borderRadius: 6,
+    padding: "8px 10px",
+    display: "flex", flexDirection: "column", gap: 4,
+    minWidth: 0,
+  };
+  const ISLAND_HEADER: React.CSSProperties = {
+    fontSize: 9, fontWeight: 700, letterSpacing: 0.8,
+    color: "#888", textTransform: "uppercase",
+    marginBottom: 4, userSelect: "none",
   };
 
   return (
-    <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+    // v1.20.70 — three-step palette, OUTSIDE-IN light→dark per reference:
+    //   outer wrapper bg #555555 (lightest)
+    //   island bg       #444444 (mid)
+    //   dropdown/control #2e2e2e (darkest)
+    <div style={{ padding: 8, background: "#555555", display: "flex", flexDirection: "column", gap: 8 }}>
+      {/* v1.20.70 — header layout: [wordmark left] [↶ ↷ center, PS native
+          undo/redo] [💾 REVERT ✕ ⟳ ⚙ ? right]. Plugin-action cluster
+          moved here from the bottom action row so the body row carries
+          only target-specific actions (JUMP, ISOLATE). The two arrow
+          glyphs in the center are intentionally separated from REVERT
+          (text pill) so users don't conflate them. */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: 4,
+        height: 24, marginBottom: 2,
+      }}>
+        {/* Left: wordmark. */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6, opacity: 0.7, flexShrink: 1, minWidth: 0 }}>
+          <img src="icons/icon-light.png" alt=""
+            style={{ width: 14, height: 14, flexShrink: 0, imageRendering: "auto" }} />
+          <span style={{
+            fontSize: 10, fontWeight: 600, letterSpacing: 0.5,
+            color: "#cccccc", userSelect: "none", whiteSpace: "nowrap",
+          }}>Color Smash</span>
+          <span style={{
+            fontSize: 9, color: "#888", userSelect: "none", whiteSpace: "nowrap",
+          }}>v1.20.70</span>
+        </div>
+        <span style={{ flex: 1 }} />
+        {/* Center: PS-native ↶ undo / ↷ redo. Calls batchPlay { _obj: "undo" / "redo" }. */}
+        <div onClick={onPsUndo}
+          title="Photoshop UNDO (same as Ctrl/Cmd+Z). Reverses the most recent PS action — affects layers, masks, edits. Independent of this plugin's REVERT button (which only restores panel state from a Match layer's XMP)."
+          style={{
+            width: 22, height: 22, display: "inline-flex", alignItems: "center", justifyContent: "center",
+            background: "transparent", color: "#aaa",
+            border: "1px solid #555", borderRadius: 4, cursor: "pointer",
+            fontSize: 14, lineHeight: 1, boxSizing: "border-box", flexShrink: 0, userSelect: "none",
+          }}>↶</div>
+        <div onClick={onPsRedo}
+          title="Photoshop REDO (same as Ctrl/Cmd+Shift+Z). Re-applies an undone PS action."
+          style={{
+            width: 22, height: 22, display: "inline-flex", alignItems: "center", justifyContent: "center",
+            background: "transparent", color: "#aaa",
+            border: "1px solid #555", borderRadius: 4, cursor: "pointer",
+            fontSize: 14, lineHeight: 1, boxSizing: "border-box", flexShrink: 0, userSelect: "none",
+          }}>↷</div>
+        <span style={{ flex: 1 }} />
+        {/* Right: 💾 REVERT ✕ ⟳ ⚙ ? */}
+        <div onClick={onExportLut}
+          title="Export the current preset to disk as a portable 33³ .CUBE 3D LUT (loadable in PS, Premiere, Resolve, etc.)."
+          style={{
+            width: 22, height: 22,
+            display: "inline-flex", alignItems: "center", justifyContent: "center",
+            background: "transparent", color: "#aaa",
+            border: "1px solid #555",
+            borderRadius: 4, cursor: "pointer", userSelect: "none",
+            fontSize: 12, lineHeight: 1,
+            boxSizing: "border-box", flexShrink: 0,
+          }}>💾</div>
+        <div onClick={onRevertClick}
+          title={preRevertSnapshot
+            ? "UN-REVERT — restore the panel state from just before your last REVERT (in-memory shadow slot). Safety net for accidental REVERT clicks."
+            : canRestore
+              ? "REVERT panel state to the snapshot stored in the selected Match layer's XMP. Snaps every slider, preset, palette weight, and doc/layer choice back to the state that produced this layer. Auto-saves a 'Before REVERT' history entry first, so this action is recoverable."
+              : "Disabled — no Color Smash metadata found on the active layer. Click a previously-baked Match layer in the Layers panel to enable."}
+          style={{
+            padding: "0 8px", fontSize: 10, fontWeight: 600, letterSpacing: 0.3,
+            background: preRevertSnapshot ? "#3a3228" : (canRestore ? "#283440" : "#2a2a2a"),
+            color: preRevertSnapshot ? "#e8c882" : (canRestore ? "#7aa8d8" : "#aaaaaa"),
+            border: `1px solid ${preRevertSnapshot ? "#d8b87a" : (canRestore ? "#7aa8d8" : "#555")}`,
+            borderRadius: 4,
+            cursor: (preRevertSnapshot || canRestore) ? "pointer" : "default",
+            userSelect: "none",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            height: 22, lineHeight: "20px", boxSizing: "border-box",
+            flex: "0 0 auto",
+            opacity: (preRevertSnapshot || canRestore) ? 1 : 0.7,
+          }}>{preRevertSnapshot ? "UN-REVERT" : "REVERT"}</div>
+        <div onClick={async () => {
+          const ok = await uxpConfirm("Reset all panel settings to defaults and clear the saved file?", "Reset");
+          if (ok) onResetAll();
+        }}
+          title="Reset all panel settings to defaults and clear the saved file"
+          style={{
+            width: 22, height: 22, display: "inline-flex", alignItems: "center", justifyContent: "center",
+            background: "#e66666", color: "#fff", fontWeight: 700, fontSize: 13, lineHeight: 1,
+            border: "1px solid #b34a4a", borderRadius: 4, cursor: "pointer", boxSizing: "border-box", flexShrink: 0,
+          }}>
+          <span style={{ marginTop: -1 }}>✕</span>
+        </div>
+        <div onClick={onRefreshAll}
+          title={stale
+            ? "Photoshop changed since last refresh — click to resync everything (docs, layer lists, source/target previews, selection mask)."
+            : "In sync. Click to force-refresh source + target previews + layer lists + selection mask."}
+          style={{
+            width: 22, height: 22, display: "inline-flex", alignItems: "center", justifyContent: "center",
+            background: stale ? "#c19a3a" : "transparent",
+            color: stale ? "#fff" : "#aaa",
+            border: `1px solid ${stale ? "#c19a3a" : "#555"}`,
+            borderRadius: 4, cursor: "pointer", boxSizing: "border-box", flexShrink: 0, fontSize: 13, userSelect: "none",
+          }}>
+          <span style={{ marginTop: -1, lineHeight: 1 }}>⟳</span>
+        </div>
+        <div onClick={() => setSettingsOpen(o => !o)}
+          title={settingsOpen
+            ? "Close settings drawer."
+            : "Open settings — group color/name, LUT options, AUTO debounce, history cap, persistence, diagnostics."}
+          style={{
+            width: 22, height: 22,
+            display: "inline-flex", alignItems: "center", justifyContent: "center",
+            background: settingsOpen ? "#3a3a3a" : "transparent",
+            color: settingsOpen ? "#dddddd" : "#888",
+            border: `1px solid ${settingsOpen ? "#888" : "#555"}`,
+            borderRadius: 4, cursor: "pointer", userSelect: "none",
+            fontSize: 12, lineHeight: 1,
+            boxSizing: "border-box", flexShrink: 0,
+          }}>⚙</div>
+        <span onClick={(e: any) => { e.stopPropagation(); e.preventDefault(); void uxpInfo("Color Smash — about", [
+          { heading: "What this is",
+            body: "Histogram-matching color grade between a source and target layer. Outputs editable Curves (RGB / Lab) or 3D Color Lookup adjustment layers, organized in a [Color Smash] group with masks and round-trippable XMP metadata." },
+          { heading: "Quick start",
+            body: "1. Pick a source layer (any open doc).\n2. Pick a target layer (the one to grade).\n3. Click Apply (or set up Multi for 3 banded layers).\n4. Pin recipes to history; export with ↑ EXPORT to share." },
+          { heading: "Header icons",
+            body: "↶ ↷ — Photoshop native undo/redo (same as Ctrl/Cmd+Z). 💾 — export current preset as .CUBE LUT. REVERT — restore panel state from the active Match layer's XMP (clicking again 'un-reverts' from a one-shot in-memory shadow slot, plus a 'Before REVERT' history entry is auto-saved as a permanent safety net). ✕ — reset all panel settings. ⟳ — resync everything from PS. ⚙ — toggle settings persistence." },
+          { heading: "Version",
+            body: "Color Smash v1.20.70. Branch: master. Build cleanly on PS 25.0+." },
+        ]); }}
+          title="About Color Smash"
+          style={{
+            cursor: "pointer", fontSize: 11, fontWeight: 700, opacity: 0.85,
+            border: "1px solid #555", borderRadius: 4,
+            width: 22, height: 22,
+            display: "inline-flex", alignItems: "center", justifyContent: "center",
+            lineHeight: 1, userSelect: "none", flexShrink: 0, color: "#aaa",
+            boxSizing: "border-box",
+          }}>?</span>
+      </div>
+      {/* v1.20.70 — Settings drawer. Toggled by the ⚙ icon in the header.
+          Inline (not modal) so it composes with the rest of the panel. */}
+      {settingsOpen && (() => {
+        // Reusable per-row layout: 80px label column, controls flex 1.
+        // Keeps every row's left edge aligned and gives the right side
+        // the same horizontal extent across rows.
+        const LABEL_W = 84;
+        const ROW: React.CSSProperties = {
+          display: "flex", alignItems: "center", gap: 6,
+          minHeight: 22,
+        };
+        const LABEL: React.CSSProperties = {
+          width: LABEL_W, flexShrink: 0,
+          fontSize: 10, color: "#bbb", letterSpacing: 0.3,
+        };
+        const SECTION_HEADER: React.CSSProperties = {
+          display: "flex", alignItems: "center", gap: 4,
+          marginTop: 4, padding: "2px 0",
+          fontSize: 10, fontWeight: 700, color: "#e8c882", letterSpacing: 0.5,
+          cursor: "pointer", userSelect: "none",
+        };
+        const sectionToggle = (key: keyof typeof settingsSection) =>
+          () => setSettingsSection(prev => ({ ...prev, [key]: !prev[key] }));
+        const COLORS: Array<{ id: typeof groupColor; swatch: string; label: string }> = [
+          { id: "none",   swatch: "transparent", label: "None"   },
+          { id: "red",    swatch: "#c34a4a",     label: "Red"    },
+          { id: "orange", swatch: "#d8884a",     label: "Orange" },
+          { id: "yellow", swatch: "#d8c14a",     label: "Yellow" },
+          { id: "green",  swatch: "#5ea85e",     label: "Green"  },
+          { id: "blue",   swatch: "#5a8ad8",     label: "Blue"   },
+          { id: "violet", swatch: "#9a6acc",     label: "Violet" },
+          { id: "gray",   swatch: "#888",        label: "Gray"   },
+        ];
+        return (
+          <div style={{
+            border: "1px solid #444", borderRadius: 4,
+            background: "#1f1f1f",
+            padding: 8, marginTop: -2, marginBottom: 4,
+            display: "flex", flexDirection: "column", gap: 4,
+          }}>
+            {/* Drawer title bar. */}
+            <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 2 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, color: "#dddddd" }}>SETTINGS</span>
+              <span style={{ flex: 1 }} />
+              <span onClick={() => setSettingsOpen(false)}
+                title="Close settings drawer."
+                style={{
+                  width: 18, height: 18, cursor: "pointer", userSelect: "none",
+                  display: "inline-flex", alignItems: "center", justifyContent: "center",
+                  border: "1px solid #555", borderRadius: 3, color: "#aaa",
+                  fontSize: 10, lineHeight: 1, boxSizing: "border-box",
+                }}>✕</span>
+            </div>
+
+            {/* ── General ── */}
+            <div style={SECTION_HEADER} onClick={sectionToggle("general")}>
+              <span style={{ width: 8, display: "inline-block", textAlign: "center" }}>{settingsSection.general ? "▾" : "▸"}</span>
+              <span>GENERAL</span>
+            </div>
+            {settingsSection.general && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingLeft: 12 }}>
+                {/* Group color picker — 8 color swatches in a row. */}
+                <div style={ROW}>
+                  <span style={LABEL} title="Photoshop color tag applied to the [Color Smash] group in the Layers panel. Decorative — helps the group stand out. 'None' disables the tag.">Group color</span>
+                  <div style={{ display: "flex", flex: 1, gap: 3, flexWrap: "wrap" }}>
+                    {COLORS.map(c => {
+                      const active = groupColor === c.id;
+                      return (
+                        <div key={c.id ?? "none"} onClick={() => setGroupColor(c.id)}
+                          title={c.label}
+                          style={{
+                            width: 22, height: 22, flexShrink: 0,
+                            background: c.id === "none" ? "transparent" : c.swatch,
+                            backgroundImage: c.id === "none"
+                              ? "linear-gradient(45deg, transparent 46%, #d84a4a 46%, #d84a4a 54%, transparent 54%)"
+                              : undefined,
+                            border: `2px solid ${active ? "#e8c882" : "#444"}`,
+                            borderRadius: 4, cursor: "pointer", userSelect: "none",
+                            boxSizing: "border-box",
+                          }} />
+                      );
+                    })}
+                  </div>
+                </div>
+                {/* Group name editor. */}
+                <div style={ROW}>
+                  <span style={LABEL} title="Name used for the canonical [Color Smash] group in PS. Defaults to '[Color Smash]'. Empty input reverts to default on save.">Group name</span>
+                  <input type="text" value={groupName}
+                    onChange={e => setGroupName(e.target.value)}
+                    onBlur={() => { if (!groupName.trim()) setGroupName("[Color Smash]"); }}
+                    style={{
+                      flex: 1, minWidth: 0, height: 22, padding: "0 6px",
+                      background: "#2a2a2a", color: "#ddd",
+                      border: "1px solid #555", borderRadius: 3,
+                      fontSize: 11, lineHeight: "20px",
+                      boxSizing: "border-box",
+                    }} />
+                </div>
+                {/* Persistence toggle (moved from the header gear). */}
+                <div style={ROW}>
+                  <span style={LABEL} title="When ON, panel settings (sliders, palette weights, envelope, output mode, etc.) are saved to disk and restored across reloads.">Persistence</span>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none", fontSize: 10, color: "#bbb" }}>
+                    <input type="checkbox" checked={remember}
+                      onChange={e => setRemember(e.target.checked)}
+                      style={{ margin: 0, width: 14, height: 14 }} />
+                    <span>{remember ? "Saved across reloads" : "Reset on next reload"}</span>
+                  </label>
+                </div>
+              </div>
+            )}
+
+            {/* ── LUT ── */}
+            <div style={SECTION_HEADER} onClick={sectionToggle("lut")}>
+              <span style={{ width: 8, display: "inline-block", textAlign: "center" }}>{settingsSection.lut ? "▾" : "▸"}</span>
+              <span>LUT</span>
+              <span style={{ flex: 1 }} />
+              <span style={{ fontSize: 9, fontWeight: 400, color: "#888", letterSpacing: 0 }}>
+                {outputMode !== "lut" ? "(only applies when output = LUT)" : null}
+              </span>
+            </div>
+            {settingsSection.lut && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingLeft: 12, opacity: outputMode !== "lut" ? 0.55 : 1 }}>
+                <div style={ROW} title={`LUT strength: ${lutStrength}% — blends the generated 3D LUT toward an identity LUT before bake. 100% = full match, 0% = identity (no transform). The lerp is baked into the LUT bytes, so portable .cube exports carry the dialed-back look.`}>
+                  <span style={LABEL}>Strength</span>
+                  <input type="range" min={0} max={100} step={1} value={lutStrength}
+                    onChange={e => setLutStrength(parseInt((e.target as HTMLInputElement).value, 10))}
+                    style={{ flex: 1, minWidth: 0, margin: 0, cursor: "pointer" }} />
+                  <span style={{ fontSize: 10, color: "#aaa", width: 32, textAlign: "right", flexShrink: 0 }}>{lutStrength}%</span>
+                </div>
+                <div style={ROW}>
+                  <span style={LABEL} title="3D LUT grid density. Higher = smoother gradients, larger files.">Quality</span>
+                  <div style={{ display: "flex", flex: 1, gap: 2, minWidth: 0 }}>
+                    {([
+                      [17 as const, "Draft 17³",   "Draft quality: 17³ grid (~50KB). Fastest, visible banding in subtle gradients."],
+                      [33 as const, "Standard 33³","Standard quality: 33³ grid (~430KB). Default. Matches PS Color Lookup's own default."],
+                      [65 as const, "High 65³",    "High quality: 65³ grid (~3.3MB). Smoothest result, larger files."],
+                    ] as Array<[17 | 33 | 65, string, string]>).map(([val, label, tip]) => (
+                      <div key={val} onClick={() => setLutGrid(val)} title={tip}
+                        style={{
+                          flex: "1 1 0", minWidth: 0, height: 22, padding: 0,
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          overflow: "hidden", whiteSpace: "nowrap",
+                          fontSize: 10, fontWeight: 600, letterSpacing: 0.3,
+                          background: lutGrid === val ? "#3a3a3a" : "transparent",
+                          color: lutGrid === val ? "#dddddd" : "#888",
+                          border: `1px solid ${lutGrid === val ? "#888" : "#444"}`,
+                          borderRadius: 3, cursor: "pointer", userSelect: "none",
+                          lineHeight: "20px", boxSizing: "border-box",
+                        }}>{label}</div>
+                    ))}
+                  </div>
+                </div>
+                <div style={ROW}>
+                  <span style={LABEL} title="PS Color Lookup's noise-injection field that hides quantization banding. Default ON.">Dither</span>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none", fontSize: 10, color: "#bbb" }}>
+                    <input type="checkbox" checked={lutDither}
+                      onChange={e => setLutDither(e.target.checked)}
+                      style={{ margin: 0, width: 14, height: 14 }} />
+                    <span>{lutDither ? "Enabled (smoother gradients)" : "Disabled (bit-exact LUT)"}</span>
+                  </label>
+                </div>
+              </div>
+            )}
+
+            {/* ── Advanced ── */}
+            <div style={SECTION_HEADER} onClick={sectionToggle("advanced")}>
+              <span style={{ width: 8, display: "inline-block", textAlign: "center" }}>{settingsSection.advanced ? "▾" : "▸"}</span>
+              <span>ADVANCED</span>
+            </div>
+            {settingsSection.advanced && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingLeft: 12 }}>
+                <div style={ROW} title={`AUTO debounce: ${autoDebounceMs}ms — wait window between the last slider change and the live re-bake. Lower = snappier (more re-bakes). Higher = smoother (fewer re-bakes).`}>
+                  <span style={LABEL}>AUTO debounce</span>
+                  <input type="range" min={60} max={1000} step={20} value={autoDebounceMs}
+                    onChange={e => setAutoDebounceMs(parseInt((e.target as HTMLInputElement).value, 10))}
+                    style={{ flex: 1, minWidth: 0, margin: 0, cursor: "pointer" }} />
+                  <span style={{ fontSize: 10, color: "#aaa", width: 48, textAlign: "right", flexShrink: 0 }}>{autoDebounceMs}ms</span>
+                </div>
+                <div style={ROW} title={`History capacity: ${historyCap} entries. Maximum ring-buffer size for the recent-history strip. Pinned entries are kept even when capacity is exceeded; unpinned ones are evicted oldest-first.`}>
+                  <span style={LABEL}>History cap</span>
+                  <input type="range" min={5} max={30} step={1} value={historyCap}
+                    onChange={e => setHistoryCap(parseInt((e.target as HTMLInputElement).value, 10))}
+                    style={{ flex: 1, minWidth: 0, margin: 0, cursor: "pointer" }} />
+                  <span style={{ fontSize: 10, color: "#aaa", width: 48, textAlign: "right", flexShrink: 0 }}>{historyCap}</span>
+                </div>
+                <div style={ROW}>
+                  <span style={LABEL} title="ADAPT default — when ON, multi-zone band peaks track the target histogram (P10/P50/P90) instead of fixed 0/128/255 points. Same toggle as the ADAPT pill in the MULTI/BLEND row.">Adaptive bands</span>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none", fontSize: 10, color: "#bbb" }}>
+                    <input type="checkbox" checked={adaptiveBands}
+                      onChange={e => setAdaptiveBands(e.target.checked)}
+                      style={{ margin: 0, width: 14, height: 14 }} />
+                    <span>{adaptiveBands ? "ON — peaks track histogram" : "OFF — peaks fixed at 0/128/255"}</span>
+                  </label>
+                </div>
+              </div>
+            )}
+
+            {/* ── Diagnostics ── */}
+            <div style={SECTION_HEADER} onClick={sectionToggle("diag")}>
+              <span style={{ width: 8, display: "inline-block", textAlign: "center" }}>{settingsSection.diag ? "▾" : "▸"}</span>
+              <span>DIAGNOSTICS</span>
+            </div>
+            {settingsSection.diag && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingLeft: 12 }}>
+                <div style={ROW}>
+                  <span style={LABEL} title="When ON, the status line surfaces extra timing + batchPlay diagnostic detail. Useful when reporting bugs.">Verbose status</span>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none", fontSize: 10, color: "#bbb" }}>
+                    <input type="checkbox" checked={verboseStatus}
+                      onChange={e => setVerboseStatus(e.target.checked)}
+                      style={{ margin: 0, width: 14, height: 14 }} />
+                    <span>{verboseStatus ? "Detailed status messages" : "Concise status messages"}</span>
+                  </label>
+                </div>
+                <div style={ROW}>
+                  <span style={LABEL} title="Reveal the plugin's per-user data folder in your OS file browser. Inspect color-smash-settings.json, recipes, etc.">Data folder</span>
+                  <div onClick={onOpenDataFolder}
+                    style={{
+                      padding: "0 10px", height: 22,
+                      display: "inline-flex", alignItems: "center", justifyContent: "center",
+                      fontSize: 10, fontWeight: 600,
+                      background: "#2a2a2a", color: "#ddd",
+                      border: "1px solid #555", borderRadius: 3,
+                      cursor: "pointer", userSelect: "none", boxSizing: "border-box",
+                    }}>Reveal in OS</div>
+                </div>
+                <div style={ROW}>
+                  <span style={LABEL} title="Save a JSON dump of every persisted panel setting to disk. Useful as a config backup or to share your setup.">Export config</span>
+                  <div onClick={onExportConfig}
+                    style={{
+                      padding: "0 10px", height: 22,
+                      display: "inline-flex", alignItems: "center", justifyContent: "center",
+                      fontSize: 10, fontWeight: 600,
+                      background: "#2a2a2a", color: "#ddd",
+                      border: "1px solid #555", borderRadius: 3,
+                      cursor: "pointer", userSelect: "none", boxSizing: "border-box",
+                    }}>↓ Save JSON</div>
+                </div>
+                <div style={ROW}>
+                  <span style={LABEL} title="Load a previously-exported JSON config. Overwrites every current panel setting with the values from the file.">Import config</span>
+                  <div onClick={onImportConfig}
+                    style={{
+                      padding: "0 10px", height: 22,
+                      display: "inline-flex", alignItems: "center", justifyContent: "center",
+                      fontSize: 10, fontWeight: 600,
+                      background: "#2a2a2a", color: "#ddd",
+                      border: "1px solid #555", borderRadius: 3,
+                      cursor: "pointer", userSelect: "none", boxSizing: "border-box",
+                    }}>↑ Load JSON</div>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* SOURCE / REFERENCE island. v1.20.70. */}
+      <div style={ISLAND}>
+        <div style={ISLAND_HEADER}>SOURCE / REFERENCE</div>
       {/* Source picker — full width, doc dropdown + dense layer list + thumbnail right.
           Target lives below (above the preview) and reuses the preview itself for its
           visual feedback, so the target column no longer needs its own thumbnail. */}
@@ -2101,7 +2936,11 @@ export function MatchTab() {
             }
           />
         </div>
+      </div>{/* end SOURCE island */}
 
+      {/* TARGET / PREVIEW island. v1.20.70. */}
+      <div style={ISLAND}>
+        <div style={ISLAND_HEADER}>TARGET / PREVIEW</div>
       {/* Target selector — single horizontal row directly above the matched preview:
           [doc dropdown] [layer dropdown] [refresh]. Kept compact (no list, no thumbnail)
           because the preview pane itself shows the target via the Before/After badge. */}
@@ -2171,14 +3010,23 @@ export function MatchTab() {
           setAdaptive={setPaletteAdaptive}
           softness={targetSoftness}
           setSoftness={setTargetSoftness}
-          maskEnabled={targetMaskEnabled}
-          setMaskEnabled={setTargetMaskEnabled}
         />
       </div>
+      </div>{/* end TARGET island */}
 
-
+      {/* COLOR / TONE / ENVELOPE island. v1.20.70. The 3 inline section
+          dividers (each was a 1px gray rule) are removed — the island
+          frame already groups them, and inner separators inside the
+          island are softer. */}
+      <div style={ISLAND}>
+        <div onClick={() => setTransformOpen(o => !o)}
+          style={{ ...ISLAND_HEADER, marginBottom: transformOpen ? 4 : 0, display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}
+          title={transformOpen ? "Hide transform controls (Color / Tone / Envelope)" : "Show transform controls (Color / Tone / Envelope)"}>
+          <span style={{ width: 8, display: "inline-block", textAlign: "center" }}>{transformOpen ? "▾" : "▸"}</span>
+          <span>TRANSFORM</span>
+        </div>
+        {transformOpen && <>{/* TRANSFORM body */}
       {/* Accordion controls */}
-      <div style={{ borderTop: "1px solid #444", margin: "6px 0 0" }} />
       <div onClick={() => toggleSection("basic")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", cursor: "pointer", fontSize: 12, fontWeight: 700, color: enColor ? "#dddddd" : "#888", fontStyle: enColor ? "normal" : "italic" }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           <span onClick={(e: any) => { e.stopPropagation(); setEnColor(!enColor); }}
@@ -2244,7 +3092,6 @@ export function MatchTab() {
         </div>
       )}
 
-      <div style={{ borderTop: "1px solid #444" }} />
       <div onClick={() => toggleSection("dims")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", cursor: "pointer", fontSize: 12, fontWeight: 700, color: enTone ? "#dddddd" : "#888", fontStyle: enTone ? "normal" : "italic" }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           <span onClick={(e: any) => { e.stopPropagation(); setEnTone(!enTone); }}
@@ -2400,7 +3247,6 @@ export function MatchTab() {
         );
       })}
 
-      <div style={{ borderTop: "1px solid #444" }} />
       <div onClick={() => toggleSection("envelope")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", cursor: "pointer", fontSize: 12, fontWeight: 700, color: enEnvelope ? "#dddddd" : "#888", fontStyle: enEnvelope ? "normal" : "italic" }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           <span onClick={(e: any) => { e.stopPropagation(); setEnEnvelope(!enEnvelope); }}
@@ -2452,120 +3298,377 @@ export function MatchTab() {
           />
         </div>
       )}
+      </>}{/* end transformOpen */}
+      </div>{/* end TRANSFORM island */}
 
-      {/* v1.20.43 — BottomActionBar dissolved; SAVE/✕/⟳ pills relocated
-          into the Apply row below for a single consolidated action cluster. */}
+      {/* OUTPUT island. v1.20.70 — header label + framed container.
+          Collapsible via the ▾/▸ disclosure on the header (default
+          expanded — the most-used section). */}
+      <div style={ISLAND}>
+        <div onClick={() => setOutputOpen(o => !o)}
+          style={{ ...ISLAND_HEADER, marginBottom: outputOpen ? 4 : 0, display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}
+          title={outputOpen ? "Hide output controls" : "Show output controls"}>
+          <span style={{ width: 8, display: "inline-block", textAlign: "center" }}>{outputOpen ? "▾" : "▸"}</span>
+          <span>OUTPUT</span>
+        </div>
+        {outputOpen && <>{/* OUTPUT body */}
 
-      {/* Apply (writes Curves layer to PS) and Export LUT (writes .CUBE to disk).
-          50/50 split. flexWrap:nowrap + overflow:hidden + minWidth:0 on each cell
-          guarantees the row stays single-line at any panel width — labels clip
-          silently inside their own button instead of wrapping the buttons to two
-          rows. Sp-button's internal text gets nowrap + overflow:hidden too. */}
-      {/* Output mode 3-way control. v1.15.0 placed this under the target
-          softness slider; v1.16.5 moved it above the Apply button row,
-          directly below the Multi / Blend If / Adaptive toggles — sits with
-          the other "what happens when I Apply" decisions instead of
-          floating between palette UI and the apply cluster. Mode change is
-          instant: preview re-renders to match the bake, Apply dispatches
-          to the right path (Curves vs Color Lookup), visibility sync
-          toggles existing outputs.
+      {/* v1.20.70 — output block restructured again. Apply pill removed:
+          tab clicks (RGB/Lab/LUT) now BOTH swap output mode AND fire Apply.
+          Column 1 (76px) is now the global-modifier stack:
+            top row (aligned w/ RGB|Lab|LUT) = "+" branch arm
+            bottom row (aligned w/ MULTI|BLEND) = AUTO armed-record indicator
+          The thin top strip drops AUTO and keeps [ADAPT][JUMP][ISOLATE]. */}
+      <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 0 }}>
+        {/* v1.20.70 — top strip removed. JUMP / ISOLATE moved DOWN into
+            the action row at the bottom of the output block, alongside
+            REVERT / RESET / ⟳ / ⚙. ADAPT (was here pre-v1.20.70)
+            relocated into the MULTI/BLEND expandable row. */}
+        {(() => {
+          // v1.20.70 — extracted per-tab meta so the tabs row and the
+          // (separate, optional) MULTI/BLEND row can both render from the
+          // same source. ACCENT + subState formerly inlined inside the map.
+          const ACCENT = "#d8b87a";
+          const TABS = ([
+            ["rgb", "RGB", "RGB — separable per-channel Curves layer. Click to switch mode AND Apply (bakes a new Curves layer)."],
+            ["lab", "Lab", "Lab — perceptual histogram match, projected to per-channel Curves layer. Click to switch mode AND Apply."],
+            ["lut", "LUT", "LUT — 33³ Color Lookup adjustment with preset blend math baked in. Click to switch mode AND Apply."],
+          ] as Array<["rgb" | "lab" | "lut", string, string]>).map(([val, label, tip], idx) => {
+            const active = outputMode === val;
+            const cfg = tabConfig[val];
+            const subDisabled = !cfg.multi;
+            const isFirst = idx === 0;
+            const subState = (on: boolean) => {
+              if (!on) return { bg: "transparent", fg: "#777", bd: "#3a3a3a" };
+              if (active) return { bg: "#2f2f2f", fg: "#cccccc", bd: ACCENT };
+              return { bg: "#242220", fg: "#aaa", bd: "#7a6a4a" };
+            };
+            const multiS = subState(cfg.multi);
+            const blendS = subState(cfg.blendIf && cfg.multi);
+            const tabUsed = cfg.multi || cfg.blendIf;
+            const tabS = active
+              ? { bg: "#3a3a3a", fg: "#dddddd", bd: ACCENT }
+              : tabUsed
+                ? { bg: "#242220", fg: "#aaa", bd: "#7a6a4a" }
+                : { bg: "transparent", fg: "#888", bd: "#444" };
+            return { val, label, tip, active, cfg, subDisabled, isFirst, multiS, blendS, tabS };
+          });
+          const adaptApplicable = tabConfig[outputMode].multi;
+          return (
+        // v1.20.70 — shared 2-column outer layout: col-1 (74px) stacks
+        // the [+|○|▼] controls row above an optional ADAPT row; col-2
+        // (flex 1) stacks the tabs row above an optional MULTI/BLEND
+        // row. Because the col-1 and col-2 *outer columns* are the
+        // SAME flex children for both visual rows, their right edges
+        // align by construction — no sub-pixel rounding stagger
+        // possible between the [+|○|▼] block and ADAPT.
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 4 }}>
+          {/* Column 1 (92px wide = 28+4+28+4+28, flexShrink:0).
+              v1.20.70 — bumped from 74→92 to host 28px-wide buttons
+              that match the new 28px output-row height. */}
+          <div style={{ width: 92, display: "flex", flexDirection: "column", gap: 0, flexShrink: 0 }}>
+            {/* Top sub-row inside col-1: + ○ ▼ buttons. */}
+            <div style={{ display: "flex", gap: 4, height: 28 }}>
+          {/* v1.20.70 — + branch arm relocated into the main row so all
+              three column-1 controls (+, ○ AUTO, ▶/▼ disclosure) live
+              side-by-side. ADAPT then sits directly below them. */}
+          <div onClick={e => { e.stopPropagation(); setOverwriteOnApply(!overwriteOnApply); }}
+            title={overwriteOnApply
+              ? "Click + to arm 'Branch' — next Apply (RGB/Lab/LUT tab click) hides the current [Color Smash] group and starts a fresh session."
+              : "BRANCH ARMED — next Apply will collapse + hide the current [Color Smash] group (preserved, just invisible) and start a fresh session. Auto-disarms after that Apply. Click to cancel."}
+            style={{
+              width: 28, height: 28, padding: 0, flexShrink: 0,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              background: overwriteOnApply ? "transparent" : "#1e3a1e",
+              border: `1px solid ${overwriteOnApply ? "#444" : "#7ad87a"}`,
+              borderRadius: 4,
+              cursor: "pointer", userSelect: "none", boxSizing: "border-box",
+              lineHeight: "26px",
+            }}>
+            <span style={{
+              color: overwriteOnApply ? "#888" : "#7ad87a",
+              fontSize: 22, fontWeight: 700, lineHeight: 1,
+              display: "block", marginTop: -3, marginLeft: 1,
+            }}>+</span>
+          </div>
+          <div onClick={() => setLiveLut(v => !v)}
+            title={liveLut
+              ? `AUTO ARMED — slider changes auto-update the existing Match ${outputMode === "lut" ? "LUT" : "Curves"} layer in real-time (debounced 300ms). Click to disarm.`
+              : `AUTO — click to arm real-time auto-bake. Match ${outputMode === "lut" ? "LUT" : "Curves"} layer will re-bake on every slider change once seeded by an Apply.`}
+            style={{
+              width: 28, height: 28, padding: 0, flexShrink: 0,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              background: liveLut ? "#3a1818" : "transparent",
+              border: `1px solid ${liveLut ? "#d84a4a" : "#444"}`,
+              color: liveLut ? "#ff8a8a" : "#888",
+              borderRadius: 4, cursor: "pointer", userSelect: "none",
+              boxSizing: "border-box",
+            }}>
+            <span style={{
+              width: 12, height: 12, borderRadius: "50%",
+              background: liveLut ? "#ff3a3a" : "transparent",
+              border: liveLut ? "1px solid #ff8a8a" : "1.5px solid #888",
+              boxShadow: liveLut ? "0 0 6px #ff3a3a" : "none",
+              display: "inline-block", flexShrink: 0,
+            }} />
+          </div>
+          {/* Disclosure column: shows/hides the MULTI/BLEND row + ADAPT
+              (which only makes sense in multi mode). 22px wide × 18px. */}
+          <div onClick={() => setMultiExpanded(v => !v)}
+            title={multiExpanded
+              ? "Collapse MULTI/BLEND row. Per-tab Multi state is preserved — just hidden."
+              : "Expand MULTI/BLEND row. Per-tab toggles to split output into 3 luma-banded layers + ADAPT (multi-only histogram tracking)."}
+            style={{
+              width: 28, height: 28, padding: 0, flexShrink: 0,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              background: "transparent",
+              border: "1px solid #444",
+              color: "#aaa",
+              borderRadius: 4, cursor: "pointer", userSelect: "none",
+              fontSize: 12, lineHeight: 1,
+              boxSizing: "border-box",
+            }}>
+            {multiExpanded ? "▼" : "▶"}
+          </div>
+            </div>
+            {/* Bottom sub-row inside col-1: ADAPT (only when expanded).
+                Width 100% of the parent col-1 (74px) — no separate width
+                declaration needed, so ADAPT is guaranteed pixel-aligned
+                with the [+|○|▼] row above it. */}
+            {multiExpanded && (
+              <div onClick={() => setAdaptiveBands(!adaptiveBands)}
+                title={adaptiveBands
+                  ? `Adaptive ON (default) — multi-zone band peaks track the target histogram (P10/P50/P90) whenever MULTI is active for a tab. ${adaptApplicable && lumaBins ? `Current: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""} Click to disable.`
+                  : "Adaptive OFF — multi-zone band peaks fixed at 0/128/255. Click to re-enable percentile-driven peaks."}
+                style={{
+                  // v1.20.70 — shave 4px off ADAPT's right edge so it
+                  // visually indents inside col-1, giving 8px total
+                  // breathing room between ADAPT and MULTI (4px
+                  // internal shave + 4px outer col-1→col-2 gap).
+                  width: "calc(100% - 4px)", marginRight: 4,
+                  height: 20, padding: 0,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
+                  background: adaptiveBands ? "#3a3228" : "transparent",
+                  color: adaptiveBands ? "#e8c882" : "#888",
+                  border: `1px solid ${adaptiveBands ? "#d8b87a" : "#444"}`,
+                  borderRadius: 3, cursor: "pointer", userSelect: "none",
+                  lineHeight: "18px", boxSizing: "border-box",
+                }}>ADAPT</div>
+            )}
+          </div>
+          {/* Column 2 (flex 1): tabs row above, optional MULTI/BLEND row below. */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 0, flex: 1, minWidth: 0 }}>
+          {/* Tabs row: RGB | Lab | LUT. overflow:hidden mirrors the
+              multi row's container so both rows clip identically at
+              narrow widths. */}
+          <div style={{ display: "flex", gap: 0, overflow: "hidden" }}>
+            {TABS.map(t => (
+              <div key={t.val} onClick={() => onTabClick(t.val)} title={t.tip}
+                style={{
+                  flex: "1 1 0", height: 28, padding: 0,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  overflow: "hidden", whiteSpace: "nowrap",
+                  fontSize: 11, fontWeight: 700, letterSpacing: 0.4,
+                  background: t.tabS.bg,
+                  color: t.tabS.fg,
+                  border: `1px solid ${t.tabS.bd}`,
+                  borderLeftWidth: t.isFirst ? 1 : 0,
+                  borderRadius: 0,
+                  cursor: "pointer", userSelect: "none",
+                  lineHeight: "26px", boxSizing: "border-box",
+                  minWidth: 0,
+                }}>{t.label}</div>
+            ))}
+          </div>
+          {/* MULTI/BLEND row inside col-2 — only when disclosure is
+              expanded. Flat 6-cell layout (was 3 per-tab wrappers × 2
+              cells each) so flex distribution matches the tabs row
+              above exactly. overflow: hidden clips MULTI/BLEND text
+              spillover at narrow panel widths. */}
+          {multiExpanded && (
+            <div style={{ display: "flex", gap: 0, overflow: "hidden" }}>
+              {TABS.flatMap((t, ti) => [
+                <div key={`${t.val}-multi`}
+                  onClick={() => setTabConfig(prev => ({ ...prev, [t.val]: { ...prev[t.val], multi: !prev[t.val].multi } }))}
+                  style={{
+                    flex: "1 1 0", minWidth: 0, height: 20, padding: 0,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    overflow: "hidden", whiteSpace: "nowrap",
+                    fontSize: 9, fontWeight: 600, letterSpacing: 0.3,
+                    background: t.multiS.bg,
+                    color: t.multiS.fg,
+                    border: `1px solid ${t.multiS.bd}`,
+                    borderLeftWidth: ti === 0 ? 1 : 0,
+                    borderRadius: 0,
+                    cursor: "pointer", userSelect: "none",
+                    lineHeight: "18px", boxSizing: "border-box",
+                  }}
+                  title={`Multi (${t.label}): split this output into 3 luma-banded layers. Per-tab — RGB / Lab / LUT each remember their own Multi state.`}>
+                  MULTI
+                </div>,
+                <div key={`${t.val}-blend`}
+                  onClick={() => setTabConfig(prev => {
+                    const cur = prev[t.val];
+                    if (!cur.multi) return { ...prev, [t.val]: { multi: true, blendIf: true } };
+                    return { ...prev, [t.val]: { ...cur, blendIf: !cur.blendIf } };
+                  })}
+                  style={{
+                    flex: "1 1 0", minWidth: 0, height: 20, padding: 0,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    overflow: "hidden", whiteSpace: "nowrap",
+                    fontSize: 9, fontWeight: 600, letterSpacing: 0.3,
+                    background: t.blendS.bg,
+                    color: t.blendS.fg,
+                    border: `1px solid ${t.blendS.bd}`,
+                    borderLeftWidth: 0,
+                    borderRadius: 0,
+                    cursor: "pointer", userSelect: "none",
+                    lineHeight: "18px", boxSizing: "border-box",
+                    opacity: t.subDisabled ? 0.7 : 1,
+                  }}
+                  title={t.subDisabled
+                    ? `Blend (${t.label}): click to enable — auto-engages Multi (Blend needs Multi's 3 band layers to operate on).`
+                    : `Blend (${t.label}): use Blending Options sliders instead of layer masks for the 3 band layers.`}>
+                  BLEND
+                </div>,
+              ])}
+            </div>
+          )}
+          </div>
+        </div>
+          );
+        })()}
+      </div>
 
-          - RGB: separable per-channel curves → Curves layer (continuous, editable)
-          - Lab: perceptual L*a*b* match, projected back to RGB curves → Curves layer
-          - LUT: 33³ 3D transform with preset blend math baked in → Color Lookup layer */}
-      {/* v1.20.53 — MASK + marquee tristate now share a single row above
-          the output-mode block. MASK leads, then Off/Focus/Exclude pills,
-          then the ↻ selection-status icon. Hint banners (no selection
-          captured, source-mode disabled) render below this row when
-          relevant. */}
-      {/* v1.20.63 — zone divider: separates the transform sections
-          (Color/Tone/Envelope) above from the output/Apply zone below. */}
-      <div style={{ borderTop: "1px solid #2a2a2a", marginTop: 8, marginBottom: 2 }} />
-      {(() => {
+      {/* v1.20.53 — marquee tristate was relocated up alongside MASK
+          (above the output-mode block). This slot is now empty. */}
+
+      {/* v1.20.70 — body action row carries only target-specific actions
+          (JUMP / ISOLATE). The plugin-level cluster (💾 REVERT ✕ ⟳ ⚙ ?)
+          lives in the header, with PS native ↶ ↷ in the header center. */}
+      <div style={{ display: "flex", flexWrap: "nowrap", gap: 4, marginTop: 6, width: "100%", alignItems: "center" }}>
+        {/* JUMP / ISOLATE — equal-width pills (44px each = (92 - 4 gap)
+            / 2), so the cluster is exactly col-1-wide and lines up with
+            MASK / [+|○|▼] / ADAPT above. */}
+        <div onClick={onJumpToTarget}
+          title={targetId == null || targetId === MERGED_LAYER_ID
+            ? "JUMP — no specific target layer to jump to (pick a layer in the target dropdown first)."
+            : "JUMP — select the target layer in PS Layers panel + scroll it into view."}
+          style={{
+            width: 44, height: 22, padding: 0, flexShrink: 0,
+            fontSize: 10, fontWeight: 700, letterSpacing: 0.3,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            background: "transparent",
+            color: (targetId != null && targetId !== MERGED_LAYER_ID) ? "#aaa" : "#555",
+            border: `1px solid ${(targetId != null && targetId !== MERGED_LAYER_ID) ? "#666" : "#3a3a3a"}`,
+            borderRadius: 4,
+            cursor: (targetId != null && targetId !== MERGED_LAYER_ID) ? "pointer" : "default",
+            userSelect: "none",
+            lineHeight: "20px", boxSizing: "border-box",
+            opacity: (targetId != null && targetId !== MERGED_LAYER_ID) ? 1 : 0.55,
+          }}>JUMP</div>
+        <div onClick={onToggleIsolation}
+          title={isolated
+            ? "ISOLATE ON — non-target / non-[Color Smash] layers hidden. Click to restore prior visibility."
+            : "ISOLATE OFF — click to hide every layer except the target's ancestor chain + [Color Smash] group. A/B compare against the full comp."}
+          style={{
+            width: 44, height: 22, padding: 0, flexShrink: 0,
+            fontSize: 10, fontWeight: 700, letterSpacing: 0.3,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            background: isolated ? "#283440" : "transparent",
+            color: isolated ? "#7aa8d8" : "#aaa",
+            border: `1px solid ${isolated ? "#7aa8d8" : "#666"}`,
+            borderRadius: 4, cursor: "pointer", userSelect: "none",
+            lineHeight: "20px", boxSizing: "border-box",
+          }}>ISOLATE</div>
+      </div>
+      </>}{/* end outputOpen */}
+      </div>{/* end OUTPUT island */}
+
+      {/* MASK island. v1.20.70 — moved BELOW the output block (was above
+          pre-v1.20.70). MASK button toggles BOTH the visualization
+          overlay (showMask) and the per-cluster attenuation gate
+          (targetMaskEnabled), unifying what was two separate toggles.
+          The old per-palette mask pill in PaletteStrip is gone — this
+          is now the single source of mask control. */}
+      <div style={ISLAND}>
+        <div onClick={() => setMaskOpen(o => !o)}
+          style={{ ...ISLAND_HEADER, marginBottom: maskOpen ? 4 : 0, display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}
+          title={maskOpen ? "Hide mask controls" : "Show mask controls"}>
+          <span style={{ width: 8, display: "inline-block", textAlign: "center" }}>{maskOpen ? "▾" : "▸"}</span>
+          <span>MASK</span>
+        </div>
+        {maskOpen && (() => {
         const marqueeDisabled = srcMode === "selection";
         const disabledTip = "Disabled because the source is using the active marquee. Switch source to a layer or browsed image to use the marquee as an output mask.";
+        const maskOn = showMask && targetMaskEnabled;
         const showNoSelectionHint =
           !marqueeDisabled &&
           selectionMode !== "off" &&
           !selectionPreviewMask;
         return (
           <>
-          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 4, height: 22, lineHeight: "20px" }}>
-            <div onClick={() => setShowMask(v => !v)}
-              title={showMask
-                ? "Show Mask ON — protected regions painted red on the matched preview (palette × selection composition). Click to disable."
-                : "Show Mask OFF — preview shows pure transform output. Click to enable: protected regions paint red."}
+          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <div onClick={() => {
+              // v1.20.70 — toggle BOTH the per-cluster attenuation gate
+              // and the red preview overlay together. Default ON.
+              const next = !maskOn;
+              setShowMask(next);
+              setTargetMaskEnabled(next);
+            }}
+              title={maskOn
+                ? "MASK ON — per-cluster target attenuation is active (preview AND bake honor the target-palette weights). Protected regions show red on the preview. Click to disable: preview shows pure transform, bake produces an unmasked Curves/LUT layer."
+                : "MASK OFF — preview shows pure transform output and bake produces an unmasked Curves/LUT layer. Click to enable: per-cluster mask attenuates the transform + paints protected regions red on the preview."}
               style={{
-                padding: "0 10px",
-                fontSize: 10, fontWeight: 600, letterSpacing: 0.4,
+                width: 88, height: 22, flexShrink: 0, marginRight: 4,
+                fontSize: 11, fontWeight: 700, letterSpacing: 0.4,
                 display: "inline-flex", alignItems: "center", justifyContent: "center",
-                background: showMask ? "#3a2828" : "transparent",
-                color: showMask ? "#e87a7a" : "#5a3a3a",
-                border: `1px solid ${showMask ? "#d87a7a" : "#5a3a3a"}`,
+                background: maskOn ? "#3a2828" : "transparent",
+                color: maskOn ? "#e87a7a" : "#5a3a3a",
+                border: `1px solid ${maskOn ? "#d87a7a" : "#5a3a3a"}`,
                 borderRadius: 4, cursor: "pointer", userSelect: "none",
-                height: 22, lineHeight: "20px", boxSizing: "border-box",
-                flexShrink: 0,
+                lineHeight: "20px", boxSizing: "border-box",
               }}>MASK</div>
-            <div style={{ display: "flex", flex: 1, gap: 2, opacity: marqueeDisabled ? 0.55 : 1 }}>
+            <div style={{ display: "flex", flex: 1, gap: 0, opacity: marqueeDisabled ? 0.55 : 1, overflow: "hidden" }}>
               {([
                 ["off",     "Off",     "Ignore the marquee — full-image apply (default). The marquee stays on the doc."],
                 ["focus",   "Focus",   "Use the active marquee as the layer mask — the Curves/LUT applies ONLY inside the marquee. Multiplied with the target-palette mask if both are active."],
                 ["exclude", "Exclude", "Use the INVERSE of the active marquee as the layer mask — the Curves/LUT applies everywhere OUTSIDE the marquee. Useful for protecting a chosen area."],
-              ] as Array<["off" | "focus" | "exclude", string, string]>).map(([val, label, tip]) => (
+              ] as Array<["off" | "focus" | "exclude", string, string]>).map(([val, label, tip], idx) => (
                 <div key={val}
                   onClick={() => { if (!marqueeDisabled) setSelectionMode(val); }}
                   title={marqueeDisabled ? disabledTip : tip}
                   style={{
-                    flex: 1, height: 22, padding: 0,
+                    flex: "1 1 0", minWidth: 0, height: 22, padding: 0,
                     display: "flex", alignItems: "center", justifyContent: "center",
+                    overflow: "hidden", whiteSpace: "nowrap",
                     fontSize: 10, fontWeight: 600, letterSpacing: 0.3,
                     background: !marqueeDisabled && selectionMode === val ? "#3a3a3a" : "transparent",
                     color: !marqueeDisabled && selectionMode === val ? "#dddddd" : "#888",
                     border: `1px solid ${!marqueeDisabled && selectionMode === val ? "#888" : "#444"}`,
-                    borderRadius: 2,
+                    borderLeftWidth: idx === 0 ? 1 : 0,
+                    borderRadius: 0,
                     cursor: marqueeDisabled ? "default" : "pointer",
                     userSelect: "none",
                     lineHeight: "20px", boxSizing: "border-box",
                   }}>{label}</div>
               ))}
             </div>
-            <div
-              onClick={() => setSelectionTick(t => t + 1)}
-              title={(() => {
-                if (marqueeDisabled) return disabledTip;
-                if (effectiveSelectionMode === "off") return "Marquee mode is OFF — preview ignores any active selection. Click to force a selection re-read.";
-                if (!selectionPreviewMask) return "No selection detected for the target preview (or the snap has no bounds yet). Draw a marquee on the target and click ↻ to retry.";
-                let inside = 0;
-                for (let i = 0; i < selectionPreviewMask.length; i++) if (selectionPreviewMask[i] > 127) inside++;
-                const pct = ((inside / selectionPreviewMask.length) * 100).toFixed(1);
-                return `Selection captured: ${inside}/${selectionPreviewMask.length} preview pixels inside (${pct}%). Click ↻ to refresh.`;
-              })()}
-              style={{
-                width: 22, height: 22, marginLeft: 2,
-                display: "inline-flex", alignItems: "center", justifyContent: "center",
-                background: "transparent",
-                color: selectionPreviewMask ? "#7ad87a" : "#888",
-                border: `1px solid ${selectionPreviewMask ? "#7ad87a" : "#555"}`,
-                borderRadius: 2, cursor: marqueeDisabled ? "default" : "pointer",
-                fontSize: 12, userSelect: "none",
-                opacity: marqueeDisabled ? 0.3 : 1,
-              }}>
-              <span style={{ marginTop: -1, lineHeight: 1 }}>↻</span>
-            </div>
           </div>
           {showNoSelectionHint && (
             <div style={{
-              marginTop: 2, padding: "2px 6px",
+              marginTop: 4, padding: "2px 6px",
               fontSize: 9, color: "#d8b87a",
               background: "transparent", border: "1px solid #5a4a2a", borderRadius: 2,
               lineHeight: 1.3,
             }}>
-              Marquee mode is <b>{selectionMode}</b> but no selection was captured. Draw a marquee on the target document, then click ↻ to refresh.{selectionMaskError ? <><br/><span style={{ opacity: 0.7 }}>{selectionMaskError}</span></> : null}
+              Marquee mode is <b>{selectionMode}</b> but no selection was captured. Draw a marquee on the target doc and click ⟳ to refresh.{selectionMaskError ? <><br/><span style={{ opacity: 0.7 }}>{selectionMaskError}</span></> : null}
             </div>
           )}
           {marqueeDisabled && (
             <div style={{
-              marginTop: 2, padding: "2px 6px",
+              marginTop: 4, padding: "2px 6px",
               fontSize: 9, color: "#888",
               background: "transparent", border: "1px solid #444", borderRadius: 2,
               lineHeight: 1.3,
@@ -2576,290 +3679,10 @@ export function MatchTab() {
           </>
         );
       })()}
+      </div>{/* end MASK island */}
 
-      {/* v1.20.59 — output block restructured to reduce visual density.
-          A thin top row carries AUTO (above the Apply column) and ADAPT
-          (above the tabs columns). Below that: tall Apply pill + 3 tab
-          columns each with their MULTI/BLEND sub-toggles. So the column
-          count drops from 5 (Apply, LIVE/ADAPT, RGB, Lab, LUT) to 4
-          (Apply, RGB, Lab, LUT) and the global modifiers ride on top. */}
-      <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 0 }}>
-        {/* Thin top strip: AUTO + ADAPT */}
-        {(() => {
-          const adaptApplicable = tabConfig[outputMode].multi;
-          return (
-            <div style={{ display: "flex", gap: 4, height: 16, marginBottom: 2 }}>
-              <div onClick={() => setLiveLut(v => !v)}
-                title={liveLut
-                  ? `AUTO ON — slider changes auto-update the existing Match ${outputMode === "lut" ? "LUT" : "Curves"} layer in real-time (debounced 300ms). Hit Apply once to seed the layer if none exists yet; subsequent changes propagate automatically. Click to disable.`
-                  : `AUTO OFF — the Match ${outputMode === "lut" ? "LUT" : "Curves"} layer is frozen until you hit Apply again. Click to enable real-time auto-bake.`}
-                style={{
-                  width: 76, height: 16, padding: 0,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
-                  background: liveLut ? "#3a3228" : "transparent",
-                  color: liveLut ? "#e8c882" : "#888",
-                  border: `1px solid ${liveLut ? "#d8b87a" : "#444"}`,
-                  borderRadius: 2, cursor: "pointer", userSelect: "none",
-                  lineHeight: "14px", boxSizing: "border-box", flexShrink: 0,
-                }}>AUTO</div>
-              {/* v1.20.61 — ADAPT sized to match a single tab pill (~1/3 of
-                  the tab-area width). Two invisible filler divs fill the
-                  remaining 2/3 so the strip's column structure mirrors the
-                  RGB | Lab | LUT row below. */}
-              <div style={{ display: "flex", flex: 1, gap: 0 }}>
-                <div onClick={() => setAdaptiveBands(!adaptiveBands)}
-                  title={adaptiveBands
-                    ? `Adaptive ON (default) — multi-zone band peaks track the target histogram (P10/P50/P90) whenever MULTI is active for a tab. ${adaptApplicable && lumaBins ? `Current: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""} Click to disable.`
-                    : "Adaptive OFF — multi-zone band peaks fixed at 0/128/255. Click to re-enable percentile-driven peaks."}
-                  style={{
-                    flex: 1, height: 16, padding: 0,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
-                    background: adaptiveBands ? "#3a3228" : "transparent",
-                    color: adaptiveBands ? "#e8c882" : "#888",
-                    border: `1px solid ${adaptiveBands ? "#d8b87a" : "#444"}`,
-                    borderRadius: 2, cursor: "pointer", userSelect: "none",
-                    lineHeight: "14px", boxSizing: "border-box",
-                  }}>ADAPT</div>
-                <div style={{ flex: 1 }} />
-                <div style={{ flex: 1 }} />
-              </div>
-            </div>
-          );
-        })()}
-        <div style={{ display: "flex", alignItems: "stretch", gap: 4 }}>
-        {/* Tall Apply pill — outer rounded shell with arm + body. Spans
-            the full height of the two-row tabs block to its right (~40px). */}
-        <div style={{
-          display: "flex", flexDirection: "row",
-          width: 76, height: 40,
-          borderRadius: 4, border: "1px solid #888",
-          overflow: "hidden", boxSizing: "border-box", flexShrink: 0,
-        }}>
-          <div onClick={e => { e.stopPropagation(); setOverwriteOnApply(!overwriteOnApply); }}
-            title={overwriteOnApply
-              ? "Apply replaces the prior Match within the current [Color Smash] session (default). Click + to arm 'Branch' — next Apply hides the current [Color Smash] group and starts a fresh one."
-              : "BRANCH ARMED — next Apply will collapse + hide the current [Color Smash] group (preserved, just invisible) and start a fresh session. Auto-disarms after that Apply. Click to cancel."}
-            style={{
-              width: 18, height: "100%", padding: 0, flexShrink: 0,
-              background: overwriteOnApply ? "#2a2a2a" : "#1e3a1e",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              cursor: "pointer", userSelect: "none", boxSizing: "border-box",
-            }}>
-            {overwriteOnApply
-              ? <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#666", display: "inline-block" }} />
-              : <span style={{ color: "#7ad87a", fontSize: 14, fontWeight: 700, lineHeight: 1, userSelect: "none" }}>+</span>}
-          </div>
-          <div onClick={outputMode === "lut" ? onApplyLut : onApply}
-            title={
-              outputMode === "lut"
-                ? "Create a Color Lookup adjustment layer in [Color Smash] loaded with a 33³ 3D LUT."
-                : multiZone
-                  ? "Multi: creates 3 stacked Curves layers (shadow/mid/highlight) with band limiting via mask and/or Blend If."
-                  : "Create a new Curves adjustment layer in the target document, clipped to the target layer."
-            }
-            style={{
-              flex: "1 1 0", minWidth: 0, height: "100%",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              background: "#3a3a3a", color: "#eeeeee",
-              fontSize: 11, fontWeight: 700, letterSpacing: 0.3,
-              borderLeft: "1px solid #555",
-              cursor: "pointer", userSelect: "none",
-              whiteSpace: "nowrap", overflow: "hidden",
-            }}>{overwriteOnApply ? "Apply" : "Apply +"}</div>
-        </div>
-        {/* v1.20.59 — LIVE/ADAPT moved up into the thin top strip. */}
-        <div style={{ display: "flex", flex: 1, gap: 0 }}>
-          {([
-            ["rgb", "RGB", "RGB — separable per-channel Curves layer."],
-            ["lab", "Lab", "Lab — perceptual histogram match, projected to per-channel Curves layer."],
-            ["lut", "LUT", "LUT — 33³ Color Lookup adjustment with preset blend math baked in."],
-          ] as Array<["rgb" | "lab" | "lut", string, string]>).map(([val, label, tip], idx) => {
-            const active = outputMode === val;
-            const cfg = tabConfig[val];
-            const subDisabled = !cfg.multi;
-            // Each column is its own little vertical group sharing borders
-            // with neighbors (no-gap segmented block).
-            const isFirst = idx === 0;
-            return (
-              <div key={val} style={{ flex: 1, display: "flex", flexDirection: "column", gap: 0, minWidth: 0 }}>
-                {/* Tab label pill. */}
-                <div onClick={() => setOutputMode(val)} title={tip}
-                  style={{
-                    height: 18, padding: 0,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: 10, fontWeight: 700, letterSpacing: 0.4,
-                    background: active ? "#3a3a3a" : "transparent",
-                    color: active ? "#dddddd" : "#888",
-                    border: `1px solid ${active ? "#888" : "#444"}`,
-                    borderLeftWidth: isFirst ? 1 : 0,
-                    borderRadius: 0,
-                    cursor: "pointer", userSelect: "none",
-                    lineHeight: "16px", boxSizing: "border-box",
-                  }}>{label}</div>
-                {/* Sub-toggles row: MULTI + BLEND IF for THIS tab. */}
-                <div style={{ display: "flex", flex: 1, gap: 0, height: 18 }}>
-                  <div onClick={() => setTabConfig(prev => ({ ...prev, [val]: { ...prev[val], multi: !prev[val].multi } }))}
-                    style={{
-                      flex: 1, height: 18, padding: 0,
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      fontSize: 8, fontWeight: 600, letterSpacing: 0.3,
-                      background: cfg.multi ? "#2f2f2f" : "transparent",
-                      color: cfg.multi ? "#cccccc" : "#777",
-                      border: `1px solid ${cfg.multi ? "#888" : "#3a3a3a"}`,
-                      borderLeftWidth: isFirst ? 1 : 0,
-                      borderTopWidth: 0,
-                      borderRadius: 0,
-                      cursor: "pointer", userSelect: "none",
-                      lineHeight: "16px", boxSizing: "border-box",
-                      opacity: active ? 1 : 0.7,
-                    }}
-                    title={`Multi (${label}): split this output into 3 luma-banded layers. Per-tab — RGB / Lab / LUT each remember their own Multi state.`}>
-                    MULTI
-                  </div>
-                  <div onClick={() => { if (cfg.multi) setTabConfig(prev => ({ ...prev, [val]: { ...prev[val], blendIf: !prev[val].blendIf } })); }}
-                    style={{
-                      flex: 1, height: 18, padding: 0,
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      fontSize: 8, fontWeight: 600, letterSpacing: 0.3,
-                      // v1.20.53 — match MULTI's color discipline so BLEND
-                      // stays readable when disabled (was #555 on transparent,
-                      // basically invisible). Now uses the same #777 dim
-                      // color MULTI uses for its "off but readable" state.
-                      background: cfg.blendIf && cfg.multi ? "#2f2f2f" : "transparent",
-                      color: cfg.blendIf && cfg.multi ? "#cccccc" : "#777",
-                      border: `1px solid ${cfg.blendIf && cfg.multi ? "#888" : "#3a3a3a"}`,
-                      borderLeftWidth: 0,
-                      borderTopWidth: 0,
-                      borderRadius: 0,
-                      cursor: subDisabled ? "default" : "pointer", userSelect: "none",
-                      lineHeight: "16px", boxSizing: "border-box",
-                      opacity: subDisabled ? 0.55 : (active ? 1 : 0.7),
-                    }}
-                    title={subDisabled
-                      ? "Blend is only meaningful when Multi is on for this tab."
-                      : `Blend (${label}): use Blending Options sliders instead of layer masks for the 3 band layers.`}>
-                    BLEND
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-      </div>
-
-      {/* v1.20.53 — marquee tristate was relocated up alongside MASK
-          (above the output-mode block). This slot is now empty. */}
-
-      {/* v1.20.51 — Apply pill relocated UP into the output-mode block.
-          This row keeps just the secondary actions: LIVE, RESTORE, Save
-          LUT, SAVE, ✕, ⟳, plus the relocated ADAPT toggle. */}
-      <div style={{ display: "flex", flexWrap: "nowrap", gap: 4, marginTop: 6, width: "100%" }}>
-        {/* Live LUT toggle: when on, every state change re-bakes the LUT into
-            the existing Match LUT layer (debounced ~300ms). Off by default —
-            the contract is stronger than one-shot Apply LUT, so we make it opt-in.
-            Match the visual style of the small mode-toggle pills used elsewhere
-            (palette mask, adapt, count) — dim when off, soft amber when on. */}
-        {/* v1.20.55 — LIVE and ADAPT relocated UP into the output block
-            as a stacked column next to Apply. Action row keeps only the
-            admin-style controls (RESTORE / 💾 LUT / SAVE / ✕ / ⟳). */}
-        {/* v1.20.43 — RESTORE pill now dim/disabled when no XMP is found on
-            the active layer; comes alive when the user clicks a previously-
-            baked Match layer. Teaches users the feature exists by enabling
-            itself exactly when it's useful. */}
-        <div onClick={canRestore ? onRestoreFromLayer : undefined}
-          title={canRestore
-            ? "Restore panel state from the selected Match layer's XMP metadata. Snaps every slider, preset, palette weight, and doc/layer choice back to the state that produced this layer."
-            : "Disabled — no Color Smash metadata found on the active layer. Click a previously-baked Match layer in the Layers panel to enable."}
-          style={{
-            padding: "0 8px", fontSize: 10, fontWeight: 600, letterSpacing: 0.3,
-            // v1.20.46 — muted gray when disabled, accent color only when
-            // there's actually something to restore. Matches LIVE's pattern:
-            // reserve color for the active state.
-            background: canRestore ? "#283440" : "#2a2a2a",
-            color: canRestore ? "#7aa8d8" : "#aaaaaa",
-            border: `1px solid ${canRestore ? "#7aa8d8" : "#666"}`,
-            borderRadius: 4, cursor: canRestore ? "pointer" : "default", userSelect: "none",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            height: 28, lineHeight: "26px", boxSizing: "border-box",
-            flex: "0 0 auto",
-            opacity: canRestore ? 1 : 0.7,
-          }}>RESTORE</div>
-        {/* v1.20.43 — Save LUT styled to match the Apply pill aesthetic:
-            rounded shell, neutral gray background, light text. Reads as a
-            sibling action to Apply rather than a different system. */}
-        {/* v1.20.54 — Save LUT now reads as [💾 LUT]: small disk glyph
-            (Unicode floppy) followed by the LUT label. Lighter visual
-            footprint than the old "Save LUT…" text, still 1:1 clear. */}
-        <div onClick={onExportLut}
-          title="Export the staged preset as a portable 33³ .CUBE 3D LUT to disk. Loadable in Photoshop, Premiere, Resolve, etc. Use Apply LUT instead if you just want it in this PS doc."
-          style={{
-            padding: "0 10px", fontSize: 10, fontWeight: 600, letterSpacing: 0.3,
-            background: "#3a3a3a", color: "#eeeeee",
-            border: "1px solid #888",
-            borderRadius: 4, cursor: "pointer", userSelect: "none",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            gap: 4,
-            height: 28, lineHeight: "26px", boxSizing: "border-box",
-            flex: "0 0 auto",
-            whiteSpace: "nowrap",
-          }}>
-          <span style={{ fontSize: 13, lineHeight: 1 }}>💾</span>
-          <span>LUT</span>
-        </div>
-        {/* v1.20.43 — SAVE/✕/⟳ pills relocated from the BottomActionBar to
-            this row. Compact icon-style so they trail the apply cluster
-            without dominating it. */}
-        {/* v1.20.63 — was 'SAVE' which was easily confused with the Save
-            LUT button next to it. Now renders as a gear icon ⚙ + 'PREFS'
-            tooltip clarifies it's the 'remember settings across reloads'
-            toggle, NOT a save-current-bake action. */}
-        <div onClick={() => setRemember(!remember)}
-          title={remember
-            ? "PREFS ON — panel settings (sliders, palette weights, envelope, output mode, LUT options) are persisted across reloads. Click to disable."
-            : "PREFS OFF — panel settings reset to defaults on next reload. Click to enable persistence."}
-          style={{
-            width: 28, height: 28, marginLeft: 4,
-            display: "inline-flex", alignItems: "center", justifyContent: "center",
-            background: remember ? "#3a3a3a" : "transparent",
-            color: remember ? "#dddddd" : "#888",
-            border: `1px solid ${remember ? "#888" : "#444"}`,
-            borderRadius: 4, cursor: "pointer", userSelect: "none",
-            fontSize: 14, lineHeight: 1,
-            boxSizing: "border-box", flexShrink: 0,
-          }}>⚙</div>
-        <div onClick={async () => {
-          const ok = await uxpConfirm("Reset all panel settings to defaults and clear the saved file?", "Reset");
-          if (ok) onResetAll();
-        }}
-          title="Reset all settings to defaults and clear the saved file"
-          style={{
-            width: 22, height: 28, display: "inline-flex", alignItems: "center", justifyContent: "center",
-            background: "#e66666", color: "#fff", fontWeight: 700, fontSize: 13, lineHeight: 1,
-            border: "none", borderRadius: 4, cursor: "pointer", boxSizing: "border-box", flexShrink: 0,
-          }}>
-          <span style={{ marginTop: -1 }}>✕</span>
-        </div>
-        <div onClick={onRefreshAll}
-          title={stale
-            ? "Photoshop changed since last refresh — click to resync"
-            : "In sync. Click to refresh source + target previews + layer lists"}
-          style={{
-            width: 22, height: 28, display: "inline-flex", alignItems: "center", justifyContent: "center",
-            background: stale ? "#c19a3a" : "transparent",
-            color: stale ? "#fff" : "#aaa",
-            border: `1px solid ${stale ? "#c19a3a" : "#888"}`,
-            borderRadius: 4, cursor: "pointer", boxSizing: "border-box", flexShrink: 0, fontSize: 15, userSelect: "none",
-          }}>
-          <span style={{ marginTop: -2, lineHeight: 1 }}>⟳</span>
-        </div>
-      </div>
-
-      {/* v1.20.63 — zone divider: separates the Apply/action zone above
-          from the history zone below. */}
-      <div style={{ borderTop: "1px solid #2a2a2a", marginTop: 8, marginBottom: 2 }} />
+      {/* HISTORY island. */}
+      <div style={ISLAND}>
       {/* Recent history. Empty state shows a single hint line; otherwise the
           stored entries render as small palette-color thumbnails. */}
       {(() => {
@@ -2879,15 +3702,15 @@ export function MatchTab() {
         <div style={{ marginTop: 6 }}>
           {/* v1.20.65 — header row: disclosure on the left, import/export
               tiny icons on the right. Cross-machine recipe portability. */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", height: 14, lineHeight: "14px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", height: 16, lineHeight: "14px", marginBottom: 4 }}>
             <div onClick={() => setHistoryOpen(o => !o)}
-              style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, opacity: 0.65,
+              style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, fontWeight: 700, letterSpacing: 0.8, color: "#888",
                        cursor: "pointer", userSelect: "none" }}
               title={historyOpen ? "Hide recent applies" : "Show recent applies — click any thumbnail to restore that state"}>
               <span style={{ width: 8, display: "inline-block", textAlign: "center" }}>
                 {historyOpen ? "▾" : "▸"}
               </span>
-              <span>history ({recentHistory.length})</span>
+              <span>HISTORY ({recentHistory.length})</span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
               <div onClick={onImportRecipes}
@@ -3084,81 +3907,19 @@ export function MatchTab() {
         </div>
         );
       })()}
+      </div>{/* end HISTORY island */}
 
-      {/* v1.20.63 — zone divider: separates the history zone above from
-          the LUT-settings / diagnostic-curves zone below. */}
-      <div style={{ borderTop: "1px solid #2a2a2a", marginTop: 8, marginBottom: 2 }} />
-      {/* LUT-specific knobs. v1.20.62 — always rendered (was gated on
-          outputMode==='lut'). Keeping these slots reserved avoids the
-          panel resizing when users flip between LUT and Curves modes;
-          they just dim out when not applicable. */}
-      {(() => {
-        const lutInactive = outputMode !== "lut";
-        return (
-        <div style={{
-          marginTop: 6, display: "flex", flexDirection: "column", gap: 4,
-          opacity: lutInactive ? 0.45 : 1,
-        }}>
-          {/* Strength slider — lerps LUT toward identity before bake.
-              Differs from PS layer opacity because the lerp is baked INTO
-              the LUT, so .cube exports carry the dialed-back look. */}
-          <div style={{ display: "flex", alignItems: "center", gap: 4, height: 14, lineHeight: "14px" }}
-            title={`LUT strength: ${lutStrength}% — blends the generated 3D LUT toward an identity LUT before bake. 100% = full match, 0% = identity (no transform). The lerp is baked into the LUT bytes, so portable .cube exports carry the dialed-back look (PS layer opacity wouldn't survive .cube export).`}>
-            <span style={{ fontSize: 9, opacity: 0.5, width: 38 }}>strength</span>
-            <input type="range" min={0} max={100} step={1} value={lutStrength}
-              onChange={e => setLutStrength(parseInt((e.target as HTMLInputElement).value, 10))}
-              style={{ flex: 1, margin: 0, cursor: "pointer" }} />
-            <span style={{ fontSize: 9, opacity: 0.7, width: 28, textAlign: "right" }}>{lutStrength}%</span>
-          </div>
-          {/* Grid quality 3-way. 17³ draft / 33³ standard / 65³ high. */}
-          <div style={{ display: "flex", alignItems: "center", gap: 4, height: 18, lineHeight: "16px" }}>
-            <span style={{ fontSize: 9, opacity: 0.5, width: 38 }}>quality</span>
-            <div style={{ display: "flex", flex: 1, gap: 2 }}>
-              {([
-                [17 as const, "Draft 17³",   "Draft quality: 17³ grid (~50KB). Fastest to bake, visible banding in subtle gradients. Good for quick previews / iterative editing."],
-                [33 as const, "Standard 33³", "Standard quality: 33³ grid (~430KB). Default. Matches PS Color Lookup's native default. Good for most photographic work."],
-                [65 as const, "High 65³",    "High quality: 65³ grid (~3.3MB). Smoothest result, larger files. Useful for video-grading / log-LUT workflows where 33³ shows banding."],
-              ] as Array<[17 | 33 | 65, string, string]>).map(([val, label, tip]) => (
-                <div key={val} onClick={() => setLutGrid(val)} title={tip}
-                  style={{
-                    flex: 1, height: 18, padding: 0,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: 9, fontWeight: 600, letterSpacing: 0.4,
-                    background: lutGrid === val ? "#3a3a3a" : "transparent",
-                    color: lutGrid === val ? "#dddddd" : "#888",
-                    border: `1px solid ${lutGrid === val ? "#888" : "#444"}`,
-                    borderRadius: 2, cursor: "pointer", userSelect: "none",
-                    lineHeight: "16px", boxSizing: "border-box",
-                  }}>{label}</div>
-              ))}
-            </div>
-          </div>
-          {/* v1.20.63 — Dither shown inline (was behind "advanced ▸"). It's
-              not scary enough to warrant a disclosure for one checkbox. */}
-          <div onClick={() => setLutDither(!lutDither)}
-            style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 9, color: "#cccccc", cursor: "pointer", height: 14, lineHeight: "14px" }}
-            title="Dither: PS Color Lookup's noise-injection field that hides quantization banding. Default ON, matches PS's own default. Turn off for a bit-exact LUT result and accept visible banding in subtle gradients.">
-            <span style={{ fontSize: 9, opacity: 0.5, width: 38 }}>dither</span>
-            <input type="checkbox" checked={lutDither}
-              onChange={e => setLutDither(e.target.checked)}
-              style={{ margin: 0, width: 12, height: 12 }} />
-          </div>
+      {/* FITTED CURVES island. v1.20.70. */}
+      <div style={ISLAND}>
+        <div onClick={() => setCurvesGraphOpen(o => !o)}
+          style={{ display: "flex", alignItems: "center", gap: 4, ...ISLAND_HEADER, marginBottom: curvesGraphOpen ? 4 : 0, cursor: "pointer" }}
+          title={curvesGraphOpen ? "Hide fitted-curves graph" : "Show fitted-curves graph (R G B channel transfer curves)"}>
+          <span style={{ width: 8, display: "inline-block", textAlign: "center" }}>{curvesGraphOpen ? "▾" : "▸"}</span>
+          <span>FITTED CURVES (R G B)</span>
         </div>
-        );
-      })()}
-
-      {/* Curves graph below Apply */}
-      {/* v1.20.63 — Fitted curves graph behind a disclosure. Diagnostic
-          information most users don't need to see continuously. */}
-      <div onClick={() => setCurvesGraphOpen(o => !o)}
-        style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 4, fontSize: 9, opacity: 0.6, cursor: "pointer", userSelect: "none" }}
-        title={curvesGraphOpen ? "Hide fitted-curves graph" : "Show fitted-curves graph (R G B channel transfer curves)"}>
-        <span style={{ width: 8, display: "inline-block", textAlign: "center" }}>{curvesGraphOpen ? "▾" : "▸"}</span>
-        <span>Fitted curves (R G B)</span>
-      </div>
-      {curvesGraphOpen && <CurvesGraph curves={renderedCurves} />}
-
-      <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7, whiteSpace: "pre-wrap" }}>{status}</div>
+        {curvesGraphOpen && <CurvesGraph curves={renderedCurves} />}
+        <div style={{ marginTop: 2, fontSize: 10, opacity: 0.7, whiteSpace: "pre-wrap" }}>{status}</div>
+      </div>{/* end FITTED CURVES island */}
 
       {/* Diagnostic-only doc-rename probe. Read-only; never mutates srcDocId / srcMode /
           targetId / etc. Logs every name-shaped value across every API surface so we can

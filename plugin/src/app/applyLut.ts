@@ -15,7 +15,7 @@
 
 import { ChannelCurves, generateLutCube, Preset, lerpCurvesTowardIdentity } from "../core/histogramMatch";
 import {
-  GROUP_NAME, action, app,
+  GROUP_NAME, action, app, setLayerColor, COLOR_SMASH_GROUP_COLOR, isColorSmashGroupName,
   executeAsModal, readLayerPixels, setClippingMask, PixelBuffer,
   readSelectionMaskBytes,
   deleteLayerMask, snapshotSelectionToChannel, restoreSelectionFromChannel, deleteChannel, deselectAll,
@@ -101,18 +101,28 @@ function collectMatches(parent: any, prefix: string, out: any[]) {
   }
 }
 
-/** Find or create the [Color Smash] group at the doc root. */
+/** Find or create the [Color Smash] group at the doc root.
+ *  v1.20.69 — when creating fresh, clear the layer selection first
+ *  via selectNoLayers so PS doesn't nest the new group inside whatever
+ *  sub-group currently owns the active layer (e.g. after JUMP set the
+ *  insertion point inside an existing group). */
 async function getOrCreateColorSmashGroup(doc: any): Promise<any> {
   const findCS = (layers: any[]): any | null => {
     for (const l of layers) {
-      if (l && l.name === GROUP_NAME && (l.kind === "group" || Array.isArray(l.layers))) return l;
+      if (l && isColorSmashGroupName(l.name) && (l.kind === "group" || Array.isArray(l.layers))) return l;
       if (Array.isArray(l.layers)) { const found = findCS(l.layers); if (found) return found; }
     }
     return null;
   };
   const existing = findCS(doc.layers ?? []);
   if (existing) return existing;
-  return await doc.createLayerGroup({ name: GROUP_NAME });
+  try {
+    await action.batchPlay([{ _obj: "selectNoLayers", _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }] }], {});
+  } catch { /* not critical */ }
+  const group = await doc.createLayerGroup({ name: GROUP_NAME });
+  // v1.20.69 — orange color tag for visibility in PS Layers panel.
+  try { if (group?.id != null) await setLayerColor(group.id, COLOR_SMASH_GROUP_COLOR); } catch { /* ignore */ }
+  return group;
 }
 
 /** Recursive layer search by id (handles nesting in groups). */

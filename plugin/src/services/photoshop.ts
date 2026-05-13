@@ -11,7 +11,33 @@ export interface PixelBuffer {
 
 export interface Rect { left: number; top: number; right: number; bottom: number }
 
-export const GROUP_NAME = "[Color Smash]";
+/**
+ * Canonical name for the plugin's output group. v1.20.69 — was a const,
+ * now mutable to support the Settings drawer's "Group name" preference.
+ * Callsites import via `getGroupName()` (or read `GROUP_NAME` directly
+ * — kept as `let` so existing imports still pick up the live value).
+ * The MatchTab panel calls `setGroupName(...)` on init / change.
+ *
+ * For migration / backward compat with prior bakes named "[Color Smash]",
+ * `getLegacyGroupName()` returns the canonical default. Recursive
+ * find/consolidate helpers match BOTH the current name AND the legacy
+ * name so users who rename mid-project don't orphan their existing
+ * group.
+ */
+export const DEFAULT_GROUP_NAME = "[Color Smash]";
+export let GROUP_NAME: string = DEFAULT_GROUP_NAME;
+export function setGroupName(name: string): void {
+  const trimmed = (name ?? "").trim();
+  GROUP_NAME = trimmed.length > 0 ? trimmed : DEFAULT_GROUP_NAME;
+}
+/** Returns true if `name` should be recognized as a Color Smash group
+ *  (matches either the current user-chosen name or the legacy default).
+ *  Used by find/consolidate helpers so a user can rename without
+ *  orphaning prior bakes. */
+export function isColorSmashGroupName(name: string | null | undefined): boolean {
+  if (!name) return false;
+  return name === GROUP_NAME || name === DEFAULT_GROUP_NAME;
+}
 
 export function getActiveDoc() {
   const doc = app.activeDocument;
@@ -302,6 +328,101 @@ export async function deleteChannel(name: string): Promise<void> {
 }
 
 /**
+ * v1.20.69 — set the Photoshop layer-panel color tag on a group/layer.
+ * Helps the [Color Smash] group stand out visually in the Layers panel.
+ * PS's fixed color set: "none" | "red" | "orange" | "yellow" | "green"
+ * | "blue" | "violet" | "gray". We tag the canonical group orange to
+ * match the panel's amber accent palette.
+ *
+ * Implemented via batchPlay set descriptor — `layer.color` isn't on
+ * the UXP DOM directly. Silent on failure: the color is decorative, not
+ * functional.
+ */
+export async function setLayerColor(
+  layerId: number,
+  color: "none" | "red" | "orange" | "yellow" | "green" | "blue" | "violet" | "gray",
+): Promise<void> {
+  try {
+    await action.batchPlay([{
+      _obj: "set",
+      _target: [{ _ref: "layer", _id: layerId }],
+      to: { _obj: "layer", color: { _enum: "color", _value: color } },
+      _options: { dialogOptions: "dontDisplay" },
+    }], {});
+  } catch { /* non-fatal — decorative only */ }
+}
+
+/** v1.20.69 — color used for the [Color Smash] group. */
+export const COLOR_SMASH_GROUP_COLOR = "orange" as const;
+
+/**
+ * v1.20.69 — consolidate stray [Color Smash] groups into a single
+ * canonical group at the doc root.
+ *
+ * Background: JUMP / ISOLATE / user clicking around in the Layers panel
+ * change PS's "insertion point" — `doc.createLayerGroup` parents the
+ * new group at the current selection's container. Combined with the
+ * `findCSGroupRecursive` lookup's "prefer top-level" rule, this means
+ * stray nested [Color Smash] groups can accumulate over time if a bake
+ * ran while the selection was inside a sub-group.
+ *
+ * This helper finds ALL [Color Smash] groups (exact name match, at any
+ * depth — NOT the renamed _NN archives created by branchColorSmashGroup).
+ * If more than one exists, all children are moved into the top-most
+ * (or first-found) instance and the duplicates are deleted. Returns the
+ * surviving canonical group, or null if none existed.
+ *
+ * Idempotent — safe to call on every Apply.
+ */
+export async function consolidateColorSmashGroups(docId: number): Promise<void> {
+  try {
+    const doc = (app.documents ?? []).find((d: any) => d.id === docId);
+    if (!doc) return;
+    const found: Array<{ group: any; depth: number }> = [];
+    const walk = (layers: any[], depth: number) => {
+      for (const l of layers) {
+        if (!l) continue;
+        // v1.20.69 — match BOTH the current (user-chosen) group name AND
+        // the legacy "[Color Smash]" default, so renaming the group via
+        // Settings doesn't orphan prior bakes.
+        if (isColorSmashGroupName(l.name) && Array.isArray(l.layers)) {
+          found.push({ group: l, depth });
+        }
+        if (Array.isArray(l.layers)) walk(l.layers, depth + 1);
+      }
+    };
+    walk(doc.layers ?? [], 0);
+    if (found.length === 0) return;
+    // Pick the canonical group: prefer the SHALLOWEST (top-level if
+    // any), then the first-found at that depth.
+    found.sort((a, b) => a.depth - b.depth);
+    const canonical = found[0].group;
+    if (found.length > 1) {
+      // Move every child of every duplicate INTO the canonical group,
+      // then delete the now-empty duplicate.
+      for (let i = 1; i < found.length; i++) {
+        const dup = found[i].group;
+        const children = Array.isArray(dup.layers) ? [...dup.layers] : [];
+        for (const child of children) {
+          try { await child.move(canonical, "placeInside"); } catch { /* ignore */ }
+        }
+        try { await dup.delete(); } catch { /* ignore */ }
+      }
+    }
+    // v1.20.69 — rename the canonical group to the user's current chosen
+    // name if it differs (e.g. they renamed via Settings while a legacy
+    // "[Color Smash]" group already existed). Idempotent if names match.
+    if (canonical && canonical.name !== GROUP_NAME) {
+      try { canonical.name = GROUP_NAME; } catch { /* ignore */ }
+    }
+    // v1.20.69 — tag the canonical group with the panel's accent color
+    // so it stands out in the Layers panel. Runs on every Apply so any
+    // older groups (created before this version) also get colored.
+    try { if (canonical?.id != null) await setLayerColor(canonical.id, COLOR_SMASH_GROUP_COLOR); } catch { /* ignore */ }
+  } catch { /* non-fatal */ }
+}
+
+/**
  * v1.20.58 — "branch off" the current [Color Smash] working group.
  * Renames the active [Color Smash] to [Color Smash _<NN>] with NN being
  * the next sequence number (scans the doc for existing archived groups,
@@ -320,14 +441,20 @@ export async function branchColorSmashGroup(docId: number): Promise<void> {
     if (!doc) return;
     let active: any | null = null;
     let highest = 0;
-    const numRe = new RegExp(`^${GROUP_NAME.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")} _(\\d+)`);
+    // v1.20.69 — accept BOTH the current user-chosen name and the legacy
+    // default for finding the active group. Archive numbering uses
+    // whichever name the group ACTUALLY had at the time, so we match
+    // either pattern when scanning for the next sequence number.
+    const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const numReCurrent = new RegExp(`^${escape(GROUP_NAME)} _(\\d+)`);
+    const numReLegacy = new RegExp(`^${escape(DEFAULT_GROUP_NAME)} _(\\d+)`);
     const walk = (layers: any[]) => {
       for (const l of layers) {
         if (!l) continue;
-        if (l.name === GROUP_NAME && Array.isArray(l.layers) && !active) {
+        if (isColorSmashGroupName(l.name) && Array.isArray(l.layers) && !active) {
           active = l;
         } else if (typeof l.name === "string") {
-          const m = l.name.match(numRe);
+          const m = l.name.match(numReCurrent) ?? l.name.match(numReLegacy);
           if (m) {
             const n = parseInt(m[1], 10);
             if (Number.isFinite(n) && n > highest) highest = n;

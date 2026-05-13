@@ -28,6 +28,29 @@ export interface PersistedSettings {
   // Typed as `any[]` here so persistence.ts doesn't pull in the LutLayerState
   // shape transitively; the recentHistory module owns parsing/pruning on load.
   recentHistory?: any[];
+  // v1.20.66 — once the starter recipe pack has been injected (on first
+  // run when no prior history exists), this flag is flipped so we don't
+  // re-inject on every reload. Bump the value (1 → 2) if/when the pack
+  // ships new starters and you want them to land in old installs.
+  starterPackVersion?: number;
+  // v1.20.69 — Multi/Blend disclosure state. Collapsed by default since
+  // these are secondary toggles; persisted so a power user who uses Multi
+  // a lot doesn't have to re-expand every session.
+  multiExpanded?: boolean;
+  // v1.20.69 — Settings drawer prefs.
+  // groupColor: PS color tag applied to the [Color Smash] group in the
+  //   Layers panel. PS's fixed set; "none" disables tagging.
+  groupColor?: "none" | "red" | "orange" | "yellow" | "green" | "blue" | "violet" | "gray";
+  // groupName: lets the user rename the canonical group (e.g. "[Grade]"
+  //   or "[Match]"). Empty/undefined → defaults to "[Color Smash]".
+  groupName?: string;
+  // autoDebounceMs: AUTO live-bake debounce window (60–1000ms). Default 300.
+  autoDebounceMs?: number;
+  // historyCap: max recent-history ring size (5–30). Default 10.
+  historyCap?: number;
+  // verboseStatus: when true, the status line surfaces extra timing /
+  //   batchPlay diagnostics. Useful when reporting bugs.
+  verboseStatus?: boolean;
   // Apply behavior
   deselectOnApply?: boolean;
   overwriteOnApply?: boolean;

@@ -3,7 +3,7 @@
 
 import {
   readLayerPixels, executeAsModal, statsRectForLayer,
-  makeCurvesLayer, setClippingMask, GROUP_NAME, action, app,
+  makeCurvesLayer, setClippingMask, GROUP_NAME, action, app, setLayerColor, COLOR_SMASH_GROUP_COLOR, isColorSmashGroupName,
   readSelectionMaskBytes,
   deleteLayerMask, snapshotSelectionToChannel, restoreSelectionFromChannel, deleteChannel, deselectAll,
 } from "../services/photoshop";
@@ -221,7 +221,10 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     // [Color Smash], the new one stacked inside it). Recursive find means we always
     // reuse the existing one even if it's mis-nested. We also prefer top-level matches
     // so the canonical group lives at the doc root.
-    const isCSGroup = (l: any) => l && l.name === GROUP_NAME && (l.kind === "group" || Array.isArray(l.layers));
+    // v1.20.69 — accept BOTH the current user-chosen group name AND
+    // the legacy "[Color Smash]" default so a rename via Settings
+    // doesn't orphan an existing group from a prior session.
+    const isCSGroup = (l: any) => l && isColorSmashGroupName(l.name) && (l.kind === "group" || Array.isArray(l.layers));
     function findCSGroupRecursive(layers: any[]): any | null {
       // Prefer top-level match
       for (const l of layers) if (isCSGroup(l)) return l;
@@ -243,6 +246,8 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
         await action.batchPlay([{ _obj: "selectNoLayers", _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }] }], {});
       } catch { /* not critical */ }
       group = await doc.createLayerGroup({ name: GROUP_NAME });
+      // v1.20.69 — orange color tag for visibility in PS Layers panel.
+      try { if (group?.id != null) await setLayerColor(group.id, COLOR_SMASH_GROUP_COLOR); } catch { /* ignore */ }
     }
     // Position the group directly above the target layer (in the panel) on every run,
     // not just first-creation. If the user picks a different target after a prior apply,
