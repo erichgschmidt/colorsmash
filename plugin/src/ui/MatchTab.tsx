@@ -5,7 +5,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useLayers } from "./useLayers";
 import { useLayerPreview } from "./useLayerPreview";
 import { CurvesGraph } from "./CurvesGraph";
-import { ZoneCompoundSlider } from "./ZoneCompoundSlider";
 import { Icon } from "./Icon";
 import { MatchedPreview, MatchedPreviewHandle } from "./MatchedPreview";
 import { SourceSelector } from "./SourceSelector";
@@ -20,7 +19,7 @@ import {
   applyDimensions, applyZoneAndEnvelopeToChannels, MERGED_LAYER_ID,
   transformCurvesForPreset, applyPresetPostprocess, generateLutCube,
   DimensionOpts, DEFAULT_DIMENSIONS, ZoneOpts, DEFAULT_ZONES,
-  computeLumaBins, bandMeanColor, lumaRange,
+  computeLumaBins, lumaRange,
   EnvelopePoint, DEFAULT_ENVELOPE,
   fitByMode, MatchMode, Preset,
   fitMultiZoneByMode, applyMultiZoneToRgba, processMultiZoneFit, MultiZoneFit, adaptiveBandPeaks,
@@ -412,7 +411,10 @@ export function MatchTab() {
   // time, letting the user A/B-test the contribution of each section without losing settings.
   const [enColor, setEnColor] = useState(true);
   const [enTone, setEnTone] = useState(true);
-  const [enZones, setEnZones] = useState(true);
+  // v1.20.70 — enZones state removed. The Zones accordion UI was already
+  // dead-code-gated since v1.8, and the toggle is unreachable. Apply paths
+  // now use `zonesRef.current` directly (always-on, defaults to neutral if
+  // no saved zones).
   const [enEnvelope, setEnEnvelope] = useState(true);
   const toggleSection = (s: "basic" | "dims" | "zones" | "envelope") => setOpenSection(o => o === s ? null : s);
   // ─── Persistence ───────────────────────────────────────────────────────────
@@ -1181,7 +1183,7 @@ export function MatchTab() {
       const dim = applyDimensions(processed, dimOpts);
       curvesForGraph = applyZoneAndEnvelopeToChannels(
         dim,
-        enZones ? zonesRef.current : DEFAULT_ZONES,
+        zonesRef.current,
         enEnvelope ? envelopeRef.current : DEFAULT_ENVELOPE,
       );
       // Use weighted apply if target weights are non-neutral, else fast path.
@@ -1351,7 +1353,7 @@ export function MatchTab() {
     // triggers a redraw with the fresh per-pixel weights.
     // targetMaskEnabled also in deps so toggling the mask gate redraws the
     // preview between masked and uniform application.
-  }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, multiZoneExtents, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope, activePreset, targetEffectiveWeights, targetMaskEnabled, showMask, outputMode, lutStrength, lutGrid, selectionPreviewMask, effectiveSelectionMode]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, multiZoneExtents, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enEnvelope, activePreset, targetEffectiveWeights, targetMaskEnabled, showMask, outputMode, lutStrength, lutGrid, selectionPreviewMask, effectiveSelectionMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Export the staged preset as a 33-grid 3D LUT in .CUBE format. Sidesteps the
   // unreliable PS Color Lookup API entirely — user picks a save location, we write
@@ -1882,26 +1884,101 @@ export function MatchTab() {
     await onRestoreFromLayer();
   };
 
-  // v1.20.70 — call PS's native undo/redo via batchPlay. Same as Ctrl/Cmd+Z
-  // but discoverable via header icons next to the plugin's REVERT button.
-  const onPsUndo = async () => {
-    try {
-      await executeAsModal("Undo", async () => {
-        await psAction.batchPlay([{ _obj: "undo" }], {});
-      });
-    } catch (e: any) {
-      setStatus(`Undo failed: ${e?.message ?? e}`);
-    }
+  // v1.20.70+ — panel-state undo / redo (header ↶ ↷ buttons).
+  //
+  // Captures snapshots of `buildXmpState()` whenever tracked panel state
+  // settles for ≥250ms (debounced — slider drags don't pollute the
+  // stack). ↶ pops the prior snapshot, pushes the current state onto
+  // redo, applies the popped state. ↷ symmetric. Capacity 30; oldest
+  // entries auto-evicted.
+  //
+  // DOES NOT touch PS's own undo/redo. PS-side undo (layer creation,
+  // mask attach, etc.) remains on Ctrl/Cmd+Z while PS has focus. This
+  // is purely a panel-side affordance for "I tweaked a slider, want
+  // it back".
+  //
+  // isRestoringRef gates the snapshot watcher so applying an undo
+  // doesn't ALSO push the just-applied state onto the undo stack
+  // (which would create an infinite-undo loop / make ↷ unreachable).
+  const PANEL_UNDO_CAP = 30;
+  const panelUndoStackRef = useRef<LutLayerState[]>([]);
+  const panelRedoStackRef = useRef<LutLayerState[]>([]);
+  const panelLastSnapshotRef = useRef<LutLayerState | null>(null);
+  const isRestoringRef = useRef(false);
+  // Force a re-render when stacks change so the header buttons dim/light
+  // correctly. The stacks themselves live in refs (no rerender on push);
+  // this tick is the React-visible signal.
+  const [undoTick, setUndoTick] = useState(0);
+  const onPanelUndo = () => {
+    const prev = panelUndoStackRef.current.pop();
+    if (!prev) { setStatus("Nothing to undo."); return; }
+    const current = panelLastSnapshotRef.current ?? buildXmpState();
+    panelRedoStackRef.current.push(current);
+    if (panelRedoStackRef.current.length > PANEL_UNDO_CAP) panelRedoStackRef.current.shift();
+    isRestoringRef.current = true;
+    panelLastSnapshotRef.current = prev;
+    applyStateToPanel(prev);
+    setUndoTick(t => t + 1);
+    setStatus("Panel state restored (undo).");
+    // Release the gate after the snapshot effect has had a chance to
+    // re-fire from the applied state. 350ms > the 250ms debounce.
+    setTimeout(() => { isRestoringRef.current = false; }, 350);
   };
-  const onPsRedo = async () => {
-    try {
-      await executeAsModal("Redo", async () => {
-        await psAction.batchPlay([{ _obj: "redo" }], {});
-      });
-    } catch (e: any) {
-      setStatus(`Redo failed: ${e?.message ?? e}`);
-    }
+  const onPanelRedo = () => {
+    const next = panelRedoStackRef.current.pop();
+    if (!next) { setStatus("Nothing to redo."); return; }
+    const current = panelLastSnapshotRef.current ?? buildXmpState();
+    panelUndoStackRef.current.push(current);
+    if (panelUndoStackRef.current.length > PANEL_UNDO_CAP) panelUndoStackRef.current.shift();
+    isRestoringRef.current = true;
+    panelLastSnapshotRef.current = next;
+    applyStateToPanel(next);
+    setUndoTick(t => t + 1);
+    setStatus("Panel state restored (redo).");
+    setTimeout(() => { isRestoringRef.current = false; }, 350);
   };
+  // Debounced snapshot watcher. Fires 250ms after the last tracked
+  // state change. On each fire, if not restoring, the prior snapshot
+  // is pushed onto the undo stack and the redo stack is cleared (new
+  // user action invalidates the old redo branch — same as text editor
+  // undo semantics).
+  useEffect(() => {
+    if (!loadedRef.current) return; // skip until persistence load resolves
+    if (isRestoringRef.current) return;
+    const id = setTimeout(() => {
+      const current = buildXmpState();
+      const prior = panelLastSnapshotRef.current;
+      if (prior !== null) {
+        // Skip no-op snapshots (string-equal == no real change).
+        const priorJson = JSON.stringify(prior);
+        const currJson = JSON.stringify(current);
+        if (priorJson === currJson) return;
+        panelUndoStackRef.current.push(prior);
+        if (panelUndoStackRef.current.length > PANEL_UNDO_CAP) panelUndoStackRef.current.shift();
+        // Clear redo on any genuine new change (standard undo
+        // semantics — once you start a new action branch, the old
+        // redo path is no longer reachable).
+        if (panelRedoStackRef.current.length > 0) {
+          panelRedoStackRef.current = [];
+        }
+        setUndoTick(t => t + 1);
+      }
+      panelLastSnapshotRef.current = current;
+    }, 250);
+    return () => clearTimeout(id);
+    // Watching a wide dep slice — every panel state slice that should
+    // count as an "undoable" change. Same set as the persistence
+    // saver so we don't have to maintain two lists in lockstep.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    matchMode, multiZone, multiZoneLimit, adaptiveBands, tabConfig,
+    amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
+    colorSpace, outputMode, lutStrength, lutGrid, lutDither, selectionMode,
+    overwriteOnApply, zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel,
+    paletteCount, paletteAdaptive, sourceSoftness, targetSoftness,
+    targetMaskEnabled, paletteWeights, targetPaletteWeights,
+    sourceId, targetId,
+  ]);
 
   // Apply LUT — bake the staged preset into a Color Lookup adjustment layer
   // automatically, no file dialog. The .cube goes to the plugin's temp folder
@@ -2148,7 +2225,7 @@ export function MatchTab() {
         stretchRange: enColor && anchorStretchToHist && lumaBins ? lumaRange(lumaBins) : undefined,
         chromaOnly: enColor && chromaOnly,
         dimensions: enTone ? dimsRef.current : DEFAULT_DIMENSIONS,
-        zones: enZones ? zonesRef.current : DEFAULT_ZONES,
+        zones: zonesRef.current,
         envelope: enEnvelope ? envelopeRef.current : DEFAULT_ENVELOPE,
         // sourcePixelsOverride: priority order is
         //   1) weighted source (when palette weights diverge from neutral) — supersedes
@@ -2497,23 +2574,44 @@ export function MatchTab() {
           }}>v1.20.70</span>
         </div>
         <span style={{ flex: 1 }} />
-        {/* Center: PS-native ↶ undo / ↷ redo. Calls batchPlay { _obj: "undo" / "redo" }. */}
-        <div onClick={onPsUndo}
-          title="Photoshop UNDO (same as Ctrl/Cmd+Z). Reverses the most recent PS action — affects layers, masks, edits. Independent of this plugin's REVERT button (which only restores panel state from a Match layer's XMP)."
-          style={{
-            width: 22, height: 22, display: "inline-flex", alignItems: "center", justifyContent: "center",
-            background: "transparent", color: "#aaa",
-            border: "1px solid #555", borderRadius: 4, cursor: "pointer",
-            fontSize: 14, lineHeight: 1, boxSizing: "border-box", flexShrink: 0, userSelect: "none",
-          }}>↶</div>
-        <div onClick={onPsRedo}
-          title="Photoshop REDO (same as Ctrl/Cmd+Shift+Z). Re-applies an undone PS action."
-          style={{
-            width: 22, height: 22, display: "inline-flex", alignItems: "center", justifyContent: "center",
-            background: "transparent", color: "#aaa",
-            border: "1px solid #555", borderRadius: 4, cursor: "pointer",
-            fontSize: 14, lineHeight: 1, boxSizing: "border-box", flexShrink: 0, userSelect: "none",
-          }}>↷</div>
+        {/* Center: panel-state ↶ undo / ↷ redo. Walks a debounced
+            snapshot stack of buildXmpState() values. PURE panel-side —
+            doesn't trigger PS's own undo (Cmd/Ctrl+Z still does that). */}
+        {(() => {
+          // Re-read from refs each render — undoTick forces this IIFE
+          // to recompute when stacks change.
+          void undoTick;
+          const canUndo = panelUndoStackRef.current.length > 0;
+          const canRedo = panelRedoStackRef.current.length > 0;
+          return <>
+            <div onClick={canUndo ? onPanelUndo : undefined}
+              title={canUndo
+                ? `Undo last panel change (${panelUndoStackRef.current.length} in stack). Reverses slider drags, palette tweaks, output-mode swaps, etc. Does NOT touch Photoshop's own undo (use Cmd/Ctrl+Z for that).`
+                : "Undo — nothing on the panel-state stack yet. Change a slider / toggle / palette to enable. (Photoshop's own undo for layer creation etc. is Cmd/Ctrl+Z.)"}
+              style={{
+                width: 22, height: 22, display: "inline-flex", alignItems: "center", justifyContent: "center",
+                background: "transparent",
+                color: canUndo ? "#aaa" : "#555",
+                border: `1px solid ${canUndo ? "#555" : "#3a3a3a"}`,
+                borderRadius: 4, cursor: canUndo ? "pointer" : "default",
+                fontSize: 14, lineHeight: 1, boxSizing: "border-box", flexShrink: 0, userSelect: "none",
+                opacity: canUndo ? 1 : 0.5,
+              }}>↶</div>
+            <div onClick={canRedo ? onPanelRedo : undefined}
+              title={canRedo
+                ? `Redo (${panelRedoStackRef.current.length} in stack). Re-applies a state you just undid. Any new panel change clears the redo stack.`
+                : "Redo — nothing on the panel-state redo stack. Undo something first to enable."}
+              style={{
+                width: 22, height: 22, display: "inline-flex", alignItems: "center", justifyContent: "center",
+                background: "transparent",
+                color: canRedo ? "#aaa" : "#555",
+                border: `1px solid ${canRedo ? "#555" : "#3a3a3a"}`,
+                borderRadius: 4, cursor: canRedo ? "pointer" : "default",
+                fontSize: 14, lineHeight: 1, boxSizing: "border-box", flexShrink: 0, userSelect: "none",
+                opacity: canRedo ? 1 : 0.5,
+              }}>↷</div>
+          </>;
+        })()}
         <span style={{ flex: 1 }} />
         {/* Right: 💾 REVERT ✕ ⟳ ⚙ ? */}
         <div onClick={onExportLut}
@@ -2591,7 +2689,7 @@ export function MatchTab() {
           { heading: "Quick start",
             body: "1. Pick a source in SOURCE / REFERENCE (any open doc, a marquee, or a file on disk).\n2. Pick a target in TARGET / PREVIEW.\n3. Open the OUTPUT island and click RGB, Lab, or LUT — clicking a tab BOTH swaps the output mode AND applies in one click.\n4. Optional: expand MASK / TRANSFORM / MULTI-BLEND for finer control. Pin recipes in HISTORY; ↓ IMPORT / ↑ EXPORT to share." },
           { heading: "Header icons (left → right)",
-            body: "↶ ↷ — Photoshop native undo / redo (same as Ctrl/Cmd+Z). Reverses PS-level edits, NOT panel state. 💾 — export the current preset to disk as a portable 33³ .CUBE 3D LUT. REVERT — restore panel state from the active Match layer's XMP. A 'Before REVERT' history entry is auto-saved as a permanent safety net; click REVERT again while it's still displayed as UN-REVERT to undo the revert from a one-shot in-memory shadow slot. ✕ — reset all panel settings to defaults (confirm dialog). ⟳ — resync source / target / layer lists / selection mask from PS. ⚙ — open the Settings drawer (group color, group name, LUT options, AUTO debounce, history cap, persistence, diagnostics)." },
+            body: "↶ ↷ — PANEL-state undo / redo. Reverses slider drags, palette tweaks, output-mode swaps, toggles — anything that changes the panel. Does NOT touch Photoshop's own undo (use Cmd/Ctrl+Z for layer creation, bake, mask edits, etc. while PS has focus). Dim when there's nothing to undo/redo. Capacity 30, oldest auto-evicted. Snapshots are debounced 250ms so slider drags collapse into a single undo step. 💾 — export the current preset to disk as a portable 33³ .CUBE 3D LUT. REVERT — restore panel state from the active Match layer's XMP. A 'Before REVERT' history entry is auto-saved as a permanent safety net; click REVERT again while it's still displayed as UN-REVERT to undo the revert from a one-shot in-memory shadow slot. ✕ — reset all panel settings to defaults (confirm dialog). ⟳ — resync source / target / layer lists / selection mask from PS. ⚙ — open the Settings drawer (group color, group name, LUT options, AUTO debounce, history cap, persistence, diagnostics)." },
           { heading: "Sections",
             body: "Panel sections render as soft 'islands'. SOURCE / REFERENCE and TARGET / PREVIEW are always visible (they're the input surface). TRANSFORM / OUTPUT / MASK / HISTORY / FITTED CURVES are collapsible — only OUTPUT is open by default. Each island's ▾/▸ disclosure on its header label toggles visibility." },
           { heading: "Version",
@@ -3087,11 +3185,11 @@ export function MatchTab() {
             <input type="checkbox" checked={anchorStretchToHist} onChange={e => { setAnchorStretchToHist(e.target.checked); scheduleRedraw(); }} style={{ cursor: "pointer", margin: 0 }} />
             Anchor stretch to histogram range
           </label>
-          {/* @ts-ignore Spectrum web component */}
+          {/* sp-checkbox renders via UXP's global JSX intrinsic-element
+              allowance (no per-tag suppression needed in this codebase). */}
           <sp-checkbox checked={chromaOnly || undefined} onInput={(e: any) => setChromaOnly(e.target.checked)} style={{ marginTop: 4, fontSize: 11 }}
             title="Apply only the hue shift; preserve target's saturation and luminance. Uses PS Hue blend mode — sidesteps the saturation inflation that per-channel curves cause.">
             Hue only (preserve target saturation + luminance)
-          {/* @ts-ignore */}
           </sp-checkbox>
         </div>
       )}
@@ -3149,107 +3247,16 @@ export function MatchTab() {
       )}
 
       {/* Zones accordion section removed in v1.8: replaced by the target
-          palette weight bar above the accordion. The bar is a strictly more
-          general tool (color clusters in Lab space vs. the old 3 fixed luma
-          bands) and feels parallel to the source palette. The ZoneOpts
-          math, persistence, and applyZoneAndEnvelopeToChannels still ship
-          unchanged for backward-compatibility on saved settings, but the
-          zonesLabel state stays at its default values now since users can't
-          edit it. The Color section's enZones flag is unused but kept to
-          avoid a persistence schema break. */}
-      {false && <div onClick={() => toggleSection("zones")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", cursor: "pointer", fontSize: 12, fontWeight: 700, color: enZones ? "#dddddd" : "#888", fontStyle: enZones ? "normal" : "italic" }}>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <span onClick={(e: any) => { e.stopPropagation(); setEnZones(!enZones); }}
-            title={enZones ? "Zones section ENABLED — click to disable" : "Zones section DISABLED — click to enable"}
-            style={{ width: 11, height: 11, borderRadius: 2, flexShrink: 0,
-                     background: enZones ? "#3a3a3a" : "transparent",
-                     border: `1px solid ${enZones ? "#888" : "#555"}`,
-                     display: "inline-flex", alignItems: "center", justifyContent: "center",
-                     fontSize: 10, fontWeight: 700, color: "#ddd", lineHeight: 1,
-                     cursor: "pointer", userSelect: "none" }}>{enZones ? "✓" : ""}</span>
-          <Icon name={openSection === "zones" ? "chevronDown" : "chevronRight"} size={11} /> Zones
-        </span>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-          {openSection === "zones" && (
-            <>
-              <label onClick={(e: any) => e.stopPropagation()} title="Lock total: when one amount changes, the other two rebalance proportionally to preserve the sum"
-                style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 10, fontWeight: 400, opacity: 0.85, cursor: "pointer" }}>
-                <input type="checkbox" checked={lockZoneTotal} onChange={e => setLockZoneTotal(e.target.checked)}
-                  style={{ cursor: "pointer", margin: 0 }} />
-                Lock total
-              </label>
-              <span onClick={(e: any) => { e.stopPropagation(); zonesRef.current = { ...DEFAULT_ZONES }; setZonesLabel({ ...DEFAULT_ZONES }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>
-            </>
-          )}
-          <span onClick={(e: any) => { e.stopPropagation(); void uxpInfo("Zones — what each control does", [
-            { heading: "What zones do",
-              body: "Modulate how strongly the histogram match applies across input tones. Each zone (shadows / midtones / highlights) is a Gaussian bump centered on its anchor. With all amounts at 100% and biases at 0, the match runs full-strength and zones have no effect." },
-            { heading: "Track (the gradient slider)",
-              body: "Visualizes the zone's footprint over the 0–255 input range. The colored band is where the zone is active. Center thumb = anchor; edge thumbs = falloff." },
-            { heading: "Anchor",
-              body: "Where the zone is centered along the input axis (0 = pure black, 255 = pure white). Drag the center thumb." },
-            { heading: "Falloff",
-              body: "How wide the zone extends from its anchor. Drag either edge thumb in/out for a narrower/broader zone. Symmetric around the anchor." },
-            { heading: "Amount",
-              body: "Strength of the zone's contribution, 0–200%. 100% = standard. 0% = fully suppress the match in that range. 200% = doubles local pull. The wide slider to the right of the track." },
-            { heading: "Bias",
-              body: "Competitive pressure against neighboring zones at overlap regions. Positive bias makes this zone dominate the partition where it overlaps another — like 'grow this range' in Color Range. 0 = neutral, default 0 is identical to no bias." },
-            { heading: "Lock total (header)",
-              body: "When on, dragging one zone's amount slider proportionally rebalances the other two to preserve their sum. Shifts weight between shadows/mids/highlights without changing total match strength." },
-            { heading: "Sampled swatch colors",
-              body: "The colored band on each track is sampled from the target image's actual pixels in that zone's input range. Updates in real time as you move anchors and falloff." },
-            { heading: "Reset (header)",
-              body: "Restores all zone settings (amounts, anchors, falloffs, biases) to defaults. Lock total stays as-is." },
-          ]); }}
-            title="What this section does — full explanation"
-            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 14, height: 14, borderRadius: "50%", border: "1px solid #888", color: "#aaa", fontSize: 10, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>i</span>
-        </span>
-      </div>}
-      {false && openSection === "zones" && (["shadows", "mids", "highlights"] as const).map(zone => {
-        const fallback: Record<string, string> = { shadows: "#4a7fc1", mids: "#bbb", highlights: "#e0b85a" };
-        const ankKey = `${zone}Anchor` as keyof ZoneOpts;
-        const falKey = `${zone}Falloff` as keyof ZoneOpts;
-        const biasKey = `${zone}Bias` as keyof ZoneOpts;
-        // Derive band color from target pixels at this zone's luma range. Falls back to
-        // fixed palette if no target snapshot yet or if the zone has no pixels in range.
-        let bandColor = fallback[zone];
-        if (lumaBins) {
-          const c = bandMeanColor(lumaBins, zonesLabel[ankKey], zonesLabel[falKey]);
-          if (c) bandColor = `rgb(${Math.round(c.r)}, ${Math.round(c.g)}, ${Math.round(c.b)})`;
-        }
-        return (
-          <div key={zone} style={{ padding: 0 }}>
-            <ZoneCompoundSlider
-              label={zone}
-              color={bandColor}
-              value={{ amount: zonesLabel[zone], anchor: zonesLabel[ankKey], falloff: zonesLabel[falKey], bias: zonesLabel[biasKey] }}
-              defaults={{ amount: DEFAULT_ZONES[zone], anchor: DEFAULT_ZONES[ankKey], falloff: DEFAULT_ZONES[falKey], bias: DEFAULT_ZONES[biasKey] }}
-              onChange={next => {
-                const cur = zonesRef.current;
-                const amountChanged = next.amount !== cur[zone];
-                let patch: Partial<ZoneOpts> = { [zone]: next.amount, [ankKey]: next.anchor, [falKey]: next.falloff, [biasKey]: next.bias } as Partial<ZoneOpts>;
-                // Lock-total: if this drag changed the amount, redistribute the delta across the other two zones
-                // proportionally to their current values (so their ratio is preserved).
-                if (lockZoneTotal && amountChanged) {
-                  const others = (["shadows", "mids", "highlights"] as const).filter(z => z !== zone);
-                  const [a, b] = others;
-                  const prevTotal = cur.shadows + cur.mids + cur.highlights;
-                  const remaining = Math.max(0, prevTotal - next.amount);
-                  const otherSum = cur[a] + cur[b];
-                  let na: number, nb: number;
-                  if (otherSum <= 0) { na = remaining / 2; nb = remaining / 2; }
-                  else { na = (cur[a] / otherSum) * remaining; nb = remaining - na; }
-                  patch[a] = Math.max(0, Math.min(200, Math.round(na)));
-                  patch[b] = Math.max(0, Math.min(200, Math.round(nb)));
-                }
-                zonesRef.current = { ...cur, ...patch } as ZoneOpts;
-                setZonesLabel(z => ({ ...z, ...patch }));
-                scheduleRedraw();
-              }}
-            />
-          </div>
-        );
-      })}
+          palette weight bar above the accordion. The bar is a strictly
+          more general tool (color clusters in Lab space vs. the old 3
+          fixed luma bands) and feels parallel to the source palette.
+          The ZoneOpts math + persistence + applyZoneAndEnvelopeToChannels
+          still ship unchanged so older saved settings (with non-default
+          zones) load + apply transparently. v1.20.70 — the dead
+          {false && ...} UI block (Zones accordion + per-band sliders)
+          was removed. zonesRef.current still flows into apply as the
+          zones param; if a user had saved zone settings before v1.8
+          they still take effect, just no longer editable via UI. */}
 
       <div onClick={() => toggleSection("envelope")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", cursor: "pointer", fontSize: 12, fontWeight: 700, color: enEnvelope ? "#dddddd" : "#888", fontStyle: enEnvelope ? "normal" : "italic" }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>

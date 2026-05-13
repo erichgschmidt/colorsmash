@@ -4,4 +4,13 @@
 # Distribution / packaging artifacts (not tracked in git)
 *.ccx
 plugin-test.zip
+ColorSmash-*.zip
+
+# Local-only research / planning notes (kept on disk, not committed)
+ColorSmash_Masterplan_*.md
+ColorSmash_Research_*.md
+ColorSmash_research*.md
+ColorSmash_relationship_transfer_vision.md
+COLOR_SMASH_RELATIONSHIP_ENGINE_REPORT.md
+LUT_Brainstorm_*.md
 

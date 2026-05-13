@@ -39,5 +39,10 @@ module.exports = (env, argv) => {
         __SMASH_ENABLED__: JSON.stringify(smashEnabled),
       }),
     ],
+    // v1.20.70 — silence the bundle-size warnings. The defaults (244 KiB) are
+    // tuned for over-the-wire web payloads; a UXP plugin ships locally and
+    // doesn't care about network-perf budgets. React-dom alone is ~131 KiB
+    // and we can't reasonably split it.
+    performance: { hints: false },
   };
 };
