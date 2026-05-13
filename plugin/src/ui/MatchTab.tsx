@@ -22,14 +22,16 @@ import {
   computeLumaBins, lumaRange,
   EnvelopePoint, DEFAULT_ENVELOPE,
   fitByMode, MatchMode, Preset,
-  fitMultiZoneByMode, applyMultiZoneToRgba, processMultiZoneFit, MultiZoneFit, adaptiveBandPeaks,
+  // v1.20.70 — multi-zone math (fitMultiZoneByMode, applyMultiZoneToRgba,
+  // processMultiZoneFit, MultiZoneFit, adaptiveBandPeaks) still exported
+  // from histogramMatch.ts but no longer imported in MatchTab — UI gone.
   lerpCurvesTowardIdentity,
 } from "../core/histogramMatch";
 import { EnvelopeEditor } from "./EnvelopeEditor";
 import { loadSettings, makeDebouncedSaver, clearSettings, PersistedSettings } from "./persistence";
 import { uxpInfo } from "./uxpInfo";
 import { applyMatch } from "../app/applyMatch";
-import { applyLutAsAdjustmentLayer, applyMultiZoneLutAsLayers } from "../app/applyLut";
+import { applyLutAsAdjustmentLayer } from "../app/applyLut";
 import { updateMatchCurvesLayerInPlace } from "../app/liveCurvesUpdate";
 import { LutLayerState, readLutLayerState, stampState } from "../app/lutXmp";
 import {
@@ -1084,27 +1086,12 @@ export function MatchTab() {
   const lumaBins = useMemo(() => tgt.snap ? computeLumaBins(tgt.snap.data) : null, [tgt.snap]);
   const sourceLumaBins = useMemo(() => srcSnap ? computeLumaBins(srcSnap.data) : null, [srcSnap]);
 
-  const multiZonePeaks = useMemo(() => {
-    if (!adaptiveBands || !lumaBins) return { shadow: 0, mid: 128, highlight: 255 };
-    return adaptiveBandPeaks(lumaBins);
-  }, [adaptiveBands, lumaBins]);
-
-  // Outer extents for multi-zone bands. When adaptive, derived from the target's actual
-  // luma range (lumaRange) — pixels outside this range get zero band application and pass
-  // through unchanged. Slider positions in PS Blend If panel match these extents so the
-  // visualization is honest about where the bands actually have effect.
-  const multiZoneExtents = useMemo(() => {
-    if (!adaptiveBands || !lumaBins) return { min: 0, max: 255 };
-    const r = lumaRange(lumaBins);
-    return { min: r.start, max: r.end };
-  }, [adaptiveBands, lumaBins]);
-
-  // Multi-zone fit: 3 separate per-band curves. Computed only when the multi-zone toggle
-  // is on (otherwise null).
-  const fittedMulti = useMemo<MultiZoneFit | null>(() => {
-    if (!multiZone || !weightedSrcData || !tgt.snap) return null;
-    return fitMultiZoneByMode(matchMode, weightedSrcData, tgt.snap.data, multiZonePeaks, multiZoneExtents);
-  }, [multiZone, weightedSrcData, tgt.snap, multiZonePeaks, multiZoneExtents, matchMode]);
+  // v1.20.70 — multi-zone derived values removed alongside the multi UI.
+  // multiZonePeaks / multiZoneExtents / fittedMulti previously computed
+  // band peaks + the 3-band fit. With multiZone always false, none of
+  // those useMemos were consumed, so they're dropped to skip the work.
+  // adaptiveBandPeaks / fitMultiZoneByMode / lumaRange remain in
+  // core/histogramMatch.ts for unit-testability + recipe compat.
 
   // Matched preview is rendered by <MatchedPreview/>; we drive it imperatively via a handle.
   const matchedHandleRef = useRef<MatchedPreviewHandle | null>(null);
@@ -1153,37 +1140,13 @@ export function MatchTab() {
       && targetEffectiveWeights != null
       && targetPaletteWeights.some(w => Math.abs(w - 1) > 0.01);
 
-    if (multiZone && fittedMulti) {
-      // Multi-zone path: process each band's curves through Color + Tone, simulate
-      // the 3-curve composite via compositional layer-stack blend (matches what PS
-      // produces from three stacked masked Curves layers). Zones + Envelope are
-      // skipped — they're zone-modulators that would double-apply over the bands.
-      const procFit = processMultiZoneFit(fittedMulti, curveOpts, dimOpts);
-      out = applyMultiZoneToRgba(tgtBuf.data, procFit, multiZonePeaks, multiZoneExtents);
-      // Target-palette mask: when active, the bake wraps the 3 band Curves layers
-      // in a sub-group and attaches the target-palette mask to the SUB-GROUP. PS
-      // evaluates that as (multi-zone composite) × (group mask). Mirror the same
-      // composition here per-pixel: lerp the multi-zone output toward original by
-      // each pixel's effective weight.
-      if (targetWeightsActive && targetEffectiveWeights) {
-        const orig = tgtBuf.data;
-        const ew = targetEffectiveWeights;
-        for (let i = 0, p = 0; i < out.length; i += 4, p++) {
-          const w = Math.max(0, Math.min(1, ew[p]));
-          if (w >= 0.999) continue; // full match: keep as-is
-          if (w <= 0.001) {
-            out[i] = orig[i]; out[i + 1] = orig[i + 1]; out[i + 2] = orig[i + 2];
-            continue;
-          }
-          out[i]     = Math.round(orig[i]     + (out[i]     - orig[i])     * w);
-          out[i + 1] = Math.round(orig[i + 1] + (out[i + 1] - orig[i + 1]) * w);
-          out[i + 2] = Math.round(orig[i + 2] + (out[i + 2] - orig[i + 2]) * w);
-        }
-      }
-      // Curves graph shows the mid-band curve as representative (graph doesn't render 3 sets).
-      curvesForGraph = procFit.mid;
-    } else {
-      // Single-curve path (default).
+    // v1.20.70 — single-curve path only. Multi-zone preview branch
+    // retired alongside the UI; the apply branches in
+    // applyMatch.ts / applyLut.ts are unreachable from the panel now
+    // (multiZone is hard-coded false). processMultiZoneFit /
+    // applyMultiZoneToRgba still ship in core/histogramMatch.ts for
+    // recipe compat, just no longer invoked from MatchTab.
+    {
       const processed = processChannelCurves(fittedRaw, curveOpts);
       const dim = applyDimensions(processed, dimOpts);
       curvesForGraph = applyZoneAndEnvelopeToChannels(
@@ -1358,7 +1321,7 @@ export function MatchTab() {
     // triggers a redraw with the fresh per-pixel weights.
     // targetMaskEnabled also in deps so toggling the mask gate redraws the
     // preview between masked and uniform application.
-  }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, multiZoneExtents, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enEnvelope, activePreset, targetEffectiveWeights, targetMaskEnabled, showMask, outputMode, lutStrength, lutGrid, selectionPreviewMask, effectiveSelectionMode]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fittedRaw, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enEnvelope, activePreset, targetEffectiveWeights, targetMaskEnabled, showMask, outputMode, lutStrength, lutGrid, selectionPreviewMask, effectiveSelectionMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Export the staged preset as a 33-grid 3D LUT in .CUBE format. Sidesteps the
   // unreliable PS Color Lookup API entirely — user picks a save location, we write
@@ -2062,61 +2025,9 @@ export function MatchTab() {
       softness: targetSoftness,
     } : undefined;
 
-    // Multi-zone LUT branch (v1.16.0). When Multi is on AND we have a fitted
-    // multi-zone result, emit 3 stacked Color Lookup layers in a sub-group
-    // (matches the Curves multi-zone structure). Each layer carries one
-    // band's LUT + a luma triangular mask. Falls back to single-LUT if
-    // multi-zone fit hasn't computed yet (e.g. no target snap).
-    if (multiZone && fittedMulti) {
-      setStatus("Applying multi-zone LUT...");
-      try {
-        // processMultiZoneFit normalizes the raw fit through curveOpts / dimOpts —
-        // same processing single-LUT applies via renderedCurves. Without this
-        // step the bands would carry pre-postprocess curves and the preset
-        // blend math would double-apply.
-        // curveOpts shape mirrors the preview pipeline (~line 746). enColor
-        // gate is applied implicitly here — caller already decided to Apply,
-        // so the Color section is honored at its current slider values.
-        const stretchRange = anchorStretchToHist && lumaBins ? lumaRange(lumaBins) : undefined;
-        const procFit = processMultiZoneFit(fittedMulti, {
-          amount: amountRef.current / 100,
-          smoothRadius: smoothRef.current,
-          maxStretch: stretchRef.current,
-          stretchRange,
-        }, dimsRef.current);
-        const result = await applyMultiZoneLutAsLayers({
-          multiZoneFit: procFit,
-          preset: activePreset,
-          gridSize: lutGrid,
-          strength: lutStrength / 100,
-          dither: lutDither,
-          selectionMode: effectiveSelectionMode,
-          targetLayerId: targetId === MERGED_LAYER_ID ? null : targetId,
-          targetIsMerged: targetId === MERGED_LAYER_ID,
-          overwritePrior: true,
-          targetPalette,
-          multiZonePeaks,
-          multiZoneExtents,
-          xmpState: buildXmpState(),
-        });
-        // v1.20.64 — multi-zone LUT result returns the band-container group
-        // id. Storing that into liveLutLayerIdRef would cause AUTO's next
-        // tick (after a switch out of multi mode) to pass a group id as
-        // `updateExistingLayerId`, which the single-LUT applyLut path can't
-        // handle and silently produces stray layers. Keep the ref null in
-        // multi-zone so AUTO always re-seeds via the create path until the
-        // user does a non-multi Apply.
-        liveLutLayerIdRef.current = null;
-        lastSelfWriteRef.current = Date.now();
-        setStatus(`Applied "${result.layerName}" (3× 33³ multi-zone LUT).`);
-        pushCurrentToHistory();
-        return;
-      } catch (e: any) {
-        setStatus(`Apply multi-zone LUT failed: ${e?.message ?? e}`);
-        return;
-      }
-    }
-
+    // v1.20.70 — multi-zone LUT branch removed alongside the UI. The
+    // applyMultiZoneLutAsLayers entry point in applyLut.ts still ships
+    // (recipe-compat) but is unreachable from the panel now.
     // Single-LUT branch.
     setStatus("Applying LUT...");
     try {
@@ -2169,13 +2080,8 @@ export function MatchTab() {
     }
     // Multi-zone LUT incompatibility (v1.16.0): the multi-zone path creates 3
     // Color Lookup layers in a sub-group, while Live LUT's update-in-place
-    // mechanism targets a single layer ID. Updating 3 layers per commit + re-
-    // baking 3 ICC profiles is a future-increment; for now skip live updates
-    // entirely when Multi is on. Apply still works (multi-zone bake).
-    if (multiZone) {
-      if (liveBakeTimerRef.current) { clearTimeout(liveBakeTimerRef.current); liveBakeTimerRef.current = null; }
-      return;
-    }
+    // v1.20.70 — multi-zone skip removed (multi UI retired; multiZone
+    // is now hard-coded false in the panel).
     // First effect run after enabling: skip — don't auto-create on toggle.
     // The user must either drag a slider OR hit Apply LUT once to seed the layer.
     if (!liveBakeFirstRunSkippedRef.current) {
@@ -2278,10 +2184,11 @@ export function MatchTab() {
         sourceLayerId: sourceId ?? -1,
         targetLayerId: targetId,
         matchMode,
-        multiZone,
+        // v1.20.70 — multi-zone retired: multiZone always false, peak/
+        // extent params no longer computed in the panel. applyMatch
+        // ignores them when multiZone is false anyway.
+        multiZone: false,
         multiZoneLimit,
-        multiZonePeaks,
-        multiZoneExtents,
         // Section-enable mirror — disabled sections apply with default params.
         amount: enColor ? amountRef.current / 100 : 1,
         smoothRadius: enColor ? smoothRef.current : 0,
