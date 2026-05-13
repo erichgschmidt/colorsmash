@@ -272,7 +272,14 @@ export function MatchTab() {
   const HISTORY_MAX = historyCap;
   // Default open in v1.20.1 — feedback was that the collapsed disclosure
   // was easy to miss, and the strip is small enough to live exposed.
-  const [historyOpen, setHistoryOpen] = useState(true);
+  // v1.20.70 — history now defaults COLLAPSED (was true). The strip
+  // sits at the bottom of the panel, so leaving it open consumed
+  // vertical real estate before the user has reason to look at it.
+  const [historyOpen, setHistoryOpen] = useState(false);
+  // v1.20.70 — MASK section collapse state. Default EXPANDED so the
+  // Off/Focus/Exclude tristate is visible by default; collapse via the
+  // ▾/▸ disclosure on the MASK island header.
+  const [maskOpen, setMaskOpen] = useState(true);
   // v1.20.3 — when set to an entry id, the thumbnail's title area swaps to
   // a small text input for renaming. Pinned entries only; recents use the
   // auto-generated label. Saved on blur / Enter; canceled on Escape.
@@ -3569,8 +3576,13 @@ export function MatchTab() {
           The old per-palette mask pill in PaletteStrip is gone — this
           is now the single source of mask control. */}
       <div style={ISLAND}>
-        <div style={ISLAND_HEADER}>MASK</div>
-      {(() => {
+        <div onClick={() => setMaskOpen(o => !o)}
+          style={{ ...ISLAND_HEADER, marginBottom: maskOpen ? 4 : 0, display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}
+          title={maskOpen ? "Hide mask controls" : "Show mask controls"}>
+          <span style={{ width: 8, display: "inline-block", textAlign: "center" }}>{maskOpen ? "▾" : "▸"}</span>
+          <span>MASK</span>
+        </div>
+        {maskOpen && (() => {
         const marqueeDisabled = srcMode === "selection";
         const disabledTip = "Disabled because the source is using the active marquee. Switch source to a layer or browsed image to use the marquee as an output mask.";
         const maskOn = showMask && targetMaskEnabled;

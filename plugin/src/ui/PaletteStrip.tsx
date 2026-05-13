@@ -363,7 +363,7 @@ export function PaletteStrip(props: PaletteStripProps) {
   if (swatches.length === 0) {
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{ display: "flex", flex: 1, height: BAR_HEIGHT, gap: 2, opacity: 0.4, minWidth: 0 }}>
             {Array.from({ length: count }, (_, i) => (
               <div key={i} style={{ flex: 1, background: "#1a1a1a", border: "1px solid #333", borderRadius: 2 }} />
@@ -386,7 +386,7 @@ export function PaletteStrip(props: PaletteStripProps) {
           cluster sits on the right at fixed width. v1.20.70 — gap
           bumped 4→8 so the slider bar doesn't visually touch the
           first cluster button. */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
       {/* The bar: positioned segments + absolutely-placed handles between them.
           We use position:relative on the outer + absolute children so the handle
           sit exactly at boundary edges without flex math drifting. */}
