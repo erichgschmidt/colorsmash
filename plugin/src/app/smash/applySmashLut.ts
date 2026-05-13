@@ -22,8 +22,7 @@ export interface ApplySmashLutResult {
   error?: string;
 }
 
-/** Decode base64 to bytes — UXP doesn't have atob in worker scope, so we use the
- *  same string-decode pattern as applyLut.ts's cubeToBase64. */
+/** Decode base64 to bytes. atob is exposed in UXP's panel JS runtime. */
 function b64ToBytes(b64: string): Uint8Array {
   const bin = atob(b64);
   const out = new Uint8Array(bin.length);
@@ -38,6 +37,16 @@ function bytesToB64(bytes: Uint8Array): string {
     s += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)));
   }
   return btoa(s);
+}
+
+/** Encode a pure-ASCII string (.cube content) to bytes without TextEncoder.
+ *  TextEncoder isn't reliably exposed in UXP across PS versions — applyLut.ts
+ *  has the same defensive pattern. .cube text is ASCII-only (numbers, keywords,
+ *  quotes around the title) so charCode-per-byte is exact. */
+function asciiStringToBytes(s: string): Uint8Array {
+  const out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i) & 0xff;
+  return out;
 }
 
 /** Build the ICC CLUT block from a Smash float LUT (Float32Array, N³ × 3,
@@ -89,7 +98,7 @@ export async function applySmashLut(engine: SmashEngineOutput): Promise<ApplySma
   try {
     const lut = bakeSmashLut(engine, SMASH_GRID);
     const cubeText = serializeSmashCube(lut, APPLY_LAYER_NAME);
-    const cubeB64 = bytesToB64(new TextEncoder().encode(cubeText));
+    const cubeB64 = bytesToB64(asciiStringToBytes(cubeText));
     const profileB64 = buildSmashIccBase64(lut.values, SMASH_GRID);
     const stamp = Date.now();
     const displayName = `${APPLY_LAYER_NAME}_${stamp}.cube`;
