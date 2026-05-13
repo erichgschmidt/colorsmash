@@ -7,3 +7,4 @@ export * from './types';
 export * from './features';
 export * from './bands';
 export * from './clusters';
+export * from './gamut';
