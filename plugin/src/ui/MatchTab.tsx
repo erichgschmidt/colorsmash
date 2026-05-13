@@ -272,14 +272,15 @@ export function MatchTab() {
   const HISTORY_MAX = historyCap;
   // Default open in v1.20.1 — feedback was that the collapsed disclosure
   // was easy to miss, and the strip is small enough to live exposed.
-  // v1.20.70 — history now defaults COLLAPSED (was true). The strip
-  // sits at the bottom of the panel, so leaving it open consumed
-  // vertical real estate before the user has reason to look at it.
+  // v1.20.70 — collapse defaults: only OUTPUT opens by default. All
+  // other optional sections (TRANSFORM / MASK / HISTORY / FITTED
+  // CURVES) start collapsed so the panel boots compact; click a
+  // section header ▾/▸ to reveal. Source / Target islands have no
+  // toggle (always visible — they're the input surface).
   const [historyOpen, setHistoryOpen] = useState(false);
-  // v1.20.70 — MASK section collapse state. Default EXPANDED so the
-  // Off/Focus/Exclude tristate is visible by default; collapse via the
-  // ▾/▸ disclosure on the MASK island header.
-  const [maskOpen, setMaskOpen] = useState(true);
+  const [maskOpen, setMaskOpen] = useState(false);
+  const [transformOpen, setTransformOpen] = useState(false);
+  const [outputOpen, setOutputOpen] = useState(true);
   // v1.20.3 — when set to an entry id, the thumbnail's title area swaps to
   // a small text input for renaming. Pinned entries only; recents use the
   // auto-generated label. Saved on blur / Enter; canceled on Escape.
@@ -3018,7 +3019,13 @@ export function MatchTab() {
           frame already groups them, and inner separators inside the
           island are softer. */}
       <div style={ISLAND}>
-        <div style={ISLAND_HEADER}>TRANSFORM</div>
+        <div onClick={() => setTransformOpen(o => !o)}
+          style={{ ...ISLAND_HEADER, marginBottom: transformOpen ? 4 : 0, display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}
+          title={transformOpen ? "Hide transform controls (Color / Tone / Envelope)" : "Show transform controls (Color / Tone / Envelope)"}>
+          <span style={{ width: 8, display: "inline-block", textAlign: "center" }}>{transformOpen ? "▾" : "▸"}</span>
+          <span>TRANSFORM</span>
+        </div>
+        {transformOpen && <>{/* TRANSFORM body */}
       {/* Accordion controls */}
       <div onClick={() => toggleSection("basic")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", cursor: "pointer", fontSize: 12, fontWeight: 700, color: enColor ? "#dddddd" : "#888", fontStyle: enColor ? "normal" : "italic" }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
@@ -3291,11 +3298,20 @@ export function MatchTab() {
           />
         </div>
       )}
+      </>}{/* end transformOpen */}
       </div>{/* end TRANSFORM island */}
 
-      {/* OUTPUT island. v1.20.70 — header label + framed container. */}
+      {/* OUTPUT island. v1.20.70 — header label + framed container.
+          Collapsible via the ▾/▸ disclosure on the header (default
+          expanded — the most-used section). */}
       <div style={ISLAND}>
-        <div style={ISLAND_HEADER}>OUTPUT</div>
+        <div onClick={() => setOutputOpen(o => !o)}
+          style={{ ...ISLAND_HEADER, marginBottom: outputOpen ? 4 : 0, display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}
+          title={outputOpen ? "Hide output controls" : "Show output controls"}>
+          <span style={{ width: 8, display: "inline-block", textAlign: "center" }}>{outputOpen ? "▾" : "▸"}</span>
+          <span>OUTPUT</span>
+        </div>
+        {outputOpen && <>{/* OUTPUT body */}
 
       {/* v1.20.70 — output block restructured again. Apply pill removed:
           tab clicks (RGB/Lab/LUT) now BOTH swap output mode AND fire Apply.
@@ -3567,6 +3583,7 @@ export function MatchTab() {
             lineHeight: "20px", boxSizing: "border-box",
           }}>ISOLATE</div>
       </div>
+      </>}{/* end outputOpen */}
       </div>{/* end OUTPUT island */}
 
       {/* MASK island. v1.20.70 — moved BELOW the output block (was above
