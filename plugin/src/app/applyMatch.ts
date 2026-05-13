@@ -3,7 +3,7 @@
 
 import {
   readLayerPixels, executeAsModal, statsRectForLayer,
-  makeCurvesLayer, setClippingMask, GROUP_NAME, action, app,
+  makeCurvesLayer, setClippingMask, GROUP_NAME, action, app, setLayerColor, COLOR_SMASH_GROUP_COLOR,
   readSelectionMaskBytes,
   deleteLayerMask, snapshotSelectionToChannel, restoreSelectionFromChannel, deleteChannel, deselectAll,
 } from "../services/photoshop";
@@ -243,6 +243,8 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
         await action.batchPlay([{ _obj: "selectNoLayers", _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }] }], {});
       } catch { /* not critical */ }
       group = await doc.createLayerGroup({ name: GROUP_NAME });
+      // v1.20.69 — orange color tag for visibility in PS Layers panel.
+      try { if (group?.id != null) await setLayerColor(group.id, COLOR_SMASH_GROUP_COLOR); } catch { /* ignore */ }
     }
     // Position the group directly above the target layer (in the panel) on every run,
     // not just first-creation. If the user picks a different target after a prior apply,

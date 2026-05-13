@@ -15,7 +15,7 @@
 
 import { ChannelCurves, generateLutCube, Preset, lerpCurvesTowardIdentity } from "../core/histogramMatch";
 import {
-  GROUP_NAME, action, app,
+  GROUP_NAME, action, app, setLayerColor, COLOR_SMASH_GROUP_COLOR,
   executeAsModal, readLayerPixels, setClippingMask, PixelBuffer,
   readSelectionMaskBytes,
   deleteLayerMask, snapshotSelectionToChannel, restoreSelectionFromChannel, deleteChannel, deselectAll,
@@ -119,7 +119,10 @@ async function getOrCreateColorSmashGroup(doc: any): Promise<any> {
   try {
     await action.batchPlay([{ _obj: "selectNoLayers", _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }] }], {});
   } catch { /* not critical */ }
-  return await doc.createLayerGroup({ name: GROUP_NAME });
+  const group = await doc.createLayerGroup({ name: GROUP_NAME });
+  // v1.20.69 — orange color tag for visibility in PS Layers panel.
+  try { if (group?.id != null) await setLayerColor(group.id, COLOR_SMASH_GROUP_COLOR); } catch { /* ignore */ }
+  return group;
 }
 
 /** Recursive layer search by id (handles nesting in groups). */

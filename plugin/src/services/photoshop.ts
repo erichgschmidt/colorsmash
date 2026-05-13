@@ -302,6 +302,34 @@ export async function deleteChannel(name: string): Promise<void> {
 }
 
 /**
+ * v1.20.69 — set the Photoshop layer-panel color tag on a group/layer.
+ * Helps the [Color Smash] group stand out visually in the Layers panel.
+ * PS's fixed color set: "none" | "red" | "orange" | "yellow" | "green"
+ * | "blue" | "violet" | "gray". We tag the canonical group orange to
+ * match the panel's amber accent palette.
+ *
+ * Implemented via batchPlay set descriptor — `layer.color` isn't on
+ * the UXP DOM directly. Silent on failure: the color is decorative, not
+ * functional.
+ */
+export async function setLayerColor(
+  layerId: number,
+  color: "none" | "red" | "orange" | "yellow" | "green" | "blue" | "violet" | "gray",
+): Promise<void> {
+  try {
+    await action.batchPlay([{
+      _obj: "set",
+      _target: [{ _ref: "layer", _id: layerId }],
+      to: { _obj: "layer", color: { _enum: "color", _value: color } },
+      _options: { dialogOptions: "dontDisplay" },
+    }], {});
+  } catch { /* non-fatal — decorative only */ }
+}
+
+/** v1.20.69 — color used for the [Color Smash] group. */
+export const COLOR_SMASH_GROUP_COLOR = "orange" as const;
+
+/**
  * v1.20.69 — consolidate stray [Color Smash] groups into a single
  * canonical group at the doc root.
  *
@@ -335,21 +363,27 @@ export async function consolidateColorSmashGroups(docId: number): Promise<void> 
       }
     };
     walk(doc.layers ?? [], 0);
-    if (found.length < 2) return;
+    if (found.length === 0) return;
     // Pick the canonical group: prefer the SHALLOWEST (top-level if
     // any), then the first-found at that depth.
     found.sort((a, b) => a.depth - b.depth);
     const canonical = found[0].group;
-    // Move every child of every duplicate INTO the canonical group,
-    // then delete the now-empty duplicate.
-    for (let i = 1; i < found.length; i++) {
-      const dup = found[i].group;
-      const children = Array.isArray(dup.layers) ? [...dup.layers] : [];
-      for (const child of children) {
-        try { await child.move(canonical, "placeInside"); } catch { /* ignore */ }
+    if (found.length > 1) {
+      // Move every child of every duplicate INTO the canonical group,
+      // then delete the now-empty duplicate.
+      for (let i = 1; i < found.length; i++) {
+        const dup = found[i].group;
+        const children = Array.isArray(dup.layers) ? [...dup.layers] : [];
+        for (const child of children) {
+          try { await child.move(canonical, "placeInside"); } catch { /* ignore */ }
+        }
+        try { await dup.delete(); } catch { /* ignore */ }
       }
-      try { await dup.delete(); } catch { /* ignore */ }
     }
+    // v1.20.69 — tag the canonical group with the panel's accent color
+    // so it stands out in the Layers panel. Runs on every Apply so any
+    // older groups (created before this version) also get colored.
+    try { if (canonical?.id != null) await setLayerColor(canonical.id, COLOR_SMASH_GROUP_COLOR); } catch { /* ignore */ }
   } catch { /* non-fatal */ }
 }
 
