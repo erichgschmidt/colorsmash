@@ -36,6 +36,7 @@ import {
   type SourceDNA,
 } from "../../core/smash";
 import { loadSmashSettings, makeSmashSaver, type SmashPersisted } from "./persistence";
+import { applySmashLut } from "../../app/smash/applySmashLut";
 
 // ────────── synthetic demo fallback ──────────
 
@@ -181,6 +182,20 @@ export function SmashTab() {
   const preset = detectPreset(amount);
   const onPresetChange = (next: SmashPreset) => setAmount(SMASH_PRESET_AMOUNTS[next]);
 
+  const onApply = async () => {
+    setExportStatus("applying…");
+    try {
+      const result = await applySmashLut(pipeline.engine);
+      if (result.ok) {
+        setExportStatus(`applied: ${result.layerName ?? "Smash LUT"}`);
+      } else {
+        setExportStatus(`apply error: ${result.error ?? "unknown"}`);
+      }
+    } catch (err: any) {
+      setExportStatus(`apply error: ${err?.message ?? err}`);
+    }
+  };
+
   const onExportCube = async () => {
     setExportStatus("baking…");
     try {
@@ -246,6 +261,13 @@ export function SmashTab() {
       />
 
       <div style={actionRowStyle}>
+        <button
+          style={primaryButtonStyle}
+          onClick={onApply}
+          title="Install the current Smash transform as a Color Lookup adjustment layer above the active layer."
+        >
+          Apply
+        </button>
         <button style={actionButtonStyle} onClick={onExportCube} title="Bake the current Smash transform to a portable .cube LUT.">
           Export .cube
         </button>
@@ -342,4 +364,10 @@ const actionButtonStyle: React.CSSProperties = {
   background: "#3a3a3a", color: "#ddd", border: "1px solid #1a1a1a",
   borderRadius: 3, padding: "5px 12px", fontFamily: "inherit", fontSize: 11,
   cursor: "pointer",
+};
+
+const primaryButtonStyle: React.CSSProperties = {
+  background: "#6ab7ff", color: "#0f1620", border: "1px solid #1a1a1a",
+  borderRadius: 3, padding: "5px 14px", fontFamily: "inherit", fontSize: 11,
+  fontWeight: 600, cursor: "pointer",
 };
