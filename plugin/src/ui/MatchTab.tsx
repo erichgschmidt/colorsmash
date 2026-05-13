@@ -2923,6 +2923,21 @@ export function MatchTab() {
             // Each column is its own little vertical group sharing borders
             // with neighbors (no-gap segmented block).
             const isFirst = idx === 0;
+            // v1.20.69 — accent the active tab + its sub-toggles with an
+            // amber border so the user can tell at a glance which column
+            // is the current output mode. Three visual states per toggle:
+            //   ACTIVE + on   → filled bg, bright fg, amber border
+            //   INACTIVE + on → no fill, dim fg, dim solid border (dormant:
+            //                   "used this session but not the current mode")
+            //   off (any tab) → no fill, muted fg, very dim border (cold)
+            const ACCENT = "#d8b87a";
+            const subState = (on: boolean) => {
+              if (!on) return { bg: "transparent", fg: "#777", bd: "#3a3a3a" };
+              if (active) return { bg: "#2f2f2f", fg: "#cccccc", bd: ACCENT };
+              return { bg: "transparent", fg: "#888", bd: "#555" };
+            };
+            const multiS = subState(cfg.multi);
+            const blendS = subState(cfg.blendIf && cfg.multi);
             return (
               <div key={val} style={{ flex: 1, display: "flex", flexDirection: "column", gap: 0, minWidth: 0 }}>
                 {/* Tab label pill. v1.20.69 — click swaps mode AND triggers Apply. */}
@@ -2933,7 +2948,7 @@ export function MatchTab() {
                     fontSize: 10, fontWeight: 700, letterSpacing: 0.4,
                     background: active ? "#3a3a3a" : "transparent",
                     color: active ? "#dddddd" : "#888",
-                    border: `1px solid ${active ? "#888" : "#444"}`,
+                    border: `1px solid ${active ? ACCENT : "#444"}`,
                     borderLeftWidth: isFirst ? 1 : 0,
                     borderRadius: 0,
                     cursor: "pointer", userSelect: "none",
@@ -2946,15 +2961,14 @@ export function MatchTab() {
                       flex: 1, height: 18, padding: 0,
                       display: "flex", alignItems: "center", justifyContent: "center",
                       fontSize: 8, fontWeight: 600, letterSpacing: 0.3,
-                      background: cfg.multi ? "#2f2f2f" : "transparent",
-                      color: cfg.multi ? "#cccccc" : "#777",
-                      border: `1px solid ${cfg.multi ? "#888" : "#3a3a3a"}`,
+                      background: multiS.bg,
+                      color: multiS.fg,
+                      border: `1px solid ${multiS.bd}`,
                       borderLeftWidth: isFirst ? 1 : 0,
                       borderTopWidth: 0,
                       borderRadius: 0,
                       cursor: "pointer", userSelect: "none",
                       lineHeight: "16px", boxSizing: "border-box",
-                      opacity: active ? 1 : 0.7,
                     }}
                     title={`Multi (${label}): split this output into 3 luma-banded layers. Per-tab — RGB / Lab / LUT each remember their own Multi state.`}>
                     MULTI
@@ -2964,19 +2978,15 @@ export function MatchTab() {
                       flex: 1, height: 18, padding: 0,
                       display: "flex", alignItems: "center", justifyContent: "center",
                       fontSize: 8, fontWeight: 600, letterSpacing: 0.3,
-                      // v1.20.53 — match MULTI's color discipline so BLEND
-                      // stays readable when disabled (was #555 on transparent,
-                      // basically invisible). Now uses the same #777 dim
-                      // color MULTI uses for its "off but readable" state.
-                      background: cfg.blendIf && cfg.multi ? "#2f2f2f" : "transparent",
-                      color: cfg.blendIf && cfg.multi ? "#cccccc" : "#777",
-                      border: `1px solid ${cfg.blendIf && cfg.multi ? "#888" : "#3a3a3a"}`,
+                      background: blendS.bg,
+                      color: blendS.fg,
+                      border: `1px solid ${blendS.bd}`,
                       borderLeftWidth: 0,
                       borderTopWidth: 0,
                       borderRadius: 0,
                       cursor: subDisabled ? "default" : "pointer", userSelect: "none",
                       lineHeight: "16px", boxSizing: "border-box",
-                      opacity: subDisabled ? 0.55 : (active ? 1 : 0.7),
+                      opacity: subDisabled ? 0.55 : 1,
                     }}
                     title={subDisabled
                       ? "Blend is only meaningful when Multi is on for this tab."
