@@ -13,6 +13,8 @@ import {
   detectPreset,
 } from "./SmashControlsBar";
 import { SmashAuditPanel } from "./SmashAuditPanel";
+import { TraitSliders, DEFAULT_TRAIT_AMOUNTS } from "./TraitSliders";
+import type { TraitAmounts } from "../../core/smash/types";
 import {
   extractFeatures,
   extractSourceDNA,
@@ -61,6 +63,8 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   const { sourceSnap, targetSnap, onEngineChange } = props;
 
   const [amount, setAmount] = useState<number>(SMASH_PRESET_AMOUNTS.strong);
+  const [traits, setTraits] = useState<TraitAmounts>(DEFAULT_TRAIT_AMOUNTS);
+  const [traitsOpen, setTraitsOpen] = useState<boolean>(false);
   const [exportStatus, setExportStatus] = useState<string>("");
   const loadedRef = useRef<boolean>(false);
 
@@ -68,7 +72,9 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   const saverRef = useRef<((s: SmashPersisted) => void) | null>(null);
   if (!saverRef.current) saverRef.current = makeSmashSaver(500);
 
-  // Mount: restore persisted amount only — layer ids are managed by the parent.
+  // Mount: restore persisted amount + trait amounts. Layer ids are managed
+  // by the parent. Missing trait keys fall back to DEFAULT_TRAIT_AMOUNTS so
+  // older save files load cleanly.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -77,18 +83,32 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       if (typeof persisted?.amount === "number" && Number.isFinite(persisted.amount)) {
         setAmount(Math.max(0, Math.min(1, persisted.amount)));
       }
+      if (persisted?.traits && typeof persisted.traits === "object") {
+        const t = persisted.traits;
+        const clamp01 = (v: unknown): number | null =>
+          typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : null;
+        setTraits((prev) => ({
+          value:      clamp01(t.value)      ?? prev.value,
+          hue:        clamp01(t.hue)        ?? prev.hue,
+          saturation: clamp01(t.saturation) ?? prev.saturation,
+          chroma:     clamp01(t.chroma)     ?? prev.chroma,
+          neutral:    clamp01(t.neutral)    ?? prev.neutral,
+          accent:     clamp01(t.accent)     ?? prev.accent,
+        }));
+      }
       loadedRef.current = true;
     })();
     return () => { cancelled = true; };
   }, []);
 
-  // Save amount on change (debounced 500ms). Skip until initial load resolved.
+  // Save amount + traits on change (debounced 500ms). Skip until initial
+  // load resolved.
   useEffect(() => {
     if (!loadedRef.current) return;
-    saverRef.current?.({ amount });
-  }, [amount]);
+    saverRef.current?.({ amount, traits });
+  }, [amount, traits]);
 
-  // Engine pipeline: recompute whenever snaps or amount change.
+  // Engine pipeline: recompute whenever snaps, amount, or traits change.
   const pipeline = useMemo<EnginePipeline | null>(() => {
     if (!sourceSnap || !targetSnap) {
       onEngineChange?.(null);
@@ -100,13 +120,13 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     const profile = pairDNA(sourceDNA, targetStructure);
     const sourceFeatures = extractFeatures(sourceSnap.data, sourceSnap.width, sourceSnap.height, 4);
     const targetFeatures = extractFeatures(targetSnap.data, targetSnap.width, targetSnap.height, 4);
-    const controls = { ...DEFAULT_SMASH_CONTROLS, global: amount };
+    const controls = { ...DEFAULT_SMASH_CONTROLS, global: amount, traits };
     const engine = smash(sourceFeatures, targetFeatures, profile, controls);
 
     onEngineChange?.(engine);
     return { sourceDNA, engine };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceSnap, targetSnap, amount]);
+  }, [sourceSnap, targetSnap, amount, traits]);
 
   const preset = detectPreset(amount);
   const onPresetChange = (next: SmashPreset) => setAmount(SMASH_PRESET_AMOUNTS[next]);
@@ -171,6 +191,29 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
         disabled={!hasSnaps}
       />
 
+      {/* Traits disclosure. Closed by default so the primary surface stays
+          the one-big-knob + preset row. Opens to reveal six trait sliders
+          (Value, Hue, Saturation, Chroma, Neutral, Accent). Phase 2a:
+          Value + Neutral differentially affect the output; the others are
+          recorded in the audit but no-op in applyTransform until Phase 2b. */}
+      <div
+        style={traitsHeaderStyle}
+        onClick={() => setTraitsOpen((o) => !o)}
+        title={traitsOpen ? "Hide trait sliders" : "Show trait sliders"}
+      >
+        <span style={{ width: 10, display: "inline-block", textAlign: "center" }}>
+          {traitsOpen ? "▾" : "▸"}
+        </span>
+        <span>TRAITS</span>
+      </div>
+      {traitsOpen && (
+        <TraitSliders
+          amounts={traits}
+          onAmountsChange={setTraits}
+          disabled={!hasSnaps}
+        />
+      )}
+
       {hasSnaps && pipeline && (
         <>
           <div style={sectionLabelStyle}>SMASH AUDIT</div>
@@ -213,6 +256,13 @@ const containerStyle: React.CSSProperties = {
 const sectionLabelStyle: React.CSSProperties = {
   fontSize: 9, fontWeight: 600, letterSpacing: 1, color: "#888",
   textTransform: "uppercase", marginTop: 2,
+};
+
+const traitsHeaderStyle: React.CSSProperties = {
+  display: "flex", alignItems: "center", gap: 4,
+  fontSize: 9, fontWeight: 600, letterSpacing: 1, color: "#888",
+  textTransform: "uppercase", marginTop: 2,
+  cursor: "pointer", userSelect: "none",
 };
 
 const placeholderStyle: React.CSSProperties = {

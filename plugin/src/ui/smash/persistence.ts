@@ -18,6 +18,17 @@ export interface SmashPersisted {
   targetDocId?: number | null;
   /** Layer id within targetDocId. */
   targetLayerId?: number | null;
+  /** v1.21 Phase 2 — six trait amounts in [0, 1]. Stored as a partial
+   *  Record so older save files without traits still load cleanly; missing
+   *  keys fall back to DEFAULT_TRAIT_AMOUNTS on read. */
+  traits?: {
+    value?: number;
+    hue?: number;
+    saturation?: number;
+    chroma?: number;
+    neutral?: number;
+    accent?: number;
+  };
 }
 
 async function getDataFolder(): Promise<any | null> {
