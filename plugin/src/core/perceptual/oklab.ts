@@ -1,22 +1,11 @@
 // Oklab and OkLCh color space conversions (Ottosson 2020).
 // Preferred over CIE Lab for new Pro-tier math: more perceptually uniform and
 // cheaper — no XYZ intermediate, no per-axis white-point normalization.
-// sRGB transfer function matches palette.ts exactly (IEC 61966-2-1).
+// sRGB transfer function sourced from core/color (IEC 61966-2-1) — same
+// implementation used by palette.ts and histogramMatch.ts.
+import { srgbToLinear, linearToSrgbByte } from '../color';
 
 export type Vec3 = readonly [number, number, number];
-
-// ────────── sRGB transfer function (IEC 61966-2-1) ──────────
-// Matches palette.ts srgbToLinear / linearToSrgb byte handling exactly.
-
-function srgbToLinear(c: number): number {
-  const x = c / 255;
-  return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
-}
-
-function linearToSrgbByte(c: number): number {
-  const x = c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(Math.max(0, c), 1 / 2.4) - 0.055;
-  return Math.max(0, Math.min(255, Math.round(x * 255)));
-}
 
 // Cube root that preserves sign for negative LMS values, per Ottosson spec.
 function cbrtSigned(x: number): number {
