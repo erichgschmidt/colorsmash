@@ -757,24 +757,10 @@ export function lumaRange(bins: LumaBins, minFraction = 0.005): { start: number;
   return { start, end: Math.max(start + 1, end) };
 }
 
-// Gaussian-weighted mean RGB color centered at `anchor` with the given falloff.
-// Returns null if no pixels in range. Falloff scaling matches buildZoneWeights.
-export function bandMeanColor(bins: LumaBins, anchor: number, falloff: number): { r: number; g: number; b: number } | null {
-  const sigma = 18 + (falloff / 100) * 60;
-  const inv2s2 = 1 / (2 * sigma * sigma);
-  let R = 0, G = 0, B = 0, W = 0;
-  for (let v = 0; v < 256; v++) {
-    if (bins.count[v] === 0) continue;
-    const w = Math.exp(-((v - anchor) ** 2) * inv2s2);
-    const cw = w * bins.count[v];
-    R += bins.sumR[v] * w;
-    G += bins.sumG[v] * w;
-    B += bins.sumB[v] * w;
-    W += cw;
-  }
-  if (W < 1e-6) return null;
-  return { r: R / W, g: G / W, b: B / W };
-}
+// bandMeanColor() was the band-sampling helper used by the Zones
+// accordion (sampled gaussian-weighted RGB at an anchor in the target's
+// luma histogram, used to tint the zone gradient slider). Removed in
+// v1.20.70 along with the rest of the Zones UI.
 
 export function applyZoneWeightsToChannels(c: ChannelCurves, opts: ZoneOpts): ChannelCurves {
   const w = buildZoneWeights(opts);

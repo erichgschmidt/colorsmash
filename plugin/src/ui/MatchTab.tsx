@@ -1937,6 +1937,33 @@ export function MatchTab() {
     setStatus("Panel state restored (redo).");
     setTimeout(() => { isRestoringRef.current = false; }, 350);
   };
+  // v1.20.70 — keyboard shortcut for panel undo / redo. Listens at
+  // document level — UXP only fires keydown when the panel itself has
+  // focus (a slider / input / picker is active here, not in PS), so
+  // we never steal Cmd/Ctrl+Z from Photoshop's own undo. When the user
+  // is hovering / focused INSIDE the panel:
+  //   Cmd/Ctrl+Z              → onPanelUndo()
+  //   Cmd/Ctrl+Shift+Z        → onPanelRedo()
+  //   Ctrl+Y (Windows convention) → onPanelRedo()
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.ctrlKey || e.metaKey;
+      if (!mod) return;
+      const key = e.key.toLowerCase();
+      if (key === "z") {
+        e.preventDefault();
+        if (e.shiftKey) onPanelRedo();
+        else onPanelUndo();
+      } else if (key === "y") {
+        e.preventDefault();
+        onPanelRedo();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Debounced snapshot watcher. Fires 250ms after the last tracked
   // state change. On each fire, if not restoring, the prior snapshot
   // is pushed onto the undo stack and the redo stack is cleared (new
@@ -1967,8 +1994,13 @@ export function MatchTab() {
     }, 250);
     return () => clearTimeout(id);
     // Watching a wide dep slice — every panel state slice that should
-    // count as an "undoable" change. Same set as the persistence
-    // saver so we don't have to maintain two lists in lockstep.
+    // count as an "undoable" change. Intentionally NOT including:
+    //   - recentHistory (auto-record after apply would push a useless
+    //     undo step; the user wouldn't expect ↶ to remove a history
+    //     entry)
+    //   - sourceId / targetId / srcDocId / tgtDocId / srcMode (context
+    //     switches, not panel "tweaks" the user would expect undo for
+    //     — they're picking where to work, not what to do)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     matchMode, multiZone, multiZoneLimit, adaptiveBands, tabConfig,
@@ -1977,7 +2009,6 @@ export function MatchTab() {
     overwriteOnApply, zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel,
     paletteCount, paletteAdaptive, sourceSoftness, targetSoftness,
     targetMaskEnabled, paletteWeights, targetPaletteWeights,
-    sourceId, targetId,
   ]);
 
   // Apply LUT — bake the staged preset into a Color Lookup adjustment layer
@@ -2689,7 +2720,7 @@ export function MatchTab() {
           { heading: "Quick start",
             body: "1. Pick a source in SOURCE / REFERENCE (any open doc, a marquee, or a file on disk).\n2. Pick a target in TARGET / PREVIEW.\n3. Open the OUTPUT island and click RGB, Lab, or LUT — clicking a tab BOTH swaps the output mode AND applies in one click.\n4. Optional: expand MASK / TRANSFORM / MULTI-BLEND for finer control. Pin recipes in HISTORY; ↓ IMPORT / ↑ EXPORT to share." },
           { heading: "Header icons (left → right)",
-            body: "↶ ↷ — PANEL-state undo / redo. Reverses slider drags, palette tweaks, output-mode swaps, toggles — anything that changes the panel. Does NOT touch Photoshop's own undo (use Cmd/Ctrl+Z for layer creation, bake, mask edits, etc. while PS has focus). Dim when there's nothing to undo/redo. Capacity 30, oldest auto-evicted. Snapshots are debounced 250ms so slider drags collapse into a single undo step. 💾 — export the current preset to disk as a portable 33³ .CUBE 3D LUT. REVERT — restore panel state from the active Match layer's XMP. A 'Before REVERT' history entry is auto-saved as a permanent safety net; click REVERT again while it's still displayed as UN-REVERT to undo the revert from a one-shot in-memory shadow slot. ✕ — reset all panel settings to defaults (confirm dialog). ⟳ — resync source / target / layer lists / selection mask from PS. ⚙ — open the Settings drawer (group color, group name, LUT options, AUTO debounce, history cap, persistence, diagnostics)." },
+            body: "↶ ↷ — PANEL-state undo / redo. Reverses slider drags, palette tweaks, output-mode swaps, toggles — anything that changes the panel. Cmd/Ctrl+Z (or Cmd/Ctrl+Shift+Z to redo, or Ctrl+Y on Windows) inside the panel triggers the same actions; while PS has focus those same shortcuts hit PS's own undo. Dim when there's nothing to undo/redo. Capacity 30, oldest auto-evicted. Snapshots are debounced 250ms so slider drags collapse into a single undo step. 💾 — export the current preset to disk as a portable 33³ .CUBE 3D LUT. REVERT — restore panel state from the active Match layer's XMP. A 'Before REVERT' history entry is auto-saved as a permanent safety net; click REVERT again while it's still displayed as UN-REVERT to undo the revert from a one-shot in-memory shadow slot. ✕ — reset all panel settings to defaults (confirm dialog). ⟳ — resync source / target / layer lists / selection mask from PS. ⚙ — open the Settings drawer (group color, group name, LUT options, AUTO debounce, history cap, persistence, diagnostics)." },
           { heading: "Sections",
             body: "Panel sections render as soft 'islands'. SOURCE / REFERENCE and TARGET / PREVIEW are always visible (they're the input surface). TRANSFORM / OUTPUT / MASK / HISTORY / FITTED CURVES are collapsible — only OUTPUT is open by default. Each island's ▾/▸ disclosure on its header label toggles visibility." },
           { heading: "Version",
