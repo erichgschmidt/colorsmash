@@ -5,7 +5,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useLayers } from "./useLayers";
 import { useLayerPreview } from "./useLayerPreview";
 import { CurvesGraph } from "./CurvesGraph";
-import { ZoneCompoundSlider } from "./ZoneCompoundSlider";
 import { Icon } from "./Icon";
 import { MatchedPreview, MatchedPreviewHandle } from "./MatchedPreview";
 import { SourceSelector } from "./SourceSelector";
@@ -20,7 +19,7 @@ import {
   applyDimensions, applyZoneAndEnvelopeToChannels, MERGED_LAYER_ID,
   transformCurvesForPreset, applyPresetPostprocess, generateLutCube,
   DimensionOpts, DEFAULT_DIMENSIONS, ZoneOpts, DEFAULT_ZONES,
-  computeLumaBins, bandMeanColor, lumaRange,
+  computeLumaBins, lumaRange,
   EnvelopePoint, DEFAULT_ENVELOPE,
   fitByMode, MatchMode, Preset,
   fitMultiZoneByMode, applyMultiZoneToRgba, processMultiZoneFit, MultiZoneFit, adaptiveBandPeaks,
@@ -412,7 +411,10 @@ export function MatchTab() {
   // time, letting the user A/B-test the contribution of each section without losing settings.
   const [enColor, setEnColor] = useState(true);
   const [enTone, setEnTone] = useState(true);
-  const [enZones, setEnZones] = useState(true);
+  // v1.20.70 — enZones state removed. The Zones accordion UI was already
+  // dead-code-gated since v1.8, and the toggle is unreachable. Apply paths
+  // now use `zonesRef.current` directly (always-on, defaults to neutral if
+  // no saved zones).
   const [enEnvelope, setEnEnvelope] = useState(true);
   const toggleSection = (s: "basic" | "dims" | "zones" | "envelope") => setOpenSection(o => o === s ? null : s);
   // ─── Persistence ───────────────────────────────────────────────────────────
@@ -1181,7 +1183,7 @@ export function MatchTab() {
       const dim = applyDimensions(processed, dimOpts);
       curvesForGraph = applyZoneAndEnvelopeToChannels(
         dim,
-        enZones ? zonesRef.current : DEFAULT_ZONES,
+        zonesRef.current,
         enEnvelope ? envelopeRef.current : DEFAULT_ENVELOPE,
       );
       // Use weighted apply if target weights are non-neutral, else fast path.
@@ -1351,7 +1353,7 @@ export function MatchTab() {
     // triggers a redraw with the fresh per-pixel weights.
     // targetMaskEnabled also in deps so toggling the mask gate redraws the
     // preview between masked and uniform application.
-  }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, multiZoneExtents, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enZones, enEnvelope, activePreset, targetEffectiveWeights, targetMaskEnabled, showMask, outputMode, lutStrength, lutGrid, selectionPreviewMask, effectiveSelectionMode]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, multiZoneExtents, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enEnvelope, activePreset, targetEffectiveWeights, targetMaskEnabled, showMask, outputMode, lutStrength, lutGrid, selectionPreviewMask, effectiveSelectionMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Export the staged preset as a 33-grid 3D LUT in .CUBE format. Sidesteps the
   // unreliable PS Color Lookup API entirely — user picks a save location, we write
@@ -2148,7 +2150,7 @@ export function MatchTab() {
         stretchRange: enColor && anchorStretchToHist && lumaBins ? lumaRange(lumaBins) : undefined,
         chromaOnly: enColor && chromaOnly,
         dimensions: enTone ? dimsRef.current : DEFAULT_DIMENSIONS,
-        zones: enZones ? zonesRef.current : DEFAULT_ZONES,
+        zones: zonesRef.current,
         envelope: enEnvelope ? envelopeRef.current : DEFAULT_ENVELOPE,
         // sourcePixelsOverride: priority order is
         //   1) weighted source (when palette weights diverge from neutral) — supersedes
@@ -3087,11 +3089,11 @@ export function MatchTab() {
             <input type="checkbox" checked={anchorStretchToHist} onChange={e => { setAnchorStretchToHist(e.target.checked); scheduleRedraw(); }} style={{ cursor: "pointer", margin: 0 }} />
             Anchor stretch to histogram range
           </label>
-          {/* @ts-ignore Spectrum web component */}
+          {/* sp-checkbox renders via UXP's global JSX intrinsic-element
+              allowance (no per-tag suppression needed in this codebase). */}
           <sp-checkbox checked={chromaOnly || undefined} onInput={(e: any) => setChromaOnly(e.target.checked)} style={{ marginTop: 4, fontSize: 11 }}
             title="Apply only the hue shift; preserve target's saturation and luminance. Uses PS Hue blend mode — sidesteps the saturation inflation that per-channel curves cause.">
             Hue only (preserve target saturation + luminance)
-          {/* @ts-ignore */}
           </sp-checkbox>
         </div>
       )}
@@ -3149,107 +3151,16 @@ export function MatchTab() {
       )}
 
       {/* Zones accordion section removed in v1.8: replaced by the target
-          palette weight bar above the accordion. The bar is a strictly more
-          general tool (color clusters in Lab space vs. the old 3 fixed luma
-          bands) and feels parallel to the source palette. The ZoneOpts
-          math, persistence, and applyZoneAndEnvelopeToChannels still ship
-          unchanged for backward-compatibility on saved settings, but the
-          zonesLabel state stays at its default values now since users can't
-          edit it. The Color section's enZones flag is unused but kept to
-          avoid a persistence schema break. */}
-      {false && <div onClick={() => toggleSection("zones")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", cursor: "pointer", fontSize: 12, fontWeight: 700, color: enZones ? "#dddddd" : "#888", fontStyle: enZones ? "normal" : "italic" }}>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <span onClick={(e: any) => { e.stopPropagation(); setEnZones(!enZones); }}
-            title={enZones ? "Zones section ENABLED — click to disable" : "Zones section DISABLED — click to enable"}
-            style={{ width: 11, height: 11, borderRadius: 2, flexShrink: 0,
-                     background: enZones ? "#3a3a3a" : "transparent",
-                     border: `1px solid ${enZones ? "#888" : "#555"}`,
-                     display: "inline-flex", alignItems: "center", justifyContent: "center",
-                     fontSize: 10, fontWeight: 700, color: "#ddd", lineHeight: 1,
-                     cursor: "pointer", userSelect: "none" }}>{enZones ? "✓" : ""}</span>
-          <Icon name={openSection === "zones" ? "chevronDown" : "chevronRight"} size={11} /> Zones
-        </span>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-          {openSection === "zones" && (
-            <>
-              <label onClick={(e: any) => e.stopPropagation()} title="Lock total: when one amount changes, the other two rebalance proportionally to preserve the sum"
-                style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 10, fontWeight: 400, opacity: 0.85, cursor: "pointer" }}>
-                <input type="checkbox" checked={lockZoneTotal} onChange={e => setLockZoneTotal(e.target.checked)}
-                  style={{ cursor: "pointer", margin: 0 }} />
-                Lock total
-              </label>
-              <span onClick={(e: any) => { e.stopPropagation(); zonesRef.current = { ...DEFAULT_ZONES }; setZonesLabel({ ...DEFAULT_ZONES }); scheduleRedraw(); }} style={{ ...tinyBtn, padding: "1px 6px" }}>Reset</span>
-            </>
-          )}
-          <span onClick={(e: any) => { e.stopPropagation(); void uxpInfo("Zones — what each control does", [
-            { heading: "What zones do",
-              body: "Modulate how strongly the histogram match applies across input tones. Each zone (shadows / midtones / highlights) is a Gaussian bump centered on its anchor. With all amounts at 100% and biases at 0, the match runs full-strength and zones have no effect." },
-            { heading: "Track (the gradient slider)",
-              body: "Visualizes the zone's footprint over the 0–255 input range. The colored band is where the zone is active. Center thumb = anchor; edge thumbs = falloff." },
-            { heading: "Anchor",
-              body: "Where the zone is centered along the input axis (0 = pure black, 255 = pure white). Drag the center thumb." },
-            { heading: "Falloff",
-              body: "How wide the zone extends from its anchor. Drag either edge thumb in/out for a narrower/broader zone. Symmetric around the anchor." },
-            { heading: "Amount",
-              body: "Strength of the zone's contribution, 0–200%. 100% = standard. 0% = fully suppress the match in that range. 200% = doubles local pull. The wide slider to the right of the track." },
-            { heading: "Bias",
-              body: "Competitive pressure against neighboring zones at overlap regions. Positive bias makes this zone dominate the partition where it overlaps another — like 'grow this range' in Color Range. 0 = neutral, default 0 is identical to no bias." },
-            { heading: "Lock total (header)",
-              body: "When on, dragging one zone's amount slider proportionally rebalances the other two to preserve their sum. Shifts weight between shadows/mids/highlights without changing total match strength." },
-            { heading: "Sampled swatch colors",
-              body: "The colored band on each track is sampled from the target image's actual pixels in that zone's input range. Updates in real time as you move anchors and falloff." },
-            { heading: "Reset (header)",
-              body: "Restores all zone settings (amounts, anchors, falloffs, biases) to defaults. Lock total stays as-is." },
-          ]); }}
-            title="What this section does — full explanation"
-            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 14, height: 14, borderRadius: "50%", border: "1px solid #888", color: "#aaa", fontSize: 10, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>i</span>
-        </span>
-      </div>}
-      {false && openSection === "zones" && (["shadows", "mids", "highlights"] as const).map(zone => {
-        const fallback: Record<string, string> = { shadows: "#4a7fc1", mids: "#bbb", highlights: "#e0b85a" };
-        const ankKey = `${zone}Anchor` as keyof ZoneOpts;
-        const falKey = `${zone}Falloff` as keyof ZoneOpts;
-        const biasKey = `${zone}Bias` as keyof ZoneOpts;
-        // Derive band color from target pixels at this zone's luma range. Falls back to
-        // fixed palette if no target snapshot yet or if the zone has no pixels in range.
-        let bandColor = fallback[zone];
-        if (lumaBins) {
-          const c = bandMeanColor(lumaBins, zonesLabel[ankKey], zonesLabel[falKey]);
-          if (c) bandColor = `rgb(${Math.round(c.r)}, ${Math.round(c.g)}, ${Math.round(c.b)})`;
-        }
-        return (
-          <div key={zone} style={{ padding: 0 }}>
-            <ZoneCompoundSlider
-              label={zone}
-              color={bandColor}
-              value={{ amount: zonesLabel[zone], anchor: zonesLabel[ankKey], falloff: zonesLabel[falKey], bias: zonesLabel[biasKey] }}
-              defaults={{ amount: DEFAULT_ZONES[zone], anchor: DEFAULT_ZONES[ankKey], falloff: DEFAULT_ZONES[falKey], bias: DEFAULT_ZONES[biasKey] }}
-              onChange={next => {
-                const cur = zonesRef.current;
-                const amountChanged = next.amount !== cur[zone];
-                let patch: Partial<ZoneOpts> = { [zone]: next.amount, [ankKey]: next.anchor, [falKey]: next.falloff, [biasKey]: next.bias } as Partial<ZoneOpts>;
-                // Lock-total: if this drag changed the amount, redistribute the delta across the other two zones
-                // proportionally to their current values (so their ratio is preserved).
-                if (lockZoneTotal && amountChanged) {
-                  const others = (["shadows", "mids", "highlights"] as const).filter(z => z !== zone);
-                  const [a, b] = others;
-                  const prevTotal = cur.shadows + cur.mids + cur.highlights;
-                  const remaining = Math.max(0, prevTotal - next.amount);
-                  const otherSum = cur[a] + cur[b];
-                  let na: number, nb: number;
-                  if (otherSum <= 0) { na = remaining / 2; nb = remaining / 2; }
-                  else { na = (cur[a] / otherSum) * remaining; nb = remaining - na; }
-                  patch[a] = Math.max(0, Math.min(200, Math.round(na)));
-                  patch[b] = Math.max(0, Math.min(200, Math.round(nb)));
-                }
-                zonesRef.current = { ...cur, ...patch } as ZoneOpts;
-                setZonesLabel(z => ({ ...z, ...patch }));
-                scheduleRedraw();
-              }}
-            />
-          </div>
-        );
-      })}
+          palette weight bar above the accordion. The bar is a strictly
+          more general tool (color clusters in Lab space vs. the old 3
+          fixed luma bands) and feels parallel to the source palette.
+          The ZoneOpts math + persistence + applyZoneAndEnvelopeToChannels
+          still ship unchanged so older saved settings (with non-default
+          zones) load + apply transparently. v1.20.70 — the dead
+          {false && ...} UI block (Zones accordion + per-band sliders)
+          was removed. zonesRef.current still flows into apply as the
+          zones param; if a user had saved zone settings before v1.8
+          they still take effect, just no longer editable via UI. */}
 
       <div onClick={() => toggleSection("envelope")} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", cursor: "pointer", fontSize: 12, fontWeight: 700, color: enEnvelope ? "#dddddd" : "#888", fontStyle: enEnvelope ? "normal" : "italic" }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
