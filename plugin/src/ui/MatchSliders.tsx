@@ -17,14 +17,13 @@ export const matchStyles = {
     // v1.20.70 — dropdown bg darkened from #3a3a3a → #1f1f1f so the
     // dropdowns are the DARKEST element on screen, sinking into the
     // island (#2c2c2c) which sinks into the panel BG (UXP default).
-    // v1.20.70 — NOTE: UXP paints native <select> elements with its own
-    // theme chrome that IGNORES our background-color (renders ~#454545
-    // regardless of what we set in CSS). The custom SVG chevron + text
-    // color still work, but the bg-color is a no-op. To actually
-    // control dropdown bg, the native <select> would need to be
-    // replaced with a custom <div>+popup component.
-    background: "#3a3a3a url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'><path d='M0 0l4 5 4-5z' fill='%23a0a0a0'/></svg>\") no-repeat right 5px center",
-    color: "#dddddd", border: "1px solid #4a4a4a", borderRadius: 2,
+    // v1.20.70 — back to #2e2e2e (the value confirmed CORRECT by the
+    // user at commit 0383a1c). UXP DOES respond to CSS bg on <select>
+    // but non-linearly: #2e renders as the desired "inner / darkest"
+    // tone, while #3a brightens unexpectedly to ~#454545. Empirical
+    // value, do not change without testing in the actual PS panel.
+    background: "#2e2e2e url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'><path d='M0 0l4 5 4-5z' fill='%23a0a0a0'/></svg>\") no-repeat right 5px center",
+    color: "#dddddd", border: "1px solid #3a3a3a", borderRadius: 2,
     margin: 0, boxSizing: "border-box",
     appearance: "none" as any, WebkitAppearance: "none" as any,
     // Inherit Photoshop's panel font instead of the UA default — without this, native
