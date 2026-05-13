@@ -90,11 +90,19 @@ export interface ApplyLutResult {
   layerId: number | null;
 }
 
-/** Recursively collect every descendant whose name matches the prefix. */
+/** Recursively collect every descendant whose name matches the prefix.
+ *  v1.20.70 — also match the `Multi-${prefix}` inner bandContainer so
+ *  multi→single rebakes don't leave the bandContainer + its 3 band
+ *  layers orphaned in the [Color Smash] group. */
 function collectMatches(parent: any, prefix: string, out: any[]) {
+  const multiPrefix = `Multi-${prefix}`;
   for (const child of parent.layers ?? []) {
     const name = child.name;
-    if (typeof name === "string" && (name === prefix || name.startsWith(prefix))) {
+    const isMatch = typeof name === "string" && (
+      name === prefix || name.startsWith(prefix) ||
+      name === multiPrefix || name.startsWith(multiPrefix)
+    );
+    if (isMatch) {
       if (child.layers) collectMatches(child, prefix, out);
       out.push(child);
     }

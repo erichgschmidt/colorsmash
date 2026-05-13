@@ -280,10 +280,22 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     // ORPHANS those children up to the parent rather than deleting them, leaving 3 stale
     // siblings beside the new sub-group on the next run. Walking the tree first means we
     // delete (or hide) every band layer individually, then the now-empty sub-group.
+    // v1.20.70 — also match the inner `Multi-${RESULT_LAYER_NAME}`
+    // bandContainer (e.g. "Multi-Match RGB"). Without this, the
+    // recursion skipped over it and PS-orphaned its 3 band-layer
+    // descendants up to the [Color Smash] group on the next single-mode
+    // bake — leaving "Multi-Match RGB" + 3 band layers as zombies
+    // alongside the new single Curves layer.
+    const MULTI_PREFIX = `Multi-${RESULT_LAYER_NAME}`;
     const collectMatches = (parent: any, out: any[]) => {
       for (const child of parent.layers ?? []) {
         const name = child.name;
-        const matches = typeof name === "string" && (name === RESULT_LAYER_NAME || name.startsWith(RESULT_LAYER_NAME));
+        const matches = typeof name === "string" && (
+          name === RESULT_LAYER_NAME ||
+          name.startsWith(RESULT_LAYER_NAME) ||
+          name === MULTI_PREFIX ||
+          name.startsWith(MULTI_PREFIX)
+        );
         if (matches) {
           // Recurse first so descendants get deleted before their group container
           if (child.layers) collectMatches(child, out);
