@@ -38,6 +38,9 @@ import {
 } from "../app/recentHistory";
 import { serializeRecipes, parseRecipes, mergeImportedRecipes } from "../app/recipeIO";
 import { buildStarterRecipes } from "../app/starterRecipes";
+import { ModeToggle, type SmashMode } from "./smash/ModeToggle";
+import { SmashSection } from "./smash/SmashSection";
+import { applyTransform, type SmashEngineOutput } from "../core/smash";
 
 const STARTER_PACK_VERSION = 1;
 import { lutGradientCSS } from "../app/historyThumbnail";
@@ -1104,6 +1107,15 @@ export function MatchTab() {
   // Matched preview is rendered by <MatchedPreview/>; we drive it imperatively via a handle.
   const matchedHandleRef = useRef<MatchedPreviewHandle | null>(null);
   const rafPendingRef = useRef(false);
+
+  // v1.21 — Pro mode toggle. Lives below the matched preview, swaps the lower
+  // control surface between Match (existing) and Smash (new Pro engine). State
+  // is held regardless of __SMASH_ENABLED__ so refs into it from existing code
+  // stay valid; the ModeToggle UI and SmashSection are gated separately. The
+  // engine output flows back here so we can drive the matched preview through
+  // the same MatchedPreview handle the Match path uses.
+  const [smashMode, setSmashMode] = useState<SmashMode>("match");
+  const [smashEngine, setSmashEngine] = useState<SmashEngineOutput | null>(null);
   const [renderedCurves, setRenderedCurves] = useState<ChannelCurves | null>(null);
   // Result pixels captured at the end of each redraw — feeds the diagnostic histogram overlay.
   // Throttled (only commits to state every ~150ms) so we don't thrash React during slider drags.
@@ -1329,6 +1341,32 @@ export function MatchTab() {
       }, 150);
     }
   };
+
+  // v1.21 — Smash-mode preview drive. When in Smash mode and we have a built
+  // engine plus a source snap, apply the transform per source pixel and push
+  // the result through the same MatchedPreview handle the Match path uses.
+  // The Before/After badge stays wired: "before" = the source pixels, "after"
+  // = Smash-transformed source pixels. Switching back to Match mode is handled
+  // by the existing Match preview effect re-firing on its own state changes.
+  useEffect(() => {
+    if (!__SMASH_ENABLED__) return;
+    if (smashMode !== "smash") return;
+    if (!smashEngine || !srcSnap || !matchedHandleRef.current) return;
+    const { width: w, height: h, data: src } = srcSnap;
+    const out = new Uint8Array(src.length);
+    for (let i = 0; i < w * h; i++) {
+      const o = i * 4;
+      const a = src[o + 3];
+      if (a < 128) {
+        out[o] = src[o]; out[o + 1] = src[o + 1]; out[o + 2] = src[o + 2]; out[o + 3] = a;
+        continue;
+      }
+      const [r, g, b] = applyTransform(smashEngine, src[o], src[o + 1], src[o + 2]);
+      out[o] = r; out[o + 1] = g; out[o + 2] = b; out[o + 3] = a;
+    }
+    matchedHandleRef.current.setPixels(out, w, h);
+    matchedHandleRef.current.setBefore(src, w, h);
+  }, [smashMode, smashEngine, srcSnap]);
 
   const scheduleRedraw = () => {
     // 16ms throttle (~60fps). Drag latency is bounded by this throttle, not
@@ -3123,6 +3161,21 @@ export function MatchTab() {
         />
       )}
 
+      {/* v1.21 — Pro mode toggle. Renders directly below the matched preview
+          so the user can swap the entire lower control surface between Match
+          and Smash without leaving the panel. Source/target pickers and the
+          preview itself are shared between modes. Gated by __SMASH_ENABLED__
+          so the free build's MatchTab renders byte-equivalent to today. */}
+      {__SMASH_ENABLED__ && (
+        <ModeToggle mode={smashMode} onModeChange={setSmashMode} />
+      )}
+
+      {/* Match-mode lower controls. Wrapped in a display-none container when
+          Smash mode is active so all the existing state hooks keep running
+          (no reset on toggle) but the JSX is hidden. Free build always renders
+          this branch since __SMASH_ENABLED__ folds to false. */}
+      <div style={{ display: (__SMASH_ENABLED__ && smashMode === "smash") ? "none" : "block" }}>
+
       {/* Target palette weight bar — mirrors the source palette but the
           weights modulate CURVE APPLICATION strength per cluster (not source
           contribution). Drag a target swatch to 0 → curves don't apply to that
@@ -3966,6 +4019,20 @@ export function MatchTab() {
       {/* Diagnostic-only doc-rename probe. Read-only; never mutates srcDocId / srcMode /
           targetId / etc. Logs every name-shaped value across every API surface so we can
           see whether ANY source updates after Save As before the panel is reopened. */}
+
+      </div>{/* end Match-mode lower controls wrapper */}
+
+      {/* Smash-mode lower controls. Slim section that receives the same src
+          /tgt snaps MatchTab already manages and exposes the engine output up
+          via onEngineChange so the matched-preview effect below can drive the
+          shared <MatchedPreview/> through the same handle the Match path uses. */}
+      {__SMASH_ENABLED__ && smashMode === "smash" && (
+        <SmashSection
+          sourceSnap={srcSnap}
+          targetSnap={tgt.snap}
+          onEngineChange={setSmashEngine}
+        />
+      )}
     </div>
   );
 }
