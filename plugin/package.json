@@ -13,7 +13,8 @@
     "watch:pro": "webpack --mode=development --env smash=true --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "gen:reference": "node scripts/gen-reference-image.js"
   },
   "devDependencies": {
     "@svgr/webpack": "^8.1.0",
