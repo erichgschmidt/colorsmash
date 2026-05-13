@@ -2587,13 +2587,15 @@ export function MatchTab() {
           }}>⚙</div>
         <span onClick={(e: any) => { e.stopPropagation(); e.preventDefault(); void uxpInfo("Color Smash — about", [
           { heading: "What this is",
-            body: "Histogram-matching color grade between a source and target layer. Outputs editable Curves (RGB / Lab) or 3D Color Lookup adjustment layers, organized in a [Color Smash] group with masks and round-trippable XMP metadata." },
+            body: "Histogram-matching color grade between a source and target layer. Outputs editable Curves (RGB / Lab) or 3D Color Lookup adjustment layers, organized in a [Color Smash] group with masks and round-trippable XMP metadata. Each output mode bakes a separate layer that can coexist in the group so you can A/B them." },
           { heading: "Quick start",
-            body: "1. Pick a source layer (any open doc).\n2. Pick a target layer (the one to grade).\n3. Click Apply (or set up Multi for 3 banded layers).\n4. Pin recipes to history; export with ↑ EXPORT to share." },
-          { heading: "Header icons",
-            body: "↶ ↷ — Photoshop native undo/redo (same as Ctrl/Cmd+Z). 💾 — export current preset as .CUBE LUT. REVERT — restore panel state from the active Match layer's XMP (clicking again 'un-reverts' from a one-shot in-memory shadow slot, plus a 'Before REVERT' history entry is auto-saved as a permanent safety net). ✕ — reset all panel settings. ⟳ — resync everything from PS. ⚙ — toggle settings persistence." },
+            body: "1. Pick a source in SOURCE / REFERENCE (any open doc, a marquee, or a file on disk).\n2. Pick a target in TARGET / PREVIEW.\n3. Open the OUTPUT island and click RGB, Lab, or LUT — clicking a tab BOTH swaps the output mode AND applies in one click.\n4. Optional: expand MASK / TRANSFORM / MULTI-BLEND for finer control. Pin recipes in HISTORY; ↓ IMPORT / ↑ EXPORT to share." },
+          { heading: "Header icons (left → right)",
+            body: "↶ ↷ — Photoshop native undo / redo (same as Ctrl/Cmd+Z). Reverses PS-level edits, NOT panel state. 💾 — export the current preset to disk as a portable 33³ .CUBE 3D LUT. REVERT — restore panel state from the active Match layer's XMP. A 'Before REVERT' history entry is auto-saved as a permanent safety net; click REVERT again while it's still displayed as UN-REVERT to undo the revert from a one-shot in-memory shadow slot. ✕ — reset all panel settings to defaults (confirm dialog). ⟳ — resync source / target / layer lists / selection mask from PS. ⚙ — open the Settings drawer (group color, group name, LUT options, AUTO debounce, history cap, persistence, diagnostics)." },
+          { heading: "Sections",
+            body: "Panel sections render as soft 'islands'. SOURCE / REFERENCE and TARGET / PREVIEW are always visible (they're the input surface). TRANSFORM / OUTPUT / MASK / HISTORY / FITTED CURVES are collapsible — only OUTPUT is open by default. Each island's ▾/▸ disclosure on its header label toggles visibility." },
           { heading: "Version",
-            body: "Color Smash v1.20.70. Branch: master. Build cleanly on PS 25.0+." },
+            body: "Color Smash v1.20.70. Branch: master. Builds cleanly on PS 25.0+." },
         ]); }}
           title="About Color Smash"
           style={{
@@ -3052,11 +3054,13 @@ export function MatchTab() {
             body: "Toggle. When on, the slope cap walks from where the target image's data actually starts/ends (≥0.5% of peak count) instead of always 0–255. Makes Stretch behave consistently across bright vs dark sources." },
           { heading: "Hue only",
             body: "Toggle. Sets the output Curves layer to Photoshop's Hue blend mode (instead of Normal). Result: only the hue shifts toward the source; target's saturation and luminance are preserved. Sidesteps the saturation inflation that per-channel curves naturally produce." },
-          { heading: "Source palette weights bar (above, under the source previews)",
-            body: "K-means swatches sampled from the source in CIE Lab space (3 / 5 / 7 toggle, sorted dark→left to light→right). Mirrors the active preset's color emphasis: Full / Hue / Saturation = raw clusters, Color = pure-hue swatches with luminance flattened, Contrast = grayscale value strip. Segment widths are proportional: each cluster's natural prevalence × your multiplier. Drag the white dividers to redistribute weight pair-wise between two adjacent neighbors, or flip 'adapt' on to drag a swatch BODY — that swatch grows/shrinks and all others rebalance proportionally. Reset restores neutral (×1) weights. Source weights bias the histogram fit — which source colors influence the computed curves. Drives both live preview and Apply Curves bake." },
-          { heading: "Target palette weights bar (under the matched preview)",
-            body: "Same UI as the source bar (3/5/7 count, handle/adapt drag, dark→light sort, Reset) but different math. Target weights control curve application strength per cluster — drag a swatch toward 0 to leave that color region of the target untouched while the rest gets matched. The mask toggle on the header (default ON) bakes the per-cluster attenuation into a layer mask on the output Curves layer; OFF skips the mask on both preview and bake (uniform curves — useful for A/B comparing). Replaces the old Zones accordion." },
-          { heading: "Softness slider (under each palette bar)",
+          { heading: "Source palette weights bar (SOURCE / REFERENCE island)",
+            body: "K-means swatches sampled from the source in CIE Lab space, sorted dark→left to light→right. The palette toolbar above the bar holds: softness slider (cluster-falloff), ↔ adapt mode toggle, 3 / 5 / 7 cluster-count picker, ✕ reset. Bar segment widths are proportional: each cluster's natural prevalence × your multiplier. Default 'handle mode' — drag the white dividers between segments to redistribute weight pair-wise between two adjacent neighbors. ↔ adapt mode — drag a swatch BODY instead of a divider; that swatch grows/shrinks and all others rebalance proportionally. ✕ reset restores neutral (×1) weights. Source weights bias the histogram fit — which source colors influence the computed curves. Drives both live preview and the bake." },
+          { heading: "Target palette weights bar (TARGET / PREVIEW island)",
+            body: "Same UI as the source bar (softness / ↔ / 3-5-7 / ✕ toolbar above a full-width bar) but different math. Target weights control curve application strength per cluster — drag a swatch toward 0 to leave that color region of the target untouched while the rest gets matched. Replaces the old Zones accordion. The per-cluster attenuation gate is unified with the MASK island button at the bottom of the panel (see MASK section below) — there's no longer a separate mask toggle on this bar." },
+          { heading: "MASK island (single source of mask control)",
+            body: "Single MASK button toggles BOTH the red preview overlay (visualization) and the per-cluster + selection-mask attenuation gate (which bakes a layer mask onto the output Curves / LUT layer). Default ON. The Off / Focus / Exclude pills next to MASK control whether the active marquee composes with the palette mask: Off = ignore marquee, Focus = apply only inside marquee, Exclude = apply only outside." },
+          { heading: "Softness slider (palette toolbar, above each bar)",
             body: "Falloff between cluster regions, 0–100. 0 = hard nearest-cluster boundary. 100 = smooth Lorentzian blend across all clusters. Visible immediately as feathering on the bar itself. Source and target each have their own slider — both persisted." },
         ]); }}
           title="What this section does — full explanation"
