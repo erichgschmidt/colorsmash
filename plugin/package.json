@@ -4,9 +4,9 @@
   "private": true,
   "description": "Photoshop UXP plugin: per-channel histogram color match into a single editable Curves adjustment layer.",
   "scripts": {
-    "build": "webpack --mode=production --env smash=false",
-    "build:free": "webpack --mode=production --env smash=false",
-    "build:pro": "webpack --mode=production --env smash=true",
+    "build": "webpack --mode=production --env smash=false && node scripts/set-manifest-variant.js free",
+    "build:free": "webpack --mode=production --env smash=false && node scripts/set-manifest-variant.js free",
+    "build:pro": "webpack --mode=production --env smash=true && node scripts/set-manifest-variant.js pro",
     "package": "node scripts/package-ccx.js",
     "build:package": "npm run build && npm run package",
     "watch": "webpack --mode=development --env smash=false --watch",
