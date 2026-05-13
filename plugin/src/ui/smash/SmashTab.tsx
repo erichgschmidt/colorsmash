@@ -261,16 +261,16 @@ export function SmashTab() {
       />
 
       <div style={actionRowStyle}>
-        <button
+        <div
           style={primaryButtonStyle}
           onClick={onApply}
           title="Install the current Smash transform as a Color Lookup adjustment layer above the active layer."
         >
           Apply
-        </button>
-        <button style={actionButtonStyle} onClick={onExportCube} title="Bake the current Smash transform to a portable .cube LUT.">
+        </div>
+        <div style={actionButtonStyle} onClick={onExportCube} title="Bake the current Smash transform to a portable .cube LUT.">
           Export .cube
-        </button>
+        </div>
         {exportStatus && <span style={statusStyle}>{exportStatus}</span>}
       </div>
     </div>
@@ -363,11 +363,11 @@ const actionRowStyle: React.CSSProperties = {
 const actionButtonStyle: React.CSSProperties = {
   background: "#3a3a3a", color: "#ddd", border: "1px solid #1a1a1a",
   borderRadius: 3, padding: "5px 12px", fontFamily: "inherit", fontSize: 11,
-  cursor: "pointer",
+  cursor: "pointer", userSelect: "none", display: "inline-block",
 };
 
 const primaryButtonStyle: React.CSSProperties = {
   background: "#6ab7ff", color: "#0f1620", border: "1px solid #1a1a1a",
   borderRadius: 3, padding: "5px 14px", fontFamily: "inherit", fontSize: 11,
-  fontWeight: 600, cursor: "pointer",
+  fontWeight: 600, cursor: "pointer", userSelect: "none", display: "inline-block",
 };

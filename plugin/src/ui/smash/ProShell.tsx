@@ -28,22 +28,22 @@ export function ProShell() {
 
 function TabButton({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
   return (
-    <button
+    <div
       onClick={onClick}
       style={{
         background: active ? "#3a3a3a" : "transparent",
         color: active ? "#ffffff" : "#aaaaaa",
-        border: "none",
         padding: "6px 14px",
         fontFamily: "inherit",
         fontSize: 11,
         fontWeight: active ? 600 : 400,
         cursor: "pointer",
         borderBottom: active ? "2px solid #6ab7ff" : "2px solid transparent",
+        userSelect: "none",
       }}
     >
       {label}
-    </button>
+    </div>
   );
 }
 
