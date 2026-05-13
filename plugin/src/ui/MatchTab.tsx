@@ -1994,8 +1994,13 @@ export function MatchTab() {
     }, 250);
     return () => clearTimeout(id);
     // Watching a wide dep slice — every panel state slice that should
-    // count as an "undoable" change. Same set as the persistence
-    // saver so we don't have to maintain two lists in lockstep.
+    // count as an "undoable" change. Intentionally NOT including:
+    //   - recentHistory (auto-record after apply would push a useless
+    //     undo step; the user wouldn't expect ↶ to remove a history
+    //     entry)
+    //   - sourceId / targetId / srcDocId / tgtDocId / srcMode (context
+    //     switches, not panel "tweaks" the user would expect undo for
+    //     — they're picking where to work, not what to do)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     matchMode, multiZone, multiZoneLimit, adaptiveBands, tabConfig,
@@ -2004,7 +2009,6 @@ export function MatchTab() {
     overwriteOnApply, zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel,
     paletteCount, paletteAdaptive, sourceSoftness, targetSoftness,
     targetMaskEnabled, paletteWeights, targetPaletteWeights,
-    sourceId, targetId,
   ]);
 
   // Apply LUT — bake the staged preset into a Color Lookup adjustment layer
