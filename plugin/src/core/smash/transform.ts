@@ -9,6 +9,7 @@ import type { ImagePairProfile, SmashControls, SmashAudit, PixelFeatures, Vec3 }
 import { createAudit, withTraitContribution, withBandUsed, finalize } from './audit';
 import { acesGamutCompress } from './gamut';
 import { perceptualLuma } from '../perceptual/luma';
+import { srgbByteToOklab } from '../perceptual/oklab';
 
 // ────────── constants ──────────
 
@@ -267,11 +268,35 @@ export function applyTransform(
   const smashG = Math.max(0, Math.min(255, Math.round(compressed[1] * 255)));
   const smashB = Math.max(0, Math.min(255, Math.round(compressed[2] * 255)));
 
-  // Apply controls.global mix: lerp between original input and smashed output.
-  const globalMix = Math.max(0, Math.min(1, controls.global));
-  const finalR = Math.max(0, Math.min(255, Math.round(lerp(r, smashR, globalMix))));
-  const finalG = Math.max(0, Math.min(255, Math.round(lerp(g, smashG, globalMix))));
-  const finalB = Math.max(0, Math.min(255, Math.round(lerp(b, smashB, globalMix))));
+  // Phase 2 — apply trait amounts.
+  //
+  // For Phase 2a, two traits differentially affect the output:
+  //   - traits.value: scales the entire transfer strength (master gate).
+  //   - traits.neutral: protects near-neutral input pixels by pulling the
+  //     mix back toward identity in proportion to the input's neutralness
+  //     (Oklab chroma below 0.15 means "near neutral").
+  //
+  // The other four traits (hue, saturation, chroma, accent) are recorded in
+  // the audit during smash() but are no-ops in applyTransform until Phase 2b
+  // factors the per-band fit into perceptual components that can be gated
+  // separately. The UI surfaces all six so users can see the future control
+  // surface; transparent docs note the partial coverage.
+  const traits = controls.traits;
+  const valueGate = Math.max(0, Math.min(1, traits.value));
+  const baseMix = Math.max(0, Math.min(1, controls.global)) * valueGate;
+
+  // Neutral protection: compute input chroma in Oklab. Low chroma → strong
+  // neutralness signal. Multiply by traits.neutral so the slider scales how
+  // much we protect. protectionFactor ∈ [0, 1]; 1 means full identity here.
+  const [, aIn, bIn] = srgbByteToOklab(r, g, b);
+  const inputChroma = Math.sqrt(aIn * aIn + bIn * bIn);
+  const neutralness = 1 - Math.min(1, inputChroma / 0.15);
+  const protectionFactor = Math.max(0, Math.min(1, traits.neutral)) * neutralness;
+  const finalMix = baseMix * (1 - protectionFactor);
+
+  const finalR = Math.max(0, Math.min(255, Math.round(lerp(r, smashR, finalMix))));
+  const finalG = Math.max(0, Math.min(255, Math.round(lerp(g, smashG, finalMix))));
+  const finalB = Math.max(0, Math.min(255, Math.round(lerp(b, smashB, finalMix))));
 
   return [finalR, finalG, finalB];
 }
