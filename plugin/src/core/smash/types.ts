@@ -171,3 +171,21 @@ export function emptySourceDNA(): SourceDNA {
     },
   };
 }
+
+/** A pair of source/target bands assumed to correspond (same axis index). */
+export interface BandPair {
+  readonly source: BandStats;
+  readonly target: BandStats;
+  /** Whether this pair has enough data on both sides to be used. False when
+   *  either band has sampleCount below the fallback threshold. */
+  readonly viable: boolean;
+}
+
+/** Result of pairing SourceDNA with TargetStructure. */
+export interface ImagePairProfile {
+  readonly source: SourceDNA;
+  readonly target: TargetStructure;
+  readonly bands: readonly BandPair[];
+  /** Bands where viability is false; the engine will fall back to identity here. */
+  readonly weakBands: readonly number[];
+}

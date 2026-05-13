@@ -8,4 +8,5 @@ export * from './features';
 export * from './bands';
 export * from './clusters';
 export * from './gamut';
+export * from './profile';
 export * from './audit';
