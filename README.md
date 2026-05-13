@@ -1,43 +1,100 @@
 # Color Smash
 
-A Photoshop UXP plugin that color-matches one image to another by fitting per-channel R/G/B Curves to the source's histograms. The output is a single editable Curves adjustment layer, not baked pixels.
+A Photoshop UXP plugin that color-matches one image to another. Outputs editable **Curves** (RGB or Lab) or **Color Lookup** (33³ 3D LUT) adjustment layers — non-destructive, organized in a `[Color Smash]` group, fully editable in Photoshop afterward.
+
+Compatible with Photoshop 25 (2024) and newer. Current version: **v1.20.70**.
 
 ## What it does
 
-Pick a **source** (a layer in any open doc, an active marquee selection, or an image file from disk) and a **target** layer. Color Smash fits a Curves adjustment that makes the target's histograms match the source's. The result is non-destructive: one Curves layer clipped to the target inside a `[Color Smash]` group, fully editable in Photoshop afterward.
+Pick a **source** (a layer in any open doc, an active marquee selection, or an image file from disk) and a **target** layer. Color Smash fits a transform that makes the target's color statistics match the source's, then bakes the transform into a non-destructive adjustment layer clipped to the target.
 
-Beyond the basic fit:
+Three output modes — click a tab in the OUTPUT island to swap mode AND apply in one click:
 
-- **Preset strip (v1.2, expanded v1.10)** — five full-width swatches above the matched preview: **Full · Color · Hue · Saturation · Contrast**. Each swatch paints the source through that preset's characteristic transform so you can see at a glance what's about to be transferred. Click a swatch to *stage* the preset — the matched preview updates live, but nothing writes to PS until you hit **Apply Curves** (non-destructive). The five presets cover every combination of H/S/L transfer:
+- **RGB** — separable per-channel histogram match → editable Curves layer.
+- **Lab** — perceptual L\*a\*b\* match, projected back to per-channel curves → Curves layer.
+- **LUT** — 33³ 3D Color Lookup adjustment with preset blend math baked in. Loadable in PS, Premiere, Resolve, or any LUT-aware host.
 
-  | Preset | H | S | L | What transfers | Blend mode |
-  |---|---|---|---|---|---|
-  | Full | ✓ | ✓ | ✓ | per-channel R/G/B curves | Normal |
-  | Color | ✓ | ✓ | — | hue + saturation, target keeps luma | Color |
-  | Hue | ✓ | — | — | hue only, target keeps sat + luma | Hue |
-  | Saturation | — | ✓ | — | saturation only, target keeps hue + luma | Saturation |
-  | Contrast | — | — | ✓ | tonal curve only, target keeps colors | Luminosity |
+## Panel layout (v1.20.70)
 
-  The Hue preset is the gentle "shift the cast, leave saturation alone" option for when Color over-saturates. Saturation is the symmetric case — match the source's vibrancy without shifting hue.
-- **Source palette + weighted bar (v1.4–v1.5)** — directly under the preset strip, a row of k-means swatches sampled from the source in CIE Lab space. **3 / 5 / 7** toggle picks the cluster count; swatches sort dark→light. The strip mirrors the active preset (Full = raw clusters, Color = pure-hue swatches with luminance flattened, Contrast = grayscale value strip). Each segment's width is its cluster's natural prevalence × your multiplier, so the bar reads as a proportional palette. Two drag modes: **handle mode** (default) — drag the white dividers between segments to redistribute weight pair-wise between two adjacent neighbors (mass-conserving on the pair); **adapt mode** (toggle, persisted) — drag a swatch BODY itself to grow/shrink it, and every other swatch rebalances proportionally to maintain its relative ratio. White boundary markers stay visible in adapt mode as visual guides (non-interactive). **Reset** restores neutral (×1). Source weights affect the *histogram fit* — which source colors influence the computed curves. The reweighted palette feeds both the live preview and the Apply Curves bake.
-- **Target palette + weighted bar (v1.8)** — a second weight bar under the matched preview, with the same 3/5/7 toggle, handle/adapt drag modes, and dark→light sort. Different math: target weights drive *curve application strength per cluster* — drag a target swatch toward 0 to leave that color region untouched while the rest gets matched. A **mask toggle** on the target header (on by default) controls whether the per-cluster attenuation produces a layer mask on the baked Curves layer (and feathers the preview). Off = uniform curves on both preview and bake — useful for A/B comparison.
-- **Softness slider (v1.8)** — below each palette bar (0..100). Falloff between cluster regions: 0 = hard nearest-cluster boundary, 100 = smooth Lorentzian blend across all clusters. Visible immediately as gradient feathering on the bar itself. Source and target each have their own slider. Persisted.
-- **Export LUT (v1.2)** — button next to Apply Curves. Bakes the staged preset (curves + blend-mode emulation) into a 33³ Adobe `.CUBE` 3D LUT and writes it to a path you pick. Sidesteps Photoshop's flaky Color Lookup automation — load the LUT manually in PS's Color Lookup layer, Premiere, Resolve, or any LUT-aware host. The LUT captures non-separable Color/Luminosity blend math that a Curves layer alone cannot represent.
-- **Matched preview Before/After badge** — corner overlay on the preview pane. Click toggles a persistent Before/After view; click-and-hold peeks the other state momentarily. A swap (⇄) button just left of the badge swaps source ↔ target docs+layers in one click; it's disabled when the source is a marquee selection or a browsed file (those can't be destinations).
-- **Multi-zone Curves output (v1.1)** — when the **Multi** toggle is on, Apply emits three stacked Curves layers (Shadows / Mids / Highlights) instead of one, each fitted from only the pixels in its luma band. Limit each band spatially with a paintable **Mask**, with **Blend If** sliders, or **Both**. Turn on **Adaptive** to shift the band peaks to the target's P10/P50/P90 luma percentiles (with outer extents matching the actual histogram bounds), so each band gets a meaningful pixel sample on low-key or high-key scenes. Every layer remains independently editable in PS afterward.
-- **RGB or LAB matching** — toggle between per-channel RGB histogram specification and a perceptual L*a*b*-domain match. Curves are sampled back to per-channel R/G/B so the output stays a standard Curves layer.
-- **Color** — overall amount, smoothing (anti-banding), max stretch (slope cap), optional anchor of the slope cap to the target's actual histogram range, and a Hue-only mode that preserves target saturation and luminance.
-- **Tone** — value, chroma, hue shift, contrast, neutralize, separation. Each is identity at default, deviating only when you move the slider.
-- **Envelope** — arbitrary-N piecewise weight curve over input 0..255 that further modulates the match per tonal value.
-- **Live matched preview** with a log2-scaled zoom slider flanked by −/+ buttons (smooth scrubbing alongside discrete steps), drag-to-pan, keyboard shortcuts, and a background-color toggle. The preview header is flush — the ⇄ swap button anchors the left, the zoom cluster owns the right. Frames are double-buffered with a latest-token swap so dragging never flickers; redraws run at 60fps (16ms throttle) and a cluster-assignment cache makes weighted-palette synthesis ~10× faster during drag.
-- **Selection mode** with Auto, Merge, and Lock toggles — the active marquee re-samples on its own when bounds or pixels change; Merge samples the visible composite; Lock freezes the current sample.
-- **Merged target** — sentinel option that uses the document composite as target; the Curves layer is placed at the top of the stack with no clipping.
+The panel renders as a stack of soft-cornered "island" sections. SOURCE and TARGET are always visible; the rest collapse via the `▾/▸` disclosure on each header.
+
+| Island | What it does |
+|---|---|
+| **Header** | Wordmark + version on the left; PS native `↶ ↷` undo/redo in the middle; `💾 REVERT ✕ ⟳ ⚙ ?` action cluster on the right. |
+| **SOURCE / REFERENCE** | Source doc + layer picker. Preset strip below (Full / Color / Hue / Saturation / Contrast) — click a swatch to stage that preset's transform. Source palette weight bar with softness / ↔ / 3-5-7 / ✕ toolbar above it. |
+| **TARGET / PREVIEW** | Target doc + layer picker, before/after preview pane with log2-zoom + pan + background-color toggle, ⇄ swap source↔target, target palette weight bar. |
+| **TRANSFORM** | Three sub-sections (Color / Tone / Envelope), each with its own enable checkbox and `(i)` help button. Collapsed by default. |
+| **OUTPUT** | `[+] [○] [▾/▸]` column-1 cluster on the left, `RGB | Lab | LUT` tabs on the right. Expandable `MULTI | BLEND` row below each tab for 3-band stacking. `JUMP | ISOLATE` row at the bottom (target-specific actions). |
+| **MASK** | Single MASK button + Off / Focus / Exclude tristate. Collapsed by default. |
+| **HISTORY** | Recent recipe strip with pin / rename, ↓ IMPORT / ↑ EXPORT. Collapsed by default. |
+| **FITTED CURVES** | Diagnostic R/G/B channel transfer-curve graph + status line. Collapsed by default. |
+
+## Header icons (left → right)
+
+- **↶ ↷** — Photoshop native undo / redo (same as Ctrl/Cmd+Z). Reverses PS-level edits, NOT panel state.
+- **💾** — Export current preset to disk as a portable 33³ `.CUBE` 3D LUT.
+- **REVERT** — Restore panel state from the active Match layer's XMP metadata. A `Before REVERT @ HH:MM` history entry is auto-saved as a permanent safety net before the revert applies. While the button reads UN-REVERT (immediately after a revert), one more click restores the pre-revert state from an in-memory shadow slot.
+- **✕** — Reset all panel settings to defaults (confirm dialog).
+- **⟳** — Resync everything from PS (docs, layer lists, source / target previews, selection mask).
+- **⚙** — Open the Settings drawer.
+- **?** — About / quick-start help.
+
+## OUTPUT island
+
+The OUTPUT island consolidates Apply, output-mode selection, branching, and live re-bake into one block. There is no separate "Apply" button — **clicking an output tab both swaps mode AND applies**.
+
+- **`+` (column 1, top)** — branch arm. When armed (green), the next tab click archives the current `[Color Smash]` group (renames it `[Color Smash] _NN`, hides it) and starts a fresh one. Auto-disarms after that click.
+- **`○` AUTO** — record-armed indicator. When ON (filled red), slider changes auto-update the existing output layer in real-time (debounced, configurable in Settings). Click an output tab once to seed the layer, then drag sliders to live-update.
+- **`▾/▸` disclosure** — expands the optional MULTI / BLEND per-tab row + ADAPT toggle.
+- **RGB / Lab / LUT tabs** — click to swap output mode AND apply. The active tab has an amber border; previously-used-this-session modes show a dim "dormant" warm tint.
+- **MULTI × 3** — per-tab toggles that split the output into 3 luma-banded layers (Shadows / Mids / Highlights). Each tab remembers its own MULTI state.
+- **BLEND × 3** — per-tab toggles that swap the band-limiting from a layer mask to Blending Options' "Blend If" sliders. BLEND auto-engages MULTI (no need to enable MULTI first).
+- **ADAPT** — when ON (default), multi-zone band peaks track the target histogram's P10/P50/P90 instead of fixed 0/128/255.
+- **JUMP** — select the target layer in PS Layers panel and scroll it into view.
+- **ISOLATE** — A/B compare via hide-other-layers. Snapshots prior visibility, hides everything except the target's ancestor chain and the `[Color Smash]` group. Click again to restore.
+
+## MASK island
+
+Single MASK button + Off / Focus / Exclude tristate. The MASK button toggles BOTH the red preview overlay (visualization) AND the per-cluster attenuation gate (which bakes a layer mask onto the output layer). Default ON.
+
+- **Off** — full-image apply, marquee ignored.
+- **Focus** — apply only inside the active marquee.
+- **Exclude** — apply only outside the active marquee. Useful for protecting a region.
+
+## Settings drawer (⚙)
+
+Click the gear icon in the header to expand the inline Settings drawer. Four sections:
+
+- **GENERAL** — Group color (8 PS color tags), Group name (rename `[Color Smash]` to anything), Persistence (save settings across reloads).
+- **LUT** — Strength (lerp toward identity), Quality (17³ / 33³ / 65³ grid), Dither.
+- **ADVANCED** — AUTO debounce (60–1000 ms), History capacity (5–30), Adaptive bands default.
+- **DIAGNOSTICS** — Verbose status, Reveal data folder, Export / Import config JSON.
+
+## HISTORY island
+
+Recent recipes auto-record after every apply (recipe-only — target swatches stripped). Click any thumbnail to restore that state. Pin (★) entries to survive ring-buffer eviction. Rename via right-click. **↓ IMPORT** loads a `.json` recipe file (cross-machine portable, auto-pinned). **↑ EXPORT** writes pinned entries (or all entries if nothing is pinned) to a `.json` file.
+
+The plugin ships with 4 starter recipes (Punch / Faded / Warm Mid / Mono) — installed on first run.
+
+## Per-document `[Color Smash]` group
+
+Every bake lands in a single canonical `[Color Smash]` group at the doc root, color-tagged orange in the Layers panel (color is configurable in Settings). The plugin auto-deduplicates stray groups before each apply, so JUMP / ISOLATE / Layers-panel selection changes can't accidentally cause groups to stack.
+
+Inside the group, each output mode keeps its own layer prefix and they coexist for A/B comparison:
+
+- `Match RGB` — RGB-mode Curves layer (or `Match RGB` sub-group containing band layers when MULTI is on).
+- `Match Lab` — Lab-mode Curves layer.
+- `Match LUT [preset]` — LUT-mode Color Lookup layer.
+
+## Round-trip restore
+
+Every bake stamps the layer with XMP metadata containing the panel state that produced it. Click the layer in PS, hit **REVERT** in the panel, and every slider, palette weight, preset, output mode, and doc/layer choice snaps back. Works across documents (target doc/layer are stored).
 
 ## Requirements
 
 - Photoshop 25 (2024) or newer (UXP API v2, Imaging API).
 - An RGB document, 8 or 16 bits/channel.
-- Two pixel layers in the active document, **or** one layer plus an active selection, **or** one layer plus an image file on disk.
+- Two pixel layers, **or** one layer plus an active selection, **or** one layer plus an image file on disk.
 
 ## Install
 
@@ -57,93 +114,45 @@ The plugin requests `localFileSystem` permission so the **Browse Image…** sour
 
 ## Usage
 
-1. Open a document with the layer you want to recolor (target). Have a reference image available — it can be another layer in the same doc, a layer in a different open doc, an active marquee on the current layer, or a file on disk.
+1. Open a document with the layer you want to recolor (target). Have a reference image available — another layer in the same doc, a layer in a different open doc, an active marquee on the current layer, or a file on disk.
 2. Open **Color Smash** from the Plugins menu.
-3. In the **Source** row (`[source/doc ▼] [layer/mode-widget ▼] [⟳]`), pick one of:
-   - **Any open document name** — switches to that doc and uses Layer mode; pick the source layer in the second dropdown.
-   - **Use Selection** — samples the active marquee. The widget exposes **Auto** (re-sample on selection or pixel changes), **Merge** (sample the visible composite instead of just the active layer), **Lock** (freeze the current sample).
-   - **Browse Image…** — opens a file picker; the chosen image is loaded as the source. The filename appears as a sticky entry in the dropdown for quick re-selection.
-   Below the source row, the **preset strip** (Full · Color · Hue · Saturation · Contrast) shows the source rendered through each preset. Click a swatch to stage it.
-4. In the **Target** row directly above the matched preview (`[doc ▼] [layer ▼] [⟳]`), pick the target document and target layer. The **MERGED** option uses the document composite as the target. Source and target docs are independent — each row has its own ⟳ refresh button (forces a hook-level reload to bypass any DOM cache, useful after silent batch renames). The Before/After badge in the preview corner identifies the target so no separate target thumbnail is shown.
-5. Layer dropdowns show the full group hierarchy as `Group / Subgroup / LayerName` so nested layers are unambiguous. The plugin's own `[Color Smash]` group is skipped automatically.
-6. Watch the matched preview update live. Zoom with the −/+ buttons, the log2-scaled slider between them, or `+` / `-` / `0` keys when the preview is hovered; drag inside the preview to pan; click the swatch to flip the preview background between dark and panel-gray. The ⇄ swap button at the flush-left of the header swaps source ↔ target docs+layers in one click.
-7. Toggle **RGB / LAB** in the matched preview header to switch color-space; click the small refresh button to re-read both source and target previews from Photoshop.
-8. Tweak any of the accordion sections: **Color**, **Tone**, **Envelope**. The target palette weight bar under the preview gives per-cluster control over where the match applies (drag a swatch toward 0 to protect that color region from being remapped).
-9. In the bottom action bar (right-anchored — labels clip silently behind the toggles in narrow panels): `[☐ Deselect] [☐ Replace] [☐ Save] [✕] [RGB] [⟳]`. **Deselect** drops the active marquee before applying, **Replace** overwrites the topmost / selected `Match Curves` layer instead of stacking, **Save** persists all panel settings to disk (debounced ~500ms, including the Save toggle itself so it survives reloads), **✕** (red) opens a confirm modal that wipes settings and deletes the persisted file, **RGB/LAB** is the color-space toggle, **⟳** refreshes previews.
-10. Click **Apply Curves** — a single Curves adjustment layer appears in `[Color Smash]` group, clipped to the target (or at the top of the stack if MERGED). When source and target live in different documents, the layer is placed in the target's document. Or click **Export LUT** (50/50 split with Apply Curves) to save the staged preset as a portable 33³ `.CUBE` file instead of writing to PS.
+3. **SOURCE / REFERENCE** — pick the source doc and layer, OR `Use Selection` (marquee — has Auto / Merge / Lock sub-toggles), OR `Browse Image…` (file picker). The preset strip below the dropdowns shows the source rendered through each preset; click a swatch to stage it.
+4. **TARGET / PREVIEW** — pick the target doc and layer. `Merged` uses the document composite. The matched preview updates live as you tweak.
+5. **OUTPUT** — click `RGB`, `Lab`, or `LUT` to apply. The active mode shows an amber border. To stack multiple modes, click each tab in sequence — they coexist inside the `[Color Smash]` group.
+6. To split the output into 3 luma-banded layers, expand the `▾/▸` row in OUTPUT, click `MULTI` for the active mode, then click the output tab again.
+7. To protect part of the target from being matched, drag a swatch in the target palette bar toward zero (its cluster region stops receiving the transform).
+8. To localize the apply to a marquee, draw the marquee on the target doc, then expand the MASK island and click `Focus` (apply inside) or `Exclude` (apply outside).
+9. To revert to a previous state, click a baked Match layer in PS Layers, then hit **REVERT** in the header. To recover from accidental REVERT, click it again immediately (UN-REVERT) — or use the auto-saved `Before REVERT` history entry.
 
-### Multi-zone Curves
+### MULTI (3-band) output
 
-Above the bottom action bar there is a row: `[☐ Multi] [☐ Blend If] [☐ Adaptive]`. (The mask is the default band-limiter; turning Blend If on implicitly switches mask export off — the two are mutually exclusive, so no separate Mask checkbox is needed.)
+Open the MULTI/BLEND row under any output tab via the `▾/▸` disclosure. Per-tab toggles let you split the output into Shadows / Mids / Highlights bands, each fitted from only the pixels in that band.
 
-- **Multi** — turn on to emit three stacked Curves layers (Shadows / Mids / Highlights) instead of one. The Apply button label switches to **Apply Multi Curves**. Each band's curves are fitted from only the pixels whose luma falls inside that band, so a single grade can lift shadows, neutralize mids, and cool highlights independently — useful for mixed-lighting scenes where one global curve over- or under-corrects.
-- **Blend If** — by default each band layer gets a paintable luminosity layer mask (visible thumbnail, editable in PS — paint to localize, blur to feather). Turn the **Blend If** checkbox on to swap that mask for the underlying-luma sliders in Layer Style → Blending Options instead — no mask data, lighter on the file, editable from the Blending Options dialog. The two are mutually exclusive: Blend If on means no mask, off means mask only.
-- **Adaptive** — when on, the band peaks shift to the target's P10 / P50 / P90 luma percentiles, and the outer extents (the leftmost shadow point and the rightmost highlight point) follow the histogram's actual min / max. When off, peaks are fixed at 0 / 128 / 255. Adaptive is on by default and is what you want for most images; turn off only when you want a strict 0/128/255 partition for a specific look.
+- **MULTI** — turn on to emit 3 stacked layers instead of 1.
+- **BLEND** — per band, use Blending Options' luma sliders instead of a paintable layer mask. Lighter file, editable from the Blend If dialog. Auto-engages MULTI if off.
+- **ADAPT** (column-1 row) — band peaks track the target's P10/P50/P90 luma instead of fixed 0/128/255. Default ON.
 
-The three layers land in the `[Color Smash]` group named `Match — Shadows`, `Match — Mids`, `Match — Highlights`, all clipped to the target. **Replace** still works — re-applying overwrites the prior multi-zone trio.
+The 3 layers land in a sub-group named `Match RGB`, `Match Lab`, or `Match LUT [preset]` depending on the mode, all clipped to the target.
 
 ### Cross-document
 
-Source and target dropdowns are fully independent. Pick a layer in document A as source and a layer in document B as target — Apply writes the Curves layer into document B. Use the ⟳ refresh button next to either dropdown if Photoshop's notification stream gets out of sync (e.g. after a batch rename).
+Source and target dropdowns are fully independent. Pick a layer in document A as source and a layer in document B as target — clicking an OUTPUT tab writes the result into document B's `[Color Smash]` group.
 
-## Color
+## TRANSFORM controls
 
-- **Amount** — global blend toward the matched curves (0 = identity).
-- **Smooth** — Gaussian smoothing on the per-channel CDFs to reduce banding from sparse histograms.
-- **Stretch** — maximum allowed slope on the fitted curve. Caps amplification of low-population bins.
-- **Anchor stretch to histogram range** — when on, the slope cap walks from where the target's data actually starts/ends (≥0.5% of peak count) instead of from 0/255. Keeps Stretch behavior consistent across bright vs. dark sources.
-- **Hue only (preserve target saturation + luminance)** — applies a Hue-blend Curves layer. Preview takes H from the mapped pixel, S from the original, then re-imposes Rec.709 luma — matches Photoshop's HSY-style Hue blend and avoids the saturation inflation per-channel curves naturally produce.
+Three accordion sub-sections inside the TRANSFORM island, each with an enable checkbox and `(i)` help button:
 
-## Target palette + softness (v1.8)
+- **Color** — Amount (match strength), Smooth (Gaussian on the CDFs, anti-banding), Stretch (max slope), Anchor stretch to histogram range, Hue only (preserve target saturation + luminance).
+- **Tone** — Value / Chroma / Hue / Contrast / Neutralize / Separation. Identity at default; each slider deviates from there.
+- **Envelope** — Arbitrary-N piecewise weight curve over input luma 0..255. Click empty area to add a smooth point; Alt-click toggles smooth↔corner; Shift/Ctrl-drag locks one axis; Delete/Backspace removes selected.
 
-A second weight bar sits under the matched preview, mirroring the source palette UI but applying fundamentally different math. Source weights bias the *histogram fit* (which source colors influence the computed curves). Target weights bias *curve application strength per cluster* — pull a target swatch toward 0 to leave that color region of the target untouched while the rest gets matched. The same 3/5/7 cluster toggle, handle/adapt drag modes, dark→light sort, and Reset apply.
+## Recipes & history
 
-The **mask toggle** on the target palette header (on by default) controls whether the per-cluster attenuation also produces a layer mask on the baked Curves layer (so the protection survives apply, not just preview). Off = uniform curves on both preview and bake; useful for A/B comparing what the mask is doing.
-
-The **softness slider** below each bar (0..100) controls falloff between cluster regions: 0 = hard nearest-cluster boundary, 100 = smooth Lorentzian blend across all clusters. Visible immediately as feathering on the bar itself. Source and target each have their own slider; both are persisted.
-
-This bar replaces the old Zones accordion (removed in v1.8). Cluster-based attenuation in Lab space is strictly more general than three fixed luma bands. Saved settings from older versions still load — the legacy ZoneOpts persists but is no longer editable.
-
-## Envelope
-
-Arbitrary-N piecewise weight curve over input luma 0..255 that modulates the match per tonal value. Default seeds three identity-weight points at 0 / 127 / 255.
-
-Editor controls:
-
-- **Click empty area** — adds a smooth point and immediately starts dragging it.
-- **Drag point** — moves position and weight.
-- **Shift-drag** — vertical only (weight only).
-- **Ctrl-drag** (Cmd on Mac) — horizontal only (position only).
-- **Alt-click point** — toggles smooth (●) ↔ corner (■). Smooth segments use monotone cubic Hermite interpolation (Fritsch–Carlson); corner segments are linear.
-- **Click point** — selects (highlight). **Delete** / **Backspace** removes.
-- **Right-click point** — removes. **Double-click point** — removes (legacy).
-- **Reset** — restores the three identity points.
-
-Background overlay shows the target luma histogram as filled gray bars, the source luma histogram as an orange outline, and the current matched-result luma histogram as a cyan outline so you can see the gap closing as you tweak. (The standalone histogram strip below the preview was removed in v1.2 — these overlays subsume it.)
-
-## Tone
-
-Identity at default. Each slider deviates the fitted curves along one axis:
-
-- **Value** — overall lightness shift.
-- **Chroma** — saturation push/pull.
-- **Hue** — hue rotation.
-- **Contrast** — S-curve / inverse-S around mid-gray.
-- **Neutralize** — pulls per-channel midpoints toward neutral.
-- **Separation** — spreads channels apart in tonal range.
-
-## Bottom bar
-
-Layout: `[☐ Deselect] [☐ Replace] [☐ Save] [✕] [RGB/LAB] [⟳]` above the Apply Curves / Export LUT row. Buttons are right-anchored; their text-labels clip silently behind toggles when the panel is narrow.
-
-- **Deselect** — drops the active marquee before applying so the Curves layer affects the full target.
-- **Replace** — overwrites the topmost / selected `Match Curves` layer instead of stacking a new one beside it.
-- **Save** — persists all panel settings (including this toggle's own state) to a JSON file in the plugin's data folder, debounced ~500ms. Restored on next panel load.
-- **✕** — solid red. Opens a UXP confirm modal: "Reset all panel settings to defaults and clear the saved file?" Confirm wipes all panel settings to defaults and deletes the persisted settings file.
-- **RGB/LAB** — color-space toggle (tight, hugs the letters).
-- **⟳** — re-reads source and target previews from Photoshop.
-- **Apply Curves** — writes the result (bakes the staged preset to a Curves layer in PS).
-- **Export LUT** — writes the staged preset to a 33³ `.CUBE` file at a path you pick.
+- **Auto-record** — every apply pushes a recipe-only entry (source palette + preset + slider values; target swatches stripped so the recipe is portable).
+- **Pin** — star icon. Pinned entries survive ring-buffer eviction.
+- **Rename** — right-click an entry. Custom names display in the thumbnail tooltip.
+- **Import / Export** — JSON envelope format (`color-smash-recipes`, versioned). Cross-machine portable. Doc/layer ids stripped at export.
+- **Starter recipes** — 4 curated recipes (Punch / Faded / Warm Mid / Mono B&W) installed on first run.
 
 ## Development
 
@@ -168,15 +177,18 @@ plugin/
 ├── dist/                  # build output (gitignored)
 └── src/
     ├── index.tsx          # React mount
-    ├── ui/                # Panel, PreviewPane, envelope/zone editors, hooks
-    ├── core/              # pure-TS algorithms (histogramMatch, lab, downsample, lut)
+    ├── ui/                # Panel, PreviewPane, accordion editors, hooks
+    ├── core/              # pure-TS algorithms (histogramMatch, lab, lut, downsample)
     ├── services/          # Photoshop DOM + batchPlay wrappers
-    └── app/               # Apply orchestration
+    └── app/               # Apply orchestration, XMP, recipes, group dedup
 ```
 
 ## Implementation notes
 
-- **Layer/doc dropdown freshness** — Photoshop fires make/delete notifications during the modal scope before `doc.layers` reflects the mutation. Reads are deferred (`setTimeout 0` plus a 120 ms backup) and deduped, so newly created layers and documents appear immediately in the dropdowns instead of requiring a second action.
+- **Single canonical group** — `consolidateColorSmashGroups()` runs before every apply, merging any stray nested `[Color Smash]` groups into a single top-level one. Prevents stacking when PS's insertion-point context (set by JUMP / ISOLATE / user clicks) tries to spawn nested groups.
+- **Three-step UI palette** — outer panel `#555` (lightest), island bg `#4a4a4a` (mid), dropdown/control bg `#2e2e2e` (darkest). Each level recesses into the next.
+- **Layer/doc dropdown freshness** — PS fires make/delete notifications during the modal scope before `doc.layers` reflects the mutation. Reads are deferred (`setTimeout 0` plus a 120 ms backup) and deduped, so newly created layers and documents appear immediately.
+- **REVERT recoverability (two safety nets)** — Auto-history: a pinned `Before REVERT @ HH:MM` entry is pushed before the revert applies, survives reloads. Shadow slot: in-memory copy of pre-revert state; the button reads `UN-REVERT` while the slot is live, click again to restore.
 - **Preview zoom buttons** — rendered as `<div>` elements rather than `<button>`s to work around UXP shadow-DOM text-rendering issues.
 
 ## License
