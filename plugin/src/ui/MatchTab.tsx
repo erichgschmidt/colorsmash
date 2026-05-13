@@ -2702,7 +2702,7 @@ export function MatchTab() {
           relevant. */}
       {/* v1.20.63 — zone divider: separates the transform sections
           (Color/Tone/Envelope) above from the output/Apply zone below. */}
-      <div style={{ borderTop: "1px solid #2a2a2a", marginTop: 8, marginBottom: 2 }} />
+      <div style={{ height: 2, background: "#0a0a0a", marginTop: 8, marginBottom: 6, boxShadow: "0 1px 0 #333" }} />
       {(() => {
         const marqueeDisabled = srcMode === "selection";
         const disabledTip = "Disabled because the source is using the active marquee. Switch source to a layer or browsed image to use the marquee as an output mask.";
@@ -3122,7 +3122,7 @@ export function MatchTab() {
 
       {/* v1.20.63 — zone divider: separates the Apply/action zone above
           from the history zone below. */}
-      <div style={{ borderTop: "1px solid #2a2a2a", marginTop: 8, marginBottom: 2 }} />
+      <div style={{ height: 2, background: "#0a0a0a", marginTop: 8, marginBottom: 6, boxShadow: "0 1px 0 #333" }} />
       {/* Recent history. Empty state shows a single hint line; otherwise the
           stored entries render as small palette-color thumbnails. */}
       {(() => {
@@ -3350,7 +3350,7 @@ export function MatchTab() {
 
       {/* v1.20.63 — zone divider: separates the history zone above from
           the LUT-settings / diagnostic-curves zone below. */}
-      <div style={{ borderTop: "1px solid #2a2a2a", marginTop: 8, marginBottom: 2 }} />
+      <div style={{ height: 2, background: "#0a0a0a", marginTop: 8, marginBottom: 6, boxShadow: "0 1px 0 #333" }} />
       {/* LUT-specific knobs. v1.20.62 — always rendered (was gated on
           outputMode==='lut'). Keeping these slots reserved avoids the
           panel resizing when users flip between LUT and Curves modes;
