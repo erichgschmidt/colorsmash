@@ -2447,8 +2447,8 @@ export function MatchTab() {
     //   ↓ dropdown / input bg (darkest, see MatchSliders.sel)
     // Each level recesses into the next. Border just barely visible
     // so the island reads as a soft inset pad, not a framed box.
-    background: "#1f1f1f",
-    border: "1px solid #2a2a2a",
+    background: "#363636",
+    border: "1px solid #404040",
     borderRadius: 6,
     padding: "8px 10px",
     display: "flex", flexDirection: "column", gap: 4,
