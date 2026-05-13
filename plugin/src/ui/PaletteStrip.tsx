@@ -336,9 +336,9 @@ export function PaletteStrip(props: PaletteStripProps) {
       style={{
         // v1.20.70 — icon-only reset, mirrors the header's RESET ✕.
         // Sized to match BAR_HEIGHT (24) so it sits flush with the
-        // slider + the other cluster buttons. Solid bright red bg +
-        // white ✕ when active; dim transparent when neutral.
-        width: 22, height: 24, flexShrink: 0,
+        // slider + the other cluster buttons. Width tightened 22→17
+        // to match the visual width of the 3/5/7 digit buttons.
+        width: 17, height: 24, flexShrink: 0,
         display: "inline-flex", alignItems: "center", justifyContent: "center",
         background: isNeutral ? "transparent" : "#ff5050",
         color: isNeutral ? "#5a3a3a" : "#ffffff",
