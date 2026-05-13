@@ -3020,13 +3020,17 @@ export function MatchTab() {
           with col-2 (RGB/Lab/LUT). 💾 LUT removed — each tab now has
           its own inline save icon. */}
       <div style={{ display: "flex", flexWrap: "nowrap", gap: 4, marginTop: 6, width: "100%", alignItems: "center" }}>
-        {/* Left cluster: JUMP / ISOLATE. */}
+        {/* Left cluster: JUMP / ISOLATE. v1.20.69 — equal-width pills
+            (44px each = (92 - 4 gap) / 2), so the cluster is exactly
+            col-1-wide and lines up with MASK / [+|○|▼] / ADAPT above.
+            ISOLATE no longer pokes past col-1 into the tabs region. */}
         <div onClick={onJumpToTarget}
           title={targetId == null || targetId === MERGED_LAYER_ID
             ? "JUMP — no specific target layer to jump to (pick a layer in the target dropdown first)."
             : "JUMP — select the target layer in PS Layers panel + scroll it into view."}
           style={{
-            padding: "0 8px", fontSize: 10, fontWeight: 700, letterSpacing: 0.3,
+            width: 44, height: 22, padding: 0, flexShrink: 0,
+            fontSize: 10, fontWeight: 700, letterSpacing: 0.3,
             display: "flex", alignItems: "center", justifyContent: "center",
             background: "transparent",
             color: (targetId != null && targetId !== MERGED_LAYER_ID) ? "#aaa" : "#555",
@@ -3034,8 +3038,7 @@ export function MatchTab() {
             borderRadius: 4,
             cursor: (targetId != null && targetId !== MERGED_LAYER_ID) ? "pointer" : "default",
             userSelect: "none",
-            height: 22, lineHeight: "20px", boxSizing: "border-box",
-            flex: "0 0 auto",
+            lineHeight: "20px", boxSizing: "border-box",
             opacity: (targetId != null && targetId !== MERGED_LAYER_ID) ? 1 : 0.55,
           }}>JUMP</div>
         <div onClick={onToggleIsolation}
@@ -3043,14 +3046,14 @@ export function MatchTab() {
             ? "ISOLATE ON — non-target / non-[Color Smash] layers hidden. Click to restore prior visibility."
             : "ISOLATE OFF — click to hide every layer except the target's ancestor chain + [Color Smash] group. A/B compare against the full comp."}
           style={{
-            padding: "0 8px", fontSize: 10, fontWeight: 700, letterSpacing: 0.3,
+            width: 44, height: 22, padding: 0, flexShrink: 0,
+            fontSize: 10, fontWeight: 700, letterSpacing: 0.3,
             display: "flex", alignItems: "center", justifyContent: "center",
             background: isolated ? "#283440" : "transparent",
             color: isolated ? "#7aa8d8" : "#aaa",
             border: `1px solid ${isolated ? "#7aa8d8" : "#666"}`,
             borderRadius: 4, cursor: "pointer", userSelect: "none",
-            height: 22, lineHeight: "20px", boxSizing: "border-box",
-            flex: "0 0 auto",
+            lineHeight: "20px", boxSizing: "border-box",
           }}>ISOLATE</div>
         {/* Spring pushes the right cluster flush-right. */}
         <div style={{ flex: 1 }} />
