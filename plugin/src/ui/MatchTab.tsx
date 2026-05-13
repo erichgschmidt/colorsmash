@@ -2957,7 +2957,7 @@ export function MatchTab() {
             {TABS.map(t => (
               <div key={t.val} onClick={() => onTabClick(t.val)} title={t.tip}
                 style={{
-                  flex: 1, height: 18, padding: 0,
+                  flex: "1 1 0", height: 18, padding: 0,
                   display: "flex", alignItems: "center", justifyContent: "center",
                   fontSize: 10, fontWeight: 700, letterSpacing: 0.4,
                   background: t.tabS.bg,
@@ -2991,50 +2991,54 @@ export function MatchTab() {
                 borderRadius: 2, cursor: "pointer", userSelect: "none",
                 lineHeight: "16px", boxSizing: "border-box",
               }}>ADAPT</div>
+            {/* v1.20.69 — flat 6-cell layout (was 3 per-tab wrappers ×
+                2 cells each) so flex distribution matches the tabs row
+                above exactly. Per-tab wrapper introduced sub-pixel
+                rounding that made column boundaries stagger by ~1px. */}
             <div style={{ display: "flex", flex: 1, gap: 0 }}>
-              {TABS.map(t => (
-                <div key={t.val} style={{ flex: 1, display: "flex", gap: 0, minWidth: 0 }}>
-                  <div onClick={() => setTabConfig(prev => ({ ...prev, [t.val]: { ...prev[t.val], multi: !prev[t.val].multi } }))}
-                    style={{
-                      flex: 1, height: 18, padding: 0,
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      fontSize: 8, fontWeight: 600, letterSpacing: 0.3,
-                      background: t.multiS.bg,
-                      color: t.multiS.fg,
-                      border: `1px solid ${t.multiS.bd}`,
-                      borderLeftWidth: t.isFirst ? 1 : 0,
-                      borderRadius: 0,
-                      cursor: "pointer", userSelect: "none",
-                      lineHeight: "16px", boxSizing: "border-box",
-                    }}
-                    title={`Multi (${t.label}): split this output into 3 luma-banded layers. Per-tab — RGB / Lab / LUT each remember their own Multi state.`}>
-                    MULTI
-                  </div>
-                  <div onClick={() => setTabConfig(prev => {
-                      const cur = prev[t.val];
-                      if (!cur.multi) return { ...prev, [t.val]: { multi: true, blendIf: true } };
-                      return { ...prev, [t.val]: { ...cur, blendIf: !cur.blendIf } };
-                    })}
-                    style={{
-                      flex: 1, height: 18, padding: 0,
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      fontSize: 8, fontWeight: 600, letterSpacing: 0.3,
-                      background: t.blendS.bg,
-                      color: t.blendS.fg,
-                      border: `1px solid ${t.blendS.bd}`,
-                      borderLeftWidth: 0,
-                      borderRadius: 0,
-                      cursor: "pointer", userSelect: "none",
-                      lineHeight: "16px", boxSizing: "border-box",
-                      opacity: t.subDisabled ? 0.7 : 1,
-                    }}
-                    title={t.subDisabled
-                      ? `Blend (${t.label}): click to enable — auto-engages Multi (Blend needs Multi's 3 band layers to operate on).`
-                      : `Blend (${t.label}): use Blending Options sliders instead of layer masks for the 3 band layers.`}>
-                    BLEND
-                  </div>
-                </div>
-              ))}
+              {TABS.flatMap((t, ti) => [
+                <div key={`${t.val}-multi`}
+                  onClick={() => setTabConfig(prev => ({ ...prev, [t.val]: { ...prev[t.val], multi: !prev[t.val].multi } }))}
+                  style={{
+                    flex: "1 1 0", minWidth: 0, height: 18, padding: 0,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 8, fontWeight: 600, letterSpacing: 0.3,
+                    background: t.multiS.bg,
+                    color: t.multiS.fg,
+                    border: `1px solid ${t.multiS.bd}`,
+                    borderLeftWidth: ti === 0 ? 1 : 0,
+                    borderRadius: 0,
+                    cursor: "pointer", userSelect: "none",
+                    lineHeight: "16px", boxSizing: "border-box",
+                  }}
+                  title={`Multi (${t.label}): split this output into 3 luma-banded layers. Per-tab — RGB / Lab / LUT each remember their own Multi state.`}>
+                  MULTI
+                </div>,
+                <div key={`${t.val}-blend`}
+                  onClick={() => setTabConfig(prev => {
+                    const cur = prev[t.val];
+                    if (!cur.multi) return { ...prev, [t.val]: { multi: true, blendIf: true } };
+                    return { ...prev, [t.val]: { ...cur, blendIf: !cur.blendIf } };
+                  })}
+                  style={{
+                    flex: "1 1 0", minWidth: 0, height: 18, padding: 0,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 8, fontWeight: 600, letterSpacing: 0.3,
+                    background: t.blendS.bg,
+                    color: t.blendS.fg,
+                    border: `1px solid ${t.blendS.bd}`,
+                    borderLeftWidth: 0,
+                    borderRadius: 0,
+                    cursor: "pointer", userSelect: "none",
+                    lineHeight: "16px", boxSizing: "border-box",
+                    opacity: t.subDisabled ? 0.7 : 1,
+                  }}
+                  title={t.subDisabled
+                    ? `Blend (${t.label}): click to enable — auto-engages Multi (Blend needs Multi's 3 band layers to operate on).`
+                    : `Blend (${t.label}): use Blending Options sliders instead of layer masks for the 3 band layers.`}>
+                  BLEND
+                </div>,
+              ])}
             </div>
           </div>
         )}
