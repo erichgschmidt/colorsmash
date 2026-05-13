@@ -406,7 +406,7 @@ export function PaletteStrip(props: PaletteStripProps) {
               }}
               title={`Softness: ${Math.round(softness)} — falloff between cluster regions (0 = hard, 100 = smooth blend)`}
               style={{ flex: 1, minWidth: 0, margin: 0, cursor: "pointer", height: 12 }} />
-            <span style={{ fontSize: 9, opacity: 0.5, width: 22, textAlign: "right", flexShrink: 0 }}>{Math.round(softness)}</span>
+            <span style={{ fontSize: 9, opacity: 0.5, width: 22, textAlign: "right", flexShrink: 0, paddingRight: 4 }}>{Math.round(softness)}</span>
           </>
         )}
         {controlsCluster}
