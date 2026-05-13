@@ -49,6 +49,16 @@ export interface HistoryEntry {
    *  (the rename UI surfaces a text input alongside the star). Empty string
    *  reverts to the auto label. */
   customName?: string;
+  /** v1.21 — optional base64-encoded PNG thumbnail of the matched preview.
+   *  Lightroom-style: lets a preset gallery render itself without re-running
+   *  k-means or re-applying the transform. Capped at ~80KB in practice
+   *  (256² PNG of the preview tile). Old presets omit this field. */
+  thumbnail?: string;
+  /** v1.21 — categorizes the preset's authoring origin.
+   *  - 'match' (default) — produced by the current Color Match workflow.
+   *  - 'smash' — produced by the Pro Smash Engine (Source DNA + traits).
+   *  Field is omitted from older presets, in which case the loader assumes 'match'. */
+  kind?: 'match' | 'smash';
 }
 
 /** Set or clear the customName on an entry by id. Returns a NEW array;
