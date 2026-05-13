@@ -3454,7 +3454,7 @@ export function MatchTab() {
                   border: `1px solid ${adaptiveBands ? "#d8b87a" : "#444"}`,
                   borderRadius: 3, cursor: "pointer", userSelect: "none",
                   lineHeight: "18px", boxSizing: "border-box",
-                }}>{"<>"}</div>
+                }}>ADAPT</div>
             )}
           </div>
           {/* Column 2 (flex 1): tabs row above, optional MULTI/BLEND row below. */}
