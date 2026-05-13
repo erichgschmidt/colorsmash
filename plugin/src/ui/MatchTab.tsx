@@ -2205,6 +2205,10 @@ export function MatchTab() {
     if (srcMode === "selection" && srcOverride) {
       try { setSrcOverride(await snapshotSelectionInner()); } catch (e: any) { setStatus(`Error: ${e?.message ?? e}`); }
     }
+    // v1.20.69 — force selection mask re-read. Folded in from the old
+    // inline ↻ button (removed from the MASK row) so the main refresh
+    // is the single sync entry point for everything PS-side.
+    setSelectionTick(t => t + 1);
   };
 
   return (
@@ -2708,67 +2712,49 @@ export function MatchTab() {
           !selectionPreviewMask;
         return (
           <>
-          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 4, height: 22, lineHeight: "20px" }}>
+          {/* v1.20.69 — MASK row layout mirrors the output block: MASK
+              spans col-1 (92px) and Off/Focus/Exclude span col-2's tab
+              widths. The inline ↻ button is gone; its functionality
+              folded into the main ⟳ refresh in the action row below. */}
+          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 4, height: 28, lineHeight: "26px" }}>
             <div onClick={() => setShowMask(v => !v)}
               title={showMask
                 ? "Show Mask ON — protected regions painted red on the matched preview (palette × selection composition). Click to disable."
                 : "Show Mask OFF — preview shows pure transform output. Click to enable: protected regions paint red."}
               style={{
-                padding: "0 10px",
-                fontSize: 10, fontWeight: 600, letterSpacing: 0.4,
+                width: 92, height: 28, flexShrink: 0,
+                fontSize: 11, fontWeight: 700, letterSpacing: 0.4,
                 display: "inline-flex", alignItems: "center", justifyContent: "center",
                 background: showMask ? "#3a2828" : "transparent",
                 color: showMask ? "#e87a7a" : "#5a3a3a",
                 border: `1px solid ${showMask ? "#d87a7a" : "#5a3a3a"}`,
                 borderRadius: 4, cursor: "pointer", userSelect: "none",
-                height: 22, lineHeight: "20px", boxSizing: "border-box",
-                flexShrink: 0,
+                lineHeight: "26px", boxSizing: "border-box",
               }}>MASK</div>
-            <div style={{ display: "flex", flex: 1, gap: 2, opacity: marqueeDisabled ? 0.55 : 1 }}>
+            <div style={{ display: "flex", flex: 1, gap: 0, opacity: marqueeDisabled ? 0.55 : 1, overflow: "hidden" }}>
               {([
                 ["off",     "Off",     "Ignore the marquee — full-image apply (default). The marquee stays on the doc."],
                 ["focus",   "Focus",   "Use the active marquee as the layer mask — the Curves/LUT applies ONLY inside the marquee. Multiplied with the target-palette mask if both are active."],
                 ["exclude", "Exclude", "Use the INVERSE of the active marquee as the layer mask — the Curves/LUT applies everywhere OUTSIDE the marquee. Useful for protecting a chosen area."],
-              ] as Array<["off" | "focus" | "exclude", string, string]>).map(([val, label, tip]) => (
+              ] as Array<["off" | "focus" | "exclude", string, string]>).map(([val, label, tip], idx) => (
                 <div key={val}
                   onClick={() => { if (!marqueeDisabled) setSelectionMode(val); }}
                   title={marqueeDisabled ? disabledTip : tip}
                   style={{
-                    flex: 1, height: 22, padding: 0,
+                    flex: "1 1 0", minWidth: 0, height: 28, padding: 0,
                     display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: 10, fontWeight: 600, letterSpacing: 0.3,
+                    overflow: "hidden", whiteSpace: "nowrap",
+                    fontSize: 11, fontWeight: 700, letterSpacing: 0.4,
                     background: !marqueeDisabled && selectionMode === val ? "#3a3a3a" : "transparent",
                     color: !marqueeDisabled && selectionMode === val ? "#dddddd" : "#888",
                     border: `1px solid ${!marqueeDisabled && selectionMode === val ? "#888" : "#444"}`,
-                    borderRadius: 2,
+                    borderLeftWidth: idx === 0 ? 1 : 0,
+                    borderRadius: 0,
                     cursor: marqueeDisabled ? "default" : "pointer",
                     userSelect: "none",
-                    lineHeight: "20px", boxSizing: "border-box",
+                    lineHeight: "26px", boxSizing: "border-box",
                   }}>{label}</div>
               ))}
-            </div>
-            <div
-              onClick={() => setSelectionTick(t => t + 1)}
-              title={(() => {
-                if (marqueeDisabled) return disabledTip;
-                if (effectiveSelectionMode === "off") return "Marquee mode is OFF — preview ignores any active selection. Click to force a selection re-read.";
-                if (!selectionPreviewMask) return "No selection detected for the target preview (or the snap has no bounds yet). Draw a marquee on the target and click ↻ to retry.";
-                let inside = 0;
-                for (let i = 0; i < selectionPreviewMask.length; i++) if (selectionPreviewMask[i] > 127) inside++;
-                const pct = ((inside / selectionPreviewMask.length) * 100).toFixed(1);
-                return `Selection captured: ${inside}/${selectionPreviewMask.length} preview pixels inside (${pct}%). Click ↻ to refresh.`;
-              })()}
-              style={{
-                width: 22, height: 22, marginLeft: 2,
-                display: "inline-flex", alignItems: "center", justifyContent: "center",
-                background: "transparent",
-                color: selectionPreviewMask ? "#7ad87a" : "#888",
-                border: `1px solid ${selectionPreviewMask ? "#7ad87a" : "#555"}`,
-                borderRadius: 2, cursor: marqueeDisabled ? "default" : "pointer",
-                fontSize: 12, userSelect: "none",
-                opacity: marqueeDisabled ? 0.3 : 1,
-              }}>
-              <span style={{ marginTop: -1, lineHeight: 1 }}>↻</span>
             </div>
           </div>
           {showNoSelectionHint && (
@@ -2802,60 +2788,10 @@ export function MatchTab() {
             bottom row (aligned w/ MULTI|BLEND) = AUTO armed-record indicator
           The thin top strip drops AUTO and keeps [ADAPT][JUMP][ISOLATE]. */}
       <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 0 }}>
-        {/* Thin top strip: JUMP + ISOLATE. ADAPT removed in v1.20.69 —
-            it's only meaningful when MULTI is active, so it moved into
-            the (expandable) MULTI/BLEND row below. */}
-        {(() => {
-          return (
-            <div style={{ display: "flex", gap: 4, height: 16, marginBottom: 2 }}>
-              {/* v1.20.69 — top strip is just JUMP + ISOLATE now. The +
-                  branch arm moved down into the main row alongside AUTO
-                  and the disclosure. 74px spacer (= 22+4+22+4+22) keeps
-                  JUMP/ISOLATE column-aligned with RGB/Lab/LUT below. */}
-              <div style={{ width: 92, height: 16, flexShrink: 0 }} />
-              <div style={{ display: "flex", flex: 1, gap: 0 }}>
-                {/* v1.20.68 — JUMP: select the target layer in PS Layers
-                    panel. Quick navigation when the target dropdown
-                    points at a layer buried in a group. */}
-                <div onClick={onJumpToTarget}
-                  title={targetId == null || targetId === MERGED_LAYER_ID
-                    ? "JUMP — no specific target layer to jump to (pick a layer in the target dropdown first)."
-                    : "JUMP — select the target layer in PS Layers panel + scroll it into view."}
-                  style={{
-                    flex: 1, height: 16, padding: 0,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
-                    background: "transparent",
-                    color: (targetId != null && targetId !== MERGED_LAYER_ID) ? "#888" : "#555",
-                    border: `1px solid ${(targetId != null && targetId !== MERGED_LAYER_ID) ? "#444" : "#3a3a3a"}`,
-                    borderRadius: 2,
-                    cursor: (targetId != null && targetId !== MERGED_LAYER_ID) ? "pointer" : "default",
-                    userSelect: "none",
-                    lineHeight: "14px", boxSizing: "border-box",
-                    opacity: (targetId != null && targetId !== MERGED_LAYER_ID) ? 1 : 0.55,
-                  }}>JUMP</div>
-                {/* v1.20.68 — ISOLATE: A/B compare via hide-other-layers.
-                    When on, snapshots prior visibility and hides every
-                    top-level layer except the target's ancestor chain +
-                    [Color Smash] group. Toggling off restores. */}
-                <div onClick={onToggleIsolation}
-                  title={isolated
-                    ? "ISOLATE ON — non-target / non-[Color Smash] layers hidden. Click to restore prior visibility."
-                    : "ISOLATE OFF — click to hide every layer except the target's ancestor chain + [Color Smash] group. A/B compare against the full comp."}
-                  style={{
-                    flex: 1, height: 16, padding: 0,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
-                    background: isolated ? "#283440" : "transparent",
-                    color: isolated ? "#7aa8d8" : "#888",
-                    border: `1px solid ${isolated ? "#7aa8d8" : "#444"}`,
-                    borderRadius: 2, cursor: "pointer", userSelect: "none",
-                    lineHeight: "14px", boxSizing: "border-box",
-                  }}>ISOLATE</div>
-              </div>
-            </div>
-          );
-        })()}
+        {/* v1.20.69 — top strip removed. JUMP / ISOLATE moved DOWN into
+            the action row at the bottom of the output block, alongside
+            REVERT / RESET / ⟳ / ⚙. ADAPT (was here pre-v1.20.69)
+            relocated into the MULTI/BLEND expandable row. */}
         {(() => {
           // v1.20.69 — extracted per-tab meta so the tabs row and the
           // (separate, optional) MULTI/BLEND row can both render from the
@@ -2998,7 +2934,7 @@ export function MatchTab() {
             {TABS.map(t => (
               <div key={t.val} onClick={() => onTabClick(t.val)} title={t.tip}
                 style={{
-                  flex: "1 1 0", height: 28, padding: 0,
+                  flex: "1 1 0", height: 28, padding: "0 4px 0 0",
                   display: "flex", alignItems: "center", justifyContent: "center",
                   overflow: "hidden", whiteSpace: "nowrap",
                   fontSize: 11, fontWeight: 700, letterSpacing: 0.4,
@@ -3010,7 +2946,26 @@ export function MatchTab() {
                   cursor: "pointer", userSelect: "none",
                   lineHeight: "26px", boxSizing: "border-box",
                   minWidth: 0,
-                }}>{t.label}</div>
+                  position: "relative",
+                }}>
+                <span style={{ flex: 1, textAlign: "center" }}>{t.label}</span>
+                {/* v1.20.69 — inline save icon on each tab. Triggers
+                    onExportLut (universal .CUBE export — captures the
+                    current preset's full transform regardless of which
+                    output mode is staged). Stops propagation so a
+                    click on the icon doesn't also fire the tab swap. */}
+                <span onClick={e => { e.stopPropagation(); onExportLut(); }}
+                  title="Export the current preset to disk as a portable 33³ .CUBE 3D LUT (loadable in PS, Premiere, Resolve, etc.). Universal — works from any output mode (RGB / Lab / LUT)."
+                  style={{
+                    width: 16, height: 18,
+                    display: "inline-flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 11, lineHeight: 1,
+                    color: t.tabS.fg,
+                    opacity: 0.75,
+                    cursor: "pointer",
+                    flexShrink: 0,
+                  }}>💾</span>
+              </div>
             ))}
           </div>
           {/* MULTI/BLEND row inside col-2 — only when disclosure is
@@ -3076,31 +3031,53 @@ export function MatchTab() {
       {/* v1.20.53 — marquee tristate was relocated up alongside MASK
           (above the output-mode block). This slot is now empty. */}
 
-      {/* v1.20.51 — Apply pill relocated UP into the output-mode block.
-          This row keeps just the secondary actions: LIVE, RESTORE, Save
-          LUT, SAVE, ✕, ⟳, plus the relocated ADAPT toggle. */}
-      <div style={{ display: "flex", flexWrap: "nowrap", gap: 4, marginTop: 6, width: "100%" }}>
-        {/* Live LUT toggle: when on, every state change re-bakes the LUT into
-            the existing Match LUT layer (debounced ~300ms). Off by default —
-            the contract is stronger than one-shot Apply LUT, so we make it opt-in.
-            Match the visual style of the small mode-toggle pills used elsewhere
-            (palette mask, adapt, count) — dim when off, soft amber when on. */}
-        {/* v1.20.55 — LIVE and ADAPT relocated UP into the output block
-            as a stacked column next to Apply. Action row keeps only the
-            admin-style controls (RESTORE / 💾 LUT / SAVE / ✕ / ⟳). */}
-        {/* v1.20.43 — RESTORE pill now dim/disabled when no XMP is found on
-            the active layer; comes alive when the user clicks a previously-
-            baked Match layer. Teaches users the feature exists by enabling
-            itself exactly when it's useful. */}
+      {/* v1.20.69 — action row restructured. JUMP / ISOLATE flush-left
+          (relocated from the top strip above the tabs); REVERT (renamed
+          from RESTORE) / RESET / ⟳ / ⚙ flush-right, indented to align
+          with col-2 (RGB/Lab/LUT). 💾 LUT removed — each tab now has
+          its own inline save icon. */}
+      <div style={{ display: "flex", flexWrap: "nowrap", gap: 4, marginTop: 6, width: "100%", alignItems: "center" }}>
+        {/* Left cluster: JUMP / ISOLATE. */}
+        <div onClick={onJumpToTarget}
+          title={targetId == null || targetId === MERGED_LAYER_ID
+            ? "JUMP — no specific target layer to jump to (pick a layer in the target dropdown first)."
+            : "JUMP — select the target layer in PS Layers panel + scroll it into view."}
+          style={{
+            padding: "0 8px", fontSize: 10, fontWeight: 700, letterSpacing: 0.3,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            background: "transparent",
+            color: (targetId != null && targetId !== MERGED_LAYER_ID) ? "#aaa" : "#555",
+            border: `1px solid ${(targetId != null && targetId !== MERGED_LAYER_ID) ? "#666" : "#3a3a3a"}`,
+            borderRadius: 4,
+            cursor: (targetId != null && targetId !== MERGED_LAYER_ID) ? "pointer" : "default",
+            userSelect: "none",
+            height: 22, lineHeight: "20px", boxSizing: "border-box",
+            flex: "0 0 auto",
+            opacity: (targetId != null && targetId !== MERGED_LAYER_ID) ? 1 : 0.55,
+          }}>JUMP</div>
+        <div onClick={onToggleIsolation}
+          title={isolated
+            ? "ISOLATE ON — non-target / non-[Color Smash] layers hidden. Click to restore prior visibility."
+            : "ISOLATE OFF — click to hide every layer except the target's ancestor chain + [Color Smash] group. A/B compare against the full comp."}
+          style={{
+            padding: "0 8px", fontSize: 10, fontWeight: 700, letterSpacing: 0.3,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            background: isolated ? "#283440" : "transparent",
+            color: isolated ? "#7aa8d8" : "#aaa",
+            border: `1px solid ${isolated ? "#7aa8d8" : "#666"}`,
+            borderRadius: 4, cursor: "pointer", userSelect: "none",
+            height: 22, lineHeight: "20px", boxSizing: "border-box",
+            flex: "0 0 auto",
+          }}>ISOLATE</div>
+        {/* Spring pushes the right cluster flush-right. */}
+        <div style={{ flex: 1 }} />
+        {/* Right cluster: REVERT / RESET / ⟳ / ⚙. */}
         <div onClick={canRestore ? onRestoreFromLayer : undefined}
           title={canRestore
-            ? "Restore panel state from the selected Match layer's XMP metadata. Snaps every slider, preset, palette weight, and doc/layer choice back to the state that produced this layer."
+            ? "Revert panel state to the snapshot stored in the selected Match layer's XMP metadata. Snaps every slider, preset, palette weight, and doc/layer choice back to the state that produced this layer."
             : "Disabled — no Color Smash metadata found on the active layer. Click a previously-baked Match layer in the Layers panel to enable."}
           style={{
             padding: "0 8px", fontSize: 10, fontWeight: 600, letterSpacing: 0.3,
-            // v1.20.46 — muted gray when disabled, accent color only when
-            // there's actually something to restore. Matches LIVE's pattern:
-            // reserve color for the active state.
             background: canRestore ? "#283440" : "#2a2a2a",
             color: canRestore ? "#7aa8d8" : "#aaaaaa",
             border: `1px solid ${canRestore ? "#7aa8d8" : "#666"}`,
@@ -3109,75 +3086,44 @@ export function MatchTab() {
             height: 28, lineHeight: "26px", boxSizing: "border-box",
             flex: "0 0 auto",
             opacity: canRestore ? 1 : 0.7,
-          }}>RESTORE</div>
-        {/* v1.20.43 — Save LUT styled to match the Apply pill aesthetic:
-            rounded shell, neutral gray background, light text. Reads as a
-            sibling action to Apply rather than a different system. */}
-        {/* v1.20.54 — Save LUT now reads as [💾 LUT]: small disk glyph
-            (Unicode floppy) followed by the LUT label. Lighter visual
-            footprint than the old "Save LUT…" text, still 1:1 clear. */}
-        <div onClick={onExportLut}
-          title="Export the staged preset as a portable 33³ .CUBE 3D LUT to disk. Loadable in Photoshop, Premiere, Resolve, etc. Use Apply LUT instead if you just want it in this PS doc."
-          style={{
-            padding: "0 10px", fontSize: 10, fontWeight: 600, letterSpacing: 0.3,
-            background: "#3a3a3a", color: "#eeeeee",
-            border: "1px solid #888",
-            borderRadius: 4, cursor: "pointer", userSelect: "none",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            gap: 4,
-            height: 28, lineHeight: "26px", boxSizing: "border-box",
-            flex: "0 0 auto",
-            whiteSpace: "nowrap",
-          }}>
-          <span style={{ fontSize: 13, lineHeight: 1 }}>💾</span>
-          <span>LUT</span>
-        </div>
-        {/* v1.20.43 — SAVE/✕/⟳ pills relocated from the BottomActionBar to
-            this row. Compact icon-style so they trail the apply cluster
-            without dominating it. */}
-        {/* v1.20.63 — was 'SAVE' which was easily confused with the Save
-            LUT button next to it. Now renders as a gear icon ⚙ + 'PREFS'
-            tooltip clarifies it's the 'remember settings across reloads'
-            toggle, NOT a save-current-bake action. */}
-        <div onClick={() => setRemember(!remember)}
-          title={remember
-            ? "PREFS ON — panel settings (sliders, palette weights, envelope, output mode, LUT options) are persisted across reloads. Click to disable."
-            : "PREFS OFF — panel settings reset to defaults on next reload. Click to enable persistence."}
-          style={{
-            width: 28, height: 28, marginLeft: 4,
-            display: "inline-flex", alignItems: "center", justifyContent: "center",
-            background: remember ? "#3a3a3a" : "transparent",
-            color: remember ? "#dddddd" : "#888",
-            border: `1px solid ${remember ? "#888" : "#444"}`,
-            borderRadius: 4, cursor: "pointer", userSelect: "none",
-            fontSize: 14, lineHeight: 1,
-            boxSizing: "border-box", flexShrink: 0,
-          }}>⚙</div>
+          }}>REVERT</div>
         <div onClick={async () => {
           const ok = await uxpConfirm("Reset all panel settings to defaults and clear the saved file?", "Reset");
           if (ok) onResetAll();
         }}
           title="Reset all settings to defaults and clear the saved file"
           style={{
-            width: 22, height: 28, display: "inline-flex", alignItems: "center", justifyContent: "center",
-            background: "#e66666", color: "#fff", fontWeight: 700, fontSize: 13, lineHeight: 1,
+            padding: "0 10px", height: 28, display: "inline-flex", alignItems: "center", justifyContent: "center",
+            background: "#e66666", color: "#fff", fontWeight: 700, fontSize: 11, letterSpacing: 0.3, lineHeight: "26px",
             border: "none", borderRadius: 4, cursor: "pointer", boxSizing: "border-box", flexShrink: 0,
-          }}>
-          <span style={{ marginTop: -1 }}>✕</span>
-        </div>
+          }}>RESET</div>
         <div onClick={onRefreshAll}
           title={stale
-            ? "Photoshop changed since last refresh — click to resync"
-            : "In sync. Click to refresh source + target previews + layer lists"}
+            ? "Photoshop changed since last refresh — click to resync everything (docs, layer lists, source/target previews, selection mask)."
+            : "In sync. Click to force-refresh source + target previews + layer lists + selection mask."}
           style={{
-            width: 22, height: 28, display: "inline-flex", alignItems: "center", justifyContent: "center",
+            width: 28, height: 28, display: "inline-flex", alignItems: "center", justifyContent: "center",
             background: stale ? "#c19a3a" : "transparent",
             color: stale ? "#fff" : "#aaa",
-            border: `1px solid ${stale ? "#c19a3a" : "#888"}`,
-            borderRadius: 4, cursor: "pointer", boxSizing: "border-box", flexShrink: 0, fontSize: 15, userSelect: "none",
+            border: `1px solid ${stale ? "#c19a3a" : "#666"}`,
+            borderRadius: 4, cursor: "pointer", boxSizing: "border-box", flexShrink: 0, fontSize: 16, userSelect: "none",
           }}>
           <span style={{ marginTop: -2, lineHeight: 1 }}>⟳</span>
         </div>
+        <div onClick={() => setRemember(!remember)}
+          title={remember
+            ? "PREFS ON — panel settings (sliders, palette weights, envelope, output mode, LUT options) are persisted across reloads. Click to disable."
+            : "PREFS OFF — panel settings reset to defaults on next reload. Click to enable persistence."}
+          style={{
+            width: 28, height: 28,
+            display: "inline-flex", alignItems: "center", justifyContent: "center",
+            background: remember ? "#3a3a3a" : "transparent",
+            color: remember ? "#dddddd" : "#888",
+            border: `1px solid ${remember ? "#888" : "#666"}`,
+            borderRadius: 4, cursor: "pointer", userSelect: "none",
+            fontSize: 14, lineHeight: 1,
+            boxSizing: "border-box", flexShrink: 0,
+          }}>⚙</div>
       </div>
 
       {/* v1.20.63 — zone divider: separates the Apply/action zone above
