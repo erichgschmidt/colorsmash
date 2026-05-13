@@ -40,7 +40,7 @@ import { serializeRecipes, parseRecipes, mergeImportedRecipes } from "../app/rec
 import { buildStarterRecipes } from "../app/starterRecipes";
 import { ModeToggle, type SmashMode } from "./smash/ModeToggle";
 import { SmashSection } from "./smash/SmashSection";
-import { applyTransform, type SmashEngineOutput } from "../core/smash";
+import { bakeSmashLut, type SmashEngineOutput, type SmashLut } from "../core/smash";
 
 const STARTER_PACK_VERSION = 1;
 import { lutGradientCSS } from "../app/historyThumbnail";
@@ -1342,17 +1342,28 @@ export function MatchTab() {
     }
   };
 
-  // v1.21 — Smash-mode preview drive. When in Smash mode and we have a built
-  // engine plus a source snap, apply the transform per source pixel and push
-  // the result through the same MatchedPreview handle the Match path uses.
-  // The Before/After badge stays wired: "before" = the source pixels, "after"
-  // = Smash-transformed source pixels. Switching back to Match mode is handled
-  // by the existing Match preview effect re-firing on its own state changes.
+  // v1.21 — Smash-mode preview drive. Bakes a 17³ LUT once per engine change
+  // (4913 applyTransform calls, ~25-50ms), then trilinear-interpolates per
+  // source pixel — much cheaper than calling the engine for all ~400K preview
+  // pixels on every slider tick.
+  //
+  // "Before" = source pixels; "after" = LUT-applied source pixels. The same
+  // <MatchedPreview/> handle the Match path uses; the Before/After badge
+  // stays wired automatically.
+  const smashPreviewLut = useMemo<SmashLut | null>(() => {
+    if (!__SMASH_ENABLED__) return null;
+    if (!smashEngine) return null;
+    return bakeSmashLut(smashEngine, 17);
+  }, [smashEngine]);
+
   useEffect(() => {
     if (!__SMASH_ENABLED__) return;
     if (smashMode !== "smash") return;
-    if (!smashEngine || !srcSnap || !matchedHandleRef.current) return;
+    if (!smashPreviewLut || !srcSnap || !matchedHandleRef.current) return;
     const { width: w, height: h, data: src } = srcSnap;
+    const lut = smashPreviewLut.values;
+    const N = smashPreviewLut.size;
+    const NM1 = N - 1;
     const out = new Uint8Array(src.length);
     for (let i = 0; i < w * h; i++) {
       const o = i * 4;
@@ -1361,12 +1372,55 @@ export function MatchTab() {
         out[o] = src[o]; out[o + 1] = src[o + 1]; out[o + 2] = src[o + 2]; out[o + 3] = a;
         continue;
       }
-      const [r, g, b] = applyTransform(smashEngine, src[o], src[o + 1], src[o + 2]);
-      out[o] = r; out[o + 1] = g; out[o + 2] = b; out[o + 3] = a;
+      // Trilinear lookup. bakeSmashLut writes r-fastest, b-slowest:
+      //   index(ri, gi, bi) = (bi * N + gi) * N + ri
+      // Triple offset = index * 3.
+      const fr = (src[o]     / 255) * NM1;
+      const fg = (src[o + 1] / 255) * NM1;
+      const fb = (src[o + 2] / 255) * NM1;
+      const r0 = Math.floor(fr), r1 = r0 < NM1 ? r0 + 1 : r0;
+      const g0 = Math.floor(fg), g1 = g0 < NM1 ? g0 + 1 : g0;
+      const b0 = Math.floor(fb), b1 = b0 < NM1 ? b0 + 1 : b0;
+      const dr = fr - r0, dg = fg - g0, db = fb - b0;
+      const c000 = ((b0 * N + g0) * N + r0) * 3;
+      const c100 = ((b0 * N + g0) * N + r1) * 3;
+      const c010 = ((b0 * N + g1) * N + r0) * 3;
+      const c110 = ((b0 * N + g1) * N + r1) * 3;
+      const c001 = ((b1 * N + g0) * N + r0) * 3;
+      const c101 = ((b1 * N + g0) * N + r1) * 3;
+      const c011 = ((b1 * N + g1) * N + r0) * 3;
+      const c111 = ((b1 * N + g1) * N + r1) * 3;
+      let or = 0, og = 0, ob = 0;
+      for (let ch = 0; ch < 3; ch++) {
+        const v00 = lut[c000 + ch] + (lut[c100 + ch] - lut[c000 + ch]) * dr;
+        const v10 = lut[c010 + ch] + (lut[c110 + ch] - lut[c010 + ch]) * dr;
+        const v01 = lut[c001 + ch] + (lut[c101 + ch] - lut[c001 + ch]) * dr;
+        const v11 = lut[c011 + ch] + (lut[c111 + ch] - lut[c011 + ch]) * dr;
+        const v0 = v00 + (v10 - v00) * dg;
+        const v1 = v01 + (v11 - v01) * dg;
+        const v = v0 + (v1 - v0) * db;
+        if (ch === 0) or = v; else if (ch === 1) og = v; else ob = v;
+      }
+      out[o]     = Math.max(0, Math.min(255, Math.round(or * 255)));
+      out[o + 1] = Math.max(0, Math.min(255, Math.round(og * 255)));
+      out[o + 2] = Math.max(0, Math.min(255, Math.round(ob * 255)));
+      out[o + 3] = a;
     }
     matchedHandleRef.current.setPixels(out, w, h);
     matchedHandleRef.current.setBefore(src, w, h);
-  }, [smashMode, smashEngine, srcSnap]);
+  }, [smashMode, smashPreviewLut, srcSnap]);
+
+  // v1.21 — Mode-flip back to Match: nudge the existing Match preview pipeline
+  // to re-fire so the user sees Match's output again. Without this, flipping
+  // Smash → Match leaves the previously-pushed Smash pixels frozen until the
+  // user touches a Match slider. scheduleRedraw is the same throttled entry
+  // point Match's own state effects use, so the behavior matches normal
+  // Match flow exactly.
+  useEffect(() => {
+    if (!__SMASH_ENABLED__) return;
+    if (smashMode !== "match") return;
+    scheduleRedraw();
+  }, [smashMode]);
 
   const scheduleRedraw = () => {
     // 16ms throttle (~60fps). Drag latency is bounded by this throttle, not
