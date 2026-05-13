@@ -2808,29 +2808,11 @@ export function MatchTab() {
         {(() => {
           return (
             <div style={{ display: "flex", gap: 4, height: 16, marginBottom: 2 }}>
-              {/* v1.20.69 — + branch arm sits in the top strip aligned over
-                  column 1 of the main row below (which holds AUTO). */}
-              <div onClick={e => { e.stopPropagation(); setOverwriteOnApply(!overwriteOnApply); }}
-                title={overwriteOnApply
-                  ? "Click + to arm 'Branch' — next Apply (RGB/Lab/LUT tab click) hides the current [Color Smash] group and starts a fresh session."
-                  : "BRANCH ARMED — next Apply will collapse + hide the current [Color Smash] group (preserved, just invisible) and start a fresh session. Auto-disarms after that Apply. Click to cancel."}
-                style={{
-                  width: 22, height: 16, padding: 0, flexShrink: 0,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  background: overwriteOnApply ? "transparent" : "#1e3a1e",
-                  border: `1px solid ${overwriteOnApply ? "#444" : "#7ad87a"}`,
-                  borderRadius: 2,
-                  cursor: "pointer", userSelect: "none", boxSizing: "border-box",
-                  lineHeight: "14px",
-                }}>
-                <span style={{
-                  color: overwriteOnApply ? "#888" : "#7ad87a",
-                  fontSize: 13, fontWeight: 700, lineHeight: 1,
-                }}>+</span>
-              </div>
-              {/* Spacer matches the disclosure column below (22px + 4 gap
-                  on either side rolls up into the parent's gap). */}
-              <div style={{ width: 22, height: 16, flexShrink: 0 }} />
+              {/* v1.20.69 — top strip is just JUMP + ISOLATE now. The +
+                  branch arm moved down into the main row alongside AUTO
+                  and the disclosure. 74px spacer (= 22+4+22+4+22) keeps
+                  JUMP/ISOLATE column-aligned with RGB/Lab/LUT below. */}
+              <div style={{ width: 74, height: 16, flexShrink: 0 }} />
               <div style={{ display: "flex", flex: 1, gap: 0 }}>
                 {/* v1.20.68 — JUMP: select the target layer in PS Layers
                     panel. Quick navigation when the target dropdown
@@ -2905,9 +2887,31 @@ export function MatchTab() {
           });
           const adaptApplicable = tabConfig[outputMode].multi;
           return (<>
-        {/* Main row: AUTO + disclosure + tabs. AUTO/disclosure stay
-            single-row (18px) regardless of MULTI/BLEND expansion. */}
+        {/* Main row: + + AUTO + disclosure + tabs. All three col-1 buttons
+            share the same row; disclosure stays single-row regardless of
+            MULTI/BLEND expansion. */}
         <div style={{ display: "flex", alignItems: "flex-start", gap: 4 }}>
+          {/* v1.20.69 — + branch arm relocated into the main row so all
+              three column-1 controls (+, ○ AUTO, ▶/▼ disclosure) live
+              side-by-side. ADAPT then sits directly below them. */}
+          <div onClick={e => { e.stopPropagation(); setOverwriteOnApply(!overwriteOnApply); }}
+            title={overwriteOnApply
+              ? "Click + to arm 'Branch' — next Apply (RGB/Lab/LUT tab click) hides the current [Color Smash] group and starts a fresh session."
+              : "BRANCH ARMED — next Apply will collapse + hide the current [Color Smash] group (preserved, just invisible) and start a fresh session. Auto-disarms after that Apply. Click to cancel."}
+            style={{
+              width: 22, height: 18, padding: 0, flexShrink: 0,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              background: overwriteOnApply ? "transparent" : "#1e3a1e",
+              border: `1px solid ${overwriteOnApply ? "#444" : "#7ad87a"}`,
+              borderRadius: 2,
+              cursor: "pointer", userSelect: "none", boxSizing: "border-box",
+              lineHeight: "16px",
+            }}>
+            <span style={{
+              color: overwriteOnApply ? "#888" : "#7ad87a",
+              fontSize: 14, fontWeight: 700, lineHeight: 1,
+            }}>+</span>
+          </div>
           <div onClick={() => setLiveLut(v => !v)}
             title={liveLut
               ? `AUTO ARMED — slider changes auto-update the existing Match ${outputMode === "lut" ? "LUT" : "Curves"} layer in real-time (debounced 300ms). Click to disarm.`
@@ -2977,7 +2981,7 @@ export function MatchTab() {
                 ? `Adaptive ON (default) — multi-zone band peaks track the target histogram (P10/P50/P90) whenever MULTI is active for a tab. ${adaptApplicable && lumaBins ? `Current: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""} Click to disable.`
                 : "Adaptive OFF — multi-zone band peaks fixed at 0/128/255. Click to re-enable percentile-driven peaks."}
               style={{
-                width: 48, height: 18, padding: 0, flexShrink: 0,
+                width: 74, height: 18, padding: 0, flexShrink: 0,
                 display: "flex", alignItems: "center", justifyContent: "center",
                 fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
                 background: adaptiveBands ? "#3a3228" : "transparent",
