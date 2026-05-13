@@ -37,6 +37,20 @@ export interface PersistedSettings {
   // these are secondary toggles; persisted so a power user who uses Multi
   // a lot doesn't have to re-expand every session.
   multiExpanded?: boolean;
+  // v1.20.69 — Settings drawer prefs.
+  // groupColor: PS color tag applied to the [Color Smash] group in the
+  //   Layers panel. PS's fixed set; "none" disables tagging.
+  groupColor?: "none" | "red" | "orange" | "yellow" | "green" | "blue" | "violet" | "gray";
+  // groupName: lets the user rename the canonical group (e.g. "[Grade]"
+  //   or "[Match]"). Empty/undefined → defaults to "[Color Smash]".
+  groupName?: string;
+  // autoDebounceMs: AUTO live-bake debounce window (60–1000ms). Default 300.
+  autoDebounceMs?: number;
+  // historyCap: max recent-history ring size (5–30). Default 10.
+  historyCap?: number;
+  // verboseStatus: when true, the status line surfaces extra timing /
+  //   batchPlay diagnostics. Useful when reporting bugs.
+  verboseStatus?: boolean;
   // Apply behavior
   deselectOnApply?: boolean;
   overwriteOnApply?: boolean;
