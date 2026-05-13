@@ -2465,7 +2465,7 @@ export function MatchTab() {
     //   outer wrapper bg #555555 (lightest)
     //   island bg       #444444 (mid)
     //   dropdown/control #2e2e2e (darkest)
-    <div style={{ padding: 8, background: "#555555", display: "flex", flexDirection: "column", gap: 6 }}>
+    <div style={{ padding: 8, background: "#555555", display: "flex", flexDirection: "column", gap: 8 }}>
       {/* v1.20.70 — header layout: [wordmark left] [↶ ↷ center, PS native
           undo/redo] [💾 REVERT ✕ ⟳ ⚙ ? right]. Plugin-action cluster
           moved here from the bottom action row so the body row carries

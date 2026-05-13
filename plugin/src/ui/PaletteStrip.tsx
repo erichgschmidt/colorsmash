@@ -65,9 +65,11 @@ function swatchColor(s: PaletteSwatch, preset: Preset | undefined): string {
   return `rgb(${s.r}, ${s.g}, ${s.b})`;
 }
 
-// Count toggle styling.
+// Count toggle styling. v1.20.70 — slimmer (padding 1×4 vs 1×6) so the
+// adapt / 3-5-7 / reset cluster eats less horizontal space and leaves
+// the palette ratio bar wider.
 const countBtnStyle = (active: boolean): React.CSSProperties => ({
-  padding: "1px 6px", fontSize: 9, fontWeight: 600,
+  padding: "1px 4px", fontSize: 9, fontWeight: 600,
   background: active ? "#1473e6" : "transparent",
   color: active ? "#fff" : "#888",
   border: `1px solid ${active ? "#1473e6" : "#444"}`,
@@ -294,8 +296,17 @@ export function PaletteStrip(props: PaletteStripProps) {
       title={adaptive
         ? "Adaptive: drag a swatch body to grow/shrink it; others rebalance proportionally. Click to switch to handle mode."
         : "Handle mode: drag the white dividers to redistribute weight between adjacent neighbors. Click to switch to adaptive (drag swatch body)."}
-      style={countBtnStyle(adaptive)}>
-      adapt
+      style={{
+        // v1.20.70 — icon-only adapt button. ↔ communicates the "scale
+        // / redistribute between" idea more directly than the text
+        // "adapt" or the earlier <> glyph. Slimmer than the text
+        // version, eats less horizontal space.
+        ...countBtnStyle(adaptive),
+        padding: "1px 5px",
+        fontSize: 11,
+        lineHeight: "12px",
+      }}>
+      ↔
     </div>
   ) : null;
 
@@ -321,12 +332,17 @@ export function PaletteStrip(props: PaletteStripProps) {
     <div onClick={isNeutral ? undefined : resetWeights}
       title={isNeutral ? "Weights are neutral" : "Reset all weights to natural ratios"}
       style={{
-        padding: "1px 6px", fontSize: 9, fontWeight: 600,
+        // v1.20.70 — brighter red (was coral #d87a7a) so it reads
+        // clearly as the destructive option in the cluster. Padding
+        // dropped 1×6→1×4 to match the slimmer 3-5-7 / ↔ buttons.
+        // Height matches the count buttons (14) instead of the bar
+        // height so the cluster sits as a uniform horizontal row.
+        padding: "1px 5px", fontSize: 9, fontWeight: 600,
         background: "transparent",
-        color: isNeutral ? "#5a3a3a" : "#d87a7a",
-        border: `1px solid ${isNeutral ? "#5a3a3a" : "#d87a7a"}`,
+        color: isNeutral ? "#5a3a3a" : "#ff5050",
+        border: `1px solid ${isNeutral ? "#5a3a3a" : "#ff5050"}`,
         borderRadius: 2, cursor: isNeutral ? "default" : "pointer", userSelect: "none",
-        height: BAR_HEIGHT, lineHeight: `${BAR_HEIGHT - 2}px`, boxSizing: "border-box",
+        height: 14, lineHeight: "12px", boxSizing: "border-box",
         flexShrink: 0,
       }}>reset</div>
   );
