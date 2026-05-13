@@ -2441,8 +2441,12 @@ export function MatchTab() {
   // matches the Adobe panel aesthetic (each section reads as its own
   // contained card).
   const ISLAND: React.CSSProperties = {
-    background: "#222222",
-    border: "1px solid #2e2e2e",
+    // v1.20.70 — slightly LIGHTER than the panel default, not darker.
+    // Subtle elevated-card feel, matching the reference mid-gray. The
+    // border is just barely visible so the island reads as "raised
+    // pad" rather than "framed box".
+    background: "#363636",
+    border: "1px solid #404040",
     borderRadius: 6,
     padding: "8px 10px",
     display: "flex", flexDirection: "column", gap: 4,
