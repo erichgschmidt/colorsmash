@@ -410,33 +410,7 @@ export function fitByMode(mode: MatchMode, srcRgba: Uint8Array, tgtRgba: Uint8Ar
 // Matches in perceptual L*a*b* (more natural than RGB for cross-cast cases),
 // then samples per-channel R/G/B curves that approximate the resulting
 // RGB→RGB transform via a 17×17×17 grid average.
-
-function srgbToLinear(c: number): number {
-  const x = c / 255;
-  return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
-}
-function linearToSrgb(c: number): number {
-  const x = c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(Math.max(0, c), 1 / 2.4) - 0.055;
-  return Math.max(0, Math.min(255, Math.round(x * 255)));
-}
-function rgbToLab(r: number, g: number, b: number): [number, number, number] {
-  const R = srgbToLinear(r), G = srgbToLinear(g), B = srgbToLinear(b);
-  const X = R * 0.4124564 + G * 0.3575761 + B * 0.1804375;
-  const Y = R * 0.2126729 + G * 0.7151522 + B * 0.0721750;
-  const Z = R * 0.0193339 + G * 0.1191920 + B * 0.9503041;
-  const xn = X / 0.95047, yn = Y, zn = Z / 1.08883;
-  const f = (t: number) => t > 0.008856 ? Math.cbrt(t) : (7.787 * t + 16 / 116);
-  return [116 * f(yn) - 16, 500 * (f(xn) - f(yn)), 200 * (f(yn) - f(zn))];
-}
-function labToRgb(L: number, a: number, b: number): [number, number, number] {
-  const fy = (L + 16) / 116, fx = a / 500 + fy, fz = fy - b / 200;
-  const finv = (t: number) => { const t3 = t * t * t; return t3 > 0.008856 ? t3 : (t - 16 / 116) / 7.787; };
-  const X = finv(fx) * 0.95047, Y = finv(fy), Z = finv(fz) * 1.08883;
-  const R = X *  3.2404542 + Y * -1.5371385 + Z * -0.4985314;
-  const G = X * -0.9692660 + Y *  1.8760108 + Z *  0.0415560;
-  const B = X *  0.0556434 + Y * -0.2040259 + Z *  1.0572252;
-  return [linearToSrgb(R), linearToSrgb(G), linearToSrgb(B)];
-}
+import { rgbByteToLab, labToRgbByte } from './color';
 
 // Lab channel ranges baked into 0..255 bins:
 // L: 0..100 (clamped) → 0..255
@@ -445,7 +419,7 @@ function buildLabHist(rgba: Uint8Array, channel: 0 | 1 | 2): Float64Array {
   const h = new Float64Array(256);
   for (let i = 0; i < rgba.length; i += 4) {
     if (rgba[i + 3] < 128) continue;
-    const [L, a, b] = rgbToLab(rgba[i], rgba[i + 1], rgba[i + 2]);
+    const [L, a, b] = rgbByteToLab(rgba[i], rgba[i + 1], rgba[i + 2]);
     let bin = 0;
     if (channel === 0) bin = Math.max(0, Math.min(255, Math.round(L * 2.55)));
     else if (channel === 1) bin = Math.max(0, Math.min(255, Math.round(a + 128)));
@@ -470,14 +444,14 @@ export function fitHistogramCurvesLab(srcRgba: Uint8Array, tgtRgba: Uint8Array):
   for (let i = 0; i < tgtRgba.length; i += 4) {
     if (tgtRgba[i + 3] < 128) continue;
     const r = tgtRgba[i], g = tgtRgba[i + 1], b = tgtRgba[i + 2];
-    const [L, A, B] = rgbToLab(r, g, b);
+    const [L, A, B] = rgbByteToLab(r, g, b);
     const Lbin = Math.max(0, Math.min(255, Math.round(L * 2.55)));
     const Abin = Math.max(0, Math.min(255, Math.round(A + 128)));
     const Bbin = Math.max(0, Math.min(255, Math.round(B + 128)));
     const Lmapped = labMaps[0][Lbin] / 2.55;
     const Amapped = labMaps[1][Abin] - 128;
     const Bmapped = labMaps[2][Bbin] - 128;
-    const [or, og, ob] = labToRgb(Lmapped, Amapped, Bmapped);
+    const [or, og, ob] = labToRgbByte(Lmapped, Amapped, Bmapped);
     sumR[r] += or; cntR[r]++;
     sumG[g] += og; cntG[g]++;
     sumB[b] += ob; cntB[b]++;

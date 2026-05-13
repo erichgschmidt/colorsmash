@@ -1,39 +1,7 @@
 // Palette extraction via k-means clustering in CIE Lab space. Lab gives perceptually
 // uniform distance, so cluster centroids represent visually distinct color groups
 // rather than sRGB-cube neighborhoods. Used for the source-palette display strip.
-//
-// Self-contained on purpose — duplicates the small RGB↔Lab functions from
-// histogramMatch.ts. Phase A is display-only; if we keep this feature long-term
-// we can refactor to share the conversion code.
-
-// ────────── sRGB ↔ Lab (D65, sRGB primaries) ──────────
-
-function srgbToLinear(c: number): number {
-  const x = c / 255;
-  return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
-}
-function linearToSrgb(c: number): number {
-  const x = c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(Math.max(0, c), 1 / 2.4) - 0.055;
-  return Math.max(0, Math.min(255, Math.round(x * 255)));
-}
-function rgbToLab(r: number, g: number, b: number): [number, number, number] {
-  const R = srgbToLinear(r), G = srgbToLinear(g), B = srgbToLinear(b);
-  const X = R * 0.4124564 + G * 0.3575761 + B * 0.1804375;
-  const Y = R * 0.2126729 + G * 0.7151522 + B * 0.0721750;
-  const Z = R * 0.0193339 + G * 0.1191920 + B * 0.9503041;
-  const xn = X / 0.95047, yn = Y, zn = Z / 1.08883;
-  const f = (t: number) => t > 0.008856 ? Math.cbrt(t) : (7.787 * t + 16 / 116);
-  return [116 * f(yn) - 16, 500 * (f(xn) - f(yn)), 200 * (f(yn) - f(zn))];
-}
-function labToRgb(L: number, a: number, b: number): [number, number, number] {
-  const fy = (L + 16) / 116, fx = a / 500 + fy, fz = fy - b / 200;
-  const finv = (t: number) => { const t3 = t * t * t; return t3 > 0.008856 ? t3 : (t - 16 / 116) / 7.787; };
-  const X = finv(fx) * 0.95047, Y = finv(fy), Z = finv(fz) * 1.08883;
-  const R = X *  3.2404542 + Y * -1.5371385 + Z * -0.4985314;
-  const G = X * -0.9692660 + Y *  1.8760108 + Z *  0.0415560;
-  const B = X *  0.0556434 + Y * -0.2040259 + Z *  1.0572252;
-  return [linearToSrgb(R), linearToSrgb(G), linearToSrgb(B)];
-}
+import { rgbByteToLab, labToRgbByte } from './color';
 
 // ────────── k-means ──────────
 
@@ -67,7 +35,7 @@ export function extractPalette(rgba: Uint8Array, width: number, height: number, 
   for (let i = 0; i < width * height; i += SAMPLE_STRIDE) {
     const o = i * 4;
     if (rgba[o + 3] < 128) continue;
-    const [L, a, b] = rgbToLab(rgba[o], rgba[o + 1], rgba[o + 2]);
+    const [L, a, b] = rgbByteToLab(rgba[o], rgba[o + 1], rgba[o + 2]);
     samples.push(L, a, b);
   }
   const n = samples.length / 3;
@@ -77,7 +45,7 @@ export function extractPalette(rgba: Uint8Array, width: number, height: number, 
     const out: PaletteSwatch[] = [];
     for (let i = 0; i < n; i++) {
       const L = samples[i * 3], A = samples[i * 3 + 1], B = samples[i * 3 + 2];
-      const [r, g, bb] = labToRgb(L, A, B);
+      const [r, g, bb] = labToRgbByte(L, A, B);
       out.push({ r, g, b: bb, weight: 1 / n, labL: L, labA: A, labB: B });
     }
     return out;
@@ -143,7 +111,7 @@ export function extractPalette(rgba: Uint8Array, width: number, height: number, 
   for (let c = 0; c < k; c++) {
     if (counts[c] === 0) continue;
     const L = centroids[c * 3], A = centroids[c * 3 + 1], B = centroids[c * 3 + 2];
-    const [r, g, bb] = labToRgb(L, A, B);
+    const [r, g, bb] = labToRgbByte(L, A, B);
     out.push({ r, g, b: bb, weight: counts[c] / n, labL: L, labA: A, labB: B });
   }
   out.sort((p, q) => q.weight - p.weight);
@@ -182,7 +150,7 @@ export function computeClusterDistances(
       for (let c = 0; c < k; c++) out[i * k + c] = Infinity;
       continue;
     }
-    const [L, a, b] = rgbToLab(rgba[o], rgba[o + 1], rgba[o + 2]);
+    const [L, a, b] = rgbByteToLab(rgba[o], rgba[o + 1], rgba[o + 2]);
     for (let c = 0; c < k; c++) {
       const dl = L - cents[c * 3];
       const da = a - cents[c * 3 + 1];

@@ -1,14 +1,21 @@
-// Recipe export / import. v1.20.65.
+// Recipe export / import. v1.21.
 //
 // Recipes are HistoryEntry objects (defined in recentHistory.ts) but for
 // portability we wrap them in a versioned envelope:
 //   {
 //     format: "color-smash-recipes",
-//     version: 1,
+//     version: 2,
 //     exportedAt: <ISO date>,
-//     pluginVersion: "1.20.65",
+//     pluginVersion: "1.21",
 //     entries: [HistoryEntry, ...]
 //   }
+//
+// Format history:
+//   v1 — initial release (1.20.x). No thumbnail or kind fields.
+//   v2 — adds optional `thumbnail` (base64 PNG) and `kind` ('match'|'smash')
+//        to HistoryEntry. Both fields are absent in v1 files; the loader
+//        accepts v1 unchanged. v2 files are rejected by v1 loaders (version >
+//        FORMAT_VERSION), but future versions continue to accept them.
 //
 // The envelope lets us evolve the file format without breaking older imports.
 // On import: validate envelope shape → reuse pruneHistory's per-entry sanitizer
@@ -22,26 +29,30 @@
 //     another machine — they reference docs the other user doesn't have.
 //     Stripped at export so they don't leak (or get re-applied on RESTORE
 //     and confuse the importer).
+//   - thumbnail and kind ARE portable: thumbnails are self-contained images
+//     and kind describes authoring origin. Both round-trip across machines.
 
 import { HistoryEntry, pruneHistory } from "./recentHistory";
 
 /** Wrap a set of entries in the export envelope. */
 export interface RecipeExportFile {
   format: "color-smash-recipes";
-  version: 1;
+  version: 1 | 2;               // 1 = legacy (1.20.x), 2 = adds thumbnail + kind
   exportedAt: string;            // ISO 8601
   pluginVersion?: string;
   entries: HistoryEntry[];
 }
 
 const FORMAT_TAG = "color-smash-recipes";
-const FORMAT_VERSION = 1;
+const FORMAT_VERSION = 2;
 
 /** Build the exportable envelope from a set of entries.
  *  - Strips source/target doc + layer ids from each entry's state (those
  *    reference local docs and confuse cross-machine imports).
  *  - Strips the `pinned` flag (importer always pins fresh imports).
- *  - Preserves customName and signature so the entry restores cleanly. */
+ *  - Preserves customName, signature, thumbnail, and kind so the entry
+ *    restores cleanly. thumbnail is a self-contained image and is safe to
+ *    round-trip across machines. */
 export function serializeRecipes(entries: HistoryEntry[], pluginVersion?: string): string {
   const stripped: HistoryEntry[] = entries.map(e => ({
     ...e,
