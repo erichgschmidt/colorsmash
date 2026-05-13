@@ -11,7 +11,7 @@
 //   - Apply button: install the LUT as a Color Lookup adjustment layer
 //   - Persist Smash preset (HistoryEntry kind='smash' with embedded DNA)
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { app } from "../../services/photoshop";
 import { useLayers } from "../useLayers";
 import { useLayerPreview } from "../useLayerPreview";
@@ -35,6 +35,7 @@ import {
   type SmashEngineOutput,
   type SourceDNA,
 } from "../../core/smash";
+import { loadSmashSettings, makeSmashSaver, type SmashPersisted } from "./persistence";
 
 // ────────── synthetic demo fallback ──────────
 
@@ -99,20 +100,61 @@ export function SmashTab() {
   const [targetLayerId, setTargetLayerId] = useState<number | null>(null);
   const [amount, setAmount] = useState<number>(SMASH_PRESET_AMOUNTS.strong);
   const [exportStatus, setExportStatus] = useState<string>("");
+  const loadedRef = useRef<boolean>(false);
 
-  // On mount: pick up whatever the active doc + layer is in PS.
+  // Debounced saver — created once per component lifetime.
+  const saverRef = useRef<((s: SmashPersisted) => void) | null>(null);
+  if (!saverRef.current) saverRef.current = makeSmashSaver(500);
+
+  // Mount: load persisted Smash state if any. Falls back to active doc/layer
+  // when no persisted state exists or when the saved doc is no longer open.
   useEffect(() => {
-    try {
-      const doc = app?.activeDocument;
-      if (doc) {
-        setDocId(doc.id);
-        const active = doc.activeLayers?.[0];
-        if (active) setSourceLayerId(active.id);
+    let cancelled = false;
+    (async () => {
+      const persisted = await loadSmashSettings();
+      if (cancelled) return;
+      const docFromPs = (() => {
+        try { return app?.activeDocument ?? null; } catch { return null; }
+      })();
+      const activeDocId = docFromPs?.id ?? null;
+
+      // Persisted layer selections are valid only if the saved doc is still open.
+      const useSavedSource = persisted?.sourceDocId != null && persisted.sourceDocId === activeDocId;
+      const useSavedTarget = persisted?.targetDocId != null && persisted.targetDocId === activeDocId;
+
+      setDocId(activeDocId);
+      if (useSavedSource && persisted?.sourceLayerId != null) {
+        setSourceLayerId(persisted.sourceLayerId);
+      } else {
+        try {
+          const active = docFromPs?.activeLayers?.[0];
+          if (active) setSourceLayerId(active.id);
+        } catch { /* */ }
       }
-    } catch {
-      /* not in PS; demo fallback will render */
-    }
+      if (useSavedTarget && persisted?.targetLayerId != null) {
+        setTargetLayerId(persisted.targetLayerId);
+      }
+      if (typeof persisted?.amount === "number" && Number.isFinite(persisted.amount)) {
+        setAmount(Math.max(0, Math.min(1, persisted.amount)));
+      }
+      loadedRef.current = true;
+    })();
+    return () => { cancelled = true; };
   }, []);
+
+  // Save on any state change (debounced 500ms). Skip until initial load resolved,
+  // otherwise we'd overwrite the persisted state with the React-default amount
+  // before the useEffect above had a chance to apply it.
+  useEffect(() => {
+    if (!loadedRef.current) return;
+    saverRef.current?.({
+      amount,
+      sourceDocId: docId,
+      sourceLayerId,
+      targetDocId: docId,
+      targetLayerId,
+    });
+  }, [amount, docId, sourceLayerId, targetLayerId]);
 
   const { layers, refresh } = useLayers(docId);
   const srcSnap = useLayerPreview(docId, sourceLayerId);
