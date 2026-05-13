@@ -313,17 +313,42 @@ export function PaletteStrip(props: PaletteStripProps) {
     </div>
   ) : null;
 
+  // v1.20.70 — shared controls cluster (adapt / count 3-5-7 / reset)
+  // that rides on the SAME ROW as the palette bar instead of stacking
+  // above it. Reduces vertical density and matches the new island
+  // mockup.
+  const resetBtn = (
+    <div onClick={isNeutral ? undefined : resetWeights}
+      title={isNeutral ? "Weights are neutral" : "Reset all weights to natural ratios"}
+      style={{
+        padding: "1px 6px", fontSize: 9, fontWeight: 600,
+        background: "transparent",
+        color: isNeutral ? "#5a3a3a" : "#d87a7a",
+        border: `1px solid ${isNeutral ? "#5a3a3a" : "#d87a7a"}`,
+        borderRadius: 2, cursor: isNeutral ? "default" : "pointer", userSelect: "none",
+        height: BAR_HEIGHT, lineHeight: `${BAR_HEIGHT - 2}px`, boxSizing: "border-box",
+        flexShrink: 0,
+      }}>reset</div>
+  );
+  const controlsCluster = (
+    <div style={{ display: "flex", alignItems: "center", gap: 3, flexShrink: 0 }}>
+      {maskToggle}
+      {adaptiveToggle}
+      {countToggle}
+      {resetBtn}
+    </div>
+  );
+
   if (swatches.length === 0) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 10 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <span />{/* spacer — was 'palette' label, removed as self-evident */}
-          {countToggle}
-        </div>
-        <div style={{ display: "flex", height: BAR_HEIGHT, gap: 2, opacity: 0.4 }}>
-          {Array.from({ length: count }, (_, i) => (
-            <div key={i} style={{ flex: 1, background: "#1a1a1a", border: "1px solid #333", borderRadius: 2 }} />
-          ))}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <div style={{ display: "flex", flex: 1, height: BAR_HEIGHT, gap: 2, opacity: 0.4, minWidth: 0 }}>
+            {Array.from({ length: count }, (_, i) => (
+              <div key={i} style={{ flex: 1, background: "#1a1a1a", border: "1px solid #333", borderRadius: 2 }} />
+            ))}
+          </div>
+          {controlsCluster}
         </div>
       </div>
     );
@@ -334,35 +359,16 @@ export function PaletteStrip(props: PaletteStripProps) {
                      :                          "dominant colors (preset: Full)";
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 10 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 4 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          {maskToggle}
-          {adaptiveToggle}
-          {countToggle}
-          {/* Reset moved RIGHT of the count toggle to read as "the destructive
-              option at the end" — and tinted a soft coral so it's visually
-              distinct from the dim mode-toggle buttons. Same opacity scheme:
-              dim when neutral (nothing to reset), full color when there's
-              something to undo. */}
-          <div onClick={isNeutral ? undefined : resetWeights}
-            title={isNeutral ? "Weights are neutral" : "Reset all weights to natural ratios"}
-            style={{
-              padding: "1px 6px", fontSize: 9, fontWeight: 600,
-              background: "transparent",
-              color: isNeutral ? "#5a3a3a" : "#d87a7a",
-              border: `1px solid ${isNeutral ? "#5a3a3a" : "#d87a7a"}`,
-              borderRadius: 2, cursor: isNeutral ? "default" : "pointer", userSelect: "none",
-              height: 14, lineHeight: "12px", boxSizing: "border-box",
-            }}>reset</div>
-        </div>
-      </div>
-
+    <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
+      {/* v1.20.70 — bar + controls share a row. Bar is flex:1 (with
+          minWidth:0 so it can shrink at narrow panel widths), controls
+          cluster sits on the right at fixed width. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
       {/* The bar: positioned segments + absolutely-placed handles between them.
           We use position:relative on the outer + absolute children so the handle
           sit exactly at boundary edges without flex math drifting. */}
       <div ref={barRef}
-        style={{ position: "relative", height: BAR_HEIGHT, width: "100%", userSelect: "none" }}
+        style={{ position: "relative", height: BAR_HEIGHT, flex: 1, minWidth: 0, userSelect: "none" }}
         title={`Source palette — ${tipForPreset} ${adaptive ? "(drag swatch body — others rebalance)" : "(drag handles to weight)"}`}>
         {/* Segments. With softness=0 each segment is a solid color block, so
             adjacent segments meet at hard boundaries (the existing v1.7
@@ -450,6 +456,10 @@ export function PaletteStrip(props: PaletteStripProps) {
             </div>
           );
         })}
+      </div>
+        {/* v1.20.70 — controls cluster lives to the right of the bar
+            on the same row (was: above the bar on its own row). */}
+        {controlsCluster}
       </div>
 
       {/* Softness slider: thin range below the bar. Drives the gradient feathering
