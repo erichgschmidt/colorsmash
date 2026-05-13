@@ -11,7 +11,33 @@ export interface PixelBuffer {
 
 export interface Rect { left: number; top: number; right: number; bottom: number }
 
-export const GROUP_NAME = "[Color Smash]";
+/**
+ * Canonical name for the plugin's output group. v1.20.69 — was a const,
+ * now mutable to support the Settings drawer's "Group name" preference.
+ * Callsites import via `getGroupName()` (or read `GROUP_NAME` directly
+ * — kept as `let` so existing imports still pick up the live value).
+ * The MatchTab panel calls `setGroupName(...)` on init / change.
+ *
+ * For migration / backward compat with prior bakes named "[Color Smash]",
+ * `getLegacyGroupName()` returns the canonical default. Recursive
+ * find/consolidate helpers match BOTH the current name AND the legacy
+ * name so users who rename mid-project don't orphan their existing
+ * group.
+ */
+export const DEFAULT_GROUP_NAME = "[Color Smash]";
+export let GROUP_NAME: string = DEFAULT_GROUP_NAME;
+export function setGroupName(name: string): void {
+  const trimmed = (name ?? "").trim();
+  GROUP_NAME = trimmed.length > 0 ? trimmed : DEFAULT_GROUP_NAME;
+}
+/** Returns true if `name` should be recognized as a Color Smash group
+ *  (matches either the current user-chosen name or the legacy default).
+ *  Used by find/consolidate helpers so a user can rename without
+ *  orphaning prior bakes. */
+export function isColorSmashGroupName(name: string | null | undefined): boolean {
+  if (!name) return false;
+  return name === GROUP_NAME || name === DEFAULT_GROUP_NAME;
+}
 
 export function getActiveDoc() {
   const doc = app.activeDocument;
@@ -356,7 +382,10 @@ export async function consolidateColorSmashGroups(docId: number): Promise<void> 
     const walk = (layers: any[], depth: number) => {
       for (const l of layers) {
         if (!l) continue;
-        if (l.name === GROUP_NAME && Array.isArray(l.layers)) {
+        // v1.20.69 — match BOTH the current (user-chosen) group name AND
+        // the legacy "[Color Smash]" default, so renaming the group via
+        // Settings doesn't orphan prior bakes.
+        if (isColorSmashGroupName(l.name) && Array.isArray(l.layers)) {
           found.push({ group: l, depth });
         }
         if (Array.isArray(l.layers)) walk(l.layers, depth + 1);
@@ -379,6 +408,12 @@ export async function consolidateColorSmashGroups(docId: number): Promise<void> 
         }
         try { await dup.delete(); } catch { /* ignore */ }
       }
+    }
+    // v1.20.69 — rename the canonical group to the user's current chosen
+    // name if it differs (e.g. they renamed via Settings while a legacy
+    // "[Color Smash]" group already existed). Idempotent if names match.
+    if (canonical && canonical.name !== GROUP_NAME) {
+      try { canonical.name = GROUP_NAME; } catch { /* ignore */ }
     }
     // v1.20.69 — tag the canonical group with the panel's accent color
     // so it stands out in the Layers panel. Runs on every Apply so any
@@ -406,14 +441,20 @@ export async function branchColorSmashGroup(docId: number): Promise<void> {
     if (!doc) return;
     let active: any | null = null;
     let highest = 0;
-    const numRe = new RegExp(`^${GROUP_NAME.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")} _(\\d+)`);
+    // v1.20.69 — accept BOTH the current user-chosen name and the legacy
+    // default for finding the active group. Archive numbering uses
+    // whichever name the group ACTUALLY had at the time, so we match
+    // either pattern when scanning for the next sequence number.
+    const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const numReCurrent = new RegExp(`^${escape(GROUP_NAME)} _(\\d+)`);
+    const numReLegacy = new RegExp(`^${escape(DEFAULT_GROUP_NAME)} _(\\d+)`);
     const walk = (layers: any[]) => {
       for (const l of layers) {
         if (!l) continue;
-        if (l.name === GROUP_NAME && Array.isArray(l.layers) && !active) {
+        if (isColorSmashGroupName(l.name) && Array.isArray(l.layers) && !active) {
           active = l;
         } else if (typeof l.name === "string") {
-          const m = l.name.match(numRe);
+          const m = l.name.match(numReCurrent) ?? l.name.match(numReLegacy);
           if (m) {
             const n = parseInt(m[1], 10);
             if (Number.isFinite(n) && n > highest) highest = n;

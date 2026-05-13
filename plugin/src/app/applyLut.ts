@@ -15,7 +15,7 @@
 
 import { ChannelCurves, generateLutCube, Preset, lerpCurvesTowardIdentity } from "../core/histogramMatch";
 import {
-  GROUP_NAME, action, app, setLayerColor, COLOR_SMASH_GROUP_COLOR,
+  GROUP_NAME, action, app, setLayerColor, COLOR_SMASH_GROUP_COLOR, isColorSmashGroupName,
   executeAsModal, readLayerPixels, setClippingMask, PixelBuffer,
   readSelectionMaskBytes,
   deleteLayerMask, snapshotSelectionToChannel, restoreSelectionFromChannel, deleteChannel, deselectAll,
@@ -109,7 +109,7 @@ function collectMatches(parent: any, prefix: string, out: any[]) {
 async function getOrCreateColorSmashGroup(doc: any): Promise<any> {
   const findCS = (layers: any[]): any | null => {
     for (const l of layers) {
-      if (l && l.name === GROUP_NAME && (l.kind === "group" || Array.isArray(l.layers))) return l;
+      if (l && isColorSmashGroupName(l.name) && (l.kind === "group" || Array.isArray(l.layers))) return l;
       if (Array.isArray(l.layers)) { const found = findCS(l.layers); if (found) return found; }
     }
     return null;

@@ -28,7 +28,10 @@ function walkLayers(layers: any[], parentPath: string[] = []): { layer: any; pat
   for (const l of layers) {
     const isGroup = Array.isArray(l.layers);
     if (isGroup) {
-      if (l.name === "[Color Smash]") continue;
+      // v1.20.69 — hide both the legacy "[Color Smash]" and any user-
+      // renamed canonical group from the source/target picker.
+      const { GROUP_NAME } = require("../services/photoshop");
+      if (l.name === "[Color Smash]" || l.name === GROUP_NAME) continue;
       out.push(...walkLayers(l.layers, [...parentPath, l.name]));
     } else {
       out.push({ layer: l, path: parentPath });

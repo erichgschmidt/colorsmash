@@ -1770,6 +1770,49 @@ export function MatchTab() {
     }
   };
 
+  // v1.20.69 — sync the user's chosen group name to the photoshop
+  // service module's mutable GROUP_NAME var. Runs on every change so
+  // find/consolidate helpers + branch numbering pick up the new value.
+  useEffect(() => {
+    try {
+      const { setGroupName: setSvc } = require("../services/photoshop");
+      setSvc(groupName);
+    } catch { /* non-fatal */ }
+  }, [groupName]);
+
+  // v1.20.69 — when the user renames the group via Settings, rename the
+  // existing canonical group in PS to match (best-effort; if no group
+  // exists yet, the next Apply / consolidate will use the new name).
+  useEffect(() => {
+    if (tgtDocId == null) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const ps = require("photoshop");
+        const { executeAsModal } = ps.core ?? {};
+        const doc = (ps.app.documents ?? []).find((d: any) => d.id === tgtDocId);
+        if (!doc) return;
+        const findCS = (layers: any[]): any | null => {
+          for (const l of layers ?? []) {
+            if (l?.name && (l.name === groupName || l.name === "[Color Smash]") && Array.isArray(l.layers)) return l;
+            if (Array.isArray(l?.layers)) { const f = findCS(l.layers); if (f) return f; }
+          }
+          return null;
+        };
+        const group = findCS(doc.layers ?? []);
+        if (!group || cancelled) return;
+        if (group.name !== groupName) {
+          if (executeAsModal) {
+            await executeAsModal(async () => { try { group.name = groupName; } catch { /* */ } }, { commandName: "Rename Color Smash group" });
+          } else {
+            try { group.name = groupName; } catch { /* */ }
+          }
+        }
+      } catch { /* non-fatal */ }
+    })();
+    return () => { cancelled = true; };
+  }, [groupName, tgtDocId]);
+
   // v1.20.69 — sync the user's chosen group color to PS whenever it
   // changes (or when the target doc changes). Finds the canonical
   // [Color Smash] group in the target doc and applies the color tag
@@ -1786,7 +1829,7 @@ export function MatchTab() {
         if (!doc) return;
         const findCS = (layers: any[]): any | null => {
           for (const l of layers ?? []) {
-            if (l?.name === "[Color Smash]" && Array.isArray(l.layers)) return l;
+            if (l?.name && (l.name === groupName || l.name === "[Color Smash]") && Array.isArray(l.layers)) return l;
             if (Array.isArray(l?.layers)) { const f = findCS(l.layers); if (f) return f; }
           }
           return null;
@@ -2052,11 +2095,11 @@ export function MatchTab() {
       } catch (e: any) {
         setStatus(`Live update skipped: ${e?.message ?? e}`);
       }
-    }, 300);
+    }, autoDebounceMs);
     return () => {
       if (liveBakeTimerRef.current) { clearTimeout(liveBakeTimerRef.current); liveBakeTimerRef.current = null; }
     };
-  }, [liveLut, renderedCurves, activePreset, targetId, targetPaletteWeights, targetSoftness, multiZone, outputMode]);
+  }, [liveLut, renderedCurves, activePreset, targetId, targetPaletteWeights, targetSoftness, multiZone, outputMode, autoDebounceMs]);
 
   const onApply = async () => {
     if (targetId == null) { setStatus("Pick target layer."); return; }
@@ -2235,7 +2278,7 @@ export function MatchTab() {
           // Find [Color Smash] group + add its ancestor chain.
           const findCS = (layers: any[]): any | null => {
             for (const l of layers) {
-              if (l.name === "[Color Smash]" && Array.isArray(l.layers)) return l;
+              if ((l.name === groupName || l.name === "[Color Smash]") && Array.isArray(l.layers)) return l;
               if (Array.isArray(l.layers)) { const f = findCS(l.layers); if (f) return f; }
             }
             return null;
