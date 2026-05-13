@@ -2812,7 +2812,7 @@ export function MatchTab() {
                   branch arm moved down into the main row alongside AUTO
                   and the disclosure. 74px spacer (= 22+4+22+4+22) keeps
                   JUMP/ISOLATE column-aligned with RGB/Lab/LUT below. */}
-              <div style={{ width: 74, height: 16, flexShrink: 0 }} />
+              <div style={{ width: 92, height: 16, flexShrink: 0 }} />
               <div style={{ display: "flex", flex: 1, gap: 0 }}>
                 {/* v1.20.68 — JUMP: select the target layer in PS Layers
                     panel. Quick navigation when the target dropdown
@@ -2895,10 +2895,12 @@ export function MatchTab() {
         // align by construction — no sub-pixel rounding stagger
         // possible between the [+|○|▼] block and ADAPT.
         <div style={{ display: "flex", alignItems: "flex-start", gap: 4 }}>
-          {/* Column 1 (74px wide, flexShrink:0). */}
-          <div style={{ width: 74, display: "flex", flexDirection: "column", gap: 0, flexShrink: 0 }}>
+          {/* Column 1 (92px wide = 28+4+28+4+28, flexShrink:0).
+              v1.20.69 — bumped from 74→92 to host 28px-wide buttons
+              that match the new 28px output-row height. */}
+          <div style={{ width: 92, display: "flex", flexDirection: "column", gap: 0, flexShrink: 0 }}>
             {/* Top sub-row inside col-1: + ○ ▼ buttons. */}
-            <div style={{ display: "flex", gap: 4, height: 18 }}>
+            <div style={{ display: "flex", gap: 4, height: 28 }}>
           {/* v1.20.69 — + branch arm relocated into the main row so all
               three column-1 controls (+, ○ AUTO, ▶/▼ disclosure) live
               side-by-side. ADAPT then sits directly below them. */}
@@ -2907,17 +2909,17 @@ export function MatchTab() {
               ? "Click + to arm 'Branch' — next Apply (RGB/Lab/LUT tab click) hides the current [Color Smash] group and starts a fresh session."
               : "BRANCH ARMED — next Apply will collapse + hide the current [Color Smash] group (preserved, just invisible) and start a fresh session. Auto-disarms after that Apply. Click to cancel."}
             style={{
-              width: 22, height: 18, padding: 0, flexShrink: 0,
+              width: 28, height: 28, padding: 0, flexShrink: 0,
               display: "flex", alignItems: "center", justifyContent: "center",
               background: overwriteOnApply ? "transparent" : "#1e3a1e",
               border: `1px solid ${overwriteOnApply ? "#444" : "#7ad87a"}`,
-              borderRadius: 2,
+              borderRadius: 4,
               cursor: "pointer", userSelect: "none", boxSizing: "border-box",
-              lineHeight: "16px",
+              lineHeight: "26px",
             }}>
             <span style={{
               color: overwriteOnApply ? "#888" : "#7ad87a",
-              fontSize: 18, fontWeight: 700, lineHeight: 1,
+              fontSize: 22, fontWeight: 700, lineHeight: 1,
               display: "block", marginTop: -2,
             }}>+</span>
           </div>
@@ -2926,19 +2928,19 @@ export function MatchTab() {
               ? `AUTO ARMED — slider changes auto-update the existing Match ${outputMode === "lut" ? "LUT" : "Curves"} layer in real-time (debounced 300ms). Click to disarm.`
               : `AUTO — click to arm real-time auto-bake. Match ${outputMode === "lut" ? "LUT" : "Curves"} layer will re-bake on every slider change once seeded by an Apply.`}
             style={{
-              width: 22, height: 18, padding: 0, flexShrink: 0,
+              width: 28, height: 28, padding: 0, flexShrink: 0,
               display: "flex", alignItems: "center", justifyContent: "center",
               background: liveLut ? "#3a1818" : "transparent",
               border: `1px solid ${liveLut ? "#d84a4a" : "#444"}`,
               color: liveLut ? "#ff8a8a" : "#888",
-              borderRadius: 2, cursor: "pointer", userSelect: "none",
+              borderRadius: 4, cursor: "pointer", userSelect: "none",
               boxSizing: "border-box",
             }}>
             <span style={{
-              width: 12, height: 12, borderRadius: "50%",
+              width: 16, height: 16, borderRadius: "50%",
               background: liveLut ? "#ff3a3a" : "transparent",
               border: liveLut ? "1px solid #ff8a8a" : "1.5px solid #888",
-              boxShadow: liveLut ? "0 0 6px #ff3a3a" : "none",
+              boxShadow: liveLut ? "0 0 7px #ff3a3a" : "none",
               display: "inline-block", flexShrink: 0,
             }} />
           </div>
@@ -2949,13 +2951,13 @@ export function MatchTab() {
               ? "Collapse MULTI/BLEND row. Per-tab Multi state is preserved — just hidden."
               : "Expand MULTI/BLEND row. Per-tab toggles to split output into 3 luma-banded layers + ADAPT (multi-only histogram tracking)."}
             style={{
-              width: 22, height: 18, padding: 0, flexShrink: 0,
+              width: 28, height: 28, padding: 0, flexShrink: 0,
               display: "flex", alignItems: "center", justifyContent: "center",
               background: "transparent",
               border: "1px solid #444",
               color: "#aaa",
-              borderRadius: 2, cursor: "pointer", userSelect: "none",
-              fontSize: 9, lineHeight: 1,
+              borderRadius: 4, cursor: "pointer", userSelect: "none",
+              fontSize: 12, lineHeight: 1,
               boxSizing: "border-box",
             }}>
             {multiExpanded ? "▼" : "▶"}
@@ -2976,14 +2978,14 @@ export function MatchTab() {
                   // breathing room between ADAPT and MULTI (4px
                   // internal shave + 4px outer col-1→col-2 gap).
                   width: "calc(100% - 4px)", marginRight: 4,
-                  height: 18, padding: 0,
+                  height: 28, padding: 0,
                   display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
+                  fontSize: 10, fontWeight: 700, letterSpacing: 0.4,
                   background: adaptiveBands ? "#3a3228" : "transparent",
                   color: adaptiveBands ? "#e8c882" : "#888",
                   border: `1px solid ${adaptiveBands ? "#d8b87a" : "#444"}`,
-                  borderRadius: 2, cursor: "pointer", userSelect: "none",
-                  lineHeight: "16px", boxSizing: "border-box",
+                  borderRadius: 4, cursor: "pointer", userSelect: "none",
+                  lineHeight: "26px", boxSizing: "border-box",
                 }}>ADAPT</div>
             )}
           </div>
@@ -2996,17 +2998,17 @@ export function MatchTab() {
             {TABS.map(t => (
               <div key={t.val} onClick={() => onTabClick(t.val)} title={t.tip}
                 style={{
-                  flex: "1 1 0", height: 18, padding: 0,
+                  flex: "1 1 0", height: 28, padding: 0,
                   display: "flex", alignItems: "center", justifyContent: "center",
                   overflow: "hidden", whiteSpace: "nowrap",
-                  fontSize: 10, fontWeight: 700, letterSpacing: 0.4,
+                  fontSize: 11, fontWeight: 700, letterSpacing: 0.4,
                   background: t.tabS.bg,
                   color: t.tabS.fg,
                   border: `1px solid ${t.tabS.bd}`,
                   borderLeftWidth: t.isFirst ? 1 : 0,
                   borderRadius: 0,
                   cursor: "pointer", userSelect: "none",
-                  lineHeight: "16px", boxSizing: "border-box",
+                  lineHeight: "26px", boxSizing: "border-box",
                   minWidth: 0,
                 }}>{t.label}</div>
             ))}
@@ -3022,17 +3024,17 @@ export function MatchTab() {
                 <div key={`${t.val}-multi`}
                   onClick={() => setTabConfig(prev => ({ ...prev, [t.val]: { ...prev[t.val], multi: !prev[t.val].multi } }))}
                   style={{
-                    flex: "1 1 0", minWidth: 0, height: 18, padding: 0,
+                    flex: "1 1 0", minWidth: 0, height: 28, padding: 0,
                     display: "flex", alignItems: "center", justifyContent: "center",
                     overflow: "hidden", whiteSpace: "nowrap",
-                    fontSize: 8, fontWeight: 600, letterSpacing: 0.3,
+                    fontSize: 10, fontWeight: 600, letterSpacing: 0.3,
                     background: t.multiS.bg,
                     color: t.multiS.fg,
                     border: `1px solid ${t.multiS.bd}`,
                     borderLeftWidth: ti === 0 ? 1 : 0,
                     borderRadius: 0,
                     cursor: "pointer", userSelect: "none",
-                    lineHeight: "16px", boxSizing: "border-box",
+                    lineHeight: "26px", boxSizing: "border-box",
                   }}
                   title={`Multi (${t.label}): split this output into 3 luma-banded layers. Per-tab — RGB / Lab / LUT each remember their own Multi state.`}>
                   MULTI
@@ -3044,17 +3046,17 @@ export function MatchTab() {
                     return { ...prev, [t.val]: { ...cur, blendIf: !cur.blendIf } };
                   })}
                   style={{
-                    flex: "1 1 0", minWidth: 0, height: 18, padding: 0,
+                    flex: "1 1 0", minWidth: 0, height: 28, padding: 0,
                     display: "flex", alignItems: "center", justifyContent: "center",
                     overflow: "hidden", whiteSpace: "nowrap",
-                    fontSize: 8, fontWeight: 600, letterSpacing: 0.3,
+                    fontSize: 10, fontWeight: 600, letterSpacing: 0.3,
                     background: t.blendS.bg,
                     color: t.blendS.fg,
                     border: `1px solid ${t.blendS.bd}`,
                     borderLeftWidth: 0,
                     borderRadius: 0,
                     cursor: "pointer", userSelect: "none",
-                    lineHeight: "16px", boxSizing: "border-box",
+                    lineHeight: "26px", boxSizing: "border-box",
                     opacity: t.subDisabled ? 0.7 : 1,
                   }}
                   title={t.subDisabled
