@@ -121,6 +121,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           ...prev,
           ...(typeof cz.hueByLuma === "boolean" ? { hueByLuma: cz.hueByLuma } : {}),
           ...(typeof cz.liftNeutrals === "boolean" ? { liftNeutrals: cz.liftNeutrals } : {}),
+          ...(typeof cz.paletteSnap === "boolean" ? { paletteSnap: cz.paletteSnap } : {}),
         }));
       }
       // v1.21 Phase 4.5c — restore Passes (clamped to [1, 4]).

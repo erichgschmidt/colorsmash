@@ -522,6 +522,15 @@ function applyTransformOnePass(
     out.hueByLumaLut !== null
     && controls.colorization?.hueByLuma !== false;
 
+  // Phase 4.5d — paletteSnap routes each pixel's hue to the nearest source
+  // CLUSTER instead of using the per-L bucket average. Preserves source's
+  // color identity (minority colors get expressed, not averaged away).
+  // Requires at least one cluster with meaningful chroma; falls back to the
+  // hueByLuma/CDF path otherwise.
+  const paletteSnapActive =
+    controls.colorization?.paletteSnap === true
+    && out.profile.source.clusters.length > 0;
+
   // Phase 4.5b — liftNeutrals (ON by default) blends the rank-mapped chroma
   // CDF result toward `sourceMedianChroma` for near-neutral inputs. Without
   // this floor, a perfectly grayscale target maps every pixel to source's
@@ -557,6 +566,40 @@ function applyTransformOnePass(
     hsm = (out.hueCdf && Cin >= HUE_FILTER_CHROMA)
       ? lookupCdfMatch(out.hueCdf, hin)
       : hsmBand;
+  }
+
+  // Phase 4.5d — paletteSnap override. Replaces the averaged hsm above with
+  // the hue of the nearest source CLUSTER (scored by hue distance + L
+  // distance). Different input pixels can pick different clusters → output
+  // diversity. Discrete by design — preserves source's color identity at
+  // the cost of cluster-boundary discontinuities on smooth inputs. Skipped
+  // when source has no chromatic clusters (degenerate input or grayscale
+  // source); the hueByLuma/CDF result above stays.
+  if (paletteSnapActive) {
+    const clusters = out.profile.source.clusters;
+    const CLUSTER_CHROMA_FLOOR = 0.02; // skip near-neutral clusters
+    const L_WEIGHT = 0.5;              // L distance weighted less than hue
+    let bestScore = -Infinity;
+    let bestHue: number | null = null;
+    for (let i = 0; i < clusters.length; i++) {
+      const [cL, cA, cB] = clusters[i].centroidOklab;
+      const cChroma = Math.sqrt(cA * cA + cB * cB);
+      if (cChroma < CLUSTER_CHROMA_FLOOR) continue;
+      const cHue = Math.atan2(cB, cA);
+      // Circular hue distance (shortest arc).
+      let dh = Math.abs(hin - cHue);
+      if (dh > Math.PI) dh = 2 * Math.PI - dh;
+      const dL = Math.abs(Lsm - cL);
+      const score = -(dh + L_WEIGHT * dL);
+      if (score > bestScore) {
+        bestScore = score;
+        bestHue = cHue;
+      }
+    }
+    if (bestHue !== null) {
+      hsm = bestHue;
+    }
+    // else: keep the hueByLuma/CDF hsm — source had no chromatic clusters
   }
 
   // Per-pixel modulation of the master gate. neutral and accent stay clamped

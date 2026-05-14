@@ -175,12 +175,16 @@ describe("ColorizationToggles", () => {
     expect(DEFAULT_COLORIZATION_TOGGLES.liftNeutrals).toBe(true);
   });
 
-  it("renders a liftNeutrals row alongside hueByLuma (2 toggle rows total)", () => {
+  it("DEFAULT_COLORIZATION_TOGGLES.paletteSnap is false (opt-in)", () => {
+    expect(DEFAULT_COLORIZATION_TOGGLES.paletteSnap).toBe(false);
+  });
+
+  it("renders three toggle rows (hueByLuma, liftNeutrals, paletteSnap)", () => {
     const el = ColorizationToggles(makeProps());
     const rows = findAllElements(el, (_t, p) => {
       return typeof p["onClick"] === "function" && typeof p["title"] === "string";
     });
-    expect(rows.length).toBe(2);
+    expect(rows.length).toBe(3);
   });
 
   it("clicking the second row flips liftNeutrals (not hueByLuma)", () => {
@@ -191,13 +195,31 @@ describe("ColorizationToggles", () => {
     const rows = findAllElements(el, (_t, p) => {
       return typeof p["onClick"] === "function" && typeof p["title"] === "string";
     });
-    expect(rows.length).toBe(2);
+    expect(rows.length).toBe(3);
     const onClick = rows[1]!["props"] as Record<string, unknown>;
     (onClick["onClick"] as () => void)();
     expect(onChange).toHaveBeenCalledTimes(1);
     const next = onChange.mock.calls[0]![0] as ColorizationToggleState;
     expect(next.liftNeutrals).toBe(false);
     expect(next.hueByLuma).toBe(true); // unchanged
+  });
+
+  it("clicking the third row flips paletteSnap (and leaves the others alone)", () => {
+    const onChange = vi.fn();
+    const el = ColorizationToggles(
+      makeProps({ state: makeState({ paletteSnap: false }), onChange }),
+    );
+    const rows = findAllElements(el, (_t, p) => {
+      return typeof p["onClick"] === "function" && typeof p["title"] === "string";
+    });
+    expect(rows.length).toBe(3);
+    const onClick = rows[2]!["props"] as Record<string, unknown>;
+    (onClick["onClick"] as () => void)();
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const next = onChange.mock.calls[0]![0] as ColorizationToggleState;
+    expect(next.paletteSnap).toBe(true);
+    expect(next.hueByLuma).toBe(true); // unchanged
+    expect(next.liftNeutrals).toBe(true); // unchanged
   });
 
   it("when disabled, container has opacity 0.5", () => {

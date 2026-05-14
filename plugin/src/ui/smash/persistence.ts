@@ -35,6 +35,7 @@ export interface SmashPersisted {
   colorization?: {
     hueByLuma?: boolean;
     liftNeutrals?: boolean;
+    paletteSnap?: boolean;
     // Future toggles slot in here as Phase 5+ ships them.
   };
   /** v1.21 Phase 4.5c — how many times applyTransform iterates per pixel

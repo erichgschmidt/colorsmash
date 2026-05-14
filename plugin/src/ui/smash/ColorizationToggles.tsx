@@ -21,6 +21,12 @@ export interface ColorizationToggleState {
    *  unchanged (faithful to source's L→C structure; shadows stay
    *  monochrome when source's shadows are neutral). */
   readonly liftNeutrals: boolean;
+  /** Phase 4.5d — Palette snap. ON = each output pixel's hue snaps to the
+   *  nearest source CLUSTER instead of using the per-L average. Preserves
+   *  source's color identity — minority colors get expressed when the
+   *  target has any chromatic variation (anti-aliasing, JPEG noise, real
+   *  color). OFF = smoother averaged output. */
+  readonly paletteSnap: boolean;
   // Future toggles (Phase 5+) added here:
   //   readonly stochasticPerL: boolean;   // noise-preserving sampling
   //   readonly conditionalCdf: boolean;   // P(color|L) match
@@ -30,6 +36,7 @@ export interface ColorizationToggleState {
 export const DEFAULT_COLORIZATION_TOGGLES: ColorizationToggleState = {
   hueByLuma: true,     // ON by default — source-driven color story
   liftNeutrals: true,  // ON by default — broad colorization across L
+  paletteSnap: false,  // OFF by default — opt-in for stronger color identity
 };
 
 export interface ColorizationTogglesProps {
@@ -70,6 +77,19 @@ const TOGGLE_ROWS: ToggleRowDef[] = [
       "with Hue-by-L on. With the floor, near-neutral pixels get source's TYPICAL chroma " +
       "magnitude paired with Hue-by-L's direction — broad colorization across the whole " +
       "L range. Vivid input pixels (Cin ≥ 0.15) are unaffected; only neutrals are lifted.",
+  },
+  {
+    key: "paletteSnap",
+    label: "Palette snap",
+    description: "Each pixel's hue snaps to the nearest source cluster. Expresses minority colors instead of averaging them away.",
+    tooltip:
+      "Palette snap (Phase 4.5d): Replaces the per-L bucket average with a discrete " +
+      "snap to the nearest source CLUSTER. Different input pixels can pick different " +
+      "clusters → minority colors in the source (e.g., 10% gray in a 90% red source) " +
+      "actually show up in the output instead of being averaged away. Diversity emerges " +
+      "when the target has any chromatic variation (edges, JPEG noise, real color); " +
+      "perfectly flat grayscale fills still get a uniform cluster pick. OFF = smooth " +
+      "averaged output (Hue-by-L behavior). ON = discrete color identity per pixel.",
   },
 ];
 

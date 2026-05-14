@@ -131,6 +131,14 @@ export interface ColorizationOptions {
    *  unchanged — faithful to source's L→C structure but produces monochrome
    *  shadows when source's shadows are also neutral. Default true. */
   readonly liftNeutrals?: boolean;
+  /** Phase 4.5d — Palette snap. On: each pixel's hue snaps to the nearest
+   *  source CLUSTER (in hue + L) rather than the per-L average. Preserves
+   *  source's color identity — minority colors get expressed instead of
+   *  averaged away. Diversity emerges when the target has any chromatic
+   *  variation (edges, JPEG noise, real color). Off: hue follows the
+   *  averaged L→(a,b) direction (Hue-by-L default). Default false — opt-in
+   *  because the smooth-vs-discrete tradeoff isn't universally preferred. */
+  readonly paletteSnap?: boolean;
   // Future toggles (Phase 5+) added here:
   //   readonly stochasticPerL?: boolean;
   //   readonly conditionalCdf?: boolean;

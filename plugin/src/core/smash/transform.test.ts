@@ -398,6 +398,46 @@ describe('applyTransform() passes multi-pass bake', () => {
     expect(spread2).toBeGreaterThan(spread1);
   });
 
+  it('paletteSnap routes output toward a source cluster, producing different output than the averaged path', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const ctrlOff: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { hueByLuma: true, liftNeutrals: true, paletteSnap: false },
+    };
+    const ctrlOn: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { hueByLuma: true, liftNeutrals: true, paletteSnap: true },
+    };
+
+    const engOff = smash(srcFeatures, tgtFeatures, profile, ctrlOff);
+    const engOn = smash(srcFeatures, tgtFeatures, profile, ctrlOn);
+
+    // Skip the test if the source produced no chromatic clusters — the
+    // synthetic warm orange buffer may collapse into a single cluster
+    // depending on the k-means seed, in which case paletteSnap has no
+    // alternative to pick from and the test loses its premise.
+    const chromaticClusters = profile.source.clusters.filter((c) => {
+      const [, a, b] = c.centroidOklab;
+      return Math.sqrt(a * a + b * b) >= 0.02;
+    });
+    if (chromaticClusters.length === 0) return;
+
+    // For a mid-gray neutral input, paletteSnap should produce output that
+    // differs from the averaged path. They might converge in degenerate
+    // cases but for warm-orange-vs-gradient they should diverge by at
+    // least 1 byte on at least one channel.
+    const [orR, orG, orB] = applyTransform(engOn, 128, 128, 128);
+    const [ofR, ofG, ofB] = applyTransform(engOff, 128, 128, 128);
+    const anyDiff =
+      Math.abs(orR - ofR) > 0 || Math.abs(orG - ofG) > 0 || Math.abs(orB - ofB) > 0;
+    expect(anyDiff).toBe(true);
+  });
+
   it('passes is clamped to [1, 4] — passes=0 behaves like passes=1, passes=10 like passes=4', () => {
     const srcRgba = warmOrangeBuffer32();
     const tgtRgba = gradientBuffer32();

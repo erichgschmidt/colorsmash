@@ -306,3 +306,94 @@ Total: ~1–2 days for a useful v0. Belongs after Phase 5 colorization (above), 
 - Apply / Export bake the pre-shape into the output LUT alongside everything else.
 
 Whichever combination the user composes, the output is a single 33³ LUT.
+
+---
+
+## 8. Color end-goals — what the plugin should accomplish
+
+This section is the canonical statement of what "Smash" means for color. It supersedes earlier scattered language across v1 and refines the user's intent as it crystallized during Phase 4 testing. The engine's job is **none of**: "apply a stylistic filter," "match average color," "blend the source over the target." It is **all of**:
+
+### 8.1 The five goals
+
+1. **Distribution mirroring across every spectrum.** For each of value (L), hue (h), saturation (S=C/L), and chroma (C), the target's distribution should be forced to look like the source's — adapted to whatever range the target actually occupies. If the source has 50% pure black, 15% dark gray, 25% medium yellow-gray, and 10% saturated red, the target should be remapped so its distribution rank-mirrors that proportionally across the equivalent range. This is the literal per-dimension CDF histogram match.
+
+2. **Source color identity expression — including non-dominant colors.** The output should look like it could have been drawn from the source's color palette. If the source has 90% red and 10% gray, the output should show *both* colors, not just the dominant red averaged across everything. Minorities matter — they're part of the source's identity. Mechanism: `paletteSnap` toggle (§8.4) routes each output pixel to the *nearest source cluster* rather than the per-L average.
+
+3. **Cross-dimensional inference for sparse targets.** When the target has too little structure on one dimension to redistribute (e.g., a grayscale target on the chroma/hue axes), the engine *invents* structure from the source's L-correlation. The `hueByLuma` toggle aims hue at the source's average (a, b) direction per L bucket; `liftNeutrals` floors chroma at source's median magnitude so shadows colorize broadly instead of collapsing.
+
+4. **User-tunable intensification.** The user controls how aggressive the smash is. The `passes` knob (1×–4×) re-runs the engine on its own output, compounding chroma further up source's CDF. The trait sliders (Value/Hue/Sat/Chroma/Neutral/Accent at 0–200%) scale per-dimension gates; 100–200% is the explicit "crank past literal CDF match" region.
+
+5. **Single-LUT bakability whenever possible.** The full transform must encode into one 33³ Color Lookup adjustment layer in Photoshop. No multi-layer stacks, no masks (except the masks the user chooses to add manually), no spatial dependencies. The transform is `f(R, G, B) → (R', G', B')` — pure per-pixel. This constraint is *fundamental*, not optional, and shapes every mechanic the engine offers.
+
+### 8.2 What the LUT constraint rules out
+
+Goal #2 (color identity) is the hardest because of #5 (LUT-bakable). A LUT can only produce different outputs for different inputs. For a perfectly flat grayscale region — every pixel literally `RGB(128, 128, 128)` — the LUT must map all of them to the same output color. Diversity is impossible there.
+
+The engine works around this where the target has *any* chromatic variation:
+- Anti-aliased edges (R ≠ G ≠ B by 1–2 LSB)
+- JPEG compression chroma noise
+- Real color in the target (even a "grayscale-looking" sepia photo has structure)
+
+These micro-variations become selectors that route different pixels to different source clusters. Diversity arises naturally for real photos; only mathematically-flat fills collapse.
+
+For genuinely flat regions, the user has three escape hatches:
+- Run `paletteSnap` OFF and accept the L-averaged output (current default before paletteSnap shipped)
+- Apply via the **panel preview path** rasterized to a layer — preview runs per-pixel and can be stochastic (Phase 5+ option)
+- Inject light chromatic noise into the target before applying the LUT (one-line PS adjustment)
+
+### 8.3 What each mechanic contributes to the goals
+
+| Mechanic | Goal it serves | Optional? |
+|---|---|---|
+| Per-dimension CDF (L/C/h) | #1 (distribution mirroring) | No — engine core |
+| Band-fitted per-channel curves | #1 (within each L band) | No — engine core |
+| ACES gamut compress | #1 (range preservation) | No — engine core |
+| `hueByLuma` toggle (Phase 4.5) | #3 (cross-dim hue) | Yes, ON by default |
+| `liftNeutrals` toggle (Phase 4.5b) | #3 (cross-dim chroma) | Yes, ON by default |
+| `paletteSnap` toggle (Phase 4.5d, this section) | #2 (color identity) | Yes, OFF by default; opt-in for stronger color preservation |
+| `passes` 1–4× (Phase 4.5c) | #4 (intensification) | Yes, default 1× |
+| Trait sliders @ 0–200% | #4 (per-dim crank) | Yes, default 100% all |
+| Pre-shaping anchors (Phase 6, planned) | #1 (user-tunable input distribution) | Yes, opt-in |
+
+All of these compose into the same 33³ LUT output.
+
+### 8.4 Phase 4.5d — `paletteSnap`: the color-identity mechanic
+
+**Problem.** Hue-by-L's per-bucket *average* `(a, b)` collapses minorities (§8.1 #2). A 90% red / 10% gray source produces an "almost-pure red" output regardless of how much gray the source actually contains; the gray is averaged away.
+
+**Mechanism.** When `paletteSnap` is ON, the smashed hue `hsm` is derived by:
+
+1. Look up `Lsm` (post-L-CDF) as before.
+2. Compute the input pixel's hue direction `hin = atan2(bIn, aIn)`. For tiny `Cin`, this is noisy but the noise itself is useful — it varies per-pixel.
+3. Scan the source's clusters (already computed in `SourceDNA.clusters` via k-means). For each cluster with meaningful chroma (≥ a chromatic floor, e.g., 0.02), compute:
+   - Hue distance `dh = circular_distance(hin, cluster.hue)`
+   - L distance `dL = |Lsm − cluster.L|`
+   - Score = `−(dh + α·dL)` where α weights L proximity (e.g., 0.5)
+4. Pick the cluster with the maximum score. Use its `atan2(b, a)` as `hsm`.
+
+**Effect.**
+- Pixels with detectable input hue direction snap to the source cluster matching that direction. Different pixels can pick different clusters → diverse output.
+- Pixels at very low `Cin` (perfect or near-perfect gray) still produce a deterministic cluster pick (via the L term), but adjacent pixels with even 1-LSB chroma variation may pick different clusters. This is the diversity mechanism for real photos.
+- Output chroma magnitude still comes from the CDF + `liftNeutrals`. `paletteSnap` only re-aims the hue.
+
+**Why this preserves minority colors.** Each output pixel resolves to *one specific source cluster* instead of a weighted average. A 90/10 source has two clusters (red + gray); the engine doesn't average them — it picks one per pixel based on input cues. The *population* of cluster picks across the output image then reflects the source's full palette.
+
+**LUT-bakable.** Yes — the per-pixel decision is a pure function of `(R, G, B)` because `hin` is derived from input alone and the cluster table is frozen at engine-build time.
+
+**Tradeoff vs. `hueByLuma`.**
+- `hueByLuma` ON, `paletteSnap` OFF: smooth, averaged color story — clean, but minority colors lost.
+- `hueByLuma` ON, `paletteSnap` ON: discrete cluster snapping per pixel — diverse, but with cluster-boundary discontinuities (visible if the input image is very smooth and there are few clusters).
+- `paletteSnap` ON without `hueByLuma`: same cluster routing, but per-pixel hue CDF for fallback when `Cin` is below the routing threshold.
+
+Default: **OFF**, to preserve smoothness in the default look. User opts in when they want minority colors expressed.
+
+### 8.5 What's still on the roadmap (Phase 5+)
+
+The four colorization mechanics in v1.1 §5 remain forward work:
+
+- **Stochastic per-L-band sampling** (Toggle 2). Per-pixel random sample from source's bucket distribution. NOT LUT-bakable (same input → different output requires per-pixel state) but works as a panel-preview-only mode the user can rasterize.
+- **Conditional CDF P(color | L)** (Toggle 3). Per-L bucket chroma distribution match, not just bucket mean. Adds within-L diversity in a LUT-bakable way.
+- **Sliced optimal transport** (Toggle 4). Math-heavy, gives the strongest distribution preservation; benchmark before implementing.
+- **Pre-shaping anchors** (§7). User-defined 1D LUTs per dimension applied before the CDF match. Composes with everything above.
+
+The order is roughly: Phase 4.5d `paletteSnap` (shipping now) → Phase 5 conditional CDF (next likely) → Phase 6 anchors → Phase 7 stochastic preview mode → Phase 8 sliced OT.
