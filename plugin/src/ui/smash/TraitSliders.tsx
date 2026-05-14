@@ -9,11 +9,16 @@ import type { TraitAmounts } from "../../core/smash/types";
 // ────────── public interface ──────────
 
 export interface TraitSlidersProps {
-  /** Current trait values. All amounts in [0, 1]. */
+  /** Current trait values. Amounts in [0, 2]: 0 = no transfer, 1 = literal
+   *  CDF match (the engine's natural target), >1 = oversample / extrapolate
+   *  past the source distribution for creative crank effects. */
   amounts: TraitAmounts;
   onAmountsChange: (next: TraitAmounts) => void;
   /** When true, all sliders are non-interactive. Used while engine is idle. */
   disabled?: boolean;
+  /** Max slider value × 100. Default 200 (allows 2× oversample). Set to 100
+   *  to lock sliders to literal-CDF-match (no crank). */
+  maxPercent?: number;
 }
 
 /** Trait keys rendered in this order. */
@@ -63,7 +68,7 @@ export const DEFAULT_TRAIT_AMOUNTS: TraitAmounts = {
 // ────────── component ──────────
 
 export function TraitSliders(props: TraitSlidersProps): JSX.Element {
-  const { amounts, onAmountsChange, disabled = false } = props;
+  const { amounts, onAmountsChange, disabled = false, maxPercent = 200 } = props;
 
   const containerStyle: React.CSSProperties = {
     display: "flex",
@@ -100,12 +105,12 @@ export function TraitSliders(props: TraitSlidersProps): JSX.Element {
     height: 12,
   };
 
-  const numericStyle: React.CSSProperties = {
+  const numericBase: React.CSSProperties = {
     width: 32,
     fontSize: 10,
-    color: "#ccc",
     textAlign: "right",
     flexShrink: 0,
+    fontVariantNumeric: "tabular-nums",
   };
 
   return (
@@ -113,6 +118,7 @@ export function TraitSliders(props: TraitSlidersProps): JSX.Element {
       {TRAIT_ORDER.map((trait) => {
         const amount = amounts[trait];
         const intValue = Math.round(amount * 100);
+        const isCrank = intValue > 100;
 
         return (
           <div
@@ -124,7 +130,7 @@ export function TraitSliders(props: TraitSlidersProps): JSX.Element {
             <input
               type="range"
               min={0}
-              max={100}
+              max={maxPercent}
               step={1}
               value={intValue}
               style={sliderStyle}
@@ -134,7 +140,13 @@ export function TraitSliders(props: TraitSlidersProps): JSX.Element {
                 onAmountsChange({ ...amounts, [trait]: next });
               }}
             />
-            <span style={numericStyle}>{intValue}</span>
+            <span style={{
+              ...numericBase,
+              // Crank zone (>100%) → orange, signals destructive extrapolation
+              // past the literal source distribution. Below 100 stays muted.
+              color: isCrank ? "#ff8866" : "#ccc",
+              fontWeight: isCrank ? 600 : 400,
+            }}>{intValue}</span>
           </div>
         );
       })}

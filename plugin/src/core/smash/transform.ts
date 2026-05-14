@@ -301,18 +301,26 @@ export function applyTransform(
   const hin = Cin > 1e-6 ? Math.atan2(bIn, aIn) : (Csm > 1e-6 ? Math.atan2(bSm, aSm) : 0);
   const hsm = Csm > 1e-6 ? Math.atan2(bSm, aSm) : hin;
 
-  // Per-pixel modulation of the master gate.
+  // Per-pixel modulation of the master gate. neutral and accent stay clamped
+  // to [0,1] as protection / amplification *factors* — they're not gates.
   const neutralness = 1 - Math.min(1, Cin / 0.15);
   const neutralProtect = neutralness * clamp01(traits.neutral);
   const accentScore = Math.min(1, Math.max(0, (Cin - 0.10) / 0.15));
   const accentBoost = accentScore * clamp01(traits.accent);
-  const masterGate = clamp01(controls.global * (1 - neutralProtect) * (1 + accentBoost));
+  // Master gate can exceed 1 when traits.accent boosts it on accent pixels.
+  // Clamp away negatives only — let positive overdrive through.
+  const masterGate = Math.max(0, controls.global * (1 - neutralProtect) * (1 + accentBoost));
 
-  // Per-trait gates.
-  const valueGate  = masterGate * clamp01(traits.value);
-  const hueGate    = masterGate * clamp01(traits.hue);
-  const chromaGate = masterGate * clamp01(traits.chroma);
-  const satGate    = masterGate * clamp01(traits.saturation);
+  // Per-trait gates. Allow >1 (oversample / "crank") so the user can extrapolate
+  // PAST the literal CDF match — the TraitSliders UI exposes the 100–200% range
+  // explicitly. We clamp away negatives but not the upper bound; the lerps
+  // below then linearly extrapolate when gate > 1. Hue is clamped to ≤1 to
+  // prevent circular wrap-overshoot that would visually look broken.
+  const gateClampPos = (v: number) => Math.max(0, v);
+  const valueGate  = masterGate * gateClampPos(traits.value);
+  const hueGate    = masterGate * clamp01(traits.hue);  // hue stays in [0,1]
+  const chromaGate = masterGate * gateClampPos(traits.chroma);
+  const satGate    = masterGate * gateClampPos(traits.saturation);
 
   // Apply perceptual deltas.
   const Lout = Lin + (Lsm - Lin) * valueGate;

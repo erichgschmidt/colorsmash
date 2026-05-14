@@ -85,15 +85,18 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       }
       if (persisted?.traits && typeof persisted.traits === "object") {
         const t = persisted.traits;
-        const clamp01 = (v: unknown): number | null =>
-          typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : null;
+        // Trait values can be in [0, 2] — values past 1 are oversample / crank
+        // territory (extrapolate past literal CDF match). Hue stays in [0, 1]
+        // because circular wrap-overshoot looks broken visually.
+        const clampGate = (v: unknown, max: number): number | null =>
+          typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.min(max, v)) : null;
         setTraits((prev) => ({
-          value:      clamp01(t.value)      ?? prev.value,
-          hue:        clamp01(t.hue)        ?? prev.hue,
-          saturation: clamp01(t.saturation) ?? prev.saturation,
-          chroma:     clamp01(t.chroma)     ?? prev.chroma,
-          neutral:    clamp01(t.neutral)    ?? prev.neutral,
-          accent:     clamp01(t.accent)     ?? prev.accent,
+          value:      clampGate(t.value, 2)      ?? prev.value,
+          hue:        clampGate(t.hue, 1)        ?? prev.hue,
+          saturation: clampGate(t.saturation, 2) ?? prev.saturation,
+          chroma:     clampGate(t.chroma, 2)     ?? prev.chroma,
+          neutral:    clampGate(t.neutral, 1)    ?? prev.neutral,
+          accent:     clampGate(t.accent, 1)     ?? prev.accent,
         }));
       }
       loadedRef.current = true;
