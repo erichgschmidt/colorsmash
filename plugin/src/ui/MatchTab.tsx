@@ -1270,12 +1270,12 @@ export function MatchTab() {
 
   // v1.21 — Smash-mode preview drive. Bakes a 17³ LUT once per engine change
   // (4913 applyTransform calls, ~25-50ms), then trilinear-interpolates per
-  // source pixel — much cheaper than calling the engine for all ~400K preview
-  // pixels on every slider tick.
+  // TARGET pixel — same convention Match mode uses: the matched preview shows
+  // the TARGET image with the transform applied, not the source. (Bug fix
+  // v1.21.x: previous version mistakenly fed srcSnap into the lookup.)
   //
-  // "Before" = source pixels; "after" = LUT-applied source pixels. The same
-  // <MatchedPreview/> handle the Match path uses; the Before/After badge
-  // stays wired automatically.
+  // "Before" = unmodified target pixels; "after" = LUT-applied target pixels.
+  // Click/hold the Before/After badge on MatchedPreview to toggle.
   const smashPreviewLut = useMemo<SmashLut | null>(() => {
     if (!__SMASH_ENABLED__) return null;
     if (!smashEngine) return null;
@@ -1285,25 +1285,25 @@ export function MatchTab() {
   useEffect(() => {
     if (!__SMASH_ENABLED__) return;
     if (smashMode !== "smash") return;
-    if (!smashPreviewLut || !srcSnap || !matchedHandleRef.current) return;
-    const { width: w, height: h, data: src } = srcSnap;
+    if (!smashPreviewLut || !tgt.snap || !matchedHandleRef.current) return;
+    const { width: w, height: h, data: tgtPixels } = tgt.snap;
     const lut = smashPreviewLut.values;
     const N = smashPreviewLut.size;
     const NM1 = N - 1;
-    const out = new Uint8Array(src.length);
+    const out = new Uint8Array(tgtPixels.length);
     for (let i = 0; i < w * h; i++) {
       const o = i * 4;
-      const a = src[o + 3];
+      const a = tgtPixels[o + 3];
       if (a < 128) {
-        out[o] = src[o]; out[o + 1] = src[o + 1]; out[o + 2] = src[o + 2]; out[o + 3] = a;
+        out[o] = tgtPixels[o]; out[o + 1] = tgtPixels[o + 1]; out[o + 2] = tgtPixels[o + 2]; out[o + 3] = a;
         continue;
       }
       // Trilinear lookup. bakeSmashLut writes r-fastest, b-slowest:
       //   index(ri, gi, bi) = (bi * N + gi) * N + ri
       // Triple offset = index * 3.
-      const fr = (src[o]     / 255) * NM1;
-      const fg = (src[o + 1] / 255) * NM1;
-      const fb = (src[o + 2] / 255) * NM1;
+      const fr = (tgtPixels[o]     / 255) * NM1;
+      const fg = (tgtPixels[o + 1] / 255) * NM1;
+      const fb = (tgtPixels[o + 2] / 255) * NM1;
       const r0 = Math.floor(fr), r1 = r0 < NM1 ? r0 + 1 : r0;
       const g0 = Math.floor(fg), g1 = g0 < NM1 ? g0 + 1 : g0;
       const b0 = Math.floor(fb), b1 = b0 < NM1 ? b0 + 1 : b0;
@@ -1333,8 +1333,8 @@ export function MatchTab() {
       out[o + 3] = a;
     }
     matchedHandleRef.current.setPixels(out, w, h);
-    matchedHandleRef.current.setBefore(src, w, h);
-  }, [smashMode, smashPreviewLut, srcSnap]);
+    matchedHandleRef.current.setBefore(tgtPixels, w, h);
+  }, [smashMode, smashPreviewLut, tgt.snap]);
 
   // v1.21 — Mode-flip back to Match: nudge the existing Match preview pipeline
   // to re-fire so the user sees Match's output again. Without this, flipping
