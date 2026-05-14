@@ -42,6 +42,7 @@ import { buildStarterRecipes } from "../app/starterRecipes";
 import { ModeToggle, type SmashMode } from "./smash/ModeToggle";
 import { SmashSection } from "./smash/SmashSection";
 import { bakeSmashLut, type SmashEngineOutput, type SmashLut } from "../core/smash";
+import { rgbaToPngDataUrl } from "./encodePng";
 
 const STARTER_PACK_VERSION = 1;
 import { lutGradientCSS } from "../app/historyThumbnail";
@@ -1054,6 +1055,17 @@ export function MatchTab() {
   // the same MatchedPreview handle the Match path uses.
   const [smashMode, setSmashMode] = useState<SmashMode>("match");
   const [smashEngine, setSmashEngine] = useState<SmashEngineOutput | null>(null);
+
+  // v1.21 — small source-preview thumbnail rendered in the SOURCE island's
+  // thumbnail slot when in Smash mode (replaces the Match-only PresetStrip +
+  // source PaletteStrip). Pure raw source pixels, no preset transform —
+  // visually confirms which layer the user just picked. Memoized on srcSnap
+  // identity so flipping modes doesn't re-encode the PNG.
+  const smashSourceThumbnailUrl = useMemo<string | null>(() => {
+    if (!__SMASH_ENABLED__) return null;
+    if (!srcSnap) return null;
+    return rgbaToPngDataUrl(srcSnap.data, srcSnap.width, srcSnap.height);
+  }, [srcSnap]);
   const [renderedCurves, setRenderedCurves] = useState<ChannelCurves | null>(null);
   // Result pixels captured at the end of each redraw — feeds the diagnostic histogram overlay.
   // Throttled (only commits to state every ~150ms) so we don't thrash React during slider drags.
@@ -2990,12 +3002,34 @@ export function MatchTab() {
             // to a grayscale value strip — the palette is a visual preview of
             // what the source contributes to the match under that preset.
             thumbnail={
-              // v1.21 — hide Match's PresetStrip (Full/Color/Hue/Sat/Contrast)
-              // and source PaletteStrip when Smash mode is active. Smash has
-              // its own SourceDNAStrip + preset row in SmashSection; the Match
-              // controls don't speak Smash's per-band engine language and
-              // their state writes here are no-ops in Smash mode anyway.
-              (__SMASH_ENABLED__ && smashMode === "smash") ? null : (
+              // v1.21 — two thumbnail layouts depending on mode:
+              //   Match → PresetStrip (Full/Color/Hue/Sat/Contrast preview row)
+              //           + source PaletteStrip (k-means swatch weight bar)
+              //   Smash → plain source image thumbnail (raw pixels, no preset
+              //           transform). Confirms which layer the user just picked.
+              //           Smash has its own DNA strip + preset row + audit in
+              //           SmashSection so the Match-mode tools aren't useful
+              //           here, but the user still wants to SEE the source.
+              (__SMASH_ENABLED__ && smashMode === "smash") ? (
+                smashSourceThumbnailUrl ? (
+                  <img
+                    src={smashSourceThumbnailUrl}
+                    style={{
+                      width: "100%", height: "auto",
+                      maxHeight: 120, objectFit: "contain",
+                      borderRadius: 3, background: "#1a1a1a",
+                    }}
+                  />
+                ) : (
+                  <div style={{
+                    padding: "12px 8px", fontSize: 10, color: "#777",
+                    fontStyle: "italic", textAlign: "center",
+                    border: "1px dashed #333", borderRadius: 3,
+                  }}>
+                    Pick a source layer to preview.
+                  </div>
+                )
+              ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                   <PresetStrip
                     srcRgba={srcSnap?.data ?? null}
