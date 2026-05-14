@@ -39,8 +39,9 @@ export interface LutLayerState {
   sourceSoftness?: number;
   targetSoftness?: number;
   paletteAdaptive?: boolean;
-  // Apply-time toggles
-  multiZone?: boolean;
+  // Apply-time toggles. multiZone was retired in v1.20.70; field
+  // dropped from the schema. Old XMP that carries multiZone:true
+  // still parses (extra fields are ignored on read).
   // LUT-output knobs (v1.17.0). Only meaningful when outputMode is "lut".
   // Restored RGB/Lab layers carry these too (harmlessly), so a user who
   // first authored as LUT and later switched to Curves doesn't lose their

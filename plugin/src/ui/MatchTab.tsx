@@ -22,9 +22,8 @@ import {
   computeLumaBins, lumaRange,
   EnvelopePoint, DEFAULT_ENVELOPE,
   fitByMode, MatchMode, Preset,
-  // v1.20.70 — multi-zone math (fitMultiZoneByMode, applyMultiZoneToRgba,
-  // processMultiZoneFit, MultiZoneFit, adaptiveBandPeaks) still exported
-  // from histogramMatch.ts but no longer imported in MatchTab — UI gone.
+  // v1.20.70 — multi-zone math fully removed from histogramMatch.ts
+  // alongside the UI retirement.
   lerpCurvesTowardIdentity,
 } from "../core/histogramMatch";
 import { EnvelopeEditor } from "./EnvelopeEditor";
@@ -76,30 +75,11 @@ export function MatchTab() {
   // Match mode: full-distribution (default), mean shift, median shift, or percentile-anchored.
   // Lighter modes are gentler — useful when full-histogram match feels over-aggressive.
   const [matchMode, setMatchMode] = useState<MatchMode>("full");
-  // Multi-zone output (beta): emit 3 stacked Curves layers (shadow/mid/highlight) limiting
-  // each to its luminance band via mask, Blend If, or both. Default off so v1.0 behavior unchanged.
-  // v1.20.51 — per-output-mode multi + blend-if config. Each tab (RGB / Lab
-  // / LUT) remembers its own Multi + Blend If state. Switching outputMode
-  // restores that tab's settings; toggling Multi or Blend If only affects
-  // the currently-active tab. Persistence saves all three.
-  type TabConfig = { multi: boolean; blendIf: boolean };
-  // v1.20.70 — tabConfig per-mode {multi, blendIf} state retained for
-  // persistence backward-compat (old saved configs still load + save
-  // through unchanged), but no longer drives anything in the UI.
-  // Multi UI is retired; the record always reads as effectively
-  // {multi: false, blendIf: false} since there's no toggle to flip.
-  const [tabConfig, setTabConfig] = useState<Record<"rgb" | "lab" | "lut", TabConfig>>({
-    rgb: { multi: false, blendIf: false },
-    lab: { multi: false, blendIf: false },
-    lut: { multi: false, blendIf: false },
-  });
-  // Derived current settings for the rest of the code that still reads the
-  // old single-state shape. setMultiZone/setMultiZoneLimit route updates
-  // back into tabConfig under the active outputMode.
-  // (outputMode is declared below; derive inside a useMemo-equivalent.)
-  // Adaptive bands: when on, band peaks shift to target's P10/P50/P90 luma percentiles
-  // so each band gets a meaningful pixel sample. When off, fixed peaks at 0/128/255.
-  const [adaptiveBands, setAdaptiveBands] = useState(true);
+  // v1.20.70 — multi-zone output (beta) retired. The per-output-mode
+  // tabConfig (Multi + Blend If per RGB/Lab/LUT tab) is gone along with
+  // adaptiveBands and multiExpanded. Multi was never publicly shipped,
+  // so no saved files affected. Persistence load silently ignores legacy
+  // multi-related keys (multiZone, multiZoneLimit, tabConfig, adaptiveBands).
   // Quick-select preset — staged in the UI, applied to the matched preview live, baked
   // into PS when the user hits Apply Curves. Defaults to "color" (full match) so the
   // initial behavior matches v1.0.
@@ -145,7 +125,7 @@ export function MatchTab() {
 
   const zonesRef = useRef<ZoneOpts>({ ...DEFAULT_ZONES });
   const [zonesLabel, setZonesLabel] = useState<ZoneOpts>({ ...DEFAULT_ZONES });
-  const [lockZoneTotal, setLockZoneTotal] = useState(false);
+  // v1.20.70 — lockZoneTotal state removed alongside the multi-zone UI cleanup.
 
   const envelopeRef = useRef<EnvelopePoint[]>([...DEFAULT_ENVELOPE]);
   const [envelopeLabel, setEnvelopeLabel] = useState<EnvelopePoint[]>([...DEFAULT_ENVELOPE]);
@@ -200,24 +180,10 @@ export function MatchTab() {
   // selector sits next to the destination it modifies. Apply button dispatches
   // to either applyMatch (RGB/Lab) or applyLutAsAdjustmentLayer (LUT) based on mode.
   const [outputMode, setOutputMode] = useState<"rgb" | "lab" | "lut">("rgb");
-  // v1.20.51 — derived per-tab toggles. Reading these stays the same as
-  // before for the rest of the file; setters route the change to the
-  // currently-active tab's slot in tabConfig.
-  // v1.20.70 — multi-zone output retired. Force multiZone to false so
-  // the apply paths always take the single-layer branch even if
-  // persisted settings or a restored XMP/recipe still carries
-  // multi:true. Underlying logic stays in applyMatch / applyLut for
-  // recipe-compat; just unreachable from the UI now.
-  // v1.20.70 — both forced to single-mode defaults. applyMatch /
-  // applyLut ignore the multi branch when multiZone is false; the
-  // multiZoneLimit type is still required by the interface but only
-  // matters in the dead branch, so "mask" is a fine no-op.
-  const multiZone = false;
-  const multiZoneLimit: "mask" | "blendIf" | "both" = "mask";
-  const setMultiZone = (v: boolean) =>
-    setTabConfig(prev => ({ ...prev, [outputMode]: { ...prev[outputMode], multi: v } }));
-  const setMultiZoneLimit = (v: "mask" | "blendIf" | "both") =>
-    setTabConfig(prev => ({ ...prev, [outputMode]: { ...prev[outputMode], blendIf: v !== "mask" } }));
+  // v1.20.70 — multi-zone output retired entirely. The setters that
+  // routed Multi/BlendIf into a per-tab `tabConfig` slot are gone now
+  // along with the tabConfig state itself. Multi was never publicly
+  // shipped so no persisted state needs migrating.
   // Derived alias for places that still operate on the legacy "rgb" | "lab"
   // pair (fitByMode, applyMatch's colorSpace param). LUT mode fits in RGB since
   // the curves are then trilinearly sampled into a 3D LUT regardless.
@@ -267,10 +233,7 @@ export function MatchTab() {
   // re-inject every reload. Loaded from persistence; if absent the next
   // save writes it.
   const [starterPackVersion, setStarterPackVersion] = useState(0);
-  // v1.20.70 — Multi/Blend is a secondary feature; collapsed by default to
-  // reduce visual density. A small disclosure (▶/▼) between AUTO and the
-  // tabs reveals the MULTI/BLEND × 3 row when expanded.
-  const [multiExpanded, setMultiExpanded] = useState(false);
+  // v1.20.70 — multiExpanded state removed alongside the Multi/Blend UI retirement.
   // v1.20.70 — Settings drawer state + persisted prefs.
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<{ general: boolean; lut: boolean; advanced: boolean; diag: boolean }>({
@@ -450,32 +413,10 @@ export function MatchTab() {
         if (s.stretch != null) { stretchRef.current = s.stretch; setStretchLabel(s.stretch); }
         if (s.anchorStretchToHist != null) setAnchorStretchToHist(s.anchorStretchToHist);
         if (s.matchMode) setMatchMode(s.matchMode as MatchMode);
-        // Normalize legacy "both" persisted state to "blendIf" — Mask is now implicit
-        // v1.20.64 — prefer the per-tab `tabConfig` snapshot if present
-        // (saved since v1.20.64). Falls back to the legacy single
-        // multiZone/multiZoneLimit fields, fanning them into all three
-        // tab slots so old PSDs/recipes don't lose state on first reload.
-        if (s.tabConfig) {
-          setTabConfig({
-            rgb: { multi: !!s.tabConfig.rgb?.multi, blendIf: !!s.tabConfig.rgb?.blendIf },
-            lab: { multi: !!s.tabConfig.lab?.multi, blendIf: !!s.tabConfig.lab?.blendIf },
-            lut: { multi: !!s.tabConfig.lut?.multi, blendIf: !!s.tabConfig.lut?.blendIf },
-          });
-        } else if (s.multiZone != null || s.multiZoneLimit != null) {
-          // Legacy migration — single values get applied to all three tabs.
-          const legacyMulti = !!s.multiZone;
-          const legacyBlendIf = s.multiZoneLimit === "blendIf" || s.multiZoneLimit === "both";
-          setTabConfig({
-            rgb: { multi: legacyMulti, blendIf: legacyBlendIf },
-            lab: { multi: legacyMulti, blendIf: legacyBlendIf },
-            lut: { multi: legacyMulti, blendIf: legacyBlendIf },
-          });
-        }
-        // v1.20.60 — adaptiveBands is now ALWAYS default-on. Don't honor a
-        // legacy `false` from persistence — users should land on the sane
-        // default every fresh session and explicitly opt out by clicking
-        // ADAPT off if they want fixed 0/128/255 band peaks.
-        // (Persistence still writes the value; just no-op on read.)
+        // v1.20.70 — multi-zone retired. Legacy `tabConfig`, `multiZone`,
+        // `multiZoneLimit`, `adaptiveBands`, and `multiExpanded` persistence
+        // reads are dropped here. Multi was never publicly shipped so no
+        // user saves are affected.
         if (s.paletteCount === 3 || s.paletteCount === 5 || s.paletteCount === 7) setPaletteCount(s.paletteCount);
         if (s.paletteAdaptive != null) setPaletteAdaptive(s.paletteAdaptive);
         if (typeof s.sourceSoftness === "number") setSourceSoftness(Math.max(0, Math.min(100, s.sourceSoftness)));
@@ -503,7 +444,6 @@ export function MatchTab() {
         }
         // v1.20.66 — track which starter pack version this install has seen.
         if (typeof s.starterPackVersion === "number") setStarterPackVersion(s.starterPackVersion);
-        if (typeof s.multiExpanded === "boolean") setMultiExpanded(s.multiExpanded);
         // v1.20.70 — Settings-drawer prefs.
         if (s.groupColor && ["none","red","orange","yellow","green","blue","violet","gray"].includes(s.groupColor)) {
           setGroupColor(s.groupColor as any);
@@ -516,7 +456,6 @@ export function MatchTab() {
         if (s.overwriteOnApply != null) setOverwriteOnApply(s.overwriteOnApply);
         if (s.openSection !== undefined) setOpenSection(s.openSection);
         if (s.zones) { zonesRef.current = { ...DEFAULT_ZONES, ...s.zones }; setZonesLabel({ ...DEFAULT_ZONES, ...s.zones }); }
-        if (s.lockZoneTotal != null) setLockZoneTotal(s.lockZoneTotal);
         if (s.dimensions) { dimsRef.current = { ...DEFAULT_DIMENSIONS, ...s.dimensions }; setDimsLabel({ ...DEFAULT_DIMENSIONS, ...s.dimensions }); }
         if (s.envelope && Array.isArray(s.envelope) && s.envelope.length > 0) {
           envelopeRef.current = s.envelope as EnvelopePoint[];
@@ -553,18 +492,17 @@ export function MatchTab() {
     const snapshot: PersistedSettings = {
       remember,
       amount: amountLabel, smooth: smoothLabel, stretch: stretchLabel,
-      anchorStretchToHist, chromaOnly, colorSpace, outputMode, lutStrength, lutGrid, lutDither, selectionMode, matchMode, multiZone, multiZoneLimit, adaptiveBands,
-      // v1.20.64 — persist the full per-tab record so each output mode's
-      // Multi/BlendIf settings survive panel reloads.
-      tabConfig,
+      anchorStretchToHist, chromaOnly, colorSpace, outputMode, lutStrength, lutGrid, lutDither, selectionMode, matchMode,
+      // v1.20.70 — multi-zone schema fields (multiZone, multiZoneLimit,
+      // adaptiveBands, tabConfig, multiExpanded) removed from the saved
+      // snapshot alongside the UI retirement.
       // v1.20.66 — once the starter pack has been injected, this prevents
       // re-injection on every reload.
       starterPackVersion,
-      multiExpanded,
       groupColor, groupName, autoDebounceMs, historyCap, verboseStatus,
       overwriteOnApply,
       openSection,
-      zones: zonesLabel, lockZoneTotal,
+      zones: zonesLabel,
       dimensions: dimsLabel,
       envelope: envelopeLabel,
       paletteCount,
@@ -575,9 +513,9 @@ export function MatchTab() {
       recentHistory,
     };
     saveDebouncedRef.current!(snapshot);
-  }, [remember, matchMode, multiZone, multiZoneLimit, adaptiveBands, tabConfig, starterPackVersion, multiExpanded, groupColor, groupName, autoDebounceMs, historyCap, verboseStatus, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
+  }, [remember, matchMode, starterPackVersion, groupColor, groupName, autoDebounceMs, historyCap, verboseStatus, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
       colorSpace, outputMode, lutStrength, lutGrid, lutDither, selectionMode, overwriteOnApply, openSection,
-      zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel, paletteCount, paletteAdaptive, sourceSoftness, targetSoftness, targetMaskEnabled, recentHistory]);
+      zonesLabel, dimsLabel, envelopeLabel, paletteCount, paletteAdaptive, sourceSoftness, targetSoftness, targetMaskEnabled, recentHistory]);
 
   const [docs, setDocs] = useState<{ id: number; name: string }[]>([]);
   // Hash of doc id+name pairs. Used as the key on the doc <select> elements so that
@@ -1371,7 +1309,6 @@ export function MatchTab() {
     sourceSoftness,
     targetSoftness,
     paletteAdaptive,
-    multiZone,
     dimensions: dimsRef.current,
     zones: zonesRef.current,
     envelope: envelopeRef.current,
@@ -1598,28 +1535,9 @@ export function MatchTab() {
     if (typeof state.sourceSoftness === "number") setSourceSoftness(state.sourceSoftness);
     if (mode === "full" && typeof state.targetSoftness === "number") setTargetSoftness(state.targetSoftness);
     if (state.paletteAdaptive != null) setPaletteAdaptive(!!state.paletteAdaptive);
-    // v1.20.64 — write tabConfig directly with the explicit target key so
-    // the restored Multi/BlendIf land on the OUTPUT MODE THE BAKE USED, not
-    // whichever tab happens to be active at restore time. setMultiZone()
-    // is a shim that closes over `outputMode`; React batches the
-    // setOutputMode + setMultiZone calls so the shim still sees the OLD
-    // outputMode and routes Multi into the wrong tab.
-    if (state.multiZone != null) {
-      const targetMode =
-        (state.outputMode === "rgb" || state.outputMode === "lab" || state.outputMode === "lut") ? state.outputMode
-        : (state.colorSpace === "rgb" || state.colorSpace === "lab") ? state.colorSpace
-        : "lut";
-      setTabConfig(prev => ({
-        ...prev,
-        [targetMode]: {
-          multi: !!state.multiZone,
-          // multiZoneLimit isn't carried in XMP (only multi is), so we
-          // preserve the existing blendIf for that tab rather than
-          // forcing it off on every restore.
-          blendIf: prev[targetMode].blendIf,
-        },
-      }));
-    }
+    // v1.20.70 — restored XMP / recipe state.multiZone is ignored
+    // (multi-zone UI retired). Old XMP that carried multi:true still
+    // parses, but the panel always lands in single-curve mode.
     if (state.dimensions) {
       dimsRef.current = { ...DEFAULT_DIMENSIONS, ...state.dimensions } as DimensionOpts;
       setDimsLabel(dimsRef.current);
@@ -1983,10 +1901,10 @@ export function MatchTab() {
     //     — they're picking where to work, not what to do)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    matchMode, multiZone, multiZoneLimit, adaptiveBands, tabConfig,
+    matchMode,
     amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
     colorSpace, outputMode, lutStrength, lutGrid, lutDither, selectionMode,
-    overwriteOnApply, zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel,
+    overwriteOnApply, zonesLabel, dimsLabel, envelopeLabel,
     paletteCount, paletteAdaptive, sourceSoftness, targetSoftness,
     targetMaskEnabled, paletteWeights, targetPaletteWeights,
   ]);
@@ -2162,7 +2080,7 @@ export function MatchTab() {
     return () => {
       if (liveBakeTimerRef.current) { clearTimeout(liveBakeTimerRef.current); liveBakeTimerRef.current = null; }
     };
-  }, [liveLut, renderedCurves, activePreset, targetId, targetPaletteWeights, targetSoftness, multiZone, outputMode, autoDebounceMs]);
+  }, [liveLut, renderedCurves, activePreset, targetId, targetPaletteWeights, targetSoftness, outputMode, autoDebounceMs]);
 
   const onApply = async () => {
     if (targetId == null) { setStatus("Pick target layer."); return; }
@@ -2192,11 +2110,8 @@ export function MatchTab() {
         sourceLayerId: sourceId ?? -1,
         targetLayerId: targetId,
         matchMode,
-        // v1.20.70 — multi-zone retired: multiZone always false, peak/
-        // extent params no longer computed in the panel. applyMatch
-        // ignores them when multiZone is false anyway.
-        multiZone: false,
-        multiZoneLimit,
+        // v1.20.70 — multi-zone retired; applyMatch no longer accepts
+        // multiZone / multiZoneLimit / peak / extent params.
         // Section-enable mirror — disabled sections apply with default params.
         amount: enColor ? amountRef.current / 100 : 1,
         smoothRadius: enColor ? smoothRef.current : 0,
@@ -2398,14 +2313,12 @@ export function MatchTab() {
     setAnchorStretchToHist(false);
     setChromaOnly(false);
     setMatchMode("full");
-    setMultiZone(false);
-    setMultiZoneLimit("mask");
-    setAdaptiveBands(true);
+    // v1.20.70 — setMultiZone / setMultiZoneLimit / setAdaptiveBands /
+    // setLockZoneTotal removed alongside the multi-zone UI cleanup.
     setOutputMode("rgb");
     setOverwriteOnApply(true);
     setOpenSection(null);
     zonesRef.current = { ...DEFAULT_ZONES }; setZonesLabel({ ...DEFAULT_ZONES });
-    setLockZoneTotal(false);
     dimsRef.current = { ...DEFAULT_DIMENSIONS }; setDimsLabel({ ...DEFAULT_DIMENSIONS });
     envelopeRef.current = [...DEFAULT_ENVELOPE]; setEnvelopeLabel([...DEFAULT_ENVELOPE]);
     setRemember(false);

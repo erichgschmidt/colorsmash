@@ -129,7 +129,6 @@ export function buildStarterRecipes(): HistoryEntry[] {
         targetSoftness: 0,
         selectionMode: "off",
         matchMode: "full",
-        multiZone: false,
         paletteAdaptive: false,
         envelope: spec.envelope,
         dimensions: spec.dimensions,

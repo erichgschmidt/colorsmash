@@ -147,20 +147,20 @@ export function buildHistoryLabel(state: LutLayerState): string {
       ? state.paletteCount
       : (state.sourcePaletteSwatches?.length ?? 0);
   let label = `${mode} · ${preset} · ${n} swatches`;
-  if (state.multiZone) label += " · Multi";
+  // v1.20.70 — multi-zone retired; the " · Multi" suffix is dead.
   if (label.length > 40) label = label.slice(0, 39) + "…";
   return label;
 }
 
-/** Stable content hash for dedupe — combines preset, output mode, multi-zone,
- *  and a hash of the palette weights. */
+/** Stable content hash for dedupe — combines preset, output mode, and a
+ *  hash of the palette weights. v1.20.70 — multi-zone no longer
+ *  influences the hash (always-0 component dropped). */
 export function dedupKey(state: LutLayerState): string {
   const mode =
     (typeof state.outputMode === "string" && state.outputMode) ||
     (typeof state.colorSpace === "string" && state.colorSpace) ||
     "rgb";
   const preset = state.preset || "";
-  const multi = state.multiZone ? "1" : "0";
   const n = state.paletteCount ?? 0;
   const srcW = (state.sourcePaletteWeights || [])
     .map((w) => (typeof w === "number" ? Math.round(w * 1000) : 0))
@@ -171,7 +171,7 @@ export function dedupKey(state: LutLayerState): string {
   const srcSig = (state.sourcePaletteSwatches || [])
     .map((s: any) => `${s?.r ?? 0},${s?.g ?? 0},${s?.b ?? 0}`)
     .join(";");
-  return `${mode}|${preset}|${multi}|${n}|${srcW}|${ss}|${srcSig}`;
+  return `${mode}|${preset}|${n}|${srcW}|${ss}|${srcSig}`;
 }
 
 /** Push a new entry onto the front of the history. Dedupes against the
