@@ -86,6 +86,16 @@ export interface SmashEngineOutput {
    * of how much chroma the target has).
    */
   readonly targetMedianChroma: number;
+  /**
+   * Phase 4.5b — source's median chroma. Used as the floor magnitude for
+   * the liftNeutrals toggle: when a target pixel is near-neutral (Cin low),
+   * the rank-mapped chroma CDF would return source's near-zero minimum
+   * (faithful, but unhelpful — the user perceives the result as monochrome).
+   * Flooring Csm at sourceMedianChroma weighted by neutralness gives near-
+   * neutral pixels the source's TYPICAL chroma magnitude paired with
+   * Hue-by-L's direction, producing broad colorization across L.
+   */
+  readonly sourceMedianChroma: number;
 }
 
 /** Chroma below this is too low to give a stable hue angle (atan2 noise
@@ -102,6 +112,7 @@ export interface SmashCdfs {
   readonly hueCdf: CdfMatchLut | null;
   readonly hueByLumaLut: HueByLumaLut | null;
   readonly targetMedianChroma: number;
+  readonly sourceMedianChroma: number;
 }
 
 /** Build the L/C/h CDF LUTs from a source/target feature pair. Pure work,
@@ -114,7 +125,7 @@ export function buildSmashCdfs(
   if (sourceFeatures.length === 0 || targetFeatures.length === 0) {
     return {
       lumaCdf: null, chromaCdf: null, hueCdf: null,
-      hueByLumaLut: null, targetMedianChroma: 0,
+      hueByLumaLut: null, targetMedianChroma: 0, sourceMedianChroma: 0,
     };
   }
   const srcLuma = new Float32Array(sourceFeatures.length);
@@ -147,16 +158,21 @@ export function buildSmashCdfs(
   }
 
   // Phase 4.5 — colorization data. hueByLumaLut is the source-only L→(a,b)
-  // lookup. targetMedianChroma is the auto-detect signal for "target is
-  // grayscale-ish" (median is a more stable estimator than mean for chroma
-  // distributions which are typically right-skewed). Median computed via
-  // sort-and-pick at the half-rank; cheap on the already-allocated tgtChroma
-  // Float32Array.
+  // lookup. targetMedianChroma is recorded for inspection (was previously
+  // an eligibility gate). sourceMedianChroma is the floor used by the
+  // liftNeutrals toggle to keep near-neutral target pixels from collapsing
+  // to source's minimum chroma. Median (vs mean) is the stable estimator
+  // for typically right-skewed chroma distributions.
   const hueByLumaLut = buildHueByLumaLut(sourceFeatures);
   const tgtChromaSorted = tgtChroma.slice().sort();
+  const srcChromaSorted = srcChroma.slice().sort();
   const targetMedianChroma = tgtChromaSorted[Math.floor(tgtChromaSorted.length / 2)] ?? 0;
+  const sourceMedianChroma = srcChromaSorted[Math.floor(srcChromaSorted.length / 2)] ?? 0;
 
-  return { lumaCdf, chromaCdf, hueCdf, hueByLumaLut, targetMedianChroma };
+  return {
+    lumaCdf, chromaCdf, hueCdf, hueByLumaLut,
+    targetMedianChroma, sourceMedianChroma,
+  };
 }
 
 // ────────── defaults ──────────
@@ -182,10 +198,13 @@ export const DEFAULT_SMASH_CONTROLS: SmashControls = {
   bandCount: 3,
   bandAxis: 'value',
   colorization: {
-    // Phase 4.5: enabled by default. Engine auto-detects grayscale-ish
-    // targets and activates the hueByLuma path; colorful targets continue
-    // to use per-dimension CDF unchanged.
+    // Phase 4.5: hueByLuma enabled by default — smashed hue follows source's
+    // L→(a,b) direction at every L.
     hueByLuma: true,
+    // Phase 4.5b: liftNeutrals enabled by default — near-neutral target
+    // pixels get a chroma floor at source's median chroma so shadows in a
+    // grayscale target colorize broadly instead of staying monochrome.
+    liftNeutrals: true,
   },
 };
 
@@ -303,6 +322,7 @@ export function smash(
   const hueCdf = cdfs.hueCdf;
   const hueByLumaLut = cdfs.hueByLumaLut;
   const targetMedianChroma = cdfs.targetMedianChroma;
+  const sourceMedianChroma = cdfs.sourceMedianChroma;
 
   // Record trait contributions from controls. The trait values can exceed 1
   // (Phase 3 oversample), so the audit stores raw products without clamping.
@@ -321,7 +341,7 @@ export function smash(
   return {
     profile, controls: c, bandTransforms, audit,
     lumaCdf, chromaCdf, hueCdf,
-    hueByLumaLut, targetMedianChroma,
+    hueByLumaLut, targetMedianChroma, sourceMedianChroma,
   };
 }
 
@@ -466,7 +486,23 @@ export function applyTransform(
     out.hueByLumaLut !== null
     && controls.colorization?.hueByLuma !== false;
 
-  const Csm = out.chromaCdf ? Math.max(0, lookupCdfMatch(out.chromaCdf, Cin)) : CsmBand;
+  // Phase 4.5b — liftNeutrals (ON by default) blends the rank-mapped chroma
+  // CDF result toward `sourceMedianChroma` for near-neutral inputs. Without
+  // this floor, a perfectly grayscale target maps every pixel to source's
+  // minimum chroma (rank 0 of source's distribution ≈ source's most neutral
+  // pixel), so shadows in the result stay monochrome even with Hue-by-L on.
+  // With the floor, near-neutral pixels pick up the source's TYPICAL chroma
+  // magnitude paired with Hue-by-L's direction — broad colorization across
+  // the whole L range instead of just where the source happens to be
+  // chromatic. neutralness=1 at Cin=0 (full lift), neutralness=0 at
+  // Cin>=0.15 (no lift — vivid inputs are left to the CDF as designed).
+  const liftNeutralsActive = controls.colorization?.liftNeutrals !== false;
+  const cdfMag = out.chromaCdf ? Math.max(0, lookupCdfMatch(out.chromaCdf, Cin)) : CsmBand;
+  const liftNeutralness = 1 - Math.min(1, Cin / 0.15);
+  const liftAmount = liftNeutralsActive
+    ? liftNeutralness * Math.max(0, out.sourceMedianChroma - cdfMag)
+    : 0;
+  const Csm = cdfMag + liftAmount;
   let hsm: number;
   if (hueByLumaActive && out.hueByLumaLut) {
     // Source's average (a, b) at the SMASHED L — we only need its DIRECTION,

@@ -108,12 +108,13 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
         }));
       }
       // v1.21 Phase 4.5 — restore colorization toggle state. Older save
-      // files without it fall back to DEFAULT_COLORIZATION_TOGGLES (hueByLuma: true).
+      // files missing individual keys fall back to DEFAULT_COLORIZATION_TOGGLES.
       if (persisted?.colorization && typeof persisted.colorization === "object") {
         const cz = persisted.colorization;
         setColorization((prev) => ({
           ...prev,
           ...(typeof cz.hueByLuma === "boolean" ? { hueByLuma: cz.hueByLuma } : {}),
+          ...(typeof cz.liftNeutrals === "boolean" ? { liftNeutrals: cz.liftNeutrals } : {}),
         }));
       }
       loadedRef.current = true;

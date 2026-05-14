@@ -34,6 +34,7 @@ export interface SmashPersisted {
    *  on read. */
   colorization?: {
     hueByLuma?: boolean;
+    liftNeutrals?: boolean;
     // Future toggles slot in here as Phase 5+ ships them.
   };
 }

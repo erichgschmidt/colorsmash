@@ -308,3 +308,61 @@ describe('smash() empty profile', () => {
     expect(ob).toBe(200);
   });
 });
+
+// ────────── liftNeutrals chroma floor (Phase 4.5b) ──────────
+
+describe('applyTransform() liftNeutrals chroma floor', () => {
+  // Setup: warm orange source (vivid) + grayscale target. This is the
+  // user-reported failure mode where shadow target pixels stayed monochrome
+  // because the chroma CDF mapped them to source's bottom-rank chroma ≈ 0.
+  it(
+    'with a vivid source + grayscale target, a neutral shadow input gets MORE chroma when liftNeutrals=ON vs OFF',
+    () => {
+      const srcRgba = warmOrangeBuffer32();
+      const tgtRgba = gradientBuffer32();
+      const { profile } = buildProfile(srcRgba, tgtRgba);
+      const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+      const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+      // Neutral mid-shadow input: R=G=B=64 (L≈0.3, Cin=0).
+      const r = 64, g = 64, b = 64;
+
+      const controlsOn: SmashControls = {
+        ...DEFAULT_SMASH_CONTROLS,
+        colorization: { hueByLuma: true, liftNeutrals: true },
+      };
+      const controlsOff: SmashControls = {
+        ...DEFAULT_SMASH_CONTROLS,
+        colorization: { hueByLuma: true, liftNeutrals: false },
+      };
+
+      const engOn = smash(srcFeatures, tgtFeatures, profile, controlsOn);
+      const engOff = smash(srcFeatures, tgtFeatures, profile, controlsOff);
+
+      const [orR, orG, orB] = applyTransform(engOn, r, g, b);
+      const [ofR, ofG, ofB] = applyTransform(engOff, r, g, b);
+
+      // Channel-spread (max - min) is a proxy for output chroma. Higher
+      // spread = more colorization. The floor should noticeably lift the
+      // shadow output's chroma. Exact thresholds depend on the synthetic
+      // buffer's source median chroma; >=5 byte spread headroom is a
+      // conservative-but-meaningful difference.
+      const spreadOn = Math.max(orR, orG, orB) - Math.min(orR, orG, orB);
+      const spreadOff = Math.max(ofR, ofG, ofB) - Math.min(ofR, ofG, ofB);
+
+      expect(spreadOn).toBeGreaterThan(spreadOff + 5);
+    },
+  );
+
+  it('engine output exposes sourceMedianChroma >= 0 (non-negative)', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const engine = smash(srcFeatures, tgtFeatures, profile);
+    expect(engine.sourceMedianChroma).toBeGreaterThanOrEqual(0);
+    expect(Number.isFinite(engine.sourceMedianChroma)).toBe(true);
+  });
+});

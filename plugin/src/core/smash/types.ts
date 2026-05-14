@@ -119,10 +119,18 @@ export interface TraitAmounts {
  *  target case). Each toggle is one of the four mechanics in v1.1 addendum
  *  Phase 5+. v0 ships only hueByLuma; future toggles slot in alongside. */
 export interface ColorizationOptions {
-  /** Phase 4.5 — Hue-by-L lookup. On: engine engages cross-dimensional
-   *  colorization (L → avg source (a,b) lookup) when target chroma is low.
-   *  Off: engine stays per-dimension CDF only. Default true. */
+  /** Phase 4.5 — Hue-by-L lookup. On: smashed hue is the source's L→(a,b)
+   *  direction at the smashed L (broad source-driven color story). Off:
+   *  smashed hue comes from the per-pixel hue CDF (preserves target's own
+   *  hue layout, rank-mapped). Default true. */
   readonly hueByLuma?: boolean;
+  /** Phase 4.5b — Lift neutrals. On: near-neutral target pixels get a chroma
+   *  floor at source's median chroma so shadows colorize broadly instead of
+   *  collapsing to source's bottom-rank chroma (which is ~0 for typical
+   *  sources with dark backgrounds). Off: chroma comes from per-dim CDF
+   *  unchanged — faithful to source's L→C structure but produces monochrome
+   *  shadows when source's shadows are also neutral. Default true. */
+  readonly liftNeutrals?: boolean;
   // Future toggles (Phase 5+) added here:
   //   readonly stochasticPerL?: boolean;
   //   readonly conditionalCdf?: boolean;

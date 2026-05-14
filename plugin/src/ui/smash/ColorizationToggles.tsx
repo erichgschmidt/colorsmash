@@ -10,10 +10,17 @@ import React from "react";
 // ────────── public types ──────────
 
 export interface ColorizationToggleState {
-  /** Phase 4.5 — Hue-by-L lookup. ON = engine engages cross-dimensional
-   *  colorization (L -> avg source (a,b) lookup) when target chroma is
-   *  low. OFF = engine stays per-dimension CDF only. */
+  /** Phase 4.5 — Hue-by-L lookup. ON = smashed hue is the source's L→(a,b)
+   *  direction at the smashed L (source-driven color story). OFF = smashed
+   *  hue comes from the per-pixel hue CDF (target's own hue layout, rank-
+   *  mapped). */
   readonly hueByLuma: boolean;
+  /** Phase 4.5b — Lift neutrals. ON = near-neutral target pixels get a
+   *  chroma floor at source's median chroma so shadows in grayscale-ish
+   *  targets colorize broadly. OFF = chroma comes from per-dim CDF
+   *  unchanged (faithful to source's L→C structure; shadows stay
+   *  monochrome when source's shadows are neutral). */
+  readonly liftNeutrals: boolean;
   // Future toggles (Phase 5+) added here:
   //   readonly stochasticPerL: boolean;   // noise-preserving sampling
   //   readonly conditionalCdf: boolean;   // P(color|L) match
@@ -21,7 +28,8 @@ export interface ColorizationToggleState {
 }
 
 export const DEFAULT_COLORIZATION_TOGGLES: ColorizationToggleState = {
-  hueByLuma: true, // ON by default — cheap, gives sensible grayscale-target behavior
+  hueByLuma: true,     // ON by default — source-driven color story
+  liftNeutrals: true,  // ON by default — broad colorization across L
 };
 
 export interface ColorizationTogglesProps {
@@ -50,6 +58,18 @@ const TOGGLE_ROWS: ToggleRowDef[] = [
       "per-dimension chroma CDF. Net effect: ON produces a source-driven color story by " +
       "lightness; OFF preserves the target's own per-pixel hue (rank-mapped onto source's " +
       "hue distribution). ON is always at least as colorful as OFF.",
+  },
+  {
+    key: "liftNeutrals",
+    label: "Lift neutrals",
+    description: "Floors chroma at source's median magnitude for near-neutral pixels. Lifts shadows in grayscale targets.",
+    tooltip:
+      "Lift neutrals (Phase 4.5b): Without this floor, a grayscale-ish target's near-" +
+      "neutral pixels rank at the bottom of the chroma CDF and pick up source's MINIMUM " +
+      "chroma (≈0 for sources with dark backgrounds), so shadows stay monochrome even " +
+      "with Hue-by-L on. With the floor, near-neutral pixels get source's TYPICAL chroma " +
+      "magnitude paired with Hue-by-L's direction — broad colorization across the whole " +
+      "L range. Vivid input pixels (Cin ≥ 0.15) are unaffected; only neutrals are lifted.",
   },
 ];
 

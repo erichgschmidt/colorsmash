@@ -171,6 +171,35 @@ describe("ColorizationToggles", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  it("DEFAULT_COLORIZATION_TOGGLES.liftNeutrals is true", () => {
+    expect(DEFAULT_COLORIZATION_TOGGLES.liftNeutrals).toBe(true);
+  });
+
+  it("renders a liftNeutrals row alongside hueByLuma (2 toggle rows total)", () => {
+    const el = ColorizationToggles(makeProps());
+    const rows = findAllElements(el, (_t, p) => {
+      return typeof p["onClick"] === "function" && typeof p["title"] === "string";
+    });
+    expect(rows.length).toBe(2);
+  });
+
+  it("clicking the second row flips liftNeutrals (not hueByLuma)", () => {
+    const onChange = vi.fn();
+    const el = ColorizationToggles(
+      makeProps({ state: makeState({ hueByLuma: true, liftNeutrals: true }), onChange }),
+    );
+    const rows = findAllElements(el, (_t, p) => {
+      return typeof p["onClick"] === "function" && typeof p["title"] === "string";
+    });
+    expect(rows.length).toBe(2);
+    const onClick = rows[1]!["props"] as Record<string, unknown>;
+    (onClick["onClick"] as () => void)();
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const next = onChange.mock.calls[0]![0] as ColorizationToggleState;
+    expect(next.liftNeutrals).toBe(false);
+    expect(next.hueByLuma).toBe(true); // unchanged
+  });
+
   it("when disabled, container has opacity 0.5", () => {
     const el = ColorizationToggles(makeProps({ disabled: true }));
     const container = el as unknown as Record<string, unknown>;
