@@ -10,6 +10,7 @@ import { createAudit, withTraitContribution, withBandUsed, finalize } from './au
 import { acesGamutCompress } from './gamut';
 import { perceptualLuma } from '../perceptual/luma';
 import { srgbByteToOklab, oklabToSrgbByte } from '../perceptual/oklab';
+import { buildCdfMatchLut, lookupCdfMatch, type CdfMatchLut } from './cdfMatch';
 
 // ────────── constants ──────────
 
@@ -49,6 +50,16 @@ export interface SmashEngineOutput {
   readonly controls: SmashControls;
   readonly bandTransforms: readonly BandTransform[];
   readonly audit: SmashAudit;
+  /**
+   * Phase 3 — global CDF-match LUTs on the L and C dimensions of OkLCh. Built
+   * from the full source/target feature distributions (not per-band). These
+   * are the user's "compressor that forces target dimension distribution to
+   * mirror source's" mechanic; applyTransform uses them as the source of
+   * "smashed L" and "smashed C" instead of deriving from per-channel curves.
+   * Null when no features were provided (degenerate input).
+   */
+  readonly lumaCdf: CdfMatchLut | null;
+  readonly chromaCdf: CdfMatchLut | null;
 }
 
 // ────────── defaults ──────────
@@ -174,8 +185,33 @@ export function smash(
     });
   }
 
-  // Record trait contributions from controls. Phase 1 mirrors what the
-  // controls say; actual per-trait curve weighting is deferred to Phase 2.
+  // Phase 3 — build global CDF-match LUTs on the L and C OkLCh dimensions.
+  // applyTransform uses these as the canonical "smashed L" and "smashed C"
+  // values (replacing what was previously derived from per-channel curves).
+  // Per-channel curves still exist in bandTransforms above and are used by
+  // applyTransform to derive a "smashed hue" — that path is the next thing
+  // to migrate to a circular CDF match.
+  let lumaCdf: CdfMatchLut | null = null;
+  let chromaCdf: CdfMatchLut | null = null;
+  if (sourceFeatures.length > 0 && targetFeatures.length > 0) {
+    const srcLuma = new Float32Array(sourceFeatures.length);
+    const tgtLuma = new Float32Array(targetFeatures.length);
+    const srcChroma = new Float32Array(sourceFeatures.length);
+    const tgtChroma = new Float32Array(targetFeatures.length);
+    for (let i = 0; i < sourceFeatures.length; i++) {
+      srcLuma[i] = sourceFeatures[i].luma;
+      srcChroma[i] = sourceFeatures[i].chroma;
+    }
+    for (let i = 0; i < targetFeatures.length; i++) {
+      tgtLuma[i] = targetFeatures[i].luma;
+      tgtChroma[i] = targetFeatures[i].chroma;
+    }
+    lumaCdf = buildCdfMatchLut(srcLuma, tgtLuma);
+    chromaCdf = buildCdfMatchLut(srcChroma, tgtChroma);
+  }
+
+  // Record trait contributions from controls. The trait values can exceed 1
+  // (Phase 3 oversample), so the audit stores raw products without clamping.
   const traits = c.traits;
   const g = c.global;
   audit = withTraitContribution(audit, 'value',      traits.value      * g);
@@ -188,7 +224,7 @@ export function smash(
   const elapsed = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - start;
   audit = finalize(audit, elapsed);
 
-  return { profile, controls: c, bandTransforms, audit };
+  return { profile, controls: c, bandTransforms, audit, lumaCdf, chromaCdf };
 }
 
 /**
@@ -266,40 +302,44 @@ export function applyTransform(
   const smashG = Math.max(0, Math.min(255, Math.round(compressed[1] * 255)));
   const smashB = Math.max(0, Math.min(255, Math.round(compressed[2] * 255)));
 
-  // ───── Phase 2b — perceptual decomposition gated per trait ─────
+  // ───── Phase 3 — CDF histogram-match in perceptual space ─────
   //
-  // The per-band curve fit above produces a "fully smashed" RGB triple.
-  // To honor each trait amount independently, we convert both input and
-  // smashed pixels to OkLCh and gate the four perceptual deltas separately:
+  // For L and C dimensions: the global CDF-match LUTs built in smash() force
+  // the target's distribution on each spectrum to mirror the source's, adapted
+  // to whatever range the target actually occupies. That's the user's literal
+  // "compressor that takes the dark 50% of a high-key target and clamps it to
+  // 10% pure black, 15% dark gray, 25% medium yellow gray" — i.e. textbook
+  // CDF histogram match per dimension.
   //
-  //   traits.value      → ΔL  (perceptual lightness shift)
-  //   traits.hue        → Δh  (hue angle rotation, circular)
-  //   traits.chroma     → ΔC  (chroma magnitude shift, absolute)
-  //   traits.saturation → ΔS  (chroma/L ratio shift, applied after value+chroma
-  //                            so it adjusts vibrancy at the new lightness)
+  // For h (hue): we still use the per-channel-curves-derived smashed hue from
+  // the band fit above. Circular CDF match is the next dimension to migrate.
   //
-  // traits.neutral and traits.accent modulate the master gate (controls.global)
-  // per-pixel based on the INPUT's chroma:
+  // Each dimension's delta is then gated by its trait amount (which can exceed
+  // 1 for oversample / crank — the lerps extrapolate past the matched value).
+  //
+  // traits.neutral and traits.accent modulate the master gate per-pixel:
   //   neutralProtect = neutralness × traits.neutral  → pulls gate down on
   //                                                    near-neutral inputs
   //   accentBoost    = accentScore × traits.accent   → pushes gate up on
   //                                                    rare/vivid inputs
-  //
-  // At default trait amounts (value=1, hue=1, sat=1, chroma=1, neutral=0.5,
-  // accent=0), the Phase 1 output is recovered modulo the small adjustment
-  // from neutral protection on grays — same envelope as Phase 2a.
   const traits = controls.traits;
   const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
   const [Lin, aIn, bIn] = srgbByteToOklab(r, g, b);
-  const [Lsm, aSm, bSm] = srgbByteToOklab(smashR, smashG, smashB);
+  const [LsmBand, aSm, bSm] = srgbByteToOklab(smashR, smashG, smashB);
 
   const Cin = Math.sqrt(aIn * aIn + bIn * bIn);
-  const Csm = Math.sqrt(aSm * aSm + bSm * bSm);
+  const CsmBand = Math.sqrt(aSm * aSm + bSm * bSm);
   // Use the smashed hue when input chroma is near zero — atan2(0, 0) is
   // ambiguous and would propagate noise.
-  const hin = Cin > 1e-6 ? Math.atan2(bIn, aIn) : (Csm > 1e-6 ? Math.atan2(bSm, aSm) : 0);
-  const hsm = Csm > 1e-6 ? Math.atan2(bSm, aSm) : hin;
+  const hin = Cin > 1e-6 ? Math.atan2(bIn, aIn) : (CsmBand > 1e-6 ? Math.atan2(bSm, aSm) : 0);
+  const hsm = CsmBand > 1e-6 ? Math.atan2(bSm, aSm) : hin;
+
+  // Phase 3 — replace band-derived Lsm/Csm with proper CDF match when LUTs
+  // are available. Falls back to band-derived values for degenerate inputs
+  // (empty feature arrays at build time → null LUTs).
+  const Lsm = out.lumaCdf ? lookupCdfMatch(out.lumaCdf, Lin) : LsmBand;
+  const Csm = out.chromaCdf ? Math.max(0, lookupCdfMatch(out.chromaCdf, Cin)) : CsmBand;
 
   // Per-pixel modulation of the master gate. neutral and accent stay clamped
   // to [0,1] as protection / amplification *factors* — they're not gates.
