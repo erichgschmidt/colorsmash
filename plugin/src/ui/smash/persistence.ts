@@ -29,6 +29,13 @@ export interface SmashPersisted {
     neutral?: number;
     accent?: number;
   };
+  /** v1.21 Phase 4.5+ — cross-dimensional colorization toggle state. Partial
+   *  so older save files without it fall back to DEFAULT_COLORIZATION_TOGGLES
+   *  on read. */
+  colorization?: {
+    hueByLuma?: boolean;
+    // Future toggles slot in here as Phase 5+ ships them.
+  };
 }
 
 async function getDataFolder(): Promise<any | null> {

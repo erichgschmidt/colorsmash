@@ -11,6 +11,7 @@ import { acesGamutCompress } from './gamut';
 import { perceptualLuma } from '../perceptual/luma';
 import { srgbByteToOklab, oklabToSrgbByte } from '../perceptual/oklab';
 import { buildCdfMatchLut, lookupCdfMatch, type CdfMatchLut } from './cdfMatch';
+import { buildHueByLumaLut, lookupHueByLuma, type HueByLumaLut } from './hueByLuma';
 
 // ────────── constants ──────────
 
@@ -70,19 +71,42 @@ export interface SmashEngineOutput {
    * fall below the viability threshold or no features at all.
    */
   readonly hueCdf: CdfMatchLut | null;
+  /**
+   * Phase 4.5 — source-derived L → (avg a, avg b) lookup used by the
+   * colorization path. applyTransform engages it when (a) the target's
+   * median chroma is below the colorization threshold AND (b) the user's
+   * colorization.hueByLuma toggle is on. Otherwise unused.
+   */
+  readonly hueByLumaLut: HueByLumaLut | null;
+  /**
+   * Phase 4.5 — target's median chroma. Used as the auto-detect signal for
+   * "is this target effectively grayscale?" Below GRAYSCALE_TARGET_THRESHOLD
+   * (≈2× HUE_FILTER_CHROMA), the colorization path engages. Stored on
+   * SmashEngineOutput so applyTransform can branch without re-scanning the
+   * target features.
+   */
+  readonly targetMedianChroma: number;
 }
+
+/** Below this target median chroma, the colorization path is eligible.
+ *  Set to 2× HUE_FILTER_CHROMA so we activate slightly before the hue CDF
+ *  itself becomes unreliable (it filters at HUE_FILTER_CHROMA). */
+const GRAYSCALE_TARGET_THRESHOLD = 0.04;
 
 /** Chroma below this is too low to give a stable hue angle (atan2 noise
  *  amplifies). Used to filter the hue CDF inputs. */
 const HUE_FILTER_CHROMA = 0.02;
 
-/** Pre-computed CDF LUTs that smash() can accept to skip the build cost.
- *  Computed once per (source, target) pair; reused across slider drags
- *  that only change controls, not the underlying feature data. */
+/** Pre-computed CDF LUTs (plus Phase 4.5 colorization data) that smash() can
+ *  accept to skip the build cost. Computed once per (source, target) pair;
+ *  reused across slider drags that only change controls, not the underlying
+ *  feature data. */
 export interface SmashCdfs {
   readonly lumaCdf: CdfMatchLut | null;
   readonly chromaCdf: CdfMatchLut | null;
   readonly hueCdf: CdfMatchLut | null;
+  readonly hueByLumaLut: HueByLumaLut | null;
+  readonly targetMedianChroma: number;
 }
 
 /** Build the L/C/h CDF LUTs from a source/target feature pair. Pure work,
@@ -93,7 +117,10 @@ export function buildSmashCdfs(
   targetFeatures: PixelFeatures[],
 ): SmashCdfs {
   if (sourceFeatures.length === 0 || targetFeatures.length === 0) {
-    return { lumaCdf: null, chromaCdf: null, hueCdf: null };
+    return {
+      lumaCdf: null, chromaCdf: null, hueCdf: null,
+      hueByLumaLut: null, targetMedianChroma: 0,
+    };
   }
   const srcLuma = new Float32Array(sourceFeatures.length);
   const tgtLuma = new Float32Array(targetFeatures.length);
@@ -123,7 +150,18 @@ export function buildSmashCdfs(
   if (srcHueArr.length >= VIABILITY_THRESHOLD && tgtHueArr.length >= VIABILITY_THRESHOLD) {
     hueCdf = buildCdfMatchLut(Float32Array.from(srcHueArr), Float32Array.from(tgtHueArr));
   }
-  return { lumaCdf, chromaCdf, hueCdf };
+
+  // Phase 4.5 — colorization data. hueByLumaLut is the source-only L→(a,b)
+  // lookup. targetMedianChroma is the auto-detect signal for "target is
+  // grayscale-ish" (median is a more stable estimator than mean for chroma
+  // distributions which are typically right-skewed). Median computed via
+  // sort-and-pick at the half-rank; cheap on the already-allocated tgtChroma
+  // Float32Array.
+  const hueByLumaLut = buildHueByLumaLut(sourceFeatures);
+  const tgtChromaSorted = tgtChroma.slice().sort();
+  const targetMedianChroma = tgtChromaSorted[Math.floor(tgtChromaSorted.length / 2)] ?? 0;
+
+  return { lumaCdf, chromaCdf, hueCdf, hueByLumaLut, targetMedianChroma };
 }
 
 // ────────── defaults ──────────
@@ -148,6 +186,12 @@ export const DEFAULT_SMASH_CONTROLS: SmashControls = {
   bandSoftness: 0.15,
   bandCount: 3,
   bandAxis: 'value',
+  colorization: {
+    // Phase 4.5: enabled by default. Engine auto-detects grayscale-ish
+    // targets and activates the hueByLuma path; colorful targets continue
+    // to use per-dimension CDF unchanged.
+    hueByLuma: true,
+  },
 };
 
 // ────────── internal helpers ──────────
@@ -262,6 +306,8 @@ export function smash(
   const lumaCdf = cdfs.lumaCdf;
   const chromaCdf = cdfs.chromaCdf;
   const hueCdf = cdfs.hueCdf;
+  const hueByLumaLut = cdfs.hueByLumaLut;
+  const targetMedianChroma = cdfs.targetMedianChroma;
 
   // Record trait contributions from controls. The trait values can exceed 1
   // (Phase 3 oversample), so the audit stores raw products without clamping.
@@ -277,7 +323,11 @@ export function smash(
   const elapsed = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - start;
   audit = finalize(audit, elapsed);
 
-  return { profile, controls: c, bandTransforms, audit, lumaCdf, chromaCdf, hueCdf };
+  return {
+    profile, controls: c, bandTransforms, audit,
+    lumaCdf, chromaCdf, hueCdf,
+    hueByLumaLut, targetMedianChroma,
+  };
 }
 
 /**
@@ -389,15 +439,39 @@ export function applyTransform(
   const hin = Cin > 1e-6 ? Math.atan2(bIn, aIn) : (CsmBand > 1e-6 ? Math.atan2(bSm, aSm) : 0);
   const hsmBand = CsmBand > 1e-6 ? Math.atan2(bSm, aSm) : hin;
 
-  // Phase 3 — L and C come from CDF match.
+  // Phase 3 — L always comes from L CDF match (no colorization variant for
+  // the L dimension — target's L distribution always exists).
   const Lsm = out.lumaCdf ? lookupCdfMatch(out.lumaCdf, Lin) : LsmBand;
-  const Csm = out.chromaCdf ? Math.max(0, lookupCdfMatch(out.chromaCdf, Cin)) : CsmBand;
-  // Phase 4 — hue from CDF match when the LUT exists AND the input pixel has
-  // enough chroma to give a stable hue angle. Below the chroma filter, fall
-  // back to the band-derived hue so near-neutral inputs don't get skewed.
-  const hsm = (out.hueCdf && Cin >= HUE_FILTER_CHROMA)
-    ? lookupCdfMatch(out.hueCdf, hin)
-    : hsmBand;
+
+  // Phase 4 + 4.5 — C and h depend on the target's chroma profile:
+  //
+  //   Colorful target (median chroma ≥ GRAYSCALE_TARGET_THRESHOLD):
+  //     C, h from per-dimension CDF match (Phase 3/4 behavior).
+  //   Grayscale-ish target AND user has hueByLuma toggle ON:
+  //     C, h derived from source's L → (a,b) lookup at Lsm. The target's
+  //     own C/h distributions are too sparse to redistribute meaningfully,
+  //     so we INVENT color structure from source's color-by-L correlation.
+  //   Grayscale-ish target AND toggle is OFF:
+  //     Fall back to per-dimension CDF (which produces near-grayscale output).
+  const colorizationEligible =
+    out.hueByLumaLut !== null
+    && out.targetMedianChroma < GRAYSCALE_TARGET_THRESHOLD
+    && controls.colorization?.hueByLuma !== false;
+
+  let Csm: number;
+  let hsm: number;
+  if (colorizationEligible && out.hueByLumaLut) {
+    // Look up source's average (a, b) at the SMASHED L (after L CDF match)
+    // so the invented color matches the new lightness, not the input lightness.
+    const [aSrc, bSrc] = lookupHueByLuma(out.hueByLumaLut, Lsm);
+    Csm = Math.sqrt(aSrc * aSrc + bSrc * bSrc);
+    hsm = Csm > 1e-6 ? Math.atan2(bSrc, aSrc) : hin;
+  } else {
+    Csm = out.chromaCdf ? Math.max(0, lookupCdfMatch(out.chromaCdf, Cin)) : CsmBand;
+    hsm = (out.hueCdf && Cin >= HUE_FILTER_CHROMA)
+      ? lookupCdfMatch(out.hueCdf, hin)
+      : hsmBand;
+  }
 
   // Per-pixel modulation of the master gate. neutral and accent stay clamped
   // to [0,1] as protection / amplification *factors* — they're not gates.

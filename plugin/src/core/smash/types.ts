@@ -114,6 +114,21 @@ export interface TraitAmounts {
   readonly accent: number;
 }
 
+/** v1.21 Phase 4.5+ — cross-dimensional colorization toggles. Activate when
+ *  per-dimension CDF can't redistribute color the target lacks (grayscale
+ *  target case). Each toggle is one of the four mechanics in v1.1 addendum
+ *  Phase 5+. v0 ships only hueByLuma; future toggles slot in alongside. */
+export interface ColorizationOptions {
+  /** Phase 4.5 — Hue-by-L lookup. On: engine engages cross-dimensional
+   *  colorization (L → avg source (a,b) lookup) when target chroma is low.
+   *  Off: engine stays per-dimension CDF only. Default true. */
+  readonly hueByLuma?: boolean;
+  // Future toggles (Phase 5+) added here:
+  //   readonly stochasticPerL?: boolean;
+  //   readonly conditionalCdf?: boolean;
+  //   readonly slicedOt?: boolean;
+}
+
 export interface SmashControls {
   readonly global: number;
   readonly traits: TraitAmounts;
@@ -124,6 +139,9 @@ export interface SmashControls {
   readonly bandSoftness: number;
   readonly bandCount: 3 | 5 | 7;
   readonly bandAxis: BandAxis;
+  /** v1.21 Phase 4.5+ — colorization toggle state. Optional for backward
+   *  compatibility; engine treats undefined as `{ hueByLuma: true }`. */
+  readonly colorization?: ColorizationOptions;
 }
 
 /** Sentinel kinds in a persisted ColorSmash preset. */

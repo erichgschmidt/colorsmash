@@ -14,6 +14,11 @@ import {
 } from "./SmashControlsBar";
 import { SmashAuditPanel } from "./SmashAuditPanel";
 import { TraitSliders, DEFAULT_TRAIT_AMOUNTS } from "./TraitSliders";
+import {
+  ColorizationToggles,
+  DEFAULT_COLORIZATION_TOGGLES,
+  type ColorizationToggleState,
+} from "./ColorizationToggles";
 import type { TraitAmounts } from "../../core/smash/types";
 import {
   extractFeatures,
@@ -66,6 +71,8 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   const [amount, setAmount] = useState<number>(SMASH_PRESET_AMOUNTS.strong);
   const [traits, setTraits] = useState<TraitAmounts>(DEFAULT_TRAIT_AMOUNTS);
   const [traitsOpen, setTraitsOpen] = useState<boolean>(false);
+  const [colorization, setColorization] = useState<ColorizationToggleState>(DEFAULT_COLORIZATION_TOGGLES);
+  const [colorizationOpen, setColorizationOpen] = useState<boolean>(false);
   const [exportStatus, setExportStatus] = useState<string>("");
   const loadedRef = useRef<boolean>(false);
 
@@ -100,17 +107,26 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           accent:     clampGate(t.accent, 1)     ?? prev.accent,
         }));
       }
+      // v1.21 Phase 4.5 — restore colorization toggle state. Older save
+      // files without it fall back to DEFAULT_COLORIZATION_TOGGLES (hueByLuma: true).
+      if (persisted?.colorization && typeof persisted.colorization === "object") {
+        const cz = persisted.colorization;
+        setColorization((prev) => ({
+          ...prev,
+          ...(typeof cz.hueByLuma === "boolean" ? { hueByLuma: cz.hueByLuma } : {}),
+        }));
+      }
       loadedRef.current = true;
     })();
     return () => { cancelled = true; };
   }, []);
 
-  // Save amount + traits on change (debounced 500ms). Skip until initial
-  // load resolved.
+  // Save amount + traits + colorization on change (debounced 500ms). Skip
+  // until initial load resolved.
   useEffect(() => {
     if (!loadedRef.current) return;
-    saverRef.current?.({ amount, traits });
-  }, [amount, traits]);
+    saverRef.current?.({ amount, traits, colorization });
+  }, [amount, traits, colorization]);
 
   // ── Heavy: features + DNA + profile + CDF LUTs. Depends on SNAPS ONLY,
   // so slider drags don't re-run extractFeatures (~100K pixels per call)
@@ -137,7 +153,12 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       onEngineChange?.(null);
       return null;
     }
-    const controls = { ...DEFAULT_SMASH_CONTROLS, global: amount, traits };
+    const controls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      global: amount,
+      traits,
+      colorization,
+    };
     const engine = smash(
       snapDerived.sourceFeatures,
       snapDerived.targetFeatures,
@@ -148,7 +169,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     onEngineChange?.(engine);
     return { sourceDNA: snapDerived.sourceDNA, engine };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [snapDerived, amount, traits]);
+  }, [snapDerived, amount, traits, colorization]);
 
   const preset = detectPreset(amount);
   const onPresetChange = (next: SmashPreset) => setAmount(SMASH_PRESET_AMOUNTS[next]);
@@ -292,6 +313,28 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
         <TraitSliders
           amounts={traits}
           onAmountsChange={setTraits}
+          disabled={!hasSnaps}
+        />
+      )}
+
+      {/* Phase 4.5+ — colorization toggles. Auto-detect grayscale targets and
+          engage cross-dimensional inference when active toggles say so. The
+          engine ignores the toggles for colorful targets (per-dimension CDF
+          handles those correctly). Disclosure pattern matches TRAITS above. */}
+      <div
+        style={traitsHeaderStyle}
+        onClick={() => setColorizationOpen((o) => !o)}
+        title={colorizationOpen ? "Hide colorization toggles" : "Show colorization toggles (cross-dimensional mechanics for grayscale targets)"}
+      >
+        <span style={{ width: 10, display: "inline-block", textAlign: "center" }}>
+          {colorizationOpen ? "▾" : "▸"}
+        </span>
+        <span>COLORIZATION</span>
+      </div>
+      {colorizationOpen && (
+        <ColorizationToggles
+          state={colorization}
+          onChange={setColorization}
           disabled={!hasSnaps}
         />
       )}
