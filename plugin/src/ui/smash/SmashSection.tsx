@@ -21,6 +21,7 @@ import {
   extractTargetStructure,
   pairDNA,
   smash,
+  buildSmashCdfs,
   bakeSmashLut,
   serializeSmashCube,
   DEFAULT_SMASH_CONTROLS,
@@ -111,25 +112,43 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     saverRef.current?.({ amount, traits });
   }, [amount, traits]);
 
-  // Engine pipeline: recompute whenever snaps, amount, or traits change.
-  const pipeline = useMemo<EnginePipeline | null>(() => {
-    if (!sourceSnap || !targetSnap) {
-      onEngineChange?.(null);
-      return null;
-    }
-
+  // ── Heavy: features + DNA + profile + CDF LUTs. Depends on SNAPS ONLY,
+  // so slider drags don't re-run extractFeatures (~100K pixels per call)
+  // four times AND don't rebuild the L/C/h CDFs each tick. The CDFs alone
+  // were 200-400ms per slider tick before this; now they're computed ONCE
+  // per snap change and reused on every drag.
+  const snapDerived = useMemo(() => {
+    if (!sourceSnap || !targetSnap) return null;
     const sourceDNA = extractSourceDNA(sourceSnap.data, sourceSnap.width, sourceSnap.height);
     const targetStructure = extractTargetStructure(targetSnap.data, targetSnap.width, targetSnap.height);
     const profile = pairDNA(sourceDNA, targetStructure);
     const sourceFeatures = extractFeatures(sourceSnap.data, sourceSnap.width, sourceSnap.height, 4);
     const targetFeatures = extractFeatures(targetSnap.data, targetSnap.width, targetSnap.height, 4);
-    const controls = { ...DEFAULT_SMASH_CONTROLS, global: amount, traits };
-    const engine = smash(sourceFeatures, targetFeatures, profile, controls);
+    const cdfs = buildSmashCdfs(sourceFeatures, targetFeatures);
+    return { sourceDNA, targetStructure, profile, sourceFeatures, targetFeatures, cdfs };
+  }, [sourceSnap, targetSnap]);
 
+  // ── Lighter: smash() invocation. Per slider tick — uses cached features
+  // + profile + CDFs from above. The expensive build is now a no-op; smash()
+  // just records the audit and returns the engine output. Sub-millisecond
+  // per drag (vs. ~1s before this refactor).
+  const pipeline = useMemo<EnginePipeline | null>(() => {
+    if (!snapDerived) {
+      onEngineChange?.(null);
+      return null;
+    }
+    const controls = { ...DEFAULT_SMASH_CONTROLS, global: amount, traits };
+    const engine = smash(
+      snapDerived.sourceFeatures,
+      snapDerived.targetFeatures,
+      snapDerived.profile,
+      controls,
+      snapDerived.cdfs,
+    );
     onEngineChange?.(engine);
-    return { sourceDNA, engine };
+    return { sourceDNA: snapDerived.sourceDNA, engine };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceSnap, targetSnap, amount, traits]);
+  }, [snapDerived, amount, traits]);
 
   const preset = detectPreset(amount);
   const onPresetChange = (next: SmashPreset) => setAmount(SMASH_PRESET_AMOUNTS[next]);

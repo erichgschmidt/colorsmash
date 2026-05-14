@@ -76,6 +76,56 @@ export interface SmashEngineOutput {
  *  amplifies). Used to filter the hue CDF inputs. */
 const HUE_FILTER_CHROMA = 0.02;
 
+/** Pre-computed CDF LUTs that smash() can accept to skip the build cost.
+ *  Computed once per (source, target) pair; reused across slider drags
+ *  that only change controls, not the underlying feature data. */
+export interface SmashCdfs {
+  readonly lumaCdf: CdfMatchLut | null;
+  readonly chromaCdf: CdfMatchLut | null;
+  readonly hueCdf: CdfMatchLut | null;
+}
+
+/** Build the L/C/h CDF LUTs from a source/target feature pair. Pure work,
+ *  no controls, no audit — call once per snap change and cache the result.
+ *  smash() will use the cached CDFs if passed via the precomputedCdfs arg. */
+export function buildSmashCdfs(
+  sourceFeatures: PixelFeatures[],
+  targetFeatures: PixelFeatures[],
+): SmashCdfs {
+  if (sourceFeatures.length === 0 || targetFeatures.length === 0) {
+    return { lumaCdf: null, chromaCdf: null, hueCdf: null };
+  }
+  const srcLuma = new Float32Array(sourceFeatures.length);
+  const tgtLuma = new Float32Array(targetFeatures.length);
+  const srcChroma = new Float32Array(sourceFeatures.length);
+  const tgtChroma = new Float32Array(targetFeatures.length);
+  for (let i = 0; i < sourceFeatures.length; i++) {
+    srcLuma[i] = sourceFeatures[i].luma;
+    srcChroma[i] = sourceFeatures[i].chroma;
+  }
+  for (let i = 0; i < targetFeatures.length; i++) {
+    tgtLuma[i] = targetFeatures[i].luma;
+    tgtChroma[i] = targetFeatures[i].chroma;
+  }
+  const lumaCdf = buildCdfMatchLut(srcLuma, tgtLuma);
+  const chromaCdf = buildCdfMatchLut(srcChroma, tgtChroma);
+
+  // Hue: chroma-filter both sides, then build linear-on-[-π,π] CDF.
+  const srcHueArr: number[] = [];
+  const tgtHueArr: number[] = [];
+  for (const f of sourceFeatures) {
+    if (f.chroma >= HUE_FILTER_CHROMA) srcHueArr.push(f.hueAngle);
+  }
+  for (const f of targetFeatures) {
+    if (f.chroma >= HUE_FILTER_CHROMA) tgtHueArr.push(f.hueAngle);
+  }
+  let hueCdf: CdfMatchLut | null = null;
+  if (srcHueArr.length >= VIABILITY_THRESHOLD && tgtHueArr.length >= VIABILITY_THRESHOLD) {
+    hueCdf = buildCdfMatchLut(Float32Array.from(srcHueArr), Float32Array.from(tgtHueArr));
+  }
+  return { lumaCdf, chromaCdf, hueCdf };
+}
+
 // ────────── defaults ──────────
 
 /**
@@ -141,6 +191,11 @@ export function smash(
   targetFeatures: PixelFeatures[],
   profile: ImagePairProfile,
   controls?: SmashControls,
+  /** Optional pre-computed CDFs from buildSmashCdfs(). When provided, smash()
+   *  skips the per-call CDF rebuild — turns 200-400ms of work into ~5ms.
+   *  Callers that re-invoke smash() many times for the same source/target
+   *  (slider drags) should compute CDFs once and pass them on every call. */
+  precomputedCdfs?: SmashCdfs,
 ): SmashEngineOutput {
   const start = typeof performance !== 'undefined' ? performance.now() : Date.now();
   const c = controls ?? DEFAULT_SMASH_CONTROLS;
@@ -199,54 +254,14 @@ export function smash(
     });
   }
 
-  // Phase 3+4 — build global CDF-match LUTs on the L, C, and h dimensions
-  // of OkLCh. applyTransform uses these as the canonical "smashed L / C / h"
-  // values, fully replacing the per-channel-curves-derived hsm fallback that
-  // was used in Phase 2b.
-  //
-  // Hue uses the same linear cdfMatch operator as L and C, applied to values
-  // in [-π, π]. The circular shortest-arc lerp at apply time handles wrap
-  // cases; the only cost is potential mild distortion for distributions that
-  // span the full circle. Pixels with input chroma below HUE_FILTER_CHROMA
-  // are filtered out — atan2 on near-zero values produces noisy hue angles
-  // that would skew the histogram toward arbitrary values.
-  let lumaCdf: CdfMatchLut | null = null;
-  let chromaCdf: CdfMatchLut | null = null;
-  let hueCdf: CdfMatchLut | null = null;
-  if (sourceFeatures.length > 0 && targetFeatures.length > 0) {
-    const srcLuma = new Float32Array(sourceFeatures.length);
-    const tgtLuma = new Float32Array(targetFeatures.length);
-    const srcChroma = new Float32Array(sourceFeatures.length);
-    const tgtChroma = new Float32Array(targetFeatures.length);
-    for (let i = 0; i < sourceFeatures.length; i++) {
-      srcLuma[i] = sourceFeatures[i].luma;
-      srcChroma[i] = sourceFeatures[i].chroma;
-    }
-    for (let i = 0; i < targetFeatures.length; i++) {
-      tgtLuma[i] = targetFeatures[i].luma;
-      tgtChroma[i] = targetFeatures[i].chroma;
-    }
-    lumaCdf = buildCdfMatchLut(srcLuma, tgtLuma);
-    chromaCdf = buildCdfMatchLut(srcChroma, tgtChroma);
-
-    // Hue: filter both sides to chromatic-enough pixels first, then build
-    // the linear-on-[-π,π] CDF. If too few pixels survive the filter on
-    // either side, leave hueCdf null and applyTransform falls back to the
-    // per-band-curves-derived hue path.
-    const srcHueArr: number[] = [];
-    const tgtHueArr: number[] = [];
-    for (const f of sourceFeatures) {
-      if (f.chroma >= HUE_FILTER_CHROMA) srcHueArr.push(f.hueAngle);
-    }
-    for (const f of targetFeatures) {
-      if (f.chroma >= HUE_FILTER_CHROMA) tgtHueArr.push(f.hueAngle);
-    }
-    if (srcHueArr.length >= VIABILITY_THRESHOLD && tgtHueArr.length >= VIABILITY_THRESHOLD) {
-      const srcHue = Float32Array.from(srcHueArr);
-      const tgtHue = Float32Array.from(tgtHueArr);
-      hueCdf = buildCdfMatchLut(srcHue, tgtHue);
-    }
-  }
+  // Phase 3+4 — global CDF-match LUTs on L, C, h. Use the caller-provided
+  // precomputed set when available (slider-drag fast path: ~5ms instead of
+  // ~200-400ms per call). buildSmashCdfs is the canonical builder — call
+  // it once per snap change and cache the result.
+  const cdfs = precomputedCdfs ?? buildSmashCdfs(sourceFeatures, targetFeatures);
+  const lumaCdf = cdfs.lumaCdf;
+  const chromaCdf = cdfs.chromaCdf;
+  const hueCdf = cdfs.hueCdf;
 
   // Record trait contributions from controls. The trait values can exceed 1
   // (Phase 3 oversample), so the audit stores raw products without clamping.
