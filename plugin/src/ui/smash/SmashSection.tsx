@@ -264,15 +264,29 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           (Value, Hue, Saturation, Chroma, Neutral, Accent). Phase 2a:
           Value + Neutral differentially affect the output; the others are
           recorded in the audit but no-op in applyTransform until Phase 2b. */}
-      <div
-        style={traitsHeaderStyle}
-        onClick={() => setTraitsOpen((o) => !o)}
-        title={traitsOpen ? "Hide trait sliders" : "Show trait sliders"}
-      >
-        <span style={{ width: 10, display: "inline-block", textAlign: "center" }}>
-          {traitsOpen ? "▾" : "▸"}
-        </span>
-        <span>TRAITS</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        <div
+          style={{ ...traitsHeaderStyle, flex: 1 }}
+          onClick={() => setTraitsOpen((o) => !o)}
+          title={traitsOpen ? "Hide trait sliders" : "Show trait sliders"}
+        >
+          <span style={{ width: 10, display: "inline-block", textAlign: "center" }}>
+            {traitsOpen ? "▾" : "▸"}
+          </span>
+          <span>TRAITS</span>
+        </div>
+        {traitsOpen && (
+          <div
+            onClick={(e) => {
+              e.stopPropagation();
+              setTraits(DEFAULT_TRAIT_AMOUNTS);
+            }}
+            title="Reset all trait sliders to defaults (value/hue/sat/chroma = 100%, neutral = 50%, accent = 0%)."
+            style={resetButtonStyle}
+          >
+            ✕
+          </div>
+        )}
       </div>
       {traitsOpen && (
         <TraitSliders
@@ -338,6 +352,19 @@ const traitsHeaderStyle: React.CSSProperties = {
   fontSize: 9, fontWeight: 600, letterSpacing: 1, color: "#888",
   textTransform: "uppercase", marginTop: 2,
   cursor: "pointer", userSelect: "none",
+};
+
+// Coral ✕ reset, matching the shipped PaletteStrip reset glyph (#ff5050).
+// Same width/height as the action buttons on the right cluster so it lines
+// up visually with the rest of the panel's "destructive action" affordances.
+const resetButtonStyle: React.CSSProperties = {
+  display: "inline-flex", alignItems: "center", justifyContent: "center",
+  width: 17, height: 17,
+  background: "#ff5050", color: "#fff",
+  border: "1px solid #1a1a1a", borderRadius: 2,
+  fontSize: 10, fontWeight: 700, lineHeight: 1,
+  cursor: "pointer", userSelect: "none",
+  flexShrink: 0,
 };
 
 const placeholderStyle: React.CSSProperties = {
