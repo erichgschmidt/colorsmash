@@ -43,12 +43,13 @@ const TOGGLE_ROWS: ToggleRowDef[] = [
   {
     key: "hueByLuma",
     label: "Hue-by-L",
-    description: "Pulls color from source's L→(a,b) correlation when target is grayscale-ish.",
+    description: "Pulls hue from source's L→(a,b) correlation. Chroma magnitude from CDF stays the same.",
     tooltip:
-      "Hue-by-L (Phase 4.5): When target chroma is too low for the per-dimension CDF to " +
-      "assign color, the engine looks up the average source (a,b) for each luminance bucket " +
-      "and injects that hue. Activates automatically on grayscale or near-grayscale targets. " +
-      "Turn off to keep strictly per-dimension CDF colorization only.",
+      "Hue-by-L (Phase 4.5): The smashed hue is aimed at the source's average (a,b) " +
+      "direction for each luminance bucket, while chroma magnitude still comes from the " +
+      "per-dimension chroma CDF. Net effect: ON produces a source-driven color story by " +
+      "lightness; OFF preserves the target's own per-pixel hue (rank-mapped onto source's " +
+      "hue distribution). ON is always at least as colorful as OFF.",
   },
 ];
 

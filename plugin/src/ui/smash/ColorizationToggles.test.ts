@@ -185,11 +185,14 @@ describe("ColorizationToggles", () => {
     expect(style["opacity"]).toBe(1);
   });
 
-  it("hover tooltip (title attribute) exists and contains the word 'grayscale'", () => {
+  it("hover tooltip (title attribute) exists and describes the Hue-by-L mechanic", () => {
     const el = ColorizationToggles(makeProps());
     const withTitle = findElement(el, (_t, p) => {
-      return typeof p["title"] === "string" &&
-        (p["title"] as string).toLowerCase().includes("grayscale");
+      if (typeof p["title"] !== "string") return false;
+      const t = (p["title"] as string).toLowerCase();
+      // The tooltip should mention the toggle by name AND describe the
+      // direction/magnitude split so the user knows what ON vs OFF does.
+      return t.includes("hue-by-l") && t.includes("chroma");
     });
     expect(withTitle).toBeDefined();
   });

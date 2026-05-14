@@ -72,29 +72,21 @@ export interface SmashEngineOutput {
    */
   readonly hueCdf: CdfMatchLut | null;
   /**
-   * Phase 4.5 — source-derived L → (avg a, avg b) lookup used by the
-   * colorization path. applyTransform engages it when (a) the target's
-   * median chroma is below the colorization threshold AND (b) the user's
-   * colorization.hueByLuma toggle is on. Otherwise unused.
+   * Phase 4.5 — source-derived L → (avg a, avg b) lookup. applyTransform
+   * uses its DIRECTION (atan2 of avg a, avg b) as the smashed hue when the
+   * user's colorization.hueByLuma toggle is on (the default). Chroma still
+   * comes from the per-dim chroma CDF, so toggle ON is ALWAYS at least as
+   * colorful as toggle OFF.
    */
   readonly hueByLumaLut: HueByLumaLut | null;
   /**
-   * Phase 4.5 — target's median chroma. Used as the auto-detect signal for
-   * "is this target effectively grayscale?" Below GRAYSCALE_TARGET_THRESHOLD
-   * (≈2× HUE_FILTER_CHROMA), the colorization path engages. Stored on
-   * SmashEngineOutput so applyTransform can branch without re-scanning the
-   * target features.
+   * Phase 4.5 — target's median chroma. Recorded on the engine output for
+   * inspection / audit purposes; no longer used as an eligibility gate
+   * (the Hue-by-L path now activates whenever the toggle is on, regardless
+   * of how much chroma the target has).
    */
   readonly targetMedianChroma: number;
 }
-
-/** Below this target median chroma, the colorization path is eligible.
- *  Tuned at 0.015 (roughly 75% of HUE_FILTER_CHROMA) so we ONLY activate on
- *  effectively-monochrome targets. Earlier 0.04 was too eager — caught
- *  typical photos with low-saturation backgrounds and produced visibly
- *  different output from per-dimension CDF even when the target had real
- *  chroma to redistribute. */
-const GRAYSCALE_TARGET_THRESHOLD = 0.015;
 
 /** Chroma below this is too low to give a stable hue angle (atan2 noise
  *  amplifies). Used to filter the hue CDF inputs. */
@@ -446,31 +438,50 @@ export function applyTransform(
   // the L dimension — target's L distribution always exists).
   const Lsm = out.lumaCdf ? lookupCdfMatch(out.lumaCdf, Lin) : LsmBand;
 
-  // Phase 4 + 4.5 — C and h depend on the target's chroma profile:
+  // Phase 4 + 4.5 — chroma always comes from per-dim CDF (rank-maps target
+  // chroma onto source's distribution, which produces vivid output for vivid
+  // sources). The hue dimension splits:
   //
-  //   Colorful target (median chroma ≥ GRAYSCALE_TARGET_THRESHOLD):
-  //     C, h from per-dimension CDF match (Phase 3/4 behavior).
-  //   Grayscale-ish target AND user has hueByLuma toggle ON:
-  //     C, h derived from source's L → (a,b) lookup at Lsm. The target's
-  //     own C/h distributions are too sparse to redistribute meaningfully,
-  //     so we INVENT color structure from source's color-by-L correlation.
-  //   Grayscale-ish target AND toggle is OFF:
-  //     Fall back to per-dimension CDF (which produces near-grayscale output).
-  const colorizationEligible =
+  //   Toggle ON (hueByLuma === true | undefined, the default):
+  //     hue is the DIRECTION from the source's L → (a,b) lookup at Lsm.
+  //     This is the "color story by lightness" mechanic — pixels at the
+  //     same L get a consistent, predictable hue derived from the source.
+  //     Works on every image type, not just grayscale targets: the LUT
+  //     averages source's color over each L bucket regardless of how much
+  //     chroma the target had.
+  //   Toggle OFF:
+  //     hue is from the per-pixel hue CDF (Phase 4 default). This is
+  //     correct when the target itself has reliable hue structure to
+  //     redistribute; gets noisy on grayscale targets where atan2(small,
+  //     small) is unstable, but that's the user's explicit choice.
+  //
+  // Net effect: ON is ALWAYS at least as colorful as OFF, and gives a
+  // source-driven color story (instead of OFF's "preserve target's own
+  // hue layout, rank-mapped"). Earlier the path produced mean-chroma
+  // direction, which was strictly weaker than the rank-mapped chroma CDF
+  // for vivid sources — that's been replaced with "ON keeps the rank-
+  // mapped chroma magnitude, just re-aims hue at the source's L→(a,b)
+  // direction".
+  const hueByLumaActive =
     out.hueByLumaLut !== null
-    && out.targetMedianChroma < GRAYSCALE_TARGET_THRESHOLD
     && controls.colorization?.hueByLuma !== false;
 
-  let Csm: number;
+  const Csm = out.chromaCdf ? Math.max(0, lookupCdfMatch(out.chromaCdf, Cin)) : CsmBand;
   let hsm: number;
-  if (colorizationEligible && out.hueByLumaLut) {
-    // Look up source's average (a, b) at the SMASHED L (after L CDF match)
-    // so the invented color matches the new lightness, not the input lightness.
+  if (hueByLumaActive && out.hueByLumaLut) {
+    // Source's average (a, b) at the SMASHED L — we only need its DIRECTION,
+    // the chroma magnitude comes from the chroma CDF above.
     const [aSrc, bSrc] = lookupHueByLuma(out.hueByLumaLut, Lsm);
-    Csm = Math.sqrt(aSrc * aSrc + bSrc * bSrc);
-    hsm = Csm > 1e-6 ? Math.atan2(bSrc, aSrc) : hin;
+    const srcMag = Math.sqrt(aSrc * aSrc + bSrc * bSrc);
+    if (srcMag > 1e-6) {
+      hsm = Math.atan2(bSrc, aSrc);
+    } else {
+      // Degenerate bucket — fall back to per-pixel hue CDF.
+      hsm = (out.hueCdf && Cin >= HUE_FILTER_CHROMA)
+        ? lookupCdfMatch(out.hueCdf, hin)
+        : hsmBand;
+    }
   } else {
-    Csm = out.chromaCdf ? Math.max(0, lookupCdfMatch(out.chromaCdf, Cin)) : CsmBand;
     hsm = (out.hueCdf && Cin >= HUE_FILTER_CHROMA)
       ? lookupCdfMatch(out.hueCdf, hin)
       : hsmBand;
