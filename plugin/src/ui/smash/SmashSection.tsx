@@ -134,13 +134,59 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   const preset = detectPreset(amount);
   const onPresetChange = (next: SmashPreset) => setAmount(SMASH_PRESET_AMOUNTS[next]);
 
+  // Track Smash LUT layer ids we've created. Default Apply replaces the most
+  // recent one in place; "+" fork mode creates a new one and auto-hides the
+  // prior. Stored in a ref (not state) because we want it to persist across
+  // re-renders without triggering them.
+  const smashLayerIdsRef = useRef<number[]>([]);
+
   const onApply = async () => {
     if (!pipeline) return;
     setExportStatus("applying…");
     try {
-      const result = await applySmashLut(pipeline.engine);
+      // Default Apply: replace the most-recently-created Smash LUT in place.
+      const replaceId = smashLayerIdsRef.current.length > 0
+        ? smashLayerIdsRef.current[smashLayerIdsRef.current.length - 1]
+        : null;
+      const result = await applySmashLut(pipeline.engine, { replaceLayerId: replaceId });
       if (result.ok) {
-        setExportStatus(`applied: ${result.layerName ?? "Smash LUT"}`);
+        // Track the layer id (whether it's the same as before for replace
+        // path, or a fresh one when the prior was deleted).
+        if (typeof result.layerId === "number") {
+          // Replace the most-recent entry rather than appending — there's
+          // still only one active Smash LUT layer in the doc.
+          const next = smashLayerIdsRef.current.slice();
+          if (next.length > 0) next[next.length - 1] = result.layerId;
+          else next.push(result.layerId);
+          smashLayerIdsRef.current = next;
+        }
+        const verb = result.replacedInPlace ? "replaced" : "applied";
+        setExportStatus(`${verb}: ${result.layerName ?? "Smash LUT"}`);
+      } else {
+        setExportStatus(`apply error: ${result.error ?? "unknown"}`);
+      }
+    } catch (err: any) {
+      setExportStatus(`apply error: ${err?.message ?? err}`);
+    }
+  };
+
+  // "+" fork mode — create a fresh Smash LUT alongside the prior one, and
+  // hide the prior so the doc isn't cluttered with concurrent overlays. The
+  // user can toggle the prior's visibility in PS's Layers panel to A/B.
+  const onApplyFork = async () => {
+    if (!pipeline) return;
+    setExportStatus("forking…");
+    try {
+      const priorIds = smashLayerIdsRef.current.slice();
+      const result = await applySmashLut(pipeline.engine, {
+        replaceLayerId: null,         // force create-new path
+        hidePriorIds: priorIds,        // auto-hide previous Smash variations
+      });
+      if (result.ok) {
+        if (typeof result.layerId === "number") {
+          smashLayerIdsRef.current = [...priorIds, result.layerId];
+        }
+        setExportStatus(`forked: ${result.layerName ?? "Smash LUT"} (${smashLayerIdsRef.current.length} total)`);
       } else {
         setExportStatus(`apply error: ${result.error ?? "unknown"}`);
       }
@@ -232,9 +278,16 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           <div
             style={pipeline ? primaryButtonStyle : primaryButtonDisabledStyle}
             onClick={onApply}
-            title="Install the current Smash transform as a Color Lookup adjustment layer above the active layer."
+            title="Apply the Smash transform — replaces the most recent Smash LUT layer in place. Use [+] to fork a new layer alongside."
           >
             Apply
+          </div>
+          <div
+            style={pipeline ? plusButtonStyle : plusButtonDisabledStyle}
+            onClick={onApplyFork}
+            title="Fork a new Smash LUT layer alongside the previous one — auto-hides prior Smash layers so the new one shows alone. Use to compare variations."
+          >
+            +
           </div>
           <div
             style={pipeline ? actionButtonStyle : actionButtonDisabledStyle}
@@ -295,6 +348,18 @@ const primaryButtonStyle: React.CSSProperties = {
 
 const primaryButtonDisabledStyle: React.CSSProperties = {
   ...primaryButtonStyle,
+  opacity: 0.4, cursor: "default",
+};
+
+const plusButtonStyle: React.CSSProperties = {
+  background: "#3a3a3a", color: "#6ab7ff", border: "1px solid #1a1a1a",
+  borderRadius: 3, padding: "5px 0", fontFamily: "inherit", fontSize: 14,
+  fontWeight: 700, cursor: "pointer", userSelect: "none", display: "inline-flex",
+  alignItems: "center", justifyContent: "center", width: 28, lineHeight: 1,
+};
+
+const plusButtonDisabledStyle: React.CSSProperties = {
+  ...plusButtonStyle,
   opacity: 0.4, cursor: "default",
 };
 
