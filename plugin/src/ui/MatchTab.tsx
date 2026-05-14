@@ -83,6 +83,11 @@ export function MatchTab() {
   // restores that tab's settings; toggling Multi or Blend If only affects
   // the currently-active tab. Persistence saves all three.
   type TabConfig = { multi: boolean; blendIf: boolean };
+  // v1.20.70 — tabConfig per-mode {multi, blendIf} state retained for
+  // persistence backward-compat (old saved configs still load + save
+  // through unchanged), but no longer drives anything in the UI.
+  // Multi UI is retired; the record always reads as effectively
+  // {multi: false, blendIf: false} since there's no toggle to flip.
   const [tabConfig, setTabConfig] = useState<Record<"rgb" | "lab" | "lut", TabConfig>>({
     rgb: { multi: false, blendIf: false },
     lab: { multi: false, blendIf: false },
@@ -203,9 +208,12 @@ export function MatchTab() {
   // persisted settings or a restored XMP/recipe still carries
   // multi:true. Underlying logic stays in applyMatch / applyLut for
   // recipe-compat; just unreachable from the UI now.
-  const multiZone = false; // was: tabConfig[outputMode].multi
-  const multiZoneLimit: "mask" | "blendIf" | "both" =
-    tabConfig[outputMode].blendIf ? "blendIf" : "mask";
+  // v1.20.70 — both forced to single-mode defaults. applyMatch /
+  // applyLut ignore the multi branch when multiZone is false; the
+  // multiZoneLimit type is still required by the interface but only
+  // matters in the dead branch, so "mask" is a fine no-op.
+  const multiZone = false;
+  const multiZoneLimit: "mask" | "blendIf" | "both" = "mask";
   const setMultiZone = (v: boolean) =>
     setTabConfig(prev => ({ ...prev, [outputMode]: { ...prev[outputMode], multi: v } }));
   const setMultiZoneLimit = (v: "mask" | "blendIf" | "both") =>
@@ -3310,24 +3318,17 @@ export function MatchTab() {
             ["lab", "Lab", "Lab — perceptual histogram match, projected to per-channel Curves layer. Click to switch mode AND Apply."],
             ["lut", "LUT", "LUT — 33³ Color Lookup adjustment with preset blend math baked in. Click to switch mode AND Apply."],
           ] as Array<["rgb" | "lab" | "lut", string, string]>).map(([val, label, tip], idx) => {
+            // v1.20.70 — multi/blend metadata removed (UI retired). Tab
+            // styling is just active vs inactive now; the old "dormant"
+            // warm tint that signalled "this mode has multi/blend
+            // configured" is no longer applicable since neither toggle
+            // exists.
             const active = outputMode === val;
-            const cfg = tabConfig[val];
-            const subDisabled = !cfg.multi;
             const isFirst = idx === 0;
-            const subState = (on: boolean) => {
-              if (!on) return { bg: "transparent", fg: "#777", bd: "#3a3a3a" };
-              if (active) return { bg: "#2f2f2f", fg: "#cccccc", bd: ACCENT };
-              return { bg: "#242220", fg: "#aaa", bd: "#7a6a4a" };
-            };
-            const multiS = subState(cfg.multi);
-            const blendS = subState(cfg.blendIf && cfg.multi);
-            const tabUsed = cfg.multi || cfg.blendIf;
             const tabS = active
               ? { bg: "#3a3a3a", fg: "#dddddd", bd: ACCENT }
-              : tabUsed
-                ? { bg: "#242220", fg: "#aaa", bd: "#7a6a4a" }
-                : { bg: "transparent", fg: "#888", bd: "#444" };
-            return { val, label, tip, active, cfg, subDisabled, isFirst, multiS, blendS, tabS };
+              : { bg: "transparent", fg: "#888", bd: "#444" };
+            return { val, label, tip, active, isFirst, tabS };
           });
           return (
         // v1.20.70 — shared 2-column outer layout: col-1 (74px) stacks
