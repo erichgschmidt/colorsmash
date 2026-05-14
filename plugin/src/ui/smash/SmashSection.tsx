@@ -149,10 +149,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   // just records the audit and returns the engine output. Sub-millisecond
   // per drag (vs. ~1s before this refactor).
   const pipeline = useMemo<EnginePipeline | null>(() => {
-    if (!snapDerived) {
-      onEngineChange?.(null);
-      return null;
-    }
+    if (!snapDerived) return null;
     const controls = {
       ...DEFAULT_SMASH_CONTROLS,
       global: amount,
@@ -166,10 +163,25 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       controls,
       snapDerived.cdfs,
     );
-    onEngineChange?.(engine);
     return { sourceDNA: snapDerived.sourceDNA, engine };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapDerived, amount, traits, colorization]);
+
+  // Propagate engine changes to the parent via useEffect, NOT inside the
+  // useMemo body above. Calling setState on the parent during a child's
+  // render is an anti-pattern: React 18 either drops the update or defers
+  // it, and on subsequent renders the memo returns its cached value
+  // without re-firing the side effect — so a colorization toggle that
+  // changed the memo never reached `smashEngine` upstream. Symptom: the
+  // preview hung on the previous toggle state until a refresh changed the
+  // snap ref and forced an unrelated re-render. This effect runs after
+  // commit and fires every time the pipeline reference changes.
+  useEffect(() => {
+    onEngineChange?.(pipeline?.engine ?? null);
+    // onEngineChange is intentionally excluded — it's a stable setState
+    // ref from useState in the parent and would be a closure-cycle hazard
+    // if treated as a dep.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pipeline]);
 
   const preset = detectPreset(amount);
   const onPresetChange = (next: SmashPreset) => setAmount(SMASH_PRESET_AMOUNTS[next]);
