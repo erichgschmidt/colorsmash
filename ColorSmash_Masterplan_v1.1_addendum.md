@@ -206,3 +206,103 @@ Design principles from `_06` that informed v1 §4.2 carry forward: P3 (one big k
 ---
 
 *This addendum is the working record of the v2 UI architecture decision. When the implementation in §8 is complete and `ProShell.tsx` and `SmashTab.tsx` are deleted, this addendum can be folded back into a revised §4 of the main masterplan.*
+
+
+---
+
+## Addendum entry — Phase 5+: Cross-dimensional colorization (the grayscale-target problem)
+
+The Phase 3-4 engine matches L / C / h distributions **independently** per dimension. That works beautifully when source and target both have meaningful color content. It breaks down when the target has near-zero structure on a dimension — most notably: **applying a colorful source to a grayscale target**.
+
+The fundamental issue: per-dimension 1D CDF match can only redistribute existing structure. Grayscale targets have no hue/chroma structure to redistribute. The chroma CDF expands target's near-zero range into something resembling source's, but it doesn't INVENT structure where there was none. Output stays mostly grayscale with faint tinting.
+
+The fix requires **cross-dimensional / conditional matching**: "given the target pixel's L, what should its (a, b) be?" This pulls color from the source's L→(a, b) correlation rather than from the target's (nonexistent) color distribution.
+
+### Four approaches, ranked by sophistication
+
+Each can ship as a **toggle** so users can mix mechanics for different creative outcomes. Multiple toggles produce blended behavior (sum-then-renormalize the contributions).
+
+**Toggle 1 — Hue-by-L lookup (Phase 5a, ~2 hours)**
+For each L value in source, compute the average (a, b). Build a 1D LUT `L → (a, b)`. At apply time, target pixel's L (after CDF match) → lookup → output (a, b). Preserves the shape of source's color-by-L correlation but loses noise. Cheap. The minimal viable colorization mechanic.
+
+**Toggle 2 — Stochastic per-L-band sampling (Phase 5b, ~4 hours)**
+Same idea but instead of averaging, sample a source pixel uniformly at random from the same L band. Use a deterministic hash of `(target_x, target_y)` as the seed so the result is reproducible across runs. Preserves noise — different target pixels at the same L get different colors. May need a small spatial smoothing pass to avoid checkerboard artifacts. Captures the "saturation variations, grays, and noise" the user wanted preserved.
+
+**Toggle 3 — Conditional CDF: P(color | L) (Phase 5c, ~8 hours)**
+Bucket source pixels by L. For each L bucket, build a 2D CDF over (a, b). At apply, look up target's L → select bucket → sample from the bucket's color CDF using target's existing (tiny) chroma as the percentile. Preserves L-conditional color distribution properly. More principled than Toggle 1; preserves cross-color structure within a band that Toggle 1's averaging loses.
+
+**Toggle 4 — Sliced Optimal Transport (Phase 6, ~3 days)**
+Pitié 2007. The principled joint-distribution match: random 1D projections, iterate. Captures all cross-dimension correlation including L↔C↔h↔spatial. Works on grayscale → colorful naturally. Heaviest implementation (~5× slower than per-dimension match) but the proper long-term answer. Already in `Masterplan_v1.md` §S5 / `Research_06.md` §S5.
+
+**Skipped: Patch-based / spatial style transfer**
+Different product (style transfer territory). Out of scope for Smash.
+
+### Toggle UX
+
+Each approach lives behind a checkbox or chip in an "Advanced — Colorization" disclosure under the trait sliders. Suggested default state:
+
+- Toggle 1 (Hue-by-L) — ON by default. Cheap; gives sensible grayscale-target behavior out of the box.
+- Toggle 2 (Stochastic) — OFF. User enables for "more painterly" / noise-preserved results.
+- Toggle 3 (Conditional CDF) — OFF. Power user knob; can replace Toggle 1 for principled results.
+- Toggle 4 (Sliced OT) — OFF. Heavy; opt-in for "more cinematic" / "more film-like" results.
+
+Multiple toggles ON: contributions blend. The simple stacking math is `output = weighted average of each enabled approach's output`, with weights from a "blend balance" tertiary slider (or just default equal weights for v0).
+
+### When the colorization path activates
+
+The engine inspects target's median chroma at smash-build time. If above `HUE_FILTER_CHROMA` × 2 (≈0.04), per-dimension CDF is the canonical path (Phase 3-4 — current behavior). If below, the colorization toggles take over for the hue + chroma dimensions; L still uses CDF match independently.
+
+This means colorful targets get the Phase 3-4 behavior unchanged. Grayscale / low-chroma targets opt into the colorization pipeline automatically. The user can override via a "Colorization: Auto / Always / Off" tri-state.
+
+### Where this slots in the roadmap
+
+Sits after Phase 4 (currently shipping) and parallel to the Phase 5 anchor-preshaping discussed in the next entry. Both are user-vision items captured during Phase 3-4 testing. Recommended order:
+
+- **Phase 4.5** — Toggle 1 (Hue-by-L) ships first as the minimal viable cross-dimensional path. Unblocks any grayscale-target use case.
+- **Phase 5** — Toggle 2 (Stochastic) adds noise preservation, which the user specifically mentioned wanting.
+- **Phase 5.5** — Toggle 3 (Conditional CDF) for more principled results.
+- **Phase 6** — Toggle 4 (Sliced OT) for the proper long-term joint-distribution match.
+
+Each phase is shippable independently. Each toggle is a separate engine module that the user can enable/disable without breaking the others.
+
+---
+
+## Addendum entry — Phase 5 alt: Target-side anchor pre-shaping
+
+The user articulated a separate-but-composable idea during Phase 3-4 testing: a **target-side pre-conditioner that runs BEFORE the source-driven CDF match**.
+
+Today the pipeline is:
+```
+target pixels → target CDF → match to source CDF → output
+```
+
+Proposed pipeline:
+```
+target pixels → user-shaped CDF (via anchor curves per dimension) → match to source CDF → output
+```
+
+Per dimension (value, hue, saturation, chroma), the user gets interactive anchor points on a histogram. Dragging an anchor stretches/compresses the local distribution. The reshaped target becomes the new input to the source-CDF remap. End result: "I want my target to behave like a 50% high-key image before Smash kicks in" — then Smash takes that shaped distribution and forces it into the source's proportions.
+
+This is the natural form of the "Range Fields" concept in `Masterplan_v1.md` §4 — but operating on histogram **distribution** rather than spatial **selection**. Same idea: "let the user pre-define where things should land before the engine processes." Where Range Fields say "this region in the image gets the transform," Anchor Curves say "this region of the histogram becomes that region before the transform."
+
+### Implementation cost
+
+Math is small — a 1D LUT pre-stage that composes with the existing CDF match as another lookup. UI is substantial:
+- Histogram visualization per dimension (canvas-rendered, live, bin-sensitive)
+- Interactive anchor placement (click-add, drag-move, right-click-delete)
+- Curve interpolation between anchors (Catmull-Rom or monotone cubic)
+- One editor per dimension (value, hue with circular topology, saturation, chroma)
+- Toggle per dimension (most users use defaults; pre-shape is power user)
+- Storage in the preset format
+
+Total: ~1–2 days for a useful v0. Belongs after Phase 5 colorization (above), since the colorization toggles solve the more pressing problem first.
+
+### Composes naturally with everything else
+
+- Per-dimension CDF match still runs. Pre-shape is just a 1D LUT applied first.
+- Colorization toggles still run on dimensions where target has structure (post-preshape).
+- Trait sliders still gate per-dimension output.
+- Oversample / crank still extrapolates.
+- Apply / Export bake the pre-shape into the output LUT alongside everything else.
+
+Whichever combination the user composes, the output is a single 33³ LUT.
