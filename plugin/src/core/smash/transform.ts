@@ -60,7 +60,21 @@ export interface SmashEngineOutput {
    */
   readonly lumaCdf: CdfMatchLut | null;
   readonly chromaCdf: CdfMatchLut | null;
+  /**
+   * Phase 4 — hue CDF match in the [-π, π] linear range. Pixels with chroma
+   * below HUE_FILTER_CHROMA are excluded from both source and target arrays
+   * (their hue angle is unstable and would skew the histogram). Linear CDF
+   * match here works because the apply-side circular shortest-arc lerp
+   * already handles wrap cases; the only cost is potential mild distortion
+   * for distributions that span the full circle. Null when filtered samples
+   * fall below the viability threshold or no features at all.
+   */
+  readonly hueCdf: CdfMatchLut | null;
 }
+
+/** Chroma below this is too low to give a stable hue angle (atan2 noise
+ *  amplifies). Used to filter the hue CDF inputs. */
+const HUE_FILTER_CHROMA = 0.02;
 
 // ────────── defaults ──────────
 
@@ -185,14 +199,20 @@ export function smash(
     });
   }
 
-  // Phase 3 — build global CDF-match LUTs on the L and C OkLCh dimensions.
-  // applyTransform uses these as the canonical "smashed L" and "smashed C"
-  // values (replacing what was previously derived from per-channel curves).
-  // Per-channel curves still exist in bandTransforms above and are used by
-  // applyTransform to derive a "smashed hue" — that path is the next thing
-  // to migrate to a circular CDF match.
+  // Phase 3+4 — build global CDF-match LUTs on the L, C, and h dimensions
+  // of OkLCh. applyTransform uses these as the canonical "smashed L / C / h"
+  // values, fully replacing the per-channel-curves-derived hsm fallback that
+  // was used in Phase 2b.
+  //
+  // Hue uses the same linear cdfMatch operator as L and C, applied to values
+  // in [-π, π]. The circular shortest-arc lerp at apply time handles wrap
+  // cases; the only cost is potential mild distortion for distributions that
+  // span the full circle. Pixels with input chroma below HUE_FILTER_CHROMA
+  // are filtered out — atan2 on near-zero values produces noisy hue angles
+  // that would skew the histogram toward arbitrary values.
   let lumaCdf: CdfMatchLut | null = null;
   let chromaCdf: CdfMatchLut | null = null;
+  let hueCdf: CdfMatchLut | null = null;
   if (sourceFeatures.length > 0 && targetFeatures.length > 0) {
     const srcLuma = new Float32Array(sourceFeatures.length);
     const tgtLuma = new Float32Array(targetFeatures.length);
@@ -208,6 +228,24 @@ export function smash(
     }
     lumaCdf = buildCdfMatchLut(srcLuma, tgtLuma);
     chromaCdf = buildCdfMatchLut(srcChroma, tgtChroma);
+
+    // Hue: filter both sides to chromatic-enough pixels first, then build
+    // the linear-on-[-π,π] CDF. If too few pixels survive the filter on
+    // either side, leave hueCdf null and applyTransform falls back to the
+    // per-band-curves-derived hue path.
+    const srcHueArr: number[] = [];
+    const tgtHueArr: number[] = [];
+    for (const f of sourceFeatures) {
+      if (f.chroma >= HUE_FILTER_CHROMA) srcHueArr.push(f.hueAngle);
+    }
+    for (const f of targetFeatures) {
+      if (f.chroma >= HUE_FILTER_CHROMA) tgtHueArr.push(f.hueAngle);
+    }
+    if (srcHueArr.length >= VIABILITY_THRESHOLD && tgtHueArr.length >= VIABILITY_THRESHOLD) {
+      const srcHue = Float32Array.from(srcHueArr);
+      const tgtHue = Float32Array.from(tgtHueArr);
+      hueCdf = buildCdfMatchLut(srcHue, tgtHue);
+    }
   }
 
   // Record trait contributions from controls. The trait values can exceed 1
@@ -224,7 +262,7 @@ export function smash(
   const elapsed = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - start;
   audit = finalize(audit, elapsed);
 
-  return { profile, controls: c, bandTransforms, audit, lumaCdf, chromaCdf };
+  return { profile, controls: c, bandTransforms, audit, lumaCdf, chromaCdf, hueCdf };
 }
 
 /**
@@ -302,20 +340,21 @@ export function applyTransform(
   const smashG = Math.max(0, Math.min(255, Math.round(compressed[1] * 255)));
   const smashB = Math.max(0, Math.min(255, Math.round(compressed[2] * 255)));
 
-  // ───── Phase 3 — CDF histogram-match in perceptual space ─────
+  // ───── Phase 3 + Phase 4 — CDF histogram-match in perceptual space ─────
   //
-  // For L and C dimensions: the global CDF-match LUTs built in smash() force
+  // For L, C, and h dimensions: global CDF-match LUTs built in smash() force
   // the target's distribution on each spectrum to mirror the source's, adapted
   // to whatever range the target actually occupies. That's the user's literal
   // "compressor that takes the dark 50% of a high-key target and clamps it to
-  // 10% pure black, 15% dark gray, 25% medium yellow gray" — i.e. textbook
-  // CDF histogram match per dimension.
+  // 10% pure black, 15% dark gray, 25% medium yellow gray" — textbook CDF
+  // histogram match per dimension.
   //
-  // For h (hue): we still use the per-channel-curves-derived smashed hue from
-  // the band fit above. Circular CDF match is the next dimension to migrate.
+  // Hue uses linear CDF match in [-π, π]. The circular shortest-arc lerp at
+  // gate-application time below handles wrap cases naturally; the only cost
+  // is potential mild distortion for distributions that span the full circle.
   //
-  // Each dimension's delta is then gated by its trait amount (which can exceed
-  // 1 for oversample / crank — the lerps extrapolate past the matched value).
+  // Each dimension's delta is gated by its trait amount (which can exceed 1
+  // for oversample / crank — the lerps extrapolate past the matched value).
   //
   // traits.neutral and traits.accent modulate the master gate per-pixel:
   //   neutralProtect = neutralness × traits.neutral  → pulls gate down on
@@ -330,16 +369,20 @@ export function applyTransform(
 
   const Cin = Math.sqrt(aIn * aIn + bIn * bIn);
   const CsmBand = Math.sqrt(aSm * aSm + bSm * bSm);
-  // Use the smashed hue when input chroma is near zero — atan2(0, 0) is
-  // ambiguous and would propagate noise.
+  // Use the band-derived smashed hue when input chroma is near zero — atan2
+  // on (0, 0) is ambiguous and would propagate noise.
   const hin = Cin > 1e-6 ? Math.atan2(bIn, aIn) : (CsmBand > 1e-6 ? Math.atan2(bSm, aSm) : 0);
-  const hsm = CsmBand > 1e-6 ? Math.atan2(bSm, aSm) : hin;
+  const hsmBand = CsmBand > 1e-6 ? Math.atan2(bSm, aSm) : hin;
 
-  // Phase 3 — replace band-derived Lsm/Csm with proper CDF match when LUTs
-  // are available. Falls back to band-derived values for degenerate inputs
-  // (empty feature arrays at build time → null LUTs).
+  // Phase 3 — L and C come from CDF match.
   const Lsm = out.lumaCdf ? lookupCdfMatch(out.lumaCdf, Lin) : LsmBand;
   const Csm = out.chromaCdf ? Math.max(0, lookupCdfMatch(out.chromaCdf, Cin)) : CsmBand;
+  // Phase 4 — hue from CDF match when the LUT exists AND the input pixel has
+  // enough chroma to give a stable hue angle. Below the chroma filter, fall
+  // back to the band-derived hue so near-neutral inputs don't get skewed.
+  const hsm = (out.hueCdf && Cin >= HUE_FILTER_CHROMA)
+    ? lookupCdfMatch(out.hueCdf, hin)
+    : hsmBand;
 
   // Per-pixel modulation of the master gate. neutral and accent stay clamped
   // to [0,1] as protection / amplification *factors* — they're not gates.
