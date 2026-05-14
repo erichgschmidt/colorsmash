@@ -54,14 +54,12 @@ describe("buildHistoryLabel", () => {
     expect(l).toMatch(/5 swatches/);
   });
 
-  it("appends Multi when multiZone is true", () => {
-    const l = buildHistoryLabel(mkState({ multiZone: true }));
-    expect(l).toMatch(/Multi/);
-  });
+  // v1.20.70 — "appends Multi when multiZone is true" removed; multi-
+  // zone output retired, label no longer carries a " · Multi" suffix.
 
   it("stays under 40 chars", () => {
     const l = buildHistoryLabel(
-      mkState({ preset: "verylongpresetnamethatshouldgettruncated", multiZone: true }),
+      mkState({ preset: "verylongpresetnamethatshouldgettruncated" }),
     );
     expect(l.length).toBeLessThanOrEqual(40);
   });

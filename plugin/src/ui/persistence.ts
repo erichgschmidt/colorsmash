@@ -33,10 +33,7 @@ export interface PersistedSettings {
   // re-inject on every reload. Bump the value (1 → 2) if/when the pack
   // ships new starters and you want them to land in old installs.
   starterPackVersion?: number;
-  // v1.20.69 — Multi/Blend disclosure state. Collapsed by default since
-  // these are secondary toggles; persisted so a power user who uses Multi
-  // a lot doesn't have to re-expand every session.
-  multiExpanded?: boolean;
+  // v1.20.70 — multiExpanded dropped alongside the Multi/Blend UI retirement.
   // v1.20.69 — Settings drawer prefs.
   // groupColor: PS color tag applied to the [Color Smash] group in the
   //   Layers panel. PS's fixed set; "none" disables tagging.
@@ -58,23 +55,14 @@ export interface PersistedSettings {
   openSection?: "basic" | "dims" | "zones" | "envelope" | null;
   // Match algorithm
   matchMode?: "full" | "mean" | "median" | "percentile";
-  // Multi-zone output (beta). v1.20.51 introduced per-output-mode config
-  // (each of rgb/lab/lut remembers its own multi + blendIf). The legacy
-  // single-state fields are kept for backward-compat reads — load-time
-  // migration in MatchTab fans the old single value into all three slots.
-  multiZone?: boolean;          // legacy (pre-v1.20.51)
-  multiZoneLimit?: "mask" | "blendIf" | "both"; // legacy
-  // v1.20.64 — per-tab record. Saves the full Record<rgb|lab|lut, {multi, blendIf}>
-  // so flipping output modes between sessions preserves each tab's intent.
-  tabConfig?: {
-    rgb?: { multi?: boolean; blendIf?: boolean };
-    lab?: { multi?: boolean; blendIf?: boolean };
-    lut?: { multi?: boolean; blendIf?: boolean };
-  };
-  adaptiveBands?: boolean;
-  // Zone targeting
+  // v1.20.70 — multi-zone schema (multiZone, multiZoneLimit, tabConfig,
+  // adaptiveBands) removed. Multi UI was never shipped publicly, so
+  // there are no users / saved files affected by dropping the
+  // backward-compat schema fields. Persistence load silently ignores
+  // any of these keys that appear in an old saved file.
+  // Zone targeting — Zones UI retired in v1.8; field stays so any
+  // pre-v1.8 saved zones still load and pass through to apply.
   zones?: any;
-  lockZoneTotal?: boolean;
   // Dimensions
   dimensions?: any;
   // Envelope

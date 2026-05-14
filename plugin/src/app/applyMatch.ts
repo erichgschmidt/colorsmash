@@ -15,9 +15,7 @@ import {
   ChannelCurves, DimensionOpts, DEFAULT_DIMENSIONS, ZoneOpts, DEFAULT_ZONES,
   EnvelopePoint, DEFAULT_ENVELOPE,
   fitByMode, MatchMode, Preset, transformCurvesForPreset,
-  fitMultiZoneByMode, processMultiZoneFit,
 } from "../core/histogramMatch";
-import { clampBandRange, readCompositeForBands, buildLumaBandMasks } from "./multiZoneCommon";
 import { writeLutLayerState } from "./lutXmp";
 
 const STATS_MAX_EDGE = 512;
@@ -62,10 +60,6 @@ export interface ApplyMatchParams {
   zones?: ZoneOpts;
   envelope?: EnvelopePoint[];
   matchMode?: MatchMode;       // full / mean / median / percentile (default full)
-  multiZone?: boolean;         // emit 3 stacked Curves layers w/ band limiting instead of one
-  multiZoneLimit?: "mask" | "blendIf" | "both"; // how to limit each band layer (default mask)
-  multiZonePeaks?: { shadow: number; mid: number; highlight: number }; // band peak luma positions
-  multiZoneExtents?: { min: number; max: number }; // outer histogram bounds for the bands
   sourcePixelsOverride?: Uint8Array; // if set, use these RGBA pixels instead of reading source layer
   sourceLabel?: string; // optional name shown in result message
   colorSpace?: "rgb" | "lab";
@@ -206,11 +200,8 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     const dim = applyDimensions(processed, dimOpts);
     const curves: ChannelCurves = applyZoneAndEnvelopeToChannels(dim, params.zones ?? DEFAULT_ZONES, params.envelope ?? DEFAULT_ENVELOPE);
 
-    // Multi-zone path needs its own per-band fit (the global `raw` above is for single-curve).
-    // We refit because the band weights are luma-conditional; single-curve fitter doesn't bin by luma.
-    const multiZoneFit = params.multiZone
-      ? processMultiZoneFit(fitMultiZoneByMode(params.matchMode ?? "full", srcPixels, downsampleToMaxEdge(t, STATS_MAX_EDGE).data, params.multiZonePeaks, params.multiZoneExtents), curveOpts, dimOpts)
-      : null;
+    // v1.20.70 — multi-zone branch retired. Single-curve path below is
+    // the only output now.
 
     // Reuse existing [Color Smash] group. Prior Match Curves layers are either deleted
     // (overwritePrior=true, default) or just hidden (overwritePrior=false).
@@ -280,10 +271,22 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     // ORPHANS those children up to the parent rather than deleting them, leaving 3 stale
     // siblings beside the new sub-group on the next run. Walking the tree first means we
     // delete (or hide) every band layer individually, then the now-empty sub-group.
+    // v1.20.70 — also match the inner `Multi-${RESULT_LAYER_NAME}`
+    // bandContainer (e.g. "Multi-Match RGB"). Without this, the
+    // recursion skipped over it and PS-orphaned its 3 band-layer
+    // descendants up to the [Color Smash] group on the next single-mode
+    // bake — leaving "Multi-Match RGB" + 3 band layers as zombies
+    // alongside the new single Curves layer.
+    const MULTI_PREFIX = `Multi-${RESULT_LAYER_NAME}`;
     const collectMatches = (parent: any, out: any[]) => {
       for (const child of parent.layers ?? []) {
         const name = child.name;
-        const matches = typeof name === "string" && (name === RESULT_LAYER_NAME || name.startsWith(RESULT_LAYER_NAME));
+        const matches = typeof name === "string" && (
+          name === RESULT_LAYER_NAME ||
+          name.startsWith(RESULT_LAYER_NAME) ||
+          name === MULTI_PREFIX ||
+          name.startsWith(MULTI_PREFIX)
+        );
         if (matches) {
           // Recurse first so descendants get deleted before their group container
           if (child.layers) collectMatches(child, out);
@@ -364,428 +367,6 @@ export async function applyMatch(params: ApplyMatchParams): Promise<string> {
     // as a mask on the new adjustment layer or the sub-group.
     if (scSelSnapshot) await deselectAll();
 
-    // ─── Multi-zone branch: emit 3 stacked Curves layers + luminosity masks ──────
-    if (multiZoneFit) {
-      // Use imaging.putLayerMask (the proper API for writing layer masks; imaging.putPixels
-      // targets pixel layers, not adjustment-layer masks). Compute the three triangular
-      // band-weight masks in JS from the document composite, then write each as a layer
-      // mask. If putLayerMask fails for any band, we fall back to a Blend If batchPlay
-      // descriptor on that layer. If BOTH approaches fail, we report it in the return tag
-      // so the user knows the result wasn't band-limited (and the Layers panel will show
-      // 3 unrestricted Curves layers — visible enough that the user can fix manually).
-
-      const { imaging } = require("photoshop");
-
-      // Read full-res document composite for mask computation (4-component when
-      // available so transparent pixels zero across all bands instead of polluting
-      // the highlight mask with white-luma border reads).
-      const { composite, dispose: disposeComposite } = await readCompositeForBands(doc.id);
-      const compW = composite.width, compH = composite.height;
-
-      // Band peak luma positions + outer extents. Adaptive (from target histogram) when
-      // caller passes them, fixed at 0/128/255 + 0/255 otherwise.
-      const peaks = params.multiZonePeaks ?? { shadow: 0, mid: 128, highlight: 255 };
-      const extents = params.multiZoneExtents ?? { min: 0, max: 255 };
-      const { sP, mP, hP, eMin, eMax } = clampBandRange(peaks, extents);
-
-      // Triangular band-weight masks (one byte per pixel = weight × 255). See
-      // buildLumaBandMasks for the per-pixel ramp math.
-      const { shadow: shadowMask, mid: midMask, highlight: highlightMask } =
-        buildLumaBandMasks(composite, { sP, mP, hP, eMin, eMax });
-      disposeComposite();
-
-      // Blend If fallback ranges — outer slider positions match the histogram extents
-      // (eMin / eMax) instead of always 0 / 255, so the slider visualization is honest.
-      const bands: Array<{
-        key: "shadow" | "mid" | "highlight"; suffix: string; mask: Uint8Array;
-        destBlackMin: number; destBlackMax: number; destWhiteMin: number; destWhiteMax: number;
-      }> = [
-        // Sliders mirror the partition-of-unity triangular weights (peaks at sP/mP/hP):
-        //   Shadow:    fade in eMin→sP, full sP, fade out sP→mP, off mP+
-        //   Mid:       off below sP, fade in sP→mP, full mP, fade out mP→hP, off hP+
-        //   Highlight: off below mP, fade in mP→hP, full hP, fade out hP→eMax, off eMax+
-        { key: "shadow",    suffix: "Shadows",    mask: shadowMask,    destBlackMin: eMin, destBlackMax: sP,  destWhiteMin: sP,  destWhiteMax: mP  },
-        { key: "mid",       suffix: "Mids",       mask: midMask,       destBlackMin: sP,   destBlackMax: mP,  destWhiteMin: mP,  destWhiteMax: hP  },
-        { key: "highlight", suffix: "Highlights", mask: highlightMask, destBlackMin: mP,   destBlackMax: hP,  destWhiteMin: hP,  destWhiteMax: eMax },
-      ];
-
-      const failures: string[] = [];
-      const limitMode = params.multiZoneLimit ?? "mask"; // 'mask' | 'blendIf' | 'both'
-
-      // ALWAYS wrap the three band Curves layers in a sub-group in multi-zone mode.
-      // This unifies the output format regardless of whether a target-palette mask is
-      // attached, so re-applying with overwrite cleanly replaces the prior sub-group
-      // (matched by RESULT_LAYER_NAME prefix in matchChildren cleanup above) instead of
-      // leaving orphaned band layers next to the new sub-group. When non-neutral target
-      // weights are active, the palette mask is attached to this sub-group below.
-      const tp = params.targetPalette;
-      const selectionMode = params.selectionMode ?? "off";
-      const useTargetMask = !!(tp && tp.weights.some(w => Math.abs(w - 1) > 0.01) && !targetIsMerged);
-      // Selection alone also justifies the sub-group + group mask (parity with
-      // the LUT path's wantSelectionMask gate).
-      const useSelectionMask = selectionMode !== "off" && !targetIsMerged;
-      const wantSubGroupMask = useTargetMask || useSelectionMask;
-      // v1.20.35 — two-level nesting:
-      //   outerGroup   (selection mask, spatial scope)
-      //   └── bandContainer (palette-ratio mask)
-      //       ├── band layer [Shadows] (luma band mask)
-      //       ├── band layer [Mids]    (luma band mask)
-      //       └── band layer [Highlights] (luma band mask)
-      let outerGroup: any = group;
-      let bandContainer: any = group;
-      try {
-        await action.batchPlay([{ _obj: "selectNoLayers", _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }] }], {});
-      } catch { /* not critical */ }
-      const subName = overwrite ? RESULT_LAYER_NAME : `${RESULT_LAYER_NAME} ${new Date().toTimeString().slice(0, 8)}`;
-      try {
-        outerGroup = await doc.createLayerGroup({ name: subName });
-        await outerGroup.move(group, "placeInside");
-        bandContainer = await doc.createLayerGroup({ name: `Multi-${RESULT_LAYER_NAME}` });
-        await bandContainer.move(outerGroup, "placeInside");
-      } catch { bandContainer = group; outerGroup = group; /* fallback to flat layout if group creation fails */ }
-      const useTargetSubGroup = wantSubGroupMask && bandContainer !== group;
-
-      for (const band of bands) {
-        const baseName = `${RESULT_LAYER_NAME} [${band.suffix}]`;
-        // Inside a sub-group, individual layer names don't need timestamps even
-        // when not overwriting (the sub-group itself is the unique unit).
-        const layerName = (overwrite || useTargetSubGroup) ? baseName
-          : `${baseName} ${new Date().toTimeString().slice(0, 8)}`;
-        const c = multiZoneFit[band.key];
-        const layer = await makeCurvesLayer(layerName, [
-          { channel: "red",   points: sampleControlPoints(c.r, CONTROL_POINTS) },
-          { channel: "green", points: sampleControlPoints(c.g, CONTROL_POINTS) },
-          { channel: "blue",  points: sampleControlPoints(c.b, CONTROL_POINTS) },
-        ]);
-        // No clipping mask in multi-zone — the per-band luminosity mask (or Blend If) is
-        // the spatial limiter. User can manually clip if they want layer-specific restriction.
-        // Apply the preset's blend mode (Hue/Color/Saturation/Luminosity/Normal) — same
-        // logic the single-curve branch uses, so preset choice is honored across all paths.
-        if (presetBlend) { try { layer.blendMode = presetBlend; } catch { /* ignore */ } }
-        // Move into the container BEFORE Blend If attempts — recent testing shows the
-        // layer.move call after a successful blendRange set may revert the destWhiteMax
-        // field back to default. Doing the move first means subsequent Blend If is the
-        // final state. bandContainer is either the [Color Smash] group directly, or a
-        // sub-group when target-palette masking is active.
-        try { await layer.move(bandContainer, "placeInside"); } catch { /* ignore */ }
-
-        // Try the user-preferred limiting method(s). 'mask' uses putLayerMask only (clean
-        // single approach). 'blendIf' uses batchPlay-set descriptor only. 'both' applies
-        // BOTH for maximum reliability — the layer ends up double-limited (mask × blendIf)
-        // which is fine because both encode the same triangular weights, so the product
-        // is just a slightly squarer version of the same band.
-        let maskOk = false, blendIfOk = false;
-        const wantMask = limitMode === "mask" || limitMode === "both";
-        const wantBlendIf = limitMode === "blendIf" || limitMode === "both";
-
-        let maskErr: any = null;
-        if (wantMask) {
-          try {
-            const maskImageData = await imaging.createImageDataFromBuffer(band.mask, {
-              width: compW, height: compH, components: 1, chunky: true, colorProfile: "Gray Gamma 2.2", colorSpace: "Grayscale",
-            });
-            await imaging.putLayerMask({
-              documentID: doc.id,
-              layerID: layer.id,
-              imageData: maskImageData,
-              targetBounds: { left: 0, top: 0, right: compW, bottom: compH },
-              replace: true,
-            });
-            if (maskImageData.dispose) maskImageData.dispose();
-            maskOk = true;
-          } catch (e: any) { maskErr = e; }
-        }
-
-        let blendIfErr: any = null;
-        if (wantBlendIf || (limitMode === "mask" && !maskOk)) {
-          // Try multiple Blend If descriptor formats, verifying each by reading back the
-          // layer's blendRange property. The set call doesn't throw on bad descriptors —
-          // it accepts and silently ignores. Without readback, we can't know it worked.
-          // Per UXP-forum example, the channel descriptor needs `_ref: "channel"` AND
-          // a `desaturate` field is included in working examples. This is a more faithful
-          // mirror of the Action Manager descriptor than my previous attempts.
-          // KEY FIX: Photoshop's Action Manager descriptor uses `desaturate` (not
-          // `destWhiteMax`) for the white-side split's RIGHT position. So setting
-          // `desaturate: 255` always pinned the white max to 255 regardless of what we
-          // tried to set in destWhiteMax. The fix is to set `desaturate: band.destWhiteMax`
-          // and drop the destWhiteMax field entirely (it's silently ignored anyway).
-          const grayEntry = {
-            _obj: "blendRange",
-            channel: { _ref: "channel", _enum: "channel", _value: "gray" },
-            srcBlackMin: 0, srcBlackMax: 0, srcWhiteMin: 255, srcWhiteMax: 255,
-            destBlackMin: band.destBlackMin, destBlackMax: band.destBlackMax,
-            destWhiteMin: band.destWhiteMin,
-            desaturate: band.destWhiteMax, // ← actual white-side max field
-          };
-          const buildBlendRange = () => [grayEntry];
-          // All-channels variant — gray + R/G/B each as defaults (no band limiting on the
-          // per-channel sliders, since we only care about composite luma for multi-zone).
-          const buildAllChannelsBlendRange = () => [
-            grayEntry,
-            { _obj: "blendRange", channel: { _ref: "channel", _enum: "channel", _value: "red" },
-              srcBlackMin: 0, srcBlackMax: 0, srcWhiteMin: 255, srcWhiteMax: 255,
-              destBlackMin: 0, destBlackMax: 0, destWhiteMin: 255, desaturate: 255 },
-            { _obj: "blendRange", channel: { _ref: "channel", _enum: "channel", _value: "green" },
-              srcBlackMin: 0, srcBlackMax: 0, srcWhiteMin: 255, srcWhiteMax: 255,
-              destBlackMin: 0, destBlackMax: 0, destWhiteMin: 255, desaturate: 255 },
-            { _obj: "blendRange", channel: { _ref: "channel", _enum: "channel", _value: "blue" },
-              srcBlackMin: 0, srcBlackMax: 0, srcWhiteMin: 255, srcWhiteMax: 255,
-              destBlackMin: 0, destBlackMax: 0, destWhiteMin: 255, desaturate: 255 },
-          ];
-
-          // Variants to try in order. Each performs a `set`, then reads back the layer's
-          // blendRange to verify all four dest values actually stuck.
-          const variants: Array<{ name: string; cmds: () => any[] }> = [
-            // 1. Minimal: bare layer wrapper with blendRange only. No _isCommand, no
-            //    knockout/blendInteriorElements/layerMaskAsGlobalMask fluff that might
-            //    be triggering PS's "partial update" behavior.
-            { name: "minimal by-id",
-              cmds: () => [{
-                _obj: "set",
-                _target: [{ _ref: "layer", _id: layer.id }],
-                to: { _obj: "layer", blendRange: buildBlendRange() },
-              }],
-            },
-            // 2. Same minimal shape but via select+targetEnum.
-            { name: "minimal select+targetEnum",
-              cmds: () => [
-                { _obj: "select", _target: [{ _ref: "layer", _id: layer.id }], makeVisible: false },
-                { _obj: "set",
-                  _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }],
-                  to: { _obj: "layer", blendRange: buildBlendRange() },
-                },
-              ],
-            },
-            // 3. With wrapping fields (the previous default — kept as fallback).
-            { name: "with wrapping fields",
-              cmds: () => [{
-                _obj: "set",
-                _target: [{ _ref: "layer", _id: layer.id }],
-                to: {
-                  _obj: "layer",
-                  blendInteriorElements: false,
-                  knockout: { _enum: "knockout", _value: "none" },
-                  layerMaskAsGlobalMask: false,
-                  blendRange: buildBlendRange(),
-                },
-                _isCommand: true,
-              } as any],
-            },
-            // 4. blendingOptions wrapper (audit suggestion).
-            { name: "blendingOptions wrapper",
-              cmds: () => [{
-                _obj: "set",
-                _target: [{ _ref: "layer", _id: layer.id }],
-                to: { _obj: "layer", blendingOptions: { _obj: "blendingOptions", blendRange: buildBlendRange() } },
-              }],
-            },
-            // 5. All four channels (gray + R + G + B). PS may require the full descriptor.
-            { name: "all-channels by-id",
-              cmds: () => [{
-                _obj: "set",
-                _target: [{ _ref: "layer", _id: layer.id }],
-                to: { _obj: "layer", blendRange: buildAllChannelsBlendRange() },
-              }],
-            },
-          ];
-
-          for (const variant of variants) {
-            try {
-              await action.batchPlay(variant.cmds(), {});
-
-              // Readback verification — get blendRange and compare.
-              const readResult = await action.batchPlay([{
-                _obj: "get",
-                _target: [
-                  { _ref: "property", _property: "blendRange" },
-                  { _ref: "layer", _id: layer.id },
-                ],
-              }], { synchronousExecution: false });
-              const allRanges = readResult?.[0]?.blendRange ?? [];
-              // Find the gray channel entry (or fall back to first entry).
-              const got = allRanges.find((e: any) => e?.channel?._value === "gray") ?? allRanges[0];
-              // Note: white-side max is stored as `desaturate` in the descriptor — that's
-              // what we set, that's what we read back. PS's `destWhiteMax` field is unused.
-              const gotWhiteMax = got?.desaturate ?? got?.destWhiteMax;
-              if (got &&
-                  got.destBlackMin === band.destBlackMin && got.destBlackMax === band.destBlackMax &&
-                  got.destWhiteMin === band.destWhiteMin && gotWhiteMax === band.destWhiteMax) {
-                blendIfOk = true;
-                break;
-              }
-              blendIfErr = new Error(`'${variant.name}' wanted dest=${band.destBlackMin}/${band.destBlackMax}/${band.destWhiteMin}/${band.destWhiteMax} got ${got?.destBlackMin}/${got?.destBlackMax}/${got?.destWhiteMin}/${gotWhiteMax} (${allRanges.length} entries)`);
-            } catch (e: any) {
-              blendIfErr = new Error(`Variant '${variant.name}' threw: ${e?.message ?? e}`);
-            }
-          }
-        }
-
-        if (!maskOk && !blendIfOk) {
-          const reasons: string[] = [];
-          if (maskErr) reasons.push(`mask: ${maskErr?.message ?? maskErr}`);
-          if (blendIfErr) reasons.push(`blendIf: ${blendIfErr?.message ?? blendIfErr}`);
-          failures.push(`${band.suffix} (${reasons.join("; ")})`);
-        }
-        // Move into the band container AFTER mask/blend if attempts so layer descriptor
-        // readback isn't confused by group nesting (per audit suggestion #1). When target
-        // palette is active, bandContainer is the sub-group; otherwise it's the parent
-        // [Color Smash] group directly.
-        try { await layer.move(bandContainer, "placeInside"); } catch { /* ignore */ }
-      }
-
-      // Attach target-palette mask to the sub-group when active. Same Lab cluster
-      // assignment + Lorentzian soft-blend as the single-curve target mask path
-      // (parity with applyChannelCurvesToRgbaWeighted's preview math). Putting
-      // the mask on the GROUP rather than per-band-layer is what the user wants:
-      // each band keeps its luma limiter, the group mask attenuates the whole
-      // multi-zone composite by per-cluster color weight.
-      if (useTargetSubGroup && bandContainer !== group && tFullForMask && tFullForMask.data) {
-        // v1.20.35 — split masks: palette → bandContainer (inner),
-        // selection → outerGroup (outer). `tm` aliases tFullForMask.
-        const tm = tFullForMask;
-        try {
-          const pxCount = tm.width * tm.height;
-          let tpMask: Uint8Array | null = null;
-          if (useTargetMask && tp) {
-          const k = tp.swatches.length;
-          const softness = Math.max(0, Math.min(100, tp.softness ?? 0));
-          const useSoft = softness > 0;
-          const sigma2 = (softness / 100) * (softness / 100) * 5000;
-          const wFloat = new Float32Array(k);
-          const wByte = new Uint8Array(k);
-          for (let i = 0; i < k; i++) {
-            const w = Math.max(0, Math.min(1, tp.weights[i]));
-            wFloat[i] = w;
-            wByte[i] = Math.round(w * 255);
-          }
-          const cents = new Float32Array(k * 3);
-          for (let i = 0; i < k; i++) {
-            cents[i * 3] = tp.swatches[i].labL;
-            cents[i * 3 + 1] = tp.swatches[i].labA;
-            cents[i * 3 + 2] = tp.swatches[i].labB;
-          }
-          tpMask = new Uint8Array(pxCount);
-          const srgbToLinear = (c: number) => {
-            const x = c / 255;
-            return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
-          };
-          const f = (t0: number) => t0 > 0.008856 ? Math.cbrt(t0) : (7.787 * t0 + 16 / 116);
-          const distBuf = new Float32Array(k);
-          for (let i = 0; i < pxCount; i++) {
-            const o = i * 4;
-            if (tm.data[o + 3] < 128) { tpMask[i] = 0; continue; }
-            const R = srgbToLinear(tm.data[o]);
-            const G = srgbToLinear(tm.data[o + 1]);
-            const B = srgbToLinear(tm.data[o + 2]);
-            const X = R * 0.4124564 + G * 0.3575761 + B * 0.1804375;
-            const Y = R * 0.2126729 + G * 0.7151522 + B * 0.0721750;
-            const Z = R * 0.0193339 + G * 0.1191920 + B * 0.9503041;
-            const fx = f(X / 0.95047), fy = f(Y), fz = f(Z / 1.08883);
-            const L = 116 * fy - 16, a = 500 * (fx - fy), b2 = 200 * (fy - fz);
-            if (!useSoft) {
-              let best = 0, bestDist = Infinity;
-              for (let c = 0; c < k; c++) {
-                const dl = L - cents[c * 3];
-                const da = a - cents[c * 3 + 1];
-                const db = b2 - cents[c * 3 + 2];
-                const d = dl * dl + da * da + db * db;
-                if (d < bestDist) { bestDist = d; best = c; }
-              }
-              tpMask[i] = wByte[best];
-            } else {
-              let minD = Infinity;
-              for (let c = 0; c < k; c++) {
-                const dl = L - cents[c * 3];
-                const da = a - cents[c * 3 + 1];
-                const db = b2 - cents[c * 3 + 2];
-                const d = dl * dl + da * da + db * db;
-                distBuf[c] = d;
-                if (d < minD) minD = d;
-              }
-              const invS2 = 1 / sigma2;
-              let sumG = 0, sumWG = 0;
-              for (let c = 0; c < k; c++) {
-                const g = 1 / (1 + (distBuf[c] - minD) * invS2);
-                sumG += g;
-                sumWG += g * wFloat[c];
-              }
-              const wf = sumG > 0 ? sumWG / sumG : 1;
-              tpMask[i] = Math.max(0, Math.min(255, Math.round(wf * 255)));
-            }
-          }
-          }
-          // Build the selection-only mask separately (for the outer group).
-          let selOnlyMask: Uint8Array | null = null;
-          if (useSelectionMask && eagerSelBytesHolder.value) {
-            const sel = resampleSelectionToMaskSize(eagerSelBytesHolder.value, pxCount);
-            selOnlyMask = composeWithSelection(fullMask(pxCount), sel, selectionMode);
-          }
-          // Attach palette mask to the inner bandContainer.
-          if (tpMask) {
-            const tpMaskImageData = await imaging.createImageDataFromBuffer(tpMask, {
-              width: tm.width, height: tm.height, components: 1, chunky: true,
-              colorProfile: "Gray Gamma 2.2", colorSpace: "Grayscale",
-            });
-            await imaging.putLayerMask({
-              documentID: doc.id,
-              layerID: bandContainer.id,
-              imageData: tpMaskImageData,
-              targetBounds: tm.bounds,
-              replace: true,
-            });
-            if (tpMaskImageData.dispose) tpMaskImageData.dispose();
-          }
-          // Attach selection mask to the outer group.
-          if (selOnlyMask && outerGroup?.id != null) {
-            const selImageData = await imaging.createImageDataFromBuffer(selOnlyMask, {
-              width: tm.width, height: tm.height, components: 1, chunky: true,
-              colorProfile: "Gray Gamma 2.2", colorSpace: "Grayscale",
-            });
-            await imaging.putLayerMask({
-              documentID: doc.id,
-              layerID: outerGroup.id,
-              imageData: selImageData,
-              targetBounds: tm.bounds,
-              replace: true,
-            });
-            if (selImageData.dispose) selImageData.dispose();
-          }
-        } catch (e: any) {
-          // v1.20.65 — was silent. Log to console so the dev tools at
-          // least show what went wrong; status-line surfacing is a
-          // bigger UX change deferred to a follow-up.
-          try { console.warn("[Color Smash] Multi-zone group mask attach failed:", e?.message ?? e); } catch { /* ignore */ }
-        }
-      }
-
-      const adaptive = (eMin > 0 || eMax < 255 || sP > 0 || hP < 255);
-      const tags = [`multi-zone (${bands.length} layers, ${adaptive ? "adaptive" : "fixed"} ${eMin}-${sP}-${mP}-${hP}-${eMax})`];
-      if (params.amount && params.amount < 1) tags.push(`amt ${Math.round(params.amount * 100)}%`);
-      if (params.chromaOnly) tags.push("hue-only");
-      if (params.sourceLabel) tags.unshift(`src "${params.sourceLabel}"`);
-      // v1.20.40 — XMP for RESTORE/AUTO. Write to outer group + inner
-      // bandContainer + the three band layers so clicking ANY of them
-      // restores the panel state.
-      if (params.xmpState) {
-        if (outerGroup?.id != null && outerGroup !== group) {
-          try { await writeLutLayerState(outerGroup.id, params.xmpState); } catch { /* non-fatal */ }
-        }
-        if (bandContainer?.id != null && bandContainer !== group) {
-          try { await writeLutLayerState(bandContainer.id, params.xmpState); } catch { /* non-fatal */ }
-        }
-      }
-      // v1.20.27 — multi-zone returns here; restore the snapshot selection
-      // and clean up the temp alpha channel before exiting the modal block.
-      if (scSelSnapshot) {
-        await restoreSelectionFromChannel(scSelSnapshot);
-        await deleteChannel(scSelSnapshot);
-      }
-      if (failures.length > 0) {
-        // Surface the failure to the user instead of silently returning success.
-        return `Matched (PARTIAL) · ${tags.join(" · ")} · ⚠ ${failures.length}/${bands.length} band(s) lack mask: ${failures.join("; ")}`;
-      }
-      return `Matched · ${tags.join(" · ")}`;
-    }
 
     // ─── Single-curve branch (default) ──────────────────────────────────────────
     // If keeping prior layers, give the new one a unique numbered suffix so they coexist.

@@ -6,6 +6,11 @@
 plugin-test.zip
 ColorSmash-*.zip
 
+# Windows-created shortcuts / OS metadata
+*.lnk
+Thumbs.db
+.DS_Store
+
 # Local-only research / planning notes (kept on disk, not committed)
 ColorSmash_Masterplan_*.md
 ColorSmash_Research_*.md

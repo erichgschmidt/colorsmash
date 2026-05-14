@@ -22,14 +22,15 @@ import {
   computeLumaBins, lumaRange,
   EnvelopePoint, DEFAULT_ENVELOPE,
   fitByMode, MatchMode, Preset,
-  fitMultiZoneByMode, applyMultiZoneToRgba, processMultiZoneFit, MultiZoneFit, adaptiveBandPeaks,
+  // v1.20.70 — multi-zone math fully removed from histogramMatch.ts
+  // alongside the UI retirement.
   lerpCurvesTowardIdentity,
 } from "../core/histogramMatch";
 import { EnvelopeEditor } from "./EnvelopeEditor";
 import { loadSettings, makeDebouncedSaver, clearSettings, PersistedSettings } from "./persistence";
 import { uxpInfo } from "./uxpInfo";
 import { applyMatch } from "../app/applyMatch";
-import { applyLutAsAdjustmentLayer, applyMultiZoneLutAsLayers } from "../app/applyLut";
+import { applyLutAsAdjustmentLayer } from "../app/applyLut";
 import { updateMatchCurvesLayerInPlace } from "../app/liveCurvesUpdate";
 import { LutLayerState, readLutLayerState, stampState } from "../app/lutXmp";
 import {
@@ -77,25 +78,11 @@ export function MatchTab() {
   // Match mode: full-distribution (default), mean shift, median shift, or percentile-anchored.
   // Lighter modes are gentler — useful when full-histogram match feels over-aggressive.
   const [matchMode, setMatchMode] = useState<MatchMode>("full");
-  // Multi-zone output (beta): emit 3 stacked Curves layers (shadow/mid/highlight) limiting
-  // each to its luminance band via mask, Blend If, or both. Default off so v1.0 behavior unchanged.
-  // v1.20.51 — per-output-mode multi + blend-if config. Each tab (RGB / Lab
-  // / LUT) remembers its own Multi + Blend If state. Switching outputMode
-  // restores that tab's settings; toggling Multi or Blend If only affects
-  // the currently-active tab. Persistence saves all three.
-  type TabConfig = { multi: boolean; blendIf: boolean };
-  const [tabConfig, setTabConfig] = useState<Record<"rgb" | "lab" | "lut", TabConfig>>({
-    rgb: { multi: false, blendIf: false },
-    lab: { multi: false, blendIf: false },
-    lut: { multi: false, blendIf: false },
-  });
-  // Derived current settings for the rest of the code that still reads the
-  // old single-state shape. setMultiZone/setMultiZoneLimit route updates
-  // back into tabConfig under the active outputMode.
-  // (outputMode is declared below; derive inside a useMemo-equivalent.)
-  // Adaptive bands: when on, band peaks shift to target's P10/P50/P90 luma percentiles
-  // so each band gets a meaningful pixel sample. When off, fixed peaks at 0/128/255.
-  const [adaptiveBands, setAdaptiveBands] = useState(true);
+  // v1.20.70 — multi-zone output (beta) retired. The per-output-mode
+  // tabConfig (Multi + Blend If per RGB/Lab/LUT tab) is gone along with
+  // adaptiveBands and multiExpanded. Multi was never publicly shipped,
+  // so no saved files affected. Persistence load silently ignores legacy
+  // multi-related keys (multiZone, multiZoneLimit, tabConfig, adaptiveBands).
   // Quick-select preset — staged in the UI, applied to the matched preview live, baked
   // into PS when the user hits Apply Curves. Defaults to "color" (full match) so the
   // initial behavior matches v1.0.
@@ -141,7 +128,7 @@ export function MatchTab() {
 
   const zonesRef = useRef<ZoneOpts>({ ...DEFAULT_ZONES });
   const [zonesLabel, setZonesLabel] = useState<ZoneOpts>({ ...DEFAULT_ZONES });
-  const [lockZoneTotal, setLockZoneTotal] = useState(false);
+  // v1.20.70 — lockZoneTotal state removed alongside the multi-zone UI cleanup.
 
   const envelopeRef = useRef<EnvelopePoint[]>([...DEFAULT_ENVELOPE]);
   const [envelopeLabel, setEnvelopeLabel] = useState<EnvelopePoint[]>([...DEFAULT_ENVELOPE]);
@@ -196,16 +183,10 @@ export function MatchTab() {
   // selector sits next to the destination it modifies. Apply button dispatches
   // to either applyMatch (RGB/Lab) or applyLutAsAdjustmentLayer (LUT) based on mode.
   const [outputMode, setOutputMode] = useState<"rgb" | "lab" | "lut">("rgb");
-  // v1.20.51 — derived per-tab toggles. Reading these stays the same as
-  // before for the rest of the file; setters route the change to the
-  // currently-active tab's slot in tabConfig.
-  const multiZone = tabConfig[outputMode].multi;
-  const multiZoneLimit: "mask" | "blendIf" | "both" =
-    tabConfig[outputMode].blendIf ? "blendIf" : "mask";
-  const setMultiZone = (v: boolean) =>
-    setTabConfig(prev => ({ ...prev, [outputMode]: { ...prev[outputMode], multi: v } }));
-  const setMultiZoneLimit = (v: "mask" | "blendIf" | "both") =>
-    setTabConfig(prev => ({ ...prev, [outputMode]: { ...prev[outputMode], blendIf: v !== "mask" } }));
+  // v1.20.70 — multi-zone output retired entirely. The setters that
+  // routed Multi/BlendIf into a per-tab `tabConfig` slot are gone now
+  // along with the tabConfig state itself. Multi was never publicly
+  // shipped so no persisted state needs migrating.
   // Derived alias for places that still operate on the legacy "rgb" | "lab"
   // pair (fitByMode, applyMatch's colorSpace param). LUT mode fits in RGB since
   // the curves are then trilinearly sampled into a 3D LUT regardless.
@@ -255,10 +236,7 @@ export function MatchTab() {
   // re-inject every reload. Loaded from persistence; if absent the next
   // save writes it.
   const [starterPackVersion, setStarterPackVersion] = useState(0);
-  // v1.20.70 — Multi/Blend is a secondary feature; collapsed by default to
-  // reduce visual density. A small disclosure (▶/▼) between AUTO and the
-  // tabs reveals the MULTI/BLEND × 3 row when expanded.
-  const [multiExpanded, setMultiExpanded] = useState(false);
+  // v1.20.70 — multiExpanded state removed alongside the Multi/Blend UI retirement.
   // v1.20.70 — Settings drawer state + persisted prefs.
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<{ general: boolean; lut: boolean; advanced: boolean; diag: boolean }>({
@@ -438,32 +416,10 @@ export function MatchTab() {
         if (s.stretch != null) { stretchRef.current = s.stretch; setStretchLabel(s.stretch); }
         if (s.anchorStretchToHist != null) setAnchorStretchToHist(s.anchorStretchToHist);
         if (s.matchMode) setMatchMode(s.matchMode as MatchMode);
-        // Normalize legacy "both" persisted state to "blendIf" — Mask is now implicit
-        // v1.20.64 — prefer the per-tab `tabConfig` snapshot if present
-        // (saved since v1.20.64). Falls back to the legacy single
-        // multiZone/multiZoneLimit fields, fanning them into all three
-        // tab slots so old PSDs/recipes don't lose state on first reload.
-        if (s.tabConfig) {
-          setTabConfig({
-            rgb: { multi: !!s.tabConfig.rgb?.multi, blendIf: !!s.tabConfig.rgb?.blendIf },
-            lab: { multi: !!s.tabConfig.lab?.multi, blendIf: !!s.tabConfig.lab?.blendIf },
-            lut: { multi: !!s.tabConfig.lut?.multi, blendIf: !!s.tabConfig.lut?.blendIf },
-          });
-        } else if (s.multiZone != null || s.multiZoneLimit != null) {
-          // Legacy migration — single values get applied to all three tabs.
-          const legacyMulti = !!s.multiZone;
-          const legacyBlendIf = s.multiZoneLimit === "blendIf" || s.multiZoneLimit === "both";
-          setTabConfig({
-            rgb: { multi: legacyMulti, blendIf: legacyBlendIf },
-            lab: { multi: legacyMulti, blendIf: legacyBlendIf },
-            lut: { multi: legacyMulti, blendIf: legacyBlendIf },
-          });
-        }
-        // v1.20.60 — adaptiveBands is now ALWAYS default-on. Don't honor a
-        // legacy `false` from persistence — users should land on the sane
-        // default every fresh session and explicitly opt out by clicking
-        // ADAPT off if they want fixed 0/128/255 band peaks.
-        // (Persistence still writes the value; just no-op on read.)
+        // v1.20.70 — multi-zone retired. Legacy `tabConfig`, `multiZone`,
+        // `multiZoneLimit`, `adaptiveBands`, and `multiExpanded` persistence
+        // reads are dropped here. Multi was never publicly shipped so no
+        // user saves are affected.
         if (s.paletteCount === 3 || s.paletteCount === 5 || s.paletteCount === 7) setPaletteCount(s.paletteCount);
         if (s.paletteAdaptive != null) setPaletteAdaptive(s.paletteAdaptive);
         if (typeof s.sourceSoftness === "number") setSourceSoftness(Math.max(0, Math.min(100, s.sourceSoftness)));
@@ -491,7 +447,6 @@ export function MatchTab() {
         }
         // v1.20.66 — track which starter pack version this install has seen.
         if (typeof s.starterPackVersion === "number") setStarterPackVersion(s.starterPackVersion);
-        if (typeof s.multiExpanded === "boolean") setMultiExpanded(s.multiExpanded);
         // v1.20.70 — Settings-drawer prefs.
         if (s.groupColor && ["none","red","orange","yellow","green","blue","violet","gray"].includes(s.groupColor)) {
           setGroupColor(s.groupColor as any);
@@ -504,7 +459,6 @@ export function MatchTab() {
         if (s.overwriteOnApply != null) setOverwriteOnApply(s.overwriteOnApply);
         if (s.openSection !== undefined) setOpenSection(s.openSection);
         if (s.zones) { zonesRef.current = { ...DEFAULT_ZONES, ...s.zones }; setZonesLabel({ ...DEFAULT_ZONES, ...s.zones }); }
-        if (s.lockZoneTotal != null) setLockZoneTotal(s.lockZoneTotal);
         if (s.dimensions) { dimsRef.current = { ...DEFAULT_DIMENSIONS, ...s.dimensions }; setDimsLabel({ ...DEFAULT_DIMENSIONS, ...s.dimensions }); }
         if (s.envelope && Array.isArray(s.envelope) && s.envelope.length > 0) {
           envelopeRef.current = s.envelope as EnvelopePoint[];
@@ -541,18 +495,17 @@ export function MatchTab() {
     const snapshot: PersistedSettings = {
       remember,
       amount: amountLabel, smooth: smoothLabel, stretch: stretchLabel,
-      anchorStretchToHist, chromaOnly, colorSpace, outputMode, lutStrength, lutGrid, lutDither, selectionMode, matchMode, multiZone, multiZoneLimit, adaptiveBands,
-      // v1.20.64 — persist the full per-tab record so each output mode's
-      // Multi/BlendIf settings survive panel reloads.
-      tabConfig,
+      anchorStretchToHist, chromaOnly, colorSpace, outputMode, lutStrength, lutGrid, lutDither, selectionMode, matchMode,
+      // v1.20.70 — multi-zone schema fields (multiZone, multiZoneLimit,
+      // adaptiveBands, tabConfig, multiExpanded) removed from the saved
+      // snapshot alongside the UI retirement.
       // v1.20.66 — once the starter pack has been injected, this prevents
       // re-injection on every reload.
       starterPackVersion,
-      multiExpanded,
       groupColor, groupName, autoDebounceMs, historyCap, verboseStatus,
       overwriteOnApply,
       openSection,
-      zones: zonesLabel, lockZoneTotal,
+      zones: zonesLabel,
       dimensions: dimsLabel,
       envelope: envelopeLabel,
       paletteCount,
@@ -563,9 +516,9 @@ export function MatchTab() {
       recentHistory,
     };
     saveDebouncedRef.current!(snapshot);
-  }, [remember, matchMode, multiZone, multiZoneLimit, adaptiveBands, tabConfig, starterPackVersion, multiExpanded, groupColor, groupName, autoDebounceMs, historyCap, verboseStatus, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
+  }, [remember, matchMode, starterPackVersion, groupColor, groupName, autoDebounceMs, historyCap, verboseStatus, amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
       colorSpace, outputMode, lutStrength, lutGrid, lutDither, selectionMode, overwriteOnApply, openSection,
-      zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel, paletteCount, paletteAdaptive, sourceSoftness, targetSoftness, targetMaskEnabled, recentHistory]);
+      zonesLabel, dimsLabel, envelopeLabel, paletteCount, paletteAdaptive, sourceSoftness, targetSoftness, targetMaskEnabled, recentHistory]);
 
   const [docs, setDocs] = useState<{ id: number; name: string }[]>([]);
   // Hash of doc id+name pairs. Used as the key on the doc <select> elements so that
@@ -1082,27 +1035,12 @@ export function MatchTab() {
   const lumaBins = useMemo(() => tgt.snap ? computeLumaBins(tgt.snap.data) : null, [tgt.snap]);
   const sourceLumaBins = useMemo(() => srcSnap ? computeLumaBins(srcSnap.data) : null, [srcSnap]);
 
-  const multiZonePeaks = useMemo(() => {
-    if (!adaptiveBands || !lumaBins) return { shadow: 0, mid: 128, highlight: 255 };
-    return adaptiveBandPeaks(lumaBins);
-  }, [adaptiveBands, lumaBins]);
-
-  // Outer extents for multi-zone bands. When adaptive, derived from the target's actual
-  // luma range (lumaRange) — pixels outside this range get zero band application and pass
-  // through unchanged. Slider positions in PS Blend If panel match these extents so the
-  // visualization is honest about where the bands actually have effect.
-  const multiZoneExtents = useMemo(() => {
-    if (!adaptiveBands || !lumaBins) return { min: 0, max: 255 };
-    const r = lumaRange(lumaBins);
-    return { min: r.start, max: r.end };
-  }, [adaptiveBands, lumaBins]);
-
-  // Multi-zone fit: 3 separate per-band curves. Computed only when the multi-zone toggle
-  // is on (otherwise null).
-  const fittedMulti = useMemo<MultiZoneFit | null>(() => {
-    if (!multiZone || !weightedSrcData || !tgt.snap) return null;
-    return fitMultiZoneByMode(matchMode, weightedSrcData, tgt.snap.data, multiZonePeaks, multiZoneExtents);
-  }, [multiZone, weightedSrcData, tgt.snap, multiZonePeaks, multiZoneExtents, matchMode]);
+  // v1.20.70 — multi-zone derived values removed alongside the multi UI.
+  // multiZonePeaks / multiZoneExtents / fittedMulti previously computed
+  // band peaks + the 3-band fit. With multiZone always false, none of
+  // those useMemos were consumed, so they're dropped to skip the work.
+  // adaptiveBandPeaks / fitMultiZoneByMode / lumaRange remain in
+  // core/histogramMatch.ts for unit-testability + recipe compat.
 
   // Matched preview is rendered by <MatchedPreview/>; we drive it imperatively via a handle.
   const matchedHandleRef = useRef<MatchedPreviewHandle | null>(null);
@@ -1160,37 +1098,13 @@ export function MatchTab() {
       && targetEffectiveWeights != null
       && targetPaletteWeights.some(w => Math.abs(w - 1) > 0.01);
 
-    if (multiZone && fittedMulti) {
-      // Multi-zone path: process each band's curves through Color + Tone, simulate
-      // the 3-curve composite via compositional layer-stack blend (matches what PS
-      // produces from three stacked masked Curves layers). Zones + Envelope are
-      // skipped — they're zone-modulators that would double-apply over the bands.
-      const procFit = processMultiZoneFit(fittedMulti, curveOpts, dimOpts);
-      out = applyMultiZoneToRgba(tgtBuf.data, procFit, multiZonePeaks, multiZoneExtents);
-      // Target-palette mask: when active, the bake wraps the 3 band Curves layers
-      // in a sub-group and attaches the target-palette mask to the SUB-GROUP. PS
-      // evaluates that as (multi-zone composite) × (group mask). Mirror the same
-      // composition here per-pixel: lerp the multi-zone output toward original by
-      // each pixel's effective weight.
-      if (targetWeightsActive && targetEffectiveWeights) {
-        const orig = tgtBuf.data;
-        const ew = targetEffectiveWeights;
-        for (let i = 0, p = 0; i < out.length; i += 4, p++) {
-          const w = Math.max(0, Math.min(1, ew[p]));
-          if (w >= 0.999) continue; // full match: keep as-is
-          if (w <= 0.001) {
-            out[i] = orig[i]; out[i + 1] = orig[i + 1]; out[i + 2] = orig[i + 2];
-            continue;
-          }
-          out[i]     = Math.round(orig[i]     + (out[i]     - orig[i])     * w);
-          out[i + 1] = Math.round(orig[i + 1] + (out[i + 1] - orig[i + 1]) * w);
-          out[i + 2] = Math.round(orig[i + 2] + (out[i + 2] - orig[i + 2]) * w);
-        }
-      }
-      // Curves graph shows the mid-band curve as representative (graph doesn't render 3 sets).
-      curvesForGraph = procFit.mid;
-    } else {
-      // Single-curve path (default).
+    // v1.20.70 — single-curve path only. Multi-zone preview branch
+    // retired alongside the UI; the apply branches in
+    // applyMatch.ts / applyLut.ts are unreachable from the panel now
+    // (multiZone is hard-coded false). processMultiZoneFit /
+    // applyMultiZoneToRgba still ship in core/histogramMatch.ts for
+    // recipe compat, just no longer invoked from MatchTab.
+    {
       const processed = processChannelCurves(fittedRaw, curveOpts);
       const dim = applyDimensions(processed, dimOpts);
       curvesForGraph = applyZoneAndEnvelopeToChannels(
@@ -1445,7 +1359,7 @@ export function MatchTab() {
     // triggers a redraw with the fresh per-pixel weights.
     // targetMaskEnabled also in deps so toggling the mask gate redraws the
     // preview between masked and uniform application.
-  }, [fittedRaw, fittedMulti, multiZone, multiZonePeaks, multiZoneExtents, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enEnvelope, activePreset, targetEffectiveWeights, targetMaskEnabled, showMask, outputMode, lutStrength, lutGrid, selectionPreviewMask, effectiveSelectionMode]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fittedRaw, tgt.snap, chromaOnly, anchorStretchToHist, enColor, enTone, enEnvelope, activePreset, targetEffectiveWeights, targetMaskEnabled, showMask, outputMode, lutStrength, lutGrid, selectionPreviewMask, effectiveSelectionMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Export the staged preset as a 33-grid 3D LUT in .CUBE format. Sidesteps the
   // unreliable PS Color Lookup API entirely — user picks a save location, we write
@@ -1487,7 +1401,6 @@ export function MatchTab() {
     sourceSoftness,
     targetSoftness,
     paletteAdaptive,
-    multiZone,
     dimensions: dimsRef.current,
     zones: zonesRef.current,
     envelope: envelopeRef.current,
@@ -1714,28 +1627,9 @@ export function MatchTab() {
     if (typeof state.sourceSoftness === "number") setSourceSoftness(state.sourceSoftness);
     if (mode === "full" && typeof state.targetSoftness === "number") setTargetSoftness(state.targetSoftness);
     if (state.paletteAdaptive != null) setPaletteAdaptive(!!state.paletteAdaptive);
-    // v1.20.64 — write tabConfig directly with the explicit target key so
-    // the restored Multi/BlendIf land on the OUTPUT MODE THE BAKE USED, not
-    // whichever tab happens to be active at restore time. setMultiZone()
-    // is a shim that closes over `outputMode`; React batches the
-    // setOutputMode + setMultiZone calls so the shim still sees the OLD
-    // outputMode and routes Multi into the wrong tab.
-    if (state.multiZone != null) {
-      const targetMode =
-        (state.outputMode === "rgb" || state.outputMode === "lab" || state.outputMode === "lut") ? state.outputMode
-        : (state.colorSpace === "rgb" || state.colorSpace === "lab") ? state.colorSpace
-        : "lut";
-      setTabConfig(prev => ({
-        ...prev,
-        [targetMode]: {
-          multi: !!state.multiZone,
-          // multiZoneLimit isn't carried in XMP (only multi is), so we
-          // preserve the existing blendIf for that tab rather than
-          // forcing it off on every restore.
-          blendIf: prev[targetMode].blendIf,
-        },
-      }));
-    }
+    // v1.20.70 — restored XMP / recipe state.multiZone is ignored
+    // (multi-zone UI retired). Old XMP that carried multi:true still
+    // parses, but the panel always lands in single-curve mode.
     if (state.dimensions) {
       dimsRef.current = { ...DEFAULT_DIMENSIONS, ...state.dimensions } as DimensionOpts;
       setDimsLabel(dimsRef.current);
@@ -2011,7 +1905,9 @@ export function MatchTab() {
     panelLastSnapshotRef.current = prev;
     applyStateToPanel(prev);
     setUndoTick(t => t + 1);
-    setStatus("Panel state restored (undo).");
+    const remainingUndo = panelUndoStackRef.current.length;
+    const inRedo = panelRedoStackRef.current.length;
+    setStatus(`Undo — ${remainingUndo} more undoable, ${inRedo} redoable.`);
     // Release the gate after the snapshot effect has had a chance to
     // re-fire from the applied state. 350ms > the 250ms debounce.
     setTimeout(() => { isRestoringRef.current = false; }, 350);
@@ -2026,7 +1922,9 @@ export function MatchTab() {
     panelLastSnapshotRef.current = next;
     applyStateToPanel(next);
     setUndoTick(t => t + 1);
-    setStatus("Panel state restored (redo).");
+    const remainingRedo = panelRedoStackRef.current.length;
+    const inUndo = panelUndoStackRef.current.length;
+    setStatus(`Redo — ${remainingRedo} more redoable, ${inUndo} undoable.`);
     setTimeout(() => { isRestoringRef.current = false; }, 350);
   };
   // v1.20.70 — keyboard shortcut for panel undo / redo. Listens at
@@ -2095,10 +1993,10 @@ export function MatchTab() {
     //     — they're picking where to work, not what to do)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    matchMode, multiZone, multiZoneLimit, adaptiveBands, tabConfig,
+    matchMode,
     amountLabel, smoothLabel, stretchLabel, anchorStretchToHist, chromaOnly,
     colorSpace, outputMode, lutStrength, lutGrid, lutDither, selectionMode,
-    overwriteOnApply, zonesLabel, lockZoneTotal, dimsLabel, envelopeLabel,
+    overwriteOnApply, zonesLabel, dimsLabel, envelopeLabel,
     paletteCount, paletteAdaptive, sourceSoftness, targetSoftness,
     targetMaskEnabled, paletteWeights, targetPaletteWeights,
   ]);
@@ -2145,61 +2043,9 @@ export function MatchTab() {
       softness: targetSoftness,
     } : undefined;
 
-    // Multi-zone LUT branch (v1.16.0). When Multi is on AND we have a fitted
-    // multi-zone result, emit 3 stacked Color Lookup layers in a sub-group
-    // (matches the Curves multi-zone structure). Each layer carries one
-    // band's LUT + a luma triangular mask. Falls back to single-LUT if
-    // multi-zone fit hasn't computed yet (e.g. no target snap).
-    if (multiZone && fittedMulti) {
-      setStatus("Applying multi-zone LUT...");
-      try {
-        // processMultiZoneFit normalizes the raw fit through curveOpts / dimOpts —
-        // same processing single-LUT applies via renderedCurves. Without this
-        // step the bands would carry pre-postprocess curves and the preset
-        // blend math would double-apply.
-        // curveOpts shape mirrors the preview pipeline (~line 746). enColor
-        // gate is applied implicitly here — caller already decided to Apply,
-        // so the Color section is honored at its current slider values.
-        const stretchRange = anchorStretchToHist && lumaBins ? lumaRange(lumaBins) : undefined;
-        const procFit = processMultiZoneFit(fittedMulti, {
-          amount: amountRef.current / 100,
-          smoothRadius: smoothRef.current,
-          maxStretch: stretchRef.current,
-          stretchRange,
-        }, dimsRef.current);
-        const result = await applyMultiZoneLutAsLayers({
-          multiZoneFit: procFit,
-          preset: activePreset,
-          gridSize: lutGrid,
-          strength: lutStrength / 100,
-          dither: lutDither,
-          selectionMode: effectiveSelectionMode,
-          targetLayerId: targetId === MERGED_LAYER_ID ? null : targetId,
-          targetIsMerged: targetId === MERGED_LAYER_ID,
-          overwritePrior: true,
-          targetPalette,
-          multiZonePeaks,
-          multiZoneExtents,
-          xmpState: buildXmpState(),
-        });
-        // v1.20.64 — multi-zone LUT result returns the band-container group
-        // id. Storing that into liveLutLayerIdRef would cause AUTO's next
-        // tick (after a switch out of multi mode) to pass a group id as
-        // `updateExistingLayerId`, which the single-LUT applyLut path can't
-        // handle and silently produces stray layers. Keep the ref null in
-        // multi-zone so AUTO always re-seeds via the create path until the
-        // user does a non-multi Apply.
-        liveLutLayerIdRef.current = null;
-        lastSelfWriteRef.current = Date.now();
-        setStatus(`Applied "${result.layerName}" (3× 33³ multi-zone LUT).`);
-        pushCurrentToHistory();
-        return;
-      } catch (e: any) {
-        setStatus(`Apply multi-zone LUT failed: ${e?.message ?? e}`);
-        return;
-      }
-    }
-
+    // v1.20.70 — multi-zone LUT branch removed alongside the UI. The
+    // applyMultiZoneLutAsLayers entry point in applyLut.ts still ships
+    // (recipe-compat) but is unreachable from the panel now.
     // Single-LUT branch.
     setStatus("Applying LUT...");
     try {
@@ -2252,13 +2098,8 @@ export function MatchTab() {
     }
     // Multi-zone LUT incompatibility (v1.16.0): the multi-zone path creates 3
     // Color Lookup layers in a sub-group, while Live LUT's update-in-place
-    // mechanism targets a single layer ID. Updating 3 layers per commit + re-
-    // baking 3 ICC profiles is a future-increment; for now skip live updates
-    // entirely when Multi is on. Apply still works (multi-zone bake).
-    if (multiZone) {
-      if (liveBakeTimerRef.current) { clearTimeout(liveBakeTimerRef.current); liveBakeTimerRef.current = null; }
-      return;
-    }
+    // v1.20.70 — multi-zone skip removed (multi UI retired; multiZone
+    // is now hard-coded false in the panel).
     // First effect run after enabling: skip — don't auto-create on toggle.
     // The user must either drag a slider OR hit Apply LUT once to seed the layer.
     if (!liveBakeFirstRunSkippedRef.current) {
@@ -2270,6 +2111,30 @@ export function MatchTab() {
     liveBakeTimerRef.current = setTimeout(async () => {
       liveBakeTimerRef.current = null;
       try {
+        // v1.20.70 — stale-layer guard. If the user did Cmd+Z in PS to
+        // undo a prior bake, liveLutLayerIdRef.current still points at
+        // the (now-deleted) layer. The next live-bake would try to
+        // update-in-place and silently fail. Resolve the id against
+        // the live target doc; if it doesn't exist, clear the ref so
+        // AUTO takes the create path on this fire.
+        if (liveLutLayerIdRef.current != null && tgtDocId != null) {
+          try {
+            const ps = require("photoshop");
+            const doc = (ps.app.documents ?? []).find((d: any) => d.id === tgtDocId);
+            if (doc) {
+              const findById = (layers: any[]): any | null => {
+                for (const l of layers ?? []) {
+                  if (l?.id === liveLutLayerIdRef.current) return l;
+                  if (Array.isArray(l?.layers)) { const f = findById(l.layers); if (f) return f; }
+                }
+                return null;
+              };
+              if (!findById(doc.layers ?? [])) {
+                liveLutLayerIdRef.current = null;
+              }
+            }
+          } catch { /* non-fatal */ }
+        }
         // Mode-aware dispatch (v1.16.4). LIVE used to only handle LUT mode —
         // in RGB/Lab mode it was creating Color Lookup layers, which is wrong
         // (those modes produce Curves layers). Branch by outputMode so LIVE
@@ -2307,7 +2172,7 @@ export function MatchTab() {
     return () => {
       if (liveBakeTimerRef.current) { clearTimeout(liveBakeTimerRef.current); liveBakeTimerRef.current = null; }
     };
-  }, [liveLut, renderedCurves, activePreset, targetId, targetPaletteWeights, targetSoftness, multiZone, outputMode, autoDebounceMs]);
+  }, [liveLut, renderedCurves, activePreset, targetId, targetPaletteWeights, targetSoftness, outputMode, autoDebounceMs]);
 
   const onApply = async () => {
     if (targetId == null) { setStatus("Pick target layer."); return; }
@@ -2337,10 +2202,8 @@ export function MatchTab() {
         sourceLayerId: sourceId ?? -1,
         targetLayerId: targetId,
         matchMode,
-        multiZone,
-        multiZoneLimit,
-        multiZonePeaks,
-        multiZoneExtents,
+        // v1.20.70 — multi-zone retired; applyMatch no longer accepts
+        // multiZone / multiZoneLimit / peak / extent params.
         // Section-enable mirror — disabled sections apply with default params.
         amount: enColor ? amountRef.current / 100 : 1,
         smoothRadius: enColor ? smoothRef.current : 0,
@@ -2542,14 +2405,12 @@ export function MatchTab() {
     setAnchorStretchToHist(false);
     setChromaOnly(false);
     setMatchMode("full");
-    setMultiZone(false);
-    setMultiZoneLimit("mask");
-    setAdaptiveBands(true);
+    // v1.20.70 — setMultiZone / setMultiZoneLimit / setAdaptiveBands /
+    // setLockZoneTotal removed alongside the multi-zone UI cleanup.
     setOutputMode("rgb");
     setOverwriteOnApply(true);
     setOpenSection(null);
     zonesRef.current = { ...DEFAULT_ZONES }; setZonesLabel({ ...DEFAULT_ZONES });
-    setLockZoneTotal(false);
     dimsRef.current = { ...DEFAULT_DIMENSIONS }; setDimsLabel({ ...DEFAULT_DIMENSIONS });
     envelopeRef.current = [...DEFAULT_ENVELOPE]; setEnvelopeLabel([...DEFAULT_ENVELOPE]);
     setRemember(false);
@@ -2810,7 +2671,7 @@ export function MatchTab() {
           { heading: "What this is",
             body: "Histogram-matching color grade between a source and target layer. Outputs editable Curves (RGB / Lab) or 3D Color Lookup adjustment layers, organized in a [Color Smash] group with masks and round-trippable XMP metadata. Each output mode bakes a separate layer that can coexist in the group so you can A/B them." },
           { heading: "Quick start",
-            body: "1. Pick a source in SOURCE / REFERENCE (any open doc, a marquee, or a file on disk).\n2. Pick a target in TARGET / PREVIEW.\n3. Open the OUTPUT island and click RGB, Lab, or LUT — clicking a tab BOTH swaps the output mode AND applies in one click.\n4. Optional: expand MASK / TRANSFORM / MULTI-BLEND for finer control. Pin recipes in HISTORY; ↓ IMPORT / ↑ EXPORT to share." },
+            body: "1. Pick a source in SOURCE / REFERENCE (any open doc, a marquee, or a file on disk).\n2. Pick a target in TARGET / PREVIEW.\n3. Open the OUTPUT island and click RGB, Lab, or LUT — clicking a tab BOTH swaps the output mode AND applies in one click.\n4. Optional: expand MASK or TRANSFORM (Color / Tone / Envelope) for finer control. Pin recipes in HISTORY; ↓ IMPORT / ↑ EXPORT to share." },
           { heading: "Header icons (left → right)",
             body: "↶ ↷ — PANEL-state undo / redo. Reverses slider drags, palette tweaks, output-mode swaps, toggles — anything that changes the panel. Cmd/Ctrl+Z (or Cmd/Ctrl+Shift+Z to redo, or Ctrl+Y on Windows) inside the panel triggers the same actions; while PS has focus those same shortcuts hit PS's own undo. Dim when there's nothing to undo/redo. Capacity 30, oldest auto-evicted. Snapshots are debounced 250ms so slider drags collapse into a single undo step. 💾 — export the current preset to disk as a portable 33³ .CUBE 3D LUT. REVERT — restore panel state from the active Match layer's XMP. A 'Before REVERT' history entry is auto-saved as a permanent safety net; click REVERT again while it's still displayed as UN-REVERT to undo the revert from a one-shot in-memory shadow slot. ✕ — reset all panel settings to defaults (confirm dialog). ⟳ — resync source / target / layer lists / selection mask from PS. ⚙ — open the Settings drawer (group color, group name, LUT options, AUTO debounce, history cap, persistence, diagnostics)." },
           { heading: "Sections",
@@ -3013,15 +2874,9 @@ export function MatchTab() {
                     style={{ flex: 1, minWidth: 0, margin: 0, cursor: "pointer" }} />
                   <span style={{ fontSize: 10, color: "#aaa", width: 48, textAlign: "right", flexShrink: 0 }}>{historyCap}</span>
                 </div>
-                <div style={ROW}>
-                  <span style={LABEL} title="ADAPT default — when ON, multi-zone band peaks track the target histogram (P10/P50/P90) instead of fixed 0/128/255 points. Same toggle as the ADAPT pill in the MULTI/BLEND row.">Adaptive bands</span>
-                  <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none", fontSize: 10, color: "#bbb" }}>
-                    <input type="checkbox" checked={adaptiveBands}
-                      onChange={e => setAdaptiveBands(e.target.checked)}
-                      style={{ margin: 0, width: 14, height: 14 }} />
-                    <span>{adaptiveBands ? "ON — peaks track histogram" : "OFF — peaks fixed at 0/128/255"}</span>
-                  </label>
-                </div>
+                {/* v1.20.70 — "Adaptive bands" toggle removed alongside
+                    the multi-zone UI. State stays in place for recipe
+                    compat but is no longer user-exposed. */}
               </div>
             )}
 
@@ -3483,26 +3338,18 @@ export function MatchTab() {
             ["lab", "Lab", "Lab — perceptual histogram match, projected to per-channel Curves layer. Click to switch mode AND Apply."],
             ["lut", "LUT", "LUT — 33³ Color Lookup adjustment with preset blend math baked in. Click to switch mode AND Apply."],
           ] as Array<["rgb" | "lab" | "lut", string, string]>).map(([val, label, tip], idx) => {
+            // v1.20.70 — multi/blend metadata removed (UI retired). Tab
+            // styling is just active vs inactive now; the old "dormant"
+            // warm tint that signalled "this mode has multi/blend
+            // configured" is no longer applicable since neither toggle
+            // exists.
             const active = outputMode === val;
-            const cfg = tabConfig[val];
-            const subDisabled = !cfg.multi;
             const isFirst = idx === 0;
-            const subState = (on: boolean) => {
-              if (!on) return { bg: "transparent", fg: "#777", bd: "#3a3a3a" };
-              if (active) return { bg: "#2f2f2f", fg: "#cccccc", bd: ACCENT };
-              return { bg: "#242220", fg: "#aaa", bd: "#7a6a4a" };
-            };
-            const multiS = subState(cfg.multi);
-            const blendS = subState(cfg.blendIf && cfg.multi);
-            const tabUsed = cfg.multi || cfg.blendIf;
             const tabS = active
               ? { bg: "#3a3a3a", fg: "#dddddd", bd: ACCENT }
-              : tabUsed
-                ? { bg: "#242220", fg: "#aaa", bd: "#7a6a4a" }
-                : { bg: "transparent", fg: "#888", bd: "#444" };
-            return { val, label, tip, active, cfg, subDisabled, isFirst, multiS, blendS, tabS };
+              : { bg: "transparent", fg: "#888", bd: "#444" };
+            return { val, label, tip, active, isFirst, tabS };
           });
-          const adaptApplicable = tabConfig[outputMode].multi;
           return (
         // v1.20.70 — shared 2-column outer layout: col-1 (74px) stacks
         // the [+|○|▼] controls row above an optional ADAPT row; col-2
@@ -3512,11 +3359,14 @@ export function MatchTab() {
         // align by construction — no sub-pixel rounding stagger
         // possible between the [+|○|▼] block and ADAPT.
         <div style={{ display: "flex", alignItems: "flex-start", gap: 4 }}>
-          {/* Column 1 (92px wide = 28+4+28+4+28, flexShrink:0).
-              v1.20.70 — bumped from 74→92 to host 28px-wide buttons
-              that match the new 28px output-row height. */}
-          <div style={{ width: 92, display: "flex", flexDirection: "column", gap: 0, flexShrink: 0 }}>
-            {/* Top sub-row inside col-1: + ○ ▼ buttons. */}
+          {/* Column 1 (60px wide = 28+4+28, flexShrink:0).
+              v1.20.70 — was 92 (3 buttons + 2 gaps) when the ▾/▸
+              multi-disclosure was the third button. Multi-zone output
+              was removed late v1.20.70 to focus the panel on single-
+              layer RGB/Lab/LUT bakes, so col-1 now holds just
+              [+ branch][○ AUTO] = 28+4+28 = 60. */}
+          <div style={{ width: 60, display: "flex", flexDirection: "column", gap: 0, flexShrink: 0 }}>
+            {/* Top sub-row inside col-1: + ○ buttons. */}
             <div style={{ display: "flex", gap: 4, height: 28 }}>
           {/* v1.20.70 — + branch arm relocated into the main row so all
               three column-1 controls (+, ○ AUTO, ▶/▼ disclosure) live
@@ -3561,57 +3411,17 @@ export function MatchTab() {
               display: "inline-block", flexShrink: 0,
             }} />
           </div>
-          {/* Disclosure column: shows/hides the MULTI/BLEND row + ADAPT
-              (which only makes sense in multi mode). 22px wide × 18px. */}
-          <div onClick={() => setMultiExpanded(v => !v)}
-            title={multiExpanded
-              ? "Collapse MULTI/BLEND row. Per-tab Multi state is preserved — just hidden."
-              : "Expand MULTI/BLEND row. Per-tab toggles to split output into 3 luma-banded layers + ADAPT (multi-only histogram tracking)."}
-            style={{
-              width: 28, height: 28, padding: 0, flexShrink: 0,
-              display: "flex", alignItems: "center", justifyContent: "center",
-              background: "transparent",
-              border: "1px solid #444",
-              color: "#aaa",
-              borderRadius: 4, cursor: "pointer", userSelect: "none",
-              fontSize: 12, lineHeight: 1,
-              boxSizing: "border-box",
-            }}>
-            {multiExpanded ? "▼" : "▶"}
-          </div>
             </div>
-            {/* Bottom sub-row inside col-1: ADAPT (only when expanded).
-                Width 100% of the parent col-1 (74px) — no separate width
-                declaration needed, so ADAPT is guaranteed pixel-aligned
-                with the [+|○|▼] row above it. */}
-            {multiExpanded && (
-              <div onClick={() => setAdaptiveBands(!adaptiveBands)}
-                title={adaptiveBands
-                  ? `Adaptive ON (default) — multi-zone band peaks track the target histogram (P10/P50/P90) whenever MULTI is active for a tab. ${adaptApplicable && lumaBins ? `Current: ${multiZonePeaks.shadow}/${multiZonePeaks.mid}/${multiZonePeaks.highlight}` : ""} Click to disable.`
-                  : "Adaptive OFF — multi-zone band peaks fixed at 0/128/255. Click to re-enable percentile-driven peaks."}
-                style={{
-                  // v1.20.70 — shave 4px off ADAPT's right edge so it
-                  // visually indents inside col-1, giving 8px total
-                  // breathing room between ADAPT and MULTI (4px
-                  // internal shave + 4px outer col-1→col-2 gap).
-                  width: "calc(100% - 4px)", marginRight: 4,
-                  height: 20, padding: 0,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
-                  background: adaptiveBands ? "#3a3228" : "transparent",
-                  color: adaptiveBands ? "#e8c882" : "#888",
-                  border: `1px solid ${adaptiveBands ? "#d8b87a" : "#444"}`,
-                  borderRadius: 3, cursor: "pointer", userSelect: "none",
-                  lineHeight: "18px", boxSizing: "border-box",
-                }}>ADAPT</div>
-            )}
+            {/* v1.20.70 — Multi/Blend disclosure + ADAPT button removed.
+                Multi-zone output (3-band stacking) was retired late
+                v1.20.70 to focus on single-layer RGB/Lab/LUT bakes
+                with palette + selection masks. Multi-zone bake paths
+                stay in applyMatch/applyLut.ts for now (recipe
+                compatibility) but are unreachable from the UI. */}
           </div>
-          {/* Column 2 (flex 1): tabs row above, optional MULTI/BLEND row below. */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 0, flex: 1, minWidth: 0 }}>
-          {/* Tabs row: RGB | Lab | LUT. overflow:hidden mirrors the
-              multi row's container so both rows clip identically at
-              narrow widths. */}
-          <div style={{ display: "flex", gap: 0, overflow: "hidden" }}>
+          {/* Tabs row: RGB | Lab | LUT. overflow:hidden so tab labels
+              clip at narrow widths instead of overflowing the row. */}
+          <div style={{ display: "flex", gap: 0, overflow: "hidden", flex: 1, minWidth: 0 }}>
             {TABS.map(t => (
               <div key={t.val} onClick={() => onTabClick(t.val)} title={t.tip}
                 style={{
@@ -3629,61 +3439,6 @@ export function MatchTab() {
                   minWidth: 0,
                 }}>{t.label}</div>
             ))}
-          </div>
-          {/* MULTI/BLEND row inside col-2 — only when disclosure is
-              expanded. Flat 6-cell layout (was 3 per-tab wrappers × 2
-              cells each) so flex distribution matches the tabs row
-              above exactly. overflow: hidden clips MULTI/BLEND text
-              spillover at narrow panel widths. */}
-          {multiExpanded && (
-            <div style={{ display: "flex", gap: 0, overflow: "hidden" }}>
-              {TABS.flatMap((t, ti) => [
-                <div key={`${t.val}-multi`}
-                  onClick={() => setTabConfig(prev => ({ ...prev, [t.val]: { ...prev[t.val], multi: !prev[t.val].multi } }))}
-                  style={{
-                    flex: "1 1 0", minWidth: 0, height: 20, padding: 0,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    overflow: "hidden", whiteSpace: "nowrap",
-                    fontSize: 9, fontWeight: 600, letterSpacing: 0.3,
-                    background: t.multiS.bg,
-                    color: t.multiS.fg,
-                    border: `1px solid ${t.multiS.bd}`,
-                    borderLeftWidth: ti === 0 ? 1 : 0,
-                    borderRadius: 0,
-                    cursor: "pointer", userSelect: "none",
-                    lineHeight: "18px", boxSizing: "border-box",
-                  }}
-                  title={`Multi (${t.label}): split this output into 3 luma-banded layers. Per-tab — RGB / Lab / LUT each remember their own Multi state.`}>
-                  MULTI
-                </div>,
-                <div key={`${t.val}-blend`}
-                  onClick={() => setTabConfig(prev => {
-                    const cur = prev[t.val];
-                    if (!cur.multi) return { ...prev, [t.val]: { multi: true, blendIf: true } };
-                    return { ...prev, [t.val]: { ...cur, blendIf: !cur.blendIf } };
-                  })}
-                  style={{
-                    flex: "1 1 0", minWidth: 0, height: 20, padding: 0,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    overflow: "hidden", whiteSpace: "nowrap",
-                    fontSize: 9, fontWeight: 600, letterSpacing: 0.3,
-                    background: t.blendS.bg,
-                    color: t.blendS.fg,
-                    border: `1px solid ${t.blendS.bd}`,
-                    borderLeftWidth: 0,
-                    borderRadius: 0,
-                    cursor: "pointer", userSelect: "none",
-                    lineHeight: "18px", boxSizing: "border-box",
-                    opacity: t.subDisabled ? 0.7 : 1,
-                  }}
-                  title={t.subDisabled
-                    ? `Blend (${t.label}): click to enable — auto-engages Multi (Blend needs Multi's 3 band layers to operate on).`
-                    : `Blend (${t.label}): use Blending Options sliders instead of layer masks for the 3 band layers.`}>
-                  BLEND
-                </div>,
-              ])}
-            </div>
-          )}
           </div>
         </div>
           );
@@ -3770,7 +3525,7 @@ export function MatchTab() {
                 ? "MASK ON — per-cluster target attenuation is active (preview AND bake honor the target-palette weights). Protected regions show red on the preview. Click to disable: preview shows pure transform, bake produces an unmasked Curves/LUT layer."
                 : "MASK OFF — preview shows pure transform output and bake produces an unmasked Curves/LUT layer. Click to enable: per-cluster mask attenuates the transform + paints protected regions red on the preview."}
               style={{
-                width: 88, height: 22, flexShrink: 0, marginRight: 4,
+                width: 56, height: 22, flexShrink: 0, marginRight: 4,
                 fontSize: 11, fontWeight: 700, letterSpacing: 0.4,
                 display: "inline-flex", alignItems: "center", justifyContent: "center",
                 background: maskOn ? "#3a2828" : "transparent",
