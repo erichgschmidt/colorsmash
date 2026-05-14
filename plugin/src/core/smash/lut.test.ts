@@ -7,7 +7,8 @@ import { extractFeatures } from './features';
 import { smash } from './transform';
 import type { SmashEngineOutput } from './transform';
 import type { ImagePairProfile } from './types';
-import { bakeSmashLut, serializeSmashCube } from './lut';
+import { bakeSmashLut, bakeTargetPerPixel, serializeSmashCube } from './lut';
+import { applyTransform } from './transform';
 
 // ────────── buffer helpers (mirrors transform.test.ts) ──────────
 
@@ -284,5 +285,66 @@ describe('bakeSmashLut() empty bandTransforms', () => {
         }
       }
     }
+  });
+});
+
+// ────────── bakeTargetPerPixel — diagnostic ground-truth bake ──────────
+
+describe('bakeTargetPerPixel()', () => {
+  it('output dimensions match input; alpha is preserved per pixel', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const srcDNA = extractSourceDNA(srcRgba, 32, 32, { bandCount: 3, sampleStride: 1 });
+    const tgtDNA = extractTargetStructure(tgtRgba, 32, 32, { bandCount: 3, sampleStride: 1 });
+    const profile = pairDNA(srcDNA, tgtDNA);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+    const engine = smash(srcFeatures, tgtFeatures, profile);
+
+    const out = bakeTargetPerPixel(engine, tgtRgba, 32, 32);
+    expect(out.length).toBe(32 * 32 * 4);
+
+    // Every pixel's alpha matches input.
+    for (let i = 0; i < 32 * 32; i++) {
+      expect(out[i * 4 + 3]).toBe(tgtRgba[i * 4 + 3]);
+    }
+  });
+
+  it('per-pixel output equals applyTransform output for opaque pixels (no LUT in the path)', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const srcDNA = extractSourceDNA(srcRgba, 32, 32, { bandCount: 3, sampleStride: 1 });
+    const tgtDNA = extractTargetStructure(tgtRgba, 32, 32, { bandCount: 3, sampleStride: 1 });
+    const profile = pairDNA(srcDNA, tgtDNA);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+    const engine = smash(srcFeatures, tgtFeatures, profile);
+
+    const baked = bakeTargetPerPixel(engine, tgtRgba, 32, 32);
+
+    // Spot-check: for the first, middle, and last opaque pixels, the bake
+    // value must equal applyTransform exactly (no quantization in the path).
+    for (const idx of [0, 32 * 16 + 16, 32 * 32 - 1]) {
+      const o = idx * 4;
+      const r = tgtRgba[o], g = tgtRgba[o + 1], b = tgtRgba[o + 2];
+      const [er, eg, eb] = applyTransform(engine, r, g, b);
+      expect(baked[o]).toBe(er);
+      expect(baked[o + 1]).toBe(eg);
+      expect(baked[o + 2]).toBe(eb);
+    }
+  });
+
+  it('throws when rgba length is smaller than width × height × 4', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const srcDNA = extractSourceDNA(srcRgba, 32, 32, { bandCount: 3, sampleStride: 1 });
+    const tgtDNA = extractTargetStructure(tgtRgba, 32, 32, { bandCount: 3, sampleStride: 1 });
+    const profile = pairDNA(srcDNA, tgtDNA);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+    const engine = smash(srcFeatures, tgtFeatures, profile);
+
+    const tooSmall = new Uint8Array(10);
+    expect(() => bakeTargetPerPixel(engine, tooSmall, 32, 32)).toThrow();
   });
 });

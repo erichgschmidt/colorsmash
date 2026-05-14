@@ -3880,6 +3880,18 @@ export function MatchTab() {
           sourceSnap={srcSnap}
           targetSnap={tgt.snap}
           onEngineChange={setSmashEngine}
+          onTestBake={(pixels, w, h) => {
+            // Diagnostic: push the per-pixel ground-truth bake into the
+            // matched preview tile. The LUT-driven smash preview useEffect
+            // will overwrite this on the next engine change (slider/toggle),
+            // so the test-bake state is naturally transient.
+            if (matchedHandleRef.current) {
+              matchedHandleRef.current.setPixels(pixels, w, h);
+              if (tgt.snap) {
+                matchedHandleRef.current.setBefore(tgt.snap.data, tgt.snap.width, tgt.snap.height);
+              }
+            }
+          }}
         />
       )}
     </div>

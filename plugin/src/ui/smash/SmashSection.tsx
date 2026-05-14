@@ -28,6 +28,7 @@ import {
   smash,
   buildSmashCdfs,
   bakeSmashLut,
+  bakeTargetPerPixel,
   serializeSmashCube,
   DEFAULT_SMASH_CONTROLS,
   type SmashEngineOutput,
@@ -54,6 +55,11 @@ export interface SmashSectionProps {
    *  parent uses this to drive the matched preview. Receives null when the
    *  engine has no valid output (no snaps yet). */
   onEngineChange?: (engine: SmashEngineOutput | null) => void;
+  /** Fired when the user clicks Test Bake. The parent should display the
+   *  pixels in the matched preview tile so the user can A/B against the
+   *  current LUT-based preview (which the parent will restore on the next
+   *  engine change). Receives a Uint8Array of RGBA bytes plus dimensions. */
+  onTestBake?: (pixels: Uint8Array, width: number, height: number) => void;
 }
 
 // ────────── internal pipeline type ──────────
@@ -66,7 +72,7 @@ interface EnginePipeline {
 // ────────── component ──────────
 
 export function SmashSection(props: SmashSectionProps): JSX.Element {
-  const { sourceSnap, targetSnap, onEngineChange } = props;
+  const { sourceSnap, targetSnap, onEngineChange, onTestBake } = props;
 
   const [amount, setAmount] = useState<number>(SMASH_PRESET_AMOUNTS.strong);
   const [traits, setTraits] = useState<TraitAmounts>(DEFAULT_TRAIT_AMOUNTS);
@@ -260,6 +266,31 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     }
   };
 
+  // Test Bake — diagnostic: render the engine's per-pixel ground-truth output
+  // (no LUT, no interpolation, no grid quantization) into the panel preview.
+  // The user A/Bs against the LUT-applied PS canvas to see whether the
+  // canvas's deviation from the panel preview is the LUT's fidelity loss vs
+  // the engine's intent. Any subsequent engine change (slider/toggle) reverts
+  // the preview to the live LUT path automatically.
+  const onTestBakeClick = () => {
+    if (!pipeline || !targetSnap || !onTestBake) return;
+    setExportStatus("baking test image…");
+    try {
+      const t0 = typeof performance !== "undefined" ? performance.now() : Date.now();
+      const baked = bakeTargetPerPixel(
+        pipeline.engine,
+        targetSnap.data,
+        targetSnap.width,
+        targetSnap.height,
+      );
+      const t1 = typeof performance !== "undefined" ? performance.now() : Date.now();
+      onTestBake(baked, targetSnap.width, targetSnap.height);
+      setExportStatus(`test bake shown (${Math.round(t1 - t0)} ms — touch any control to revert)`);
+    } catch (err: any) {
+      setExportStatus(`test bake error: ${err?.message ?? err}`);
+    }
+  };
+
   const onExportCube = async () => {
     if (!pipeline) return;
     setExportStatus("baking…");
@@ -422,6 +453,13 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
             title="Fork a new Smash LUT layer alongside the previous one — auto-hides prior Smash layers so the new one shows alone. Use to compare variations."
           >
             +
+          </div>
+          <div
+            style={pipeline && onTestBake ? actionButtonStyle : actionButtonDisabledStyle}
+            onClick={onTestBakeClick}
+            title="Diagnostic: render the engine's per-pixel ground-truth output (no LUT, no interpolation) into the panel preview. A/B against the LUT-applied PS canvas to see whether the LUT is losing fidelity vs the engine's intent. Touch any control to revert to the live LUT preview."
+          >
+            Test Bake
           </div>
           <div
             style={pipeline ? actionButtonStyle : actionButtonDisabledStyle}
