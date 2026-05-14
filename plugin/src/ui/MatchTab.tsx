@@ -2990,7 +2990,15 @@ export function MatchTab() {
             // to a grayscale value strip — the palette is a visual preview of
             // what the source contributes to the match under that preset.
             thumbnail={
-              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              // v1.21 — hide Match's PresetStrip (Full/Color/Hue/Sat/Contrast)
+              // and source PaletteStrip when Smash mode is active. Smash has
+              // its own SourceDNAStrip + preset row in SmashSection; the Match
+              // controls don't speak Smash's per-band engine language and
+              // their state writes here are no-ops in Smash mode anyway.
+              <div style={{
+                display: (__SMASH_ENABLED__ && smashMode === "smash") ? "none" : "flex",
+                flexDirection: "column", gap: 4,
+              }}>
                 <PresetStrip
                   srcRgba={srcSnap?.data ?? null}
                   srcWidth={srcSnap?.width ?? 0}
