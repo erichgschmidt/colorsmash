@@ -206,6 +206,9 @@ export const DEFAULT_SMASH_CONTROLS: SmashControls = {
     // grayscale target colorize broadly instead of staying monochrome.
     liftNeutrals: true,
   },
+  // Phase 4.5c: passes = 1 by default (one transform per pixel). Users can
+  // dial up to 2 or 3 to bake the compounded "multi-pass" look into the LUT.
+  passes: 1,
 };
 
 // ────────── internal helpers ──────────
@@ -346,16 +349,49 @@ export function smash(
 }
 
 /**
- * Apply a Smash transform to a single sRGB byte triple. Soft band membership:
- * the pixel's perceptual luma is used to interpolate between adjacent band
- * curves with a Gaussian falloff scaled by controls.bandSoftness. The blended
- * result is then ACES-gamut-compressed at full strength and returned as bytes.
+ * Apply a Smash transform N times to a single sRGB byte triple, where N is
+ * `controls.passes` (default 1, clamped to [1, 4]). Each pass re-runs the
+ * full transform on the previous pass's output. Compounding behavior: each
+ * iteration pushes chroma further up source's CDF because the input's
+ * chroma distribution shifts after pass 1. Users dial passes up to 2 or 3
+ * to bake the "stale-preview" vivid look into the single Color Lookup
+ * adjustment layer's LUT — equivalent to applying the LUT layer N times
+ * in succession in PS, but baked into one layer.
  *
  * Identity for empty input: if all band transforms fellBack, the input pixel
  * is returned unchanged (after gamut compression, which leaves in-gamut input
- * alone).
+ * alone) regardless of how many passes are requested.
  */
 export function applyTransform(
+  out: SmashEngineOutput,
+  r: number,
+  g: number,
+  b: number,
+): Vec3 {
+  const rawPasses = out.controls.passes ?? 1;
+  // Clamp to [1, 4]: 1 is a no-op loop (single transform), 4 is enough to
+  // hit visible diminishing returns on typical inputs. Round to int because
+  // a fractional pass count has no clean interpretation here.
+  const passes = Math.max(1, Math.min(4, Math.round(rawPasses)));
+  let cr = r;
+  let cg = g;
+  let cb = b;
+  for (let i = 0; i < passes; i++) {
+    const [nr, ng, nb] = applyTransformOnePass(out, cr, cg, cb);
+    cr = nr; cg = ng; cb = nb;
+  }
+  return [cr, cg, cb];
+}
+
+/**
+ * Single-pass Smash transform. Soft band membership: the pixel's perceptual
+ * luma is used to interpolate between adjacent band curves with a Gaussian
+ * falloff scaled by controls.bandSoftness. The blended result is then
+ * ACES-gamut-compressed at full strength and returned as bytes.
+ *
+ * Not exported — callers use applyTransform() which honors `controls.passes`.
+ */
+function applyTransformOnePass(
   out: SmashEngineOutput,
   r: number,
   g: number,

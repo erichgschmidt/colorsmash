@@ -366,3 +366,60 @@ describe('applyTransform() liftNeutrals chroma floor', () => {
     expect(Number.isFinite(engine.sourceMedianChroma)).toBe(true);
   });
 });
+
+// ────────── Passes (multi-pass bake) — Phase 4.5c ──────────
+
+describe('applyTransform() passes multi-pass bake', () => {
+  // The "stale-preview vivid" look the user accidentally discovered when the
+  // panel snap captured a post-LUT layer is equivalent to running the engine
+  // N times in succession. With passes>=2, applyTransform should produce
+  // strictly more compounded chroma than passes=1 on near-neutral inputs.
+  it('passes=2 produces strictly more chroma than passes=1 on a neutral shadow input', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const r = 64, g = 64, b = 64; // neutral mid-shadow
+
+    const ctrl1: SmashControls = { ...DEFAULT_SMASH_CONTROLS, passes: 1 };
+    const ctrl2: SmashControls = { ...DEFAULT_SMASH_CONTROLS, passes: 2 };
+
+    const eng1 = smash(srcFeatures, tgtFeatures, profile, ctrl1);
+    const eng2 = smash(srcFeatures, tgtFeatures, profile, ctrl2);
+
+    const [r1, g1, b1] = applyTransform(eng1, r, g, b);
+    const [r2, g2, b2] = applyTransform(eng2, r, g, b);
+
+    const spread1 = Math.max(r1, g1, b1) - Math.min(r1, g1, b1);
+    const spread2 = Math.max(r2, g2, b2) - Math.min(r2, g2, b2);
+
+    expect(spread2).toBeGreaterThan(spread1);
+  });
+
+  it('passes is clamped to [1, 4] — passes=0 behaves like passes=1, passes=10 like passes=4', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const r = 64, g = 64, b = 64;
+
+    const ctrl0: SmashControls = { ...DEFAULT_SMASH_CONTROLS, passes: 0 };
+    const ctrl1: SmashControls = { ...DEFAULT_SMASH_CONTROLS, passes: 1 };
+    const ctrl4: SmashControls = { ...DEFAULT_SMASH_CONTROLS, passes: 4 };
+    const ctrl10: SmashControls = { ...DEFAULT_SMASH_CONTROLS, passes: 10 };
+
+    const out0 = applyTransform(smash(srcFeatures, tgtFeatures, profile, ctrl0), r, g, b);
+    const out1 = applyTransform(smash(srcFeatures, tgtFeatures, profile, ctrl1), r, g, b);
+    const out4 = applyTransform(smash(srcFeatures, tgtFeatures, profile, ctrl4), r, g, b);
+    const out10 = applyTransform(smash(srcFeatures, tgtFeatures, profile, ctrl10), r, g, b);
+
+    // 0 → clamped to 1
+    expect(out0).toEqual(out1);
+    // 10 → clamped to 4
+    expect(out10).toEqual(out4);
+  });
+});

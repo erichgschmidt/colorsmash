@@ -150,6 +150,12 @@ export interface SmashControls {
   /** v1.21 Phase 4.5+ — colorization toggle state. Optional for backward
    *  compatibility; engine treats undefined as `{ hueByLuma: true }`. */
   readonly colorization?: ColorizationOptions;
+  /** v1.21 Phase 4.5c — number of times applyTransform iterates per pixel.
+   *  Compounding effect: each pass re-runs the transform on the previous
+   *  output, pushing chroma further up source's CDF. 1 = current behavior;
+   *  2-3 = the "stale-preview" vivid look baked into the LUT. Clamped to
+   *  [1, 4] at apply-time. Optional for backward compat — undefined = 1. */
+  readonly passes?: number;
 }
 
 /** Sentinel kinds in a persisted ColorSmash preset. */

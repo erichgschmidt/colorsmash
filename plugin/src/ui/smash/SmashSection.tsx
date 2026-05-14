@@ -73,6 +73,12 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   const [traitsOpen, setTraitsOpen] = useState<boolean>(false);
   const [colorization, setColorization] = useState<ColorizationToggleState>(DEFAULT_COLORIZATION_TOGGLES);
   const [colorizationOpen, setColorizationOpen] = useState<boolean>(false);
+  // Phase 4.5c — Passes: how many times applyTransform iterates per pixel
+  // during the LUT bake. 1 = default (single transform). 2-3 emulates the
+  // "stale-preview multi-pass" look the user accidentally discovered when
+  // the panel snap captured a post-LUT version of the target layer. 4 is
+  // the engine clamp ceiling.
+  const [passes, setPasses] = useState<number>(1);
   const [exportStatus, setExportStatus] = useState<string>("");
   const loadedRef = useRef<boolean>(false);
 
@@ -117,17 +123,21 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           ...(typeof cz.liftNeutrals === "boolean" ? { liftNeutrals: cz.liftNeutrals } : {}),
         }));
       }
+      // v1.21 Phase 4.5c — restore Passes (clamped to [1, 4]).
+      if (typeof persisted?.passes === "number" && Number.isFinite(persisted.passes)) {
+        setPasses(Math.max(1, Math.min(4, Math.round(persisted.passes))));
+      }
       loadedRef.current = true;
     })();
     return () => { cancelled = true; };
   }, []);
 
-  // Save amount + traits + colorization on change (debounced 500ms). Skip
-  // until initial load resolved.
+  // Save amount + traits + colorization + passes on change (debounced 500ms).
+  // Skip until initial load resolved.
   useEffect(() => {
     if (!loadedRef.current) return;
-    saverRef.current?.({ amount, traits, colorization });
-  }, [amount, traits, colorization]);
+    saverRef.current?.({ amount, traits, colorization, passes });
+  }, [amount, traits, colorization, passes]);
 
   // ── Heavy: features + DNA + profile + CDF LUTs. Depends on SNAPS ONLY,
   // so slider drags don't re-run extractFeatures (~100K pixels per call)
@@ -156,6 +166,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       global: amount,
       traits,
       colorization,
+      passes,
     };
     const engine = smash(
       snapDerived.sourceFeatures,
@@ -165,7 +176,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       snapDerived.cdfs,
     );
     return { sourceDNA: snapDerived.sourceDNA, engine };
-  }, [snapDerived, amount, traits, colorization]);
+  }, [snapDerived, amount, traits, colorization, passes]);
 
   // Propagate engine changes to the parent via useEffect, NOT inside the
   // useMemo body above. Calling setState on the parent during a child's
@@ -292,6 +303,39 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
         onPresetChange={onPresetChange}
         disabled={!hasSnaps}
       />
+
+      {/* Passes pill row (Phase 4.5c). Inline because it's a small, primary
+          intensity knob — not gated behind a disclosure. 1× = one transform
+          per pixel (current default). 2× and 3× bake the multi-pass compound
+          look (re-running the transform on its own output) directly into
+          the LUT, matching what the panel preview sometimes accidentally
+          showed when the snap captured a post-LUT layer. 4× is the engine
+          clamp ceiling — past that, output saturates/clips with no useful
+          additional change. */}
+      <div style={passesRowStyle}>
+        <span style={passesLabelStyle}>PASSES</span>
+        {[1, 2, 3, 4].map((n) => {
+          const active = passes === n;
+          return (
+            <div
+              key={n}
+              onClick={() => { if (hasSnaps) setPasses(n); }}
+              title={
+                n === 1
+                  ? "Single transform per pixel (default)."
+                  : `Apply the transform ${n} times in succession on each pixel during LUT bake. Compounds chroma; useful when the source has a strong color story you want pushed further into a near-neutral target.`
+              }
+              style={{
+                ...passesPillStyle,
+                ...(active ? passesPillActiveStyle : passesPillInactiveStyle),
+                ...(hasSnaps ? {} : passesPillDisabledStyle),
+              }}
+            >
+              {n}×
+            </div>
+          );
+        })}
+      </div>
 
       {/* Traits disclosure. Closed by default so the primary surface stays
           the one-big-knob + preset row. Opens to reveal six trait sliders
@@ -467,4 +511,37 @@ const plusButtonDisabledStyle: React.CSSProperties = {
 
 const statusStyle: React.CSSProperties = {
   fontSize: 9, color: "#888", minWidth: 56, textAlign: "right",
+};
+
+// Passes pill row styles — small inline strip matching the SmashControlsBar
+// preset-chip vocabulary. Compact: a tag-style label on the left and four
+// pill buttons on the right.
+const passesRowStyle: React.CSSProperties = {
+  display: "flex", alignItems: "center", gap: 4,
+  marginTop: -2, // tuck under the controls bar
+};
+
+const passesLabelStyle: React.CSSProperties = {
+  fontSize: 9, fontWeight: 600, letterSpacing: 1, color: "#888",
+  textTransform: "uppercase", marginRight: 4,
+};
+
+const passesPillStyle: React.CSSProperties = {
+  display: "inline-flex", alignItems: "center", justifyContent: "center",
+  height: 18, minWidth: 26,
+  border: "1px solid #1a1a1a", borderRadius: 2,
+  fontSize: 10, fontWeight: 600,
+  cursor: "pointer", userSelect: "none",
+};
+
+const passesPillActiveStyle: React.CSSProperties = {
+  background: "#6ab7ff", color: "#0f1620",
+};
+
+const passesPillInactiveStyle: React.CSSProperties = {
+  background: "#3a3a3a", color: "#aaa",
+};
+
+const passesPillDisabledStyle: React.CSSProperties = {
+  opacity: 0.4, cursor: "default",
 };

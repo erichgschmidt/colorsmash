@@ -37,6 +37,9 @@ export interface SmashPersisted {
     liftNeutrals?: boolean;
     // Future toggles slot in here as Phase 5+ ships them.
   };
+  /** v1.21 Phase 4.5c — how many times applyTransform iterates per pixel
+   *  during the LUT bake. Clamped to [1, 4] on load. Default 1. */
+  passes?: number;
 }
 
 async function getDataFolder(): Promise<any | null> {
