@@ -2995,30 +2995,29 @@ export function MatchTab() {
               // its own SourceDNAStrip + preset row in SmashSection; the Match
               // controls don't speak Smash's per-band engine language and
               // their state writes here are no-ops in Smash mode anyway.
-              <div style={{
-                display: (__SMASH_ENABLED__ && smashMode === "smash") ? "none" : "flex",
-                flexDirection: "column", gap: 4,
-              }}>
-                <PresetStrip
-                  srcRgba={srcSnap?.data ?? null}
-                  srcWidth={srcSnap?.width ?? 0}
-                  srcHeight={srcSnap?.height ?? 0}
-                  active={activePreset}
-                  onSelect={setActivePreset}
-                />
-                <PaletteStrip
-                  swatches={paletteSwatches}
-                  weights={paletteWeights}
-                  setWeights={setPaletteWeights}
-                  preset={activePreset}
-                  count={paletteCount}
-                  setCount={setPaletteCount}
-                  adaptive={paletteAdaptive}
-                  setAdaptive={setPaletteAdaptive}
-                  softness={sourceSoftness}
-                  setSoftness={setSourceSoftness}
-                />
-              </div>
+              (__SMASH_ENABLED__ && smashMode === "smash") ? null : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <PresetStrip
+                    srcRgba={srcSnap?.data ?? null}
+                    srcWidth={srcSnap?.width ?? 0}
+                    srcHeight={srcSnap?.height ?? 0}
+                    active={activePreset}
+                    onSelect={setActivePreset}
+                  />
+                  <PaletteStrip
+                    swatches={paletteSwatches}
+                    weights={paletteWeights}
+                    setWeights={setPaletteWeights}
+                    preset={activePreset}
+                    count={paletteCount}
+                    setCount={setPaletteCount}
+                    adaptive={paletteAdaptive}
+                    setAdaptive={setPaletteAdaptive}
+                    softness={sourceSoftness}
+                    setSoftness={setSourceSoftness}
+                  />
+                </div>
+              )
             }
           />
         </div>
@@ -3079,41 +3078,40 @@ export function MatchTab() {
       )}
 
       {/* v1.21 — Pro mode toggle. Renders directly below the matched preview
-          so the user can swap the entire lower control surface between Match
-          and Smash without leaving the panel. Source/target pickers and the
-          preview itself are shared between modes. Gated by __SMASH_ENABLED__
+          but INSIDE the TARGET / PREVIEW island. Visually anchors the toggle
+          to the preview which is the shared surface. Gated by __SMASH_ENABLED__
           so the free build's MatchTab renders byte-equivalent to today. */}
       {__SMASH_ENABLED__ && (
         <ModeToggle mode={smashMode} onModeChange={setSmashMode} />
       )}
 
-      {/* Match-mode lower controls. Wrapped in a display-none container when
-          Smash mode is active so all the existing state hooks keep running
-          (no reset on toggle) but the JSX is hidden. Free build always renders
-          this branch since __SMASH_ENABLED__ folds to false. */}
-      <div style={{ display: (__SMASH_ENABLED__ && smashMode === "smash") ? "none" : "block" }}>
-
-      {/* Target palette weight bar — mirrors the source palette but the
-          weights modulate CURVE APPLICATION strength per cluster (not source
-          contribution). Drag a target swatch to 0 → curves don't apply to that
-          cluster's pixels (e.g., "leave skies alone, push the rest"). Reuses
-          the same component, no preset transform (target swatches always show
-          actual target colors). Sits directly below the matched preview, where
-          it visually relates to "what's being modified" rather than to source. */}
-      <div style={{ marginTop: 4 }}>
-        <PaletteStrip
-          swatches={targetPaletteSwatches}
-          weights={targetPaletteWeights}
-          setWeights={setTargetPaletteWeights}
-          count={paletteCount}
-          setCount={setPaletteCount}
-          adaptive={paletteAdaptive}
-          setAdaptive={setPaletteAdaptive}
-          softness={targetSoftness}
-          setSoftness={setTargetSoftness}
-        />
-      </div>
+      {/* Target palette weight bar — Match-only control inside TARGET / PREVIEW
+          island. Wrapped in a Smash-mode conditional so it disappears when
+          flipping to Smash (Smash doesn't speak per-cluster target weights). */}
+      {(!__SMASH_ENABLED__ || smashMode === "match") && (
+        <div style={{ marginTop: 4 }}>
+          <PaletteStrip
+            swatches={targetPaletteSwatches}
+            weights={targetPaletteWeights}
+            setWeights={setTargetPaletteWeights}
+            count={paletteCount}
+            setCount={setPaletteCount}
+            adaptive={paletteAdaptive}
+            setAdaptive={setPaletteAdaptive}
+            softness={targetSoftness}
+            setSoftness={setTargetSoftness}
+          />
+        </div>
+      )}
       </div>{/* end TARGET island */}
+
+      {/* Match-mode lower controls (TRANSFORM, OUTPUT, MASK, HISTORY,
+          FITTED CURVES islands). Conditionally rendered as a Fragment so
+          there's no extra wrapping div — the islands' margins and gaps
+          continue to compose with the outer flex column exactly as in
+          Match-only builds. MatchTab's state hooks survive unmount, so
+          flipping Smash → Match → Smash restores all slider positions. */}
+      {(!__SMASH_ENABLED__ || smashMode === "match") && (<>
 
       {/* COLOR / TONE / ENVELOPE island. v1.20.70. The 3 inline section
           dividers (each was a 1px gray rule) are removed — the island
@@ -3837,7 +3835,7 @@ export function MatchTab() {
           targetId / etc. Logs every name-shaped value across every API surface so we can
           see whether ANY source updates after Save As before the panel is reopened. */}
 
-      </div>{/* end Match-mode lower controls wrapper */}
+      </>)}{/* end Match-mode lower controls conditional fragment */}
 
       {/* Smash-mode lower controls. Slim section that receives the same src
           /tgt snaps MatchTab already manages and exposes the engine output up
