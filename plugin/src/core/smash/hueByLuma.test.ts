@@ -44,7 +44,7 @@ describe('buildHueByLumaLut + lookupHueByLuma', () => {
   });
 
   // 2. Single-bucket / collapsed L: all features share the same L.
-  it('collapsed L: all features at same luma return that average at lookup', () => {
+  it('collapsed L: all features at same luma return magnitude-preserved average', () => {
     const features = [
       makeFeature(0.5, 0.1, -0.2),
       makeFeature(0.5, 0.3, 0.4),
@@ -52,10 +52,21 @@ describe('buildHueByLumaLut + lookupHueByLuma', () => {
     ];
     const lut = buildHueByLumaLut(features, 32);
     // All features map to bucket 0 (lRange === 0).
-    // Average a = (0.1 + 0.3 + -0.1) / 3 = 0.1; average b = (-0.2 + 0.4 + 0.0) / 3 = 0.0667.
+    // Vector mean: avgA = 0.1, avgB = 0.0667, |vec| ≈ 0.1202.
+    // Scalar chroma mean: avgC = (√0.05 + √0.25 + √0.01) / 3 ≈ 0.2745.
+    // The LUT rescales the vector mean's DIRECTION to the scalar chroma
+    // MAGNITUDE so mixed-hue buckets don't collapse to neutral.
+    //   scale = avgC / |vec| ≈ 2.284
+    //   a = 0.1   * 2.284 ≈ 0.2284
+    //   b = 0.0667 * 2.284 ≈ 0.1524
     const [a, b] = lookupHueByLuma(lut, 0.5);
-    expect(a).toBeCloseTo(0.1, 4);
-    expect(b).toBeCloseTo(0.0667, 3);
+    expect(a).toBeCloseTo(0.2284, 3);
+    expect(b).toBeCloseTo(0.1524, 3);
+
+    // Sanity: the output direction matches the vector-mean direction.
+    const inputAngle = Math.atan2(0.0667, 0.1);
+    const outputAngle = Math.atan2(b, a);
+    expect(Math.abs(inputAngle - outputAngle)).toBeLessThan(1e-3);
   });
 
   // 3. Two-color source at L=0.2 and L=0.8.

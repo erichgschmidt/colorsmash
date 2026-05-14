@@ -70,6 +70,12 @@ export function buildHueByLumaLut(
   const lRange = lMax - lMin;
   const sumA = new Float64Array(b);
   const sumB = new Float64Array(b);
+  // Scalar sum of chroma magnitudes (sqrt(a²+b²)) per bucket. The vector mean
+  // (sumA/N, sumB/N) gives DIRECTION but its magnitude collapses toward zero
+  // when a bucket has hues that cancel (e.g. red AND cyan at the same L). To
+  // preserve the bucket's typical chroma we average the magnitudes separately
+  // and rescale the vector mean to that magnitude below.
+  const sumC = new Float64Array(b);
   const sampleCounts = new Int32Array(b);
 
   // Pass 2: accumulate per bucket.
@@ -81,17 +87,42 @@ export function buildHueByLumaLut(
     } else {
       bucket = Math.min(b - 1, Math.max(0, Math.floor(((f.luma - lMin) / lRange) * (b - 1))));
     }
-    sumA[bucket] += f.oklab[1];
-    sumB[bucket] += f.oklab[2];
+    const a = f.oklab[1];
+    const fb = f.oklab[2];
+    sumA[bucket] += a;
+    sumB[bucket] += fb;
+    sumC[bucket] += Math.sqrt(a * a + fb * fb);
     sampleCounts[bucket]++;
   }
 
-  // Pass 3: compute per-bucket averages (skip empty buckets for now).
+  // Pass 3: compute per-bucket magnitude-preserving averages. For each
+  // populated bucket we take the vector mean for DIRECTION and the scalar
+  // mean of chroma for MAGNITUDE, then rescale to combine them. Effect:
+  // - bucket with one dominant hue (all-red): direction strong, magnitude
+  //   strong, factor ≈ 1 → output unchanged from naive average
+  // - bucket with mixed hues (red + cyan): direction weak (cancels),
+  //   magnitude strong → output preserves the dominant direction at the
+  //   typical chroma level instead of collapsing to ~zero
   const values = new Float32Array(b * 2);
   for (let i = 0; i < b; i++) {
     if (sampleCounts[i] > 0) {
-      values[i * 2 + 0] = sumA[i] / sampleCounts[i];
-      values[i * 2 + 1] = sumB[i] / sampleCounts[i];
+      const inv = 1 / sampleCounts[i];
+      const avgA = sumA[i] * inv;
+      const avgB = sumB[i] * inv;
+      const avgC = sumC[i] * inv;
+      const vecMag = Math.sqrt(avgA * avgA + avgB * avgB);
+      if (vecMag > 1e-6) {
+        // Rescale unit direction by the average chroma magnitude.
+        const scale = avgC / vecMag;
+        values[i * 2 + 0] = avgA * scale;
+        values[i * 2 + 1] = avgB * scale;
+      } else {
+        // Full cancellation — bucket has no dominant direction. Output 0
+        // contribution (the bucket's typical pixel really is neutral on
+        // average even if individual pixels have chroma).
+        values[i * 2 + 0] = 0;
+        values[i * 2 + 1] = 0;
+      }
     }
     // Empty buckets remain 0 — filled in pass 4.
   }

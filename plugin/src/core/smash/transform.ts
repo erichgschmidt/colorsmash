@@ -89,9 +89,12 @@ export interface SmashEngineOutput {
 }
 
 /** Below this target median chroma, the colorization path is eligible.
- *  Set to 2× HUE_FILTER_CHROMA so we activate slightly before the hue CDF
- *  itself becomes unreliable (it filters at HUE_FILTER_CHROMA). */
-const GRAYSCALE_TARGET_THRESHOLD = 0.04;
+ *  Tuned at 0.015 (roughly 75% of HUE_FILTER_CHROMA) so we ONLY activate on
+ *  effectively-monochrome targets. Earlier 0.04 was too eager — caught
+ *  typical photos with low-saturation backgrounds and produced visibly
+ *  different output from per-dimension CDF even when the target had real
+ *  chroma to redistribute. */
+const GRAYSCALE_TARGET_THRESHOLD = 0.015;
 
 /** Chroma below this is too low to give a stable hue angle (atan2 noise
  *  amplifies). Used to filter the hue CDF inputs. */
