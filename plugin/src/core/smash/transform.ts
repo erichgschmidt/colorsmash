@@ -205,6 +205,10 @@ export const DEFAULT_SMASH_CONTROLS: SmashControls = {
     // pixels get a chroma floor at source's median chroma so shadows in a
     // grayscale target colorize broadly instead of staying monochrome.
     liftNeutrals: true,
+    // Phase 4.5g: proportionMatch defaults to 1.0 (tight) — lift floor uses
+    // source's chroma at the smashed L, preserving source's L→C structure
+    // and the output's color/neutral proportions.
+    proportionMatch: 1.0,
   },
   // Phase 4.5c: passes = 1 by default (one transform per pixel). Users can
   // dial up to 2 or 3 to bake the compounded "multi-pass" look into the LUT.
@@ -572,7 +576,23 @@ function applyTransformOnePass(
     bSrcLut = lookup[1];
     srcLutMag = Math.sqrt(aSrcLut * aSrcLut + bSrcLut * bSrcLut);
   }
-  const liftFloor = out.hueByLumaLut ? srcLutMag : out.sourceMedianChroma;
+
+  // Phase 4.5g — proportionMatch controls how tightly liftFloor tracks
+  // source's L-conditional chroma vs the global median. 1.0 = pure per-L
+  // (Phase 4.5f behavior, faithful to source's color/neutral structure).
+  // 0.0 = pure global median (pre-4.5f behavior, uniform lift across L).
+  // Intermediate values lerp between the two. Defaults to 1.0 (tight) so
+  // existing controls without the field still get the proportion-faithful
+  // behavior. When hueByLumaLut is null (degenerate input), per-L isn't
+  // available — falls back to global median regardless of slider value.
+  const rawProportion = controls.colorization?.proportionMatch;
+  const proportionMatch =
+    typeof rawProportion === "number" && Number.isFinite(rawProportion)
+      ? Math.max(0, Math.min(1, rawProportion))
+      : 1;
+  const liftFloor = out.hueByLumaLut
+    ? proportionMatch * srcLutMag + (1 - proportionMatch) * out.sourceMedianChroma
+    : out.sourceMedianChroma;
 
   // Phase 4.5b → 4.5f — liftNeutrals (ON by default) floors the rank-mapped
   // chroma CDF result at SOURCE'S CHROMA AT THE TARGET'S L. Earlier the

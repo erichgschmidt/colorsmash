@@ -85,6 +85,10 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   // the panel snap captured a post-LUT version of the target layer. 4 is
   // the engine clamp ceiling.
   const [passes, setPasses] = useState<number>(1);
+  // Phase 4.5g — Proportion match: 1.0 = tight (per-L lift, mirrors source's
+  // color/neutral structure), 0.0 = loose (global median lift, uniform
+  // colorization). Slider lerps between the two regimes.
+  const [proportionMatch, setProportionMatch] = useState<number>(1.0);
   const [exportStatus, setExportStatus] = useState<string>("");
   const loadedRef = useRef<boolean>(false);
 
@@ -136,17 +140,21 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       if (typeof persisted?.passes === "number" && Number.isFinite(persisted.passes)) {
         setPasses(Math.max(1, Math.min(4, persisted.passes)));
       }
+      // v1.21 Phase 4.5g — restore Proportion match (clamped to [0, 1]).
+      if (typeof persisted?.proportionMatch === "number" && Number.isFinite(persisted.proportionMatch)) {
+        setProportionMatch(Math.max(0, Math.min(1, persisted.proportionMatch)));
+      }
       loadedRef.current = true;
     })();
     return () => { cancelled = true; };
   }, []);
 
-  // Save amount + traits + colorization + passes on change (debounced 500ms).
-  // Skip until initial load resolved.
+  // Save amount + traits + colorization + passes + proportionMatch on
+  // change (debounced 500ms). Skip until initial load resolved.
   useEffect(() => {
     if (!loadedRef.current) return;
-    saverRef.current?.({ amount, traits, colorization, passes });
-  }, [amount, traits, colorization, passes]);
+    saverRef.current?.({ amount, traits, colorization, passes, proportionMatch });
+  }, [amount, traits, colorization, passes, proportionMatch]);
 
   // ── Heavy: features + DNA + profile + CDF LUTs. Depends on SNAPS ONLY,
   // so slider drags don't re-run extractFeatures (~100K pixels per call)
@@ -174,7 +182,9 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       ...DEFAULT_SMASH_CONTROLS,
       global: amount,
       traits,
-      colorization,
+      // proportionMatch lives on colorization in the engine schema, so merge
+      // it in here rather than carrying it around as a separate field.
+      colorization: { ...colorization, proportionMatch },
       passes,
     };
     const engine = smash(
@@ -185,7 +195,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       snapDerived.cdfs,
     );
     return { sourceDNA: snapDerived.sourceDNA, engine };
-  }, [snapDerived, amount, traits, colorization, passes]);
+  }, [snapDerived, amount, traits, colorization, passes, proportionMatch]);
 
   // Propagate engine changes to the parent via useEffect, NOT inside the
   // useMemo body above. Calling setState on the parent during a child's
@@ -359,6 +369,31 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           title="Drag for fine control over how many times the transform compounds per pixel. 1.0× = single pass (default). 1.5× lands halfway between single and double apply. Past 2× is usually over the top."
         />
         <span style={passesValueStyle}>{passes.toFixed(2)}×</span>
+      </div>
+
+      {/* Phase 4.5g — Proportion match. Same inline-slider vocabulary as
+          PASSES. 100% (tight, default) makes the lift floor track source's
+          per-L chroma magnitude — the output's color/neutral RATIO mirrors
+          source's structure (dark stays dark, chromatic stays chromatic).
+          0% (loose) uses source's GLOBAL median for every L — every near-
+          neutral pixel gets the same lift regardless of where it sits in
+          the source's L→C structure (more uniform "everything colorizes"
+          look). Has no effect when liftNeutrals is OFF (no lift to
+          compute). */}
+      <div style={passesRowStyle}>
+        <span style={passesLabelStyle}>PROPORTION</span>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={5}
+          value={Math.round(proportionMatch * 100)}
+          onChange={(e) => setProportionMatch(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
+          disabled={!hasSnaps}
+          style={passesSliderStyle}
+          title="How tightly the output's color/neutral ratio matches the source's. 100% (tight, default): lift floor uses source's chroma at the target's smashed L — dark areas of source come through dark, bright/chromatic areas come through chromatic. 0% (loose): lift floor uses source's GLOBAL median chroma — uniform colorization across L, ignoring source's structure. Affects only when Lift Neutrals is on."
+        />
+        <span style={passesValueStyle}>{Math.round(proportionMatch * 100)}%</span>
       </div>
 
       {/* Traits disclosure. Closed by default so the primary surface stays

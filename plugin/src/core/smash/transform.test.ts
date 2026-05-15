@@ -397,6 +397,56 @@ describe('applyTransform() liftNeutrals chroma floor', () => {
     expect(highSpread).toBeGreaterThan(lowSpread + 30);
   });
 
+  it('proportionMatch slider blends lift floor between per-L (tight=1) and global median (loose=0)', () => {
+    // Same bimodal source as the proportion-preservation test (dark low-L,
+    // vivid red high-L). Sample at low-L target where the per-L floor is
+    // small but the global median floor is much larger. Tight=1 should
+    // produce LESS chroma than loose=0 at this L (per-L is faithful;
+    // global median over-lifts neutrals at low L).
+    const total = 32 * 32;
+    const srcRgba = new Uint8Array(total * 4);
+    for (let i = 0; i < total; i++) {
+      const v = i / (total - 1);
+      if (v < 0.5) {
+        const gray = Math.round(v * 80);
+        srcRgba[i * 4]     = gray;
+        srcRgba[i * 4 + 1] = gray;
+        srcRgba[i * 4 + 2] = gray;
+      } else {
+        srcRgba[i * 4]     = Math.round(180 + (v - 0.5) * 150);
+        srcRgba[i * 4 + 1] = Math.round((v - 0.5) * 100);
+        srcRgba[i * 4 + 2] = Math.round((v - 0.5) * 100);
+      }
+      srcRgba[i * 4 + 3] = 255;
+    }
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const ctrlTight: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { hueByLuma: true, liftNeutrals: true, proportionMatch: 1.0 },
+    };
+    const ctrlLoose: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { hueByLuma: true, liftNeutrals: true, proportionMatch: 0.0 },
+    };
+
+    const engTight = smash(srcFeatures, tgtFeatures, profile, ctrlTight);
+    const engLoose = smash(srcFeatures, tgtFeatures, profile, ctrlLoose);
+
+    // Low-L target neutral input: per-L floor (tight) is small for source's
+    // dark region, global median (loose) is larger because it averages in
+    // the bright vivid pixels. So loose should produce MORE chroma than
+    // tight at this L.
+    const [trL, tgL, tbL] = applyTransform(engTight, 30, 30, 30);
+    const [lrL, lgL, lbL] = applyTransform(engLoose, 30, 30, 30);
+    const tightSpreadLow = Math.max(trL, tgL, tbL) - Math.min(trL, tgL, tbL);
+    const looseSpreadLow = Math.max(lrL, lgL, lbL) - Math.min(lrL, lgL, lbL);
+    expect(looseSpreadLow).toBeGreaterThan(tightSpreadLow);
+  });
+
   it('engine output exposes sourceMedianChroma >= 0 (non-negative)', () => {
     const srcRgba = warmOrangeBuffer32();
     const tgtRgba = gradientBuffer32();

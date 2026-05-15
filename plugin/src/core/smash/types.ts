@@ -139,6 +139,19 @@ export interface ColorizationOptions {
    *  averaged L→(a,b) direction (Hue-by-L default). Default false — opt-in
    *  because the smooth-vs-discrete tradeoff isn't universally preferred. */
   readonly paletteSnap?: boolean;
+  /** Phase 4.5g — Proportion match. Controls how tightly the lift floor
+   *  tracks source's L-conditional chroma structure vs averaging across
+   *  the whole source. Range [0, 1]:
+   *    1.0 (tight, default): liftFloor = source's chroma magnitude AT THE
+   *        TARGET'S smashed L. Output color/neutral ratio mirrors source's
+   *        — dark areas of the source come through as dark in the output,
+   *        bright/chromatic areas come through as chromatic.
+   *    0.0 (loose): liftFloor = source's GLOBAL median chroma. Every
+   *        near-neutral pixel gets the same lift regardless of L → more
+   *        uniform colorization, less faithful to source's structure.
+   *    0.5: 50/50 blend.
+   *  Only affects the engine when liftNeutrals is on. */
+  readonly proportionMatch?: number;
   // Future toggles (Phase 5+) added here:
   //   readonly stochasticPerL?: boolean;
   //   readonly conditionalCdf?: boolean;

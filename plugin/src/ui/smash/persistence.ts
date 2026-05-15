@@ -41,6 +41,10 @@ export interface SmashPersisted {
   /** v1.21 Phase 4.5c — how many times applyTransform iterates per pixel
    *  during the LUT bake. Clamped to [1, 4] on load. Default 1. */
   passes?: number;
+  /** v1.21 Phase 4.5g — proportion match strength [0, 1]. 1 = tight (per-L
+   *  lift floor, mirrors source's structure). 0 = loose (global median lift,
+   *  uniform colorization). Default 1. */
+  proportionMatch?: number;
 }
 
 async function getDataFolder(): Promise<any | null> {

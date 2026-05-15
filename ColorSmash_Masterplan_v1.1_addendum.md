@@ -413,6 +413,32 @@ Combined with `lumaCdf` rank-mapping target's L distribution onto source's (so t
 
 **Falls back gracefully:** if `hueByLumaLut` is null (degenerate input), `liftFloor` falls back to `sourceMedianChroma` — the old behavior — so no regressions on edge cases.
 
+### 8.4c — `proportionMatch` slider (Phase 4.5g)
+
+The Phase 4.5f per-L floor is a strong default but it's also an opinion: it forces the output to mirror the source's L→C structure faithfully. Some users want that exactly; others want a softer interpretation that still colorizes neutrals broadly without being chained to source's exact proportions. Phase 4.5g exposes this as a continuous control.
+
+**Mechanic.** `proportionMatch ∈ [0, 1]` lerps the lift floor between the two regimes:
+
+```
+liftFloor = proportionMatch × srcLutMag(Lsm) + (1 − proportionMatch) × sourceMedianChroma
+```
+
+| Value | Behavior | Effect on a 15%-fire / 85%-dark source |
+|---|---|---|
+| 1.0 (tight, default) | Pure per-L floor | Output = ~85% dark + ~15% red, mirrors source's structure |
+| 0.5 | 50/50 blend | Halfway: dark areas get some warm tint, but still less than highlights |
+| 0.0 (loose) | Pure global median floor | Output = ~uniform warm tint everywhere (pre-4.5f behavior) |
+
+**UI.** Inline slider below PASSES, labeled `PROPORTION`, range 0–100% in 5% steps. Tooltip explains the tight/loose tradeoff.
+
+**Composition.**
+- No effect when `liftNeutrals` is OFF (no lift to compute, slider is dormant).
+- Composes with `passes` — multi-pass compounds whatever lift floor the slider lands on.
+- Composes with `paletteSnap` — snap re-aims hue regardless of which floor produced the magnitude.
+- Composes with `hueByLuma` direction — orthogonal mechanics.
+
+**Falls back gracefully:** when `hueByLumaLut` is null, `srcLutMag` is undefined and the engine uses `sourceMedianChroma` regardless of slider position — no NaN, no surprise.
+
 ### 8.5 What's still on the roadmap (Phase 5+)
 
 The four colorization mechanics in v1.1 §5 remain forward work:
