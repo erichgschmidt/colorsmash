@@ -76,6 +76,10 @@ export interface SmashPersisted {
   /** v1.21 Phase 4.5l — zone edge shift. -1..+1, default 0.
    *  Slides K-1 boundary midpoints along target L axis. */
   zoneEdgeShift?: number;
+  /** v1.21 Phase 4.5r — temperature L bias. -1..+1, default 0.
+   *  Limits the temperature shift to a slice of the L range
+   *  (-1 = shadows only, +1 = highlights only). */
+  temperatureLBias?: number;
 }
 
 async function getDataFolder(): Promise<any | null> {

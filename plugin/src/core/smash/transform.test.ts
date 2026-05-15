@@ -1287,6 +1287,88 @@ describe('applyTransform() zoneRatio (Phase 4.5k)', () => {
     }
   });
 
+  it('Phase 4.5r: temperatureLBias=0 produces identical output to absent (default uniform)', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    // Engage temperature so the modulator path actually runs.
+    const baseCtrl: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, temperature: 1 },
+    };
+    const explicitZero: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        temperature: 1,
+        temperatureLBias: 0,
+      },
+    };
+
+    const engBase = smash(srcFeatures, tgtFeatures, profile, baseCtrl);
+    const engZero = smash(srcFeatures, tgtFeatures, profile, explicitZero);
+    for (const v of [50, 128, 200]) {
+      expect(applyTransform(engBase, v, v, v)).toEqual(applyTransform(engZero, v, v, v));
+    }
+  });
+
+  it('Phase 4.5r: temperatureLBias=+1 spares shadows; -1 spares highlights', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    // Engage temperature so there's a delta to bias.
+    const makeCtrl = (lBias: number): SmashControls => ({
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        temperature: 1,
+        temperatureLBias: lBias,
+      },
+    });
+    const ctrlUniform = makeCtrl(0);
+    const ctrlHighlights = makeCtrl(1);
+    const ctrlShadows = makeCtrl(-1);
+
+    const engUni = smash(srcFeatures, tgtFeatures, profile, ctrlUniform);
+    const engHi = smash(srcFeatures, tgtFeatures, profile, ctrlHighlights);
+    const engLo = smash(srcFeatures, tgtFeatures, profile, ctrlShadows);
+
+    const dist = (a: readonly [number, number, number], b: readonly [number, number, number]) =>
+      Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]);
+
+    // At lBias=+1, low-L pixels should match the temperature=0 baseline
+    // closer than they do at uniform bias (shadows are spared).
+    const tempZero = (v: number) => applyTransform(
+      smash(srcFeatures, tgtFeatures, profile, {
+        ...DEFAULT_SMASH_CONTROLS,
+        colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, temperature: 0 },
+      }),
+      v, v, v,
+    );
+
+    const shadowInput = 40; // low L
+    const shadowBaseline = tempZero(shadowInput);
+    const shadowUni = applyTransform(engUni, shadowInput, shadowInput, shadowInput);
+    const shadowHi = applyTransform(engHi, shadowInput, shadowInput, shadowInput);
+
+    // With +1 (highlights only), shadow pixel should be closer to the
+    // temperature=0 baseline than under uniform bias.
+    expect(dist(shadowHi, shadowBaseline)).toBeLessThanOrEqual(dist(shadowUni, shadowBaseline));
+
+    // Symmetric: -1 (shadows only) → highlight pixel closer to baseline.
+    const highlightInput = 220;
+    const highlightBaseline = tempZero(highlightInput);
+    const highlightUni = applyTransform(engUni, highlightInput, highlightInput, highlightInput);
+    const highlightLo = applyTransform(engLo, highlightInput, highlightInput, highlightInput);
+    expect(dist(highlightLo, highlightBaseline)).toBeLessThanOrEqual(dist(highlightUni, highlightBaseline));
+  });
+
   it('Phase 4.5l: zoneEdgeSoftness=0 + zoneEdgeShift=0 produces output bit-identical to absent (4.5j argmin path)', () => {
     const srcRgba = warmOrangeBuffer32();
     const tgtRgba = gradientBuffer32();

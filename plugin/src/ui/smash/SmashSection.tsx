@@ -130,6 +130,9 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   // Phase 4.5p — temperature sensitivity. 0..1, default 0.5 (linear).
   // 0 = soft split near median, 1 = sharp distinct warm/cool zones.
   const [temperatureSensitivity, setTemperatureSensitivity] = useState<number>(0.5);
+  // Phase 4.5r — temperature L bias. -1..+1, default 0 (uniform).
+  // -1 = full bias to shadows, +1 = full bias to highlights.
+  const [temperatureLBias, setTemperatureLBias] = useState<number>(0);
   const [exportStatus, setExportStatus] = useState<string>("");
   const loadedRef = useRef<boolean>(false);
 
@@ -219,6 +222,9 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       if (typeof persisted?.temperatureSensitivity === "number" && Number.isFinite(persisted.temperatureSensitivity)) {
         setTemperatureSensitivity(Math.max(0, Math.min(2, persisted.temperatureSensitivity)));
       }
+      if (typeof persisted?.temperatureLBias === "number" && Number.isFinite(persisted.temperatureLBias)) {
+        setTemperatureLBias(Math.max(-1, Math.min(1, persisted.temperatureLBias)));
+      }
       loadedRef.current = true;
     })();
     return () => { cancelled = true; };
@@ -232,9 +238,9 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     saverRef.current?.({
       amount, traits, colorization, passes, proportionMatch, posterize, distribution,
       clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity,
-      zoneEdgeSoftness, zoneEdgeShift,
+      zoneEdgeSoftness, zoneEdgeShift, temperatureLBias,
     });
-  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution, clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift]);
+  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution, clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias]);
 
   // ── Heavy: features + DNA + profile + CDF LUTs. Depends on SNAPS ONLY,
   // so slider drags don't re-run extractFeatures (~100K pixels per call)
@@ -266,7 +272,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       traits,
       // proportionMatch lives on colorization in the engine schema, so merge
       // it in here rather than carrying it around as a separate field.
-      colorization: { ...colorization, proportionMatch, posterize, distribution, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift },
+      colorization: { ...colorization, proportionMatch, posterize, distribution, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias },
       passes,
     };
     const engine = smash(
@@ -277,7 +283,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       snapDerived.cdfs,
     );
     return { sourceDNA: snapDerived.sourceDNA, engine };
-  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift]);
+  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias]);
 
   // Propagate engine changes to the parent via useEffect, NOT inside the
   // useMemo body above. Calling setState on the parent during a child's
@@ -682,6 +688,25 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           title="How sharp the warm/cool split is around the image's median warmth. 0% = SOFT (near-median pixels barely move). 50% (default) = linear. 100% = SHARP (every pixel past median gets full boost → distinct zones). 100–200% = OVERDRIVE: even pixels right at the median migrate hard, combined with TEMPERATURE overdrive lets you push way past the median for extreme effects. Only effective when TEMPERATURE ≠ 0."
         />
         <span style={passesValueStyle}>{Math.round(temperatureSensitivity * 100)}%</span>
+      </div>
+
+      {/* Phase 4.5r — Temperature L Bias. Restricts the temperature shift
+          to a slice of the L range. 0% = uniform (current behavior).
+          Negative = focus shift on shadows; positive = focus on highlights. */}
+      <div style={passesRowStyle}>
+        <span style={passesLabelStyle}>TARGET L</span>
+        <input
+          type="range"
+          min={-100}
+          max={100}
+          step={5}
+          value={Math.round(temperatureLBias * 100)}
+          onChange={(e) => setTemperatureLBias(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
+          disabled={!hasSnaps}
+          style={passesSliderStyle}
+          title="Restricts the TEMPERATURE shift to a slice of the L range. 0% (default) = UNIFORM — all L gets the shift. NEGATIVE = focus on SHADOWS — only low-L pixels migrate; highlights are untouched. POSITIVE = focus on HIGHLIGHTS — only high-L pixels migrate; shadows are untouched. ±100% = full bias (the opposite side is fully spared). Linear ramp between the two endpoints. Only effective when TEMPERATURE ≠ 0."
+        />
+        <span style={passesValueStyle}>{temperatureLBias >= 0 ? "+" : ""}{Math.round(temperatureLBias * 100)}%</span>
       </div>
 
       {/* Traits disclosure. Closed by default so the primary surface stays

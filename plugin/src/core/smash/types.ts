@@ -295,6 +295,29 @@ export interface ColorizationOptions {
    *  [0, 0.5] L range into the [0, 0.25] routing band; that "compression"
    *  is just endpoint sliding on the routing function. */
   readonly zoneEdgeShift?: number;
+  /** Phase 4.5r — Temperature L Bias. Limits the temperature mechanic
+   *  to a slice of the L range — "highlights only," "shadows only," or
+   *  anywhere in between. Multiplies the per-pixel migration delta by
+   *  a linear weight derived from the pixel's output L.
+   *
+   *  Range [-1, +1]:
+   *    -1: full bias toward SHADOWS — only low-L pixels get the
+   *        temperature shift; highlights are untouched
+   *     0 (default): uniform — every L gets the temperature shift
+   *        as computed by TEMPERATURE × SENSITIVITY
+   *    +1: full bias toward HIGHLIGHTS — only high-L pixels get the
+   *        temperature shift; shadows are untouched
+   *
+   *  Weight formula:
+   *    if lBias === 0: weight = 1            (uniform)
+   *    if lBias  >  0: weight = lerp(1, L,     |lBias|)
+   *    if lBias  <  0: weight = lerp(1, 1−L,   |lBias|)
+   *
+   *  Captures the user's original "influence by value, color, saturation
+   *  etc." aspiration. Per-color (hue) and per-saturation modulators are
+   *  forward work; this one ships the L-axis modulator first because
+   *  shadows/highlights/mids is the most-asked-for split. */
+  readonly temperatureLBias?: number;
   // Future toggles (Phase 5+) added here:
   //   readonly stochasticPerL?: boolean;
   //   readonly conditionalCdf?: boolean;

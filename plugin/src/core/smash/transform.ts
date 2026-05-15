@@ -371,6 +371,9 @@ export const DEFAULT_SMASH_CONTROLS: SmashControls = {
     // Phase 4.5j behavior byte-for-byte).
     zoneEdgeSoftness: 0,
     zoneEdgeShift: 0,
+    // Phase 4.5r: temperatureLBias defaults to 0 — uniform across all
+    // L values (matches Phase 4.5p behavior).
+    temperatureLBias: 0,
   },
   // Phase 4.5c: passes = 1 by default (one transform per pixel). Users can
   // dial up to 2 or 3 to bake the compounded "multi-pass" look into the LUT.
@@ -1173,8 +1176,27 @@ function applyTransformOnePass(
       (temperature > 0 && relW < 0) ||
       (temperature < 0 && relW > 0);
     if (shouldShift) {
-      // delta moves warmth toward (and possibly past) median.
-      const delta = -relW * effective_t;
+      // Phase 4.5r — Temperature L Bias: linear weight on the migration
+      // delta based on the pixel's output L. Lets the user restrict
+      // temperature to highlights, shadows, or anywhere in between.
+      const rawLBias = controls.colorization?.temperatureLBias;
+      const lBias =
+        typeof rawLBias === 'number' && Number.isFinite(rawLBias)
+          ? Math.max(-1, Math.min(1, rawLBias))
+          : 0;
+      let lWeight = 1;
+      if (lBias !== 0) {
+        // Clamp Lout to [0, 1] for the weight curve. The post-gate Lout
+        // can exceed [0, 1] under crank/overdrive — we clamp here so the
+        // weight stays in a meaningful range without changing Lout itself.
+        const L = Math.max(0, Math.min(1, Lout));
+        const target = lBias > 0 ? L : 1 - L;
+        const absBias = Math.abs(lBias);
+        // lerp(1, target, |lBias|): at lBias=0 → 1 (uniform), at lBias=±1 → target
+        lWeight = 1 + absBias * (target - 1);
+      }
+      // delta moves warmth toward (and possibly past) median, scaled by lWeight.
+      const delta = -relW * effective_t * lWeight;
       aOut += delta * WARM_A;
       bOut += delta * WARM_B;
     }

@@ -640,7 +640,28 @@ Coefficients chosen empirically: at ±1 produces ≈ 30-byte channel shift on ne
 
 **UI.** TEMPERATURE slider inline below ZONE RATIO. Range -100..+100% step 5, default 0%. Sign-prefixed value display.
 
-**Future work.** Per-L modulation (only affect highlights / only affect shadows), per-C modulation (only affect saturated pixels), per-S modulation. Each adds one more slider. None changes the core math — just multiplies the relative-shift scalar by a per-pixel weight derived from Lin / Cin / Sin.
+**Phase 4.5r — Temperature L Bias (per-L modulator).** Shipped. New control `temperatureLBias ∈ [-1, +1]`, default `0`. Restricts the temperature delta to a slice of the L range, multiplying the per-pixel migration by a linear weight derived from the pixel's output L:
+
+```
+if lBias === 0: lWeight = 1                # uniform, default
+if lBias  >  0: lWeight = lerp(1, L,     |lBias|)   # bias to highlights
+if lBias  <  0: lWeight = lerp(1, 1−L,   |lBias|)   # bias to shadows
+delta *= lWeight
+```
+
+| Slider | Behavior |
+|---|---|
+| `0%` (default) | Uniform — every L gets the full temperature shift (4.5p behavior unchanged). |
+| `+50%` | Highlights get 100% effect, shadows get 50%, mids interpolate linearly. |
+| `+100%` | Highlights get full effect; shadows are spared entirely. |
+| `−50%` | Shadows get 100% effect, highlights get 50%. |
+| `−100%` | Shadows get full effect; highlights are spared entirely. |
+
+UI label: `TARGET L`. Slider -100..+100% step 5%, default 0. Tooltip explains the highlights/shadows split.
+
+Composes orthogonally with `temperature` and `temperatureSensitivity` — those decide *how much* shift to apply; the bias decides *where on the L axis* to apply it. With the bias at 0, the engine output matches Phase 4.5p byte-for-byte (regression test verifies).
+
+**Future work.** Per-C modulation (only affect saturated pixels), per-S modulation. Each adds one more slider following the same pattern as `temperatureLBias`: multiply the migration delta by a per-pixel weight derived from Cin or Sin.
 
 ### 8.4i — Refinements (Phase 4.5n)
 
