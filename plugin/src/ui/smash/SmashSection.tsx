@@ -79,6 +79,10 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   const [traitsOpen, setTraitsOpen] = useState<boolean>(false);
   const [colorization, setColorization] = useState<ColorizationToggleState>(DEFAULT_COLORIZATION_TOGGLES);
   const [colorizationOpen, setColorizationOpen] = useState<boolean>(false);
+  // SMASH AUDIT disclosure — closed by default; the panel is a diagnostic
+  // surface, not part of the primary editing loop. User opens it on
+  // demand to inspect trait contributions, band fallbacks, etc.
+  const [auditOpen, setAuditOpen] = useState<boolean>(false);
   // Phase 4.5c — Passes: how many times applyTransform iterates per pixel
   // during the LUT bake. 1 = default (single transform). 2-3 emulates the
   // "stale-preview multi-pass" look the user accidentally discovered when
@@ -687,11 +691,24 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
 
       {hasSnaps && pipeline && (
         <>
-          <div style={sectionLabelStyle}>SMASH AUDIT</div>
-          <SmashAuditPanel
-            audit={pipeline.engine.audit}
-            bandCount={pipeline.engine.profile.bands.length}
-          />
+          <div
+            style={traitsHeaderStyle}
+            onClick={() => setAuditOpen((o) => !o)}
+            title={auditOpen
+              ? "Hide the audit panel"
+              : "Show the audit panel: per-trait contribution bars, which bands had viable samples, which clusters were anchored/locked, gamut clip status, and engine build time (~50–200ms typical). Diagnostic-only — doesn't affect output."}
+          >
+            <span style={{ width: 10, display: "inline-block", textAlign: "center" }}>
+              {auditOpen ? "▾" : "▸"}
+            </span>
+            <span>SMASH AUDIT</span>
+          </div>
+          {auditOpen && (
+            <SmashAuditPanel
+              audit={pipeline.engine.audit}
+              bandCount={pipeline.engine.profile.bands.length}
+            />
+          )}
         </>
       )}
 
