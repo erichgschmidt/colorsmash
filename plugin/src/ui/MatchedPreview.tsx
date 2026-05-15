@@ -16,6 +16,16 @@ import { rgbaToPngDataUrl } from "./encodePng";
 export interface MatchedPreviewHandle {
   setPixels: (rgba: Uint8Array, width: number, height: number) => void;
   setBefore: (rgba: Uint8Array, width: number, height: number) => void;
+  /** Atomic: cache the rgba as the After buffer, force the badge into After
+   *  mode (clear any persistent "show before" flip), AND synchronously push
+   *  the buffer to both <img> tags so the visible one shows it immediately.
+   *  Bypasses the displayBefore gate that setPixels respects — necessary for
+   *  diagnostic flows like Smash Test Bake where the user might be in
+   *  Before mode but we want the test-bake pixels to show right away.
+   *  setShowBefore is still scheduled (so the badge UI updates next render);
+   *  the synchronous img.src assignments make the pixels visible without
+   *  waiting for that state propagation. */
+  showAfter: (rgba: Uint8Array, width: number, height: number) => void;
 }
 
 interface MatchedPreviewProps {
@@ -120,7 +130,22 @@ export const MatchedPreview = forwardRef<MatchedPreviewHandle, MatchedPreviewPro
       beforeRef.current = buf;
       if (displayBefore) pushNew("before", buf);
     },
-  }), [displayBefore, activeBuffer]);
+    showAfter: (rgba, w, h) => {
+      // Cache as After buffer.
+      let url = "";
+      try { url = rgbaToPngDataUrl(rgba, w, h); } catch { return; }
+      const buf = { rgba, w, h, url };
+      afterRef.current = buf;
+      // Schedule badge UI update (async — won't take effect until next render).
+      if (showBefore) setShowBefore(false);
+      // Synchronously push to both imgs so whichever one is currently the
+      // active <img> shows our new pixels immediately, regardless of
+      // displayBefore / activeBuffer state.
+      const a = imgARef.current; const b = imgBRef.current;
+      if (a) a.src = url;
+      if (b) b.src = url;
+    },
+  }), [displayBefore, activeBuffer, showBefore]);
 
   const onZoomMouseDown = (e: React.MouseEvent) => {
     dragStartRef.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y };

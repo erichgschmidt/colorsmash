@@ -3882,11 +3882,17 @@ export function MatchTab() {
           onEngineChange={setSmashEngine}
           onTestBake={(pixels, w, h) => {
             // Diagnostic: push the per-pixel ground-truth bake into the
-            // matched preview tile. The LUT-driven smash preview useEffect
-            // will overwrite this on the next engine change (slider/toggle),
-            // so the test-bake state is naturally transient.
+            // matched preview tile via showAfter — the atomic variant that
+            // bypasses displayBefore gating and synchronously updates the
+            // visible <img> tags. setPixels alone would silently cache the
+            // bytes without displaying them when the user is currently
+            // viewing Before mode (the gate is on `!displayBefore` and a
+            // setShowBefore call wouldn't propagate in time). The LUT-
+            // driven smash preview useEffect overwrites this on the next
+            // engine change (slider/toggle), so the test-bake state is
+            // naturally transient.
             if (matchedHandleRef.current) {
-              matchedHandleRef.current.setPixels(pixels, w, h);
+              matchedHandleRef.current.showAfter(pixels, w, h);
               if (tgt.snap) {
                 matchedHandleRef.current.setBefore(tgt.snap.data, tgt.snap.width, tgt.snap.height);
               }
