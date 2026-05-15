@@ -1115,40 +1115,100 @@ describe('applyTransform() zoneRatio (Phase 4.5k)', () => {
     expect(anyDifference).toBe(true);
   });
 
-  it('temperature shifts output toward warm (R>B) for positive, cool (B>R) for negative', () => {
-    const srcRgba = warmOrangeBuffer32();
+  it('temperature uses RELATIVE migration: only opposite-polarity pixels move (Phase 4.5n)', () => {
+    // Two scenarios prove the asymmetry:
+    //   A) Warm source (warmOrange) → engine output is warm-ish.
+    //      t=+1.0 should NOT change much (same-polarity → no migration).
+    //      t=-1.0 SHOULD shift the warm output toward cool (warm pixels
+    //      migrate when t is negative).
+    //   B) Cool source (coolBlue) → engine output is cool-ish.
+    //      t=-1.0 should NOT change much.
+    //      t=+1.0 SHOULD shift the cool output toward warm.
+
+    const sample = (srcRgba: Uint8Array, t: number) => {
+      const tgtRgba = gradientBuffer32();
+      const { profile } = buildProfile(srcRgba, tgtRgba);
+      const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+      const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+      const ctrl: SmashControls = {
+        ...DEFAULT_SMASH_CONTROLS,
+        colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, temperature: t },
+      };
+      return applyTransform(smash(srcFeatures, tgtFeatures, profile, ctrl), 128, 128, 128);
+    };
+
+    // Warm source: t=0 baseline, then ±1
+    const warm0 = sample(warmOrangeBuffer32(), 0);
+    const warmPlus = sample(warmOrangeBuffer32(), 1);
+    const warmMinus = sample(warmOrangeBuffer32(), -1);
+
+    // Cool source: t=0 baseline, then ±1
+    const cool0 = sample(coolBlueBuffer32(), 0);
+    const coolPlus = sample(coolBlueBuffer32(), 1);
+    const coolMinus = sample(coolBlueBuffer32(), -1);
+
+    // Helper: distance from baseline
+    const dist = (a: readonly [number, number, number], b: readonly [number, number, number]) =>
+      Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]);
+
+    // Scenario A: warm source. Same-polarity (+1) shifts the warm output
+    // less than opposite-polarity (-1) does.
+    const aSame = dist(warmPlus, warm0);    // warm+warm: no migration expected
+    const aOpposite = dist(warmMinus, warm0); // warm+cool: migrates
+    expect(aOpposite).toBeGreaterThan(aSame);
+
+    // Scenario B: cool source. Same-polarity (-1) shifts less than
+    // opposite-polarity (+1).
+    const bSame = dist(coolMinus, cool0);
+    const bOpposite = dist(coolPlus, cool0);
+    expect(bOpposite).toBeGreaterThan(bSame);
+  });
+
+  it('zoneInfluence > 1 (overdrive) produces output that diverges further from default than zoneInfluence = 1', () => {
+    // Bimodal source so clusters are distinct and zone routing has
+    // meaningful direction to overshoot toward.
+    const total = 32 * 32;
+    const srcRgba = new Uint8Array(total * 4);
+    for (let i = 0; i < total; i++) {
+      const v = i / (total - 1);
+      if (v < 0.5) {
+        srcRgba[i * 4]     = 30; srcRgba[i * 4 + 1] = 30; srcRgba[i * 4 + 2] = 30;
+      } else {
+        srcRgba[i * 4]     = 230; srcRgba[i * 4 + 1] = 20; srcRgba[i * 4 + 2] = 20;
+      }
+      srcRgba[i * 4 + 3] = 255;
+    }
     const tgtRgba = gradientBuffer32();
     const { profile } = buildProfile(srcRgba, tgtRgba);
     const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
     const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
 
-    const ctrlNeutral: SmashControls = { ...DEFAULT_SMASH_CONTROLS };
-    const ctrlWarm: SmashControls = {
+    const make = (inf: number) => smash(srcFeatures, tgtFeatures, profile, {
       ...DEFAULT_SMASH_CONTROLS,
-      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, temperature: 1 },
-    };
-    const ctrlCool: SmashControls = {
-      ...DEFAULT_SMASH_CONTROLS,
-      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, temperature: -1 },
-    };
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, zoneInfluence: inf, detailRichness: 1 },
+    });
 
-    const engNeutral = smash(srcFeatures, tgtFeatures, profile, ctrlNeutral);
-    const engWarm = smash(srcFeatures, tgtFeatures, profile, ctrlWarm);
-    const engCool = smash(srcFeatures, tgtFeatures, profile, ctrlCool);
+    const eng0 = make(0);
+    const eng1 = make(1);
+    const eng2 = make(2);
 
-    // Sample a mid-gray input on the GRADIENT target — the temperature shift
-    // should move (R - B) noticeably positive for warm, noticeably negative
-    // for cool, compared to neutral.
-    const [nR, , nB] = applyTransform(engNeutral, 128, 128, 128);
-    const [wR, , wB] = applyTransform(engWarm, 128, 128, 128);
-    const [cR, , cB] = applyTransform(engCool, 128, 128, 128);
+    let totalDist0to1 = 0;
+    let totalDist0to2 = 0;
+    for (const v of [60, 120, 180]) {
+      const a = applyTransform(eng0, v, v, v);
+      const b = applyTransform(eng1, v, v, v);
+      const c = applyTransform(eng2, v, v, v);
+      totalDist0to1 +=
+        Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]);
+      totalDist0to2 +=
+        Math.abs(a[0] - c[0]) + Math.abs(a[1] - c[1]) + Math.abs(a[2] - c[2]);
+    }
 
-    const neutralBias = nR - nB;
-    const warmBias = wR - wB;
-    const coolBias = cR - cB;
-
-    expect(warmBias).toBeGreaterThan(neutralBias);
-    expect(coolBias).toBeLessThan(neutralBias);
+    // INFLUENCE=2 overdrive should produce output strictly further from
+    // the unmodified default than INFLUENCE=1 does — the rotation/Csm
+    // overshoot pushes past where the natural cluster contribution would
+    // land.
+    expect(totalDist0to2).toBeGreaterThan(totalDist0to1);
   });
 
   it('temperature=0 produces identical output to default (off by default)', () => {

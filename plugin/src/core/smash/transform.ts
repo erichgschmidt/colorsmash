@@ -824,10 +824,17 @@ function applyTransformOnePass(
   // structure-with-richness intent as paletteSnap + posterize, but applied
   // in (a, b) space rather than full RGB so it composes with the engine's
   // Lout / gate math instead of bypassing them.
+  // Phase 4.5j/n — zoneInfluence range expanded from [0,1] to [0,2] so
+  // users can OVERDRIVE the cluster-routed effect past natural strength.
+  // Values >1 over-rotate the hue past the zone's hue and overshoot Csm
+  // past the zone's chroma magnitude — useful for cranking the cluster's
+  // character beyond what straight replacement would produce. Outputs at
+  // 200% can land in places the engine wouldn't normally visit, but
+  // oklabToSrgbByte's clipping keeps the result in-gamut.
   const rawZoneInfluence = controls.colorization?.zoneInfluence;
   const zoneInfluence =
     typeof rawZoneInfluence === "number" && Number.isFinite(rawZoneInfluence)
-      ? Math.max(0, Math.min(1, rawZoneInfluence))
+      ? Math.max(0, Math.min(2, rawZoneInfluence))
       : 0;
   if (zoneInfluence > 0 && out.clusterSubLuts.length > 0) {
     const rawDetail = controls.colorization?.detailRichness;
@@ -909,23 +916,47 @@ function applyTransformOnePass(
   let aOut = Cout * Math.cos(hout);
   let bOut = Cout * Math.sin(hout);
 
-  // Phase 4.5m — Temperature. Final pre-conversion warm/cool shift in
-  // Oklab (a, b). Pure global bias, applied after the engine's
-  // structure-aware paths have done their work. Scale chosen empirically:
-  // ±1 maps to ≈30-byte channel shift on neutral inputs without crushing
-  // pixels at the gamut edge (ACES already gamut-compressed earlier).
-  //   Warm direction: +a (toward red) and +b (toward yellow)
-  //   Cool direction: −a (toward green) and −b (toward blue)
-  // Subsequent oklabToSrgbByte handles clipping when the shift drives a
-  // pixel out of sRGB.
+  // Phase 4.5m/n — Temperature. RELATIVE warm/cool migration, NOT a uniform
+  // bias. The user's mental model: "+50% warm should take cools and push
+  // them halfway toward warm; warms stay put. −50% cool should take warms
+  // and push them halfway toward cool; cools stay put."
+  //
+  // Algorithm: project the pixel's (a, b) onto a warm axis (≈ red-orange
+  // direction in Oklab). The sign of that projection tells us which "side"
+  // the pixel sits on. Then:
+  //   • Positive temperature + cool pixel → reduce |warmth| toward 0,
+  //     and past 0 it flips into warm territory. At t=+0.5 → neutral.
+  //     At t=+1.0 → mirror sign (cool became its warm reflection).
+  //   • Negative temperature + warm pixel → symmetric, toward cool side.
+  //   • Same-sign pixel + temperature → no change (preserves the polarity
+  //     the user wants to keep).
+  //
+  // We only modify the warm-axis projection, leaving the perpendicular
+  // component (green↔magenta axis) untouched — so warm/cool migration
+  // doesn't accidentally re-tint along an unrelated axis.
   const rawTemperature = controls.colorization?.temperature;
   const temperature =
     typeof rawTemperature === 'number' && Number.isFinite(rawTemperature)
       ? Math.max(-1, Math.min(1, rawTemperature))
       : 0;
   if (temperature !== 0) {
-    aOut += temperature * 0.06;
-    bOut += temperature * 0.04;
+    // Warm direction in Oklab (a, b). Red-yellow corner. Normalized.
+    const WARM_A = 0.82;
+    const WARM_B = 0.57;
+    const warmth = aOut * WARM_A + bOut * WARM_B;
+    const isCool = warmth < 0;
+    const shouldShift = (temperature > 0 && isCool) || (temperature < 0 && !isCool);
+    if (shouldShift) {
+      const absT = Math.abs(temperature);
+      // New projection along warm axis:
+      //   absT = 0    → unchanged
+      //   absT = 0.5  → 0 (neutral)
+      //   absT = 1.0  → −warmth (full mirror)
+      const newWarmth = warmth * (1 - 2 * absT);
+      const delta = newWarmth - warmth;
+      aOut += delta * WARM_A;
+      bOut += delta * WARM_B;
+    }
   }
 
   // Convert to bytes.

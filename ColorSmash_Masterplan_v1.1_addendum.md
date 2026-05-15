@@ -640,7 +640,35 @@ Coefficients chosen empirically: at ±1 produces ≈ 30-byte channel shift on ne
 
 **UI.** TEMPERATURE slider inline below ZONE RATIO. Range -100..+100% step 5, default 0%. Sign-prefixed value display.
 
-**Future work.** Per-L modulation (only affect highlights / only affect shadows), per-C modulation (only affect saturated pixels), per-S modulation. Each adds one more slider. None changes the core math — just multiplies `(Δa, Δb)` by a per-pixel scalar derived from Lin / Cin / Sin.
+**Future work.** Per-L modulation (only affect highlights / only affect shadows), per-C modulation (only affect saturated pixels), per-S modulation. Each adds one more slider. None changes the core math — just multiplies the relative-shift scalar by a per-pixel weight derived from Lin / Cin / Sin.
+
+### 8.4i — Refinements (Phase 4.5n)
+
+Two changes to existing knobs based on user feedback:
+
+**INFLUENCE overdrive (zoneInfluence 0–200%).** Slider max raised from 100% to 200%, engine clamp from 1.0 to 2.0. Values above 100% over-rotate the smashed hue past the zone's hue and overshoot Csm past the cluster's chroma magnitude. Useful when the cluster's character is "right but underdone." `oklabToSrgbByte` clamps the result in-gamut.
+
+**TEMPERATURE → relative migration.** Earlier Phase 4.5m math was a uniform `(Δa, Δb)` bias — every pixel shifted regardless of its own warmth. User's intent: **only opposite-polarity pixels should migrate**:
+
+```
+warmth = aOut · 0.82 + bOut · 0.57            # project onto warm axis
+shouldShift = (t > 0 && warmth < 0)            # warm slider, cool pixel
+            ∨ (t < 0 && warmth > 0)            # cool slider, warm pixel
+if shouldShift:
+    newWarmth = warmth × (1 − 2|t|)            # |t|=0.5 → neutral; |t|=1 → mirror
+    Δproj = newWarmth − warmth
+    aOut += Δproj × 0.82
+    bOut += Δproj × 0.57
+```
+
+- `t = +0.5` (warm slider, halfway): cool pixels migrate to neutral. Warm pixels untouched.
+- `t = +1.0`: cool pixels migrate to their warm mirror (full sign flip on the warm-axis projection).
+- `t = −0.5`: warm pixels migrate to neutral. Cool pixels untouched.
+- `t = −1.0`: warm pixels migrate to their cool mirror.
+
+Only the warm-axis projection is touched; the perpendicular (green↔magenta) component is preserved — warm/cool migration doesn't accidentally re-tint along an unrelated axis.
+
+LUT-bakable. No new state; same single Color Lookup adjustment layer.
 
 ### 8.5 What's still on the roadmap (Phase 5+)
 

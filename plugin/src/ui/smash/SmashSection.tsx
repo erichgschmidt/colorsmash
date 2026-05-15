@@ -528,13 +528,13 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
         <input
           type="range"
           min={0}
-          max={100}
+          max={200}
           step={5}
           value={Math.round(zoneInfluence * 100)}
           onChange={(e) => setZoneInfluence(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
           disabled={!hasSnaps}
           style={passesSliderStyle}
-          title="How strongly the zone-routed path overrides the default Hue-by-L for each pixel. 0% = off (default path unchanged). 100% = each pixel's hue and chroma magnitude come entirely from its source cluster's contribution. Use DETAIL to control how much intra-cluster variation comes through."
+          title="How strongly the zone-routed path overrides the default Hue-by-L for each pixel. 0% = off. 100% = each pixel's hue and chroma magnitude come entirely from its source cluster's contribution. 100–200% = OVERDRIVE: hue over-rotates past the zone's hue and Csm overshoots past the zone's chroma magnitude, exaggerating the cluster's character. Use DETAIL to control how much intra-cluster variation comes through."
         />
         <span style={passesValueStyle}>{Math.round(zoneInfluence * 100)}%</span>
       </div>
