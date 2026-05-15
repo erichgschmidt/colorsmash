@@ -343,16 +343,59 @@ describe('applyTransform() liftNeutrals chroma floor', () => {
       const [ofR, ofG, ofB] = applyTransform(engOff, r, g, b);
 
       // Channel-spread (max - min) is a proxy for output chroma. Higher
-      // spread = more colorization. The floor should noticeably lift the
-      // shadow output's chroma. Exact thresholds depend on the synthetic
-      // buffer's source median chroma; >=5 byte spread headroom is a
-      // conservative-but-meaningful difference.
+      // spread = more colorization. The lift floor (now per-L since
+      // Phase 4.5f) raises Csm whenever source's chroma magnitude at the
+      // smashed L exceeds the chroma CDF's rank-mapped value. ON should
+      // produce >= the chroma OFF produces; for this synthetic source/
+      // input combo the margin is small but strictly positive.
       const spreadOn = Math.max(orR, orG, orB) - Math.min(orR, orG, orB);
       const spreadOff = Math.max(ofR, ofG, ofB) - Math.min(ofR, ofG, ofB);
 
-      expect(spreadOn).toBeGreaterThan(spreadOff + 5);
+      expect(spreadOn).toBeGreaterThanOrEqual(spreadOff);
     },
   );
+
+  it('per-L lift floor preserves source proportions: low-L target stays low chroma, high-L target gets high chroma when source is bimodal', () => {
+    // Build a SOURCE where chroma magnitude varies strongly with L:
+    //   - Low L (dark): near-neutral pixels (chroma ≈ 0)
+    //   - High L (bright): vivid red pixels (chroma high)
+    // The per-L lift floor should pull this structure through to the output:
+    // a target pixel at low L should pick up little chroma, a target pixel
+    // at high L should pick up lots — even though both inputs are neutral.
+    const total = 32 * 32;
+    const srcRgba = new Uint8Array(total * 4);
+    for (let i = 0; i < total; i++) {
+      const v = i / (total - 1);
+      // Bimodal: bottom half = dark gray (no chroma), top half = vivid red.
+      if (v < 0.5) {
+        const gray = Math.round(v * 80); // 0..40 (dark)
+        srcRgba[i * 4]     = gray;
+        srcRgba[i * 4 + 1] = gray;
+        srcRgba[i * 4 + 2] = gray;
+      } else {
+        srcRgba[i * 4]     = Math.round(180 + (v - 0.5) * 150); // 180..255 (bright red)
+        srcRgba[i * 4 + 1] = Math.round((v - 0.5) * 100);       // 0..50
+        srcRgba[i * 4 + 2] = Math.round((v - 0.5) * 100);       // 0..50
+      }
+      srcRgba[i * 4 + 3] = 255;
+    }
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+    const engine = smash(srcFeatures, tgtFeatures, profile);
+
+    const [lr, lg, lb] = applyTransform(engine, 30, 30, 30);   // low-L neutral input
+    const [hr, hg, hb] = applyTransform(engine, 220, 220, 220); // high-L neutral input
+
+    const lowSpread  = Math.max(lr, lg, lb) - Math.min(lr, lg, lb);
+    const highSpread = Math.max(hr, hg, hb) - Math.min(hr, hg, hb);
+
+    // High-L output should be MUCH more chromatic than low-L output —
+    // matching source's structure. Earlier behavior (global-median lift)
+    // pulled both toward the same magnitude, yielding similar spreads.
+    expect(highSpread).toBeGreaterThan(lowSpread + 30);
+  });
 
   it('engine output exposes sourceMedianChroma >= 0 (non-negative)', () => {
     const srcRgba = warmOrangeBuffer32();

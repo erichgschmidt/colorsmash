@@ -349,7 +349,7 @@ For genuinely flat regions, the user has three escape hatches:
 | Band-fitted per-channel curves | #1 (within each L band) | No — engine core |
 | ACES gamut compress | #1 (range preservation) | No — engine core |
 | `hueByLuma` toggle (Phase 4.5) | #3 (cross-dim hue) | Yes, ON by default |
-| `liftNeutrals` toggle (Phase 4.5b) | #3 (cross-dim chroma) | Yes, ON by default |
+| `liftNeutrals` toggle (Phase 4.5b → refined 4.5f) | #1 (proportions) + #3 (cross-dim chroma) | Yes, ON by default |
 | `paletteSnap` toggle (Phase 4.5d, this section) | #2 (color identity) | Yes, OFF by default; opt-in for stronger color preservation |
 | `passes` 1–4× (Phase 4.5c) | #4 (intensification) | Yes, default 1× |
 | Trait sliders @ 0–200% | #4 (per-dim crank) | Yes, default 100% all |
@@ -386,6 +386,32 @@ All of these compose into the same 33³ LUT output.
 - `paletteSnap` ON without `hueByLuma`: same cluster routing, but per-pixel hue CDF for fallback when `Cin` is below the routing threshold.
 
 Default: **OFF**, to preserve smoothness in the default look. User opts in when they want minority colors expressed.
+
+### 8.4b — `liftNeutrals` per-L floor refinement (Phase 4.5f)
+
+**Earlier behavior (Phase 4.5b shipping):** lift floor was `sourceMedianChroma` — a single global number for the whole source. Every near-neutral target pixel got pushed to the same magnitude regardless of L. Symptom: a 15%-fire / 85%-dark source produced nearly-uniform warm output instead of "warm where source is warm, dark where source is dark." Source's color/neutral *proportions* were lost in the output.
+
+**Refined behavior (this revision):** lift floor is `srcLutMag(Lsm)` — the magnitude of the `hueByLumaLut` lookup at the smashed L. The hueByLumaLut already stores the magnitude-preserving average chroma per L bucket (built once at engine time), so reusing it costs nothing.
+
+```
+liftFloor = magnitude of hueByLumaLut at Lsm    # source's typical chroma at this L
+liftAmount = neutralness × max(0, liftFloor − cdfMag)
+Csm = cdfMag + liftAmount
+```
+
+**Effect on a bimodal source (e.g., dark background + bright fire):**
+
+| Target L (after lumaCdf) | Source's chroma at that L | Lift | Output |
+|---|---|---|---|
+| Low (≈0.1, source's "dark background" rank) | Very small (≈0.005) | Tiny | Stays dark/neutral |
+| Mid (≈0.5) | Moderate | Moderate | Some warm tone |
+| High (≈0.85, source's "fire" rank) | Large (≈0.20) | Big | Vivid warm |
+
+Combined with `lumaCdf` rank-mapping target's L distribution onto source's (so target gets the same proportion of low/high L pixels as source does), the OUTPUT's color/neutral ratio approximately matches the SOURCE'S. Goal #1 (distribution mirroring across all spectra) extends to color *proportions*, not just averaged distributions.
+
+**What this doesn't solve:** within-L diversity. If source's L=0.5 bucket is 50% red + 50% blue, target's pixels at L=0.5 still all get the bucket's *average* direction (a muted purple) at the bucket's *average* magnitude. Per-pixel diversity within a bucket is what Phase 5 stochastic per-L sampling and the existing `paletteSnap` toggle address.
+
+**Falls back gracefully:** if `hueByLumaLut` is null (degenerate input), `liftFloor` falls back to `sourceMedianChroma` — the old behavior — so no regressions on edge cases.
 
 ### 8.5 What's still on the roadmap (Phase 5+)
 

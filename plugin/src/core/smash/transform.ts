@@ -559,37 +559,50 @@ function applyTransformOnePass(
     controls.colorization?.paletteSnap === true
     && out.profile.source.clusters.length > 0;
 
-  // Phase 4.5b — liftNeutrals (ON by default) blends the rank-mapped chroma
-  // CDF result toward `sourceMedianChroma` for near-neutral inputs. Without
-  // this floor, a perfectly grayscale target maps every pixel to source's
-  // minimum chroma (rank 0 of source's distribution ≈ source's most neutral
-  // pixel), so shadows in the result stay monochrome even with Hue-by-L on.
-  // With the floor, near-neutral pixels pick up the source's TYPICAL chroma
-  // magnitude paired with Hue-by-L's direction — broad colorization across
-  // the whole L range instead of just where the source happens to be
-  // chromatic. neutralness=1 at Cin=0 (full lift), neutralness=0 at
-  // Cin>=0.15 (no lift — vivid inputs are left to the CDF as designed).
+  // Look up source's average (a, b) at the smashed L — used by BOTH the lift
+  // floor (its magnitude tells us source's typical chroma at this L) and the
+  // Hue-by-L direction below. Single call, two consumers. Falls back to the
+  // global sourceMedianChroma if the LUT is null (degenerate input).
+  let aSrcLut = 0;
+  let bSrcLut = 0;
+  let srcLutMag = 0;
+  if (out.hueByLumaLut) {
+    const lookup = lookupHueByLuma(out.hueByLumaLut, Lsm);
+    aSrcLut = lookup[0];
+    bSrcLut = lookup[1];
+    srcLutMag = Math.sqrt(aSrcLut * aSrcLut + bSrcLut * bSrcLut);
+  }
+  const liftFloor = out.hueByLumaLut ? srcLutMag : out.sourceMedianChroma;
+
+  // Phase 4.5b → 4.5f — liftNeutrals (ON by default) floors the rank-mapped
+  // chroma CDF result at SOURCE'S CHROMA AT THE TARGET'S L. Earlier the
+  // floor used a single global median across all source pixels — that
+  // pushed every near-neutral target pixel to the same magnitude regardless
+  // of L, which dilutes source's actual color proportions. A 15%-fire /
+  // 85%-dark source ended up producing nearly-uniform warm output instead
+  // of "warm where source is warm, dark where source is dark". The per-L
+  // floor matches source's L-conditional chroma structure: low-L target
+  // pixels inherit source's small low-L chroma (stay neutral), high-L
+  // target pixels inherit source's large high-L chroma (become vivid).
+  // Net effect: output proportions track source's L→C structure, which —
+  // combined with lumaCdf rank-mapping target's L distribution onto
+  // source's — preserves the source's overall color/neutral ratio.
+  //
+  // neutralness=1 at Cin=0 (full lift), neutralness=0 at Cin>=0.15 (no
+  // lift — vivid inputs are left to the CDF as designed).
   const liftNeutralsActive = controls.colorization?.liftNeutrals !== false;
   const cdfMag = out.chromaCdf ? Math.max(0, lookupCdfMatch(out.chromaCdf, Cin)) : CsmBand;
   const liftNeutralness = 1 - Math.min(1, Cin / 0.15);
   const liftAmount = liftNeutralsActive
-    ? liftNeutralness * Math.max(0, out.sourceMedianChroma - cdfMag)
+    ? liftNeutralness * Math.max(0, liftFloor - cdfMag)
     : 0;
   const Csm = cdfMag + liftAmount;
+
+  // Hue: source's L→(a,b) direction (Hue-by-L) when toggle ON and lookup
+  // has a usable magnitude; per-pixel hue CDF fallback otherwise.
   let hsm: number;
-  if (hueByLumaActive && out.hueByLumaLut) {
-    // Source's average (a, b) at the SMASHED L — we only need its DIRECTION,
-    // the chroma magnitude comes from the chroma CDF above.
-    const [aSrc, bSrc] = lookupHueByLuma(out.hueByLumaLut, Lsm);
-    const srcMag = Math.sqrt(aSrc * aSrc + bSrc * bSrc);
-    if (srcMag > 1e-6) {
-      hsm = Math.atan2(bSrc, aSrc);
-    } else {
-      // Degenerate bucket — fall back to per-pixel hue CDF.
-      hsm = (out.hueCdf && Cin >= HUE_FILTER_CHROMA)
-        ? lookupCdfMatch(out.hueCdf, hin)
-        : hsmBand;
-    }
+  if (hueByLumaActive && srcLutMag > 1e-6) {
+    hsm = Math.atan2(bSrcLut, aSrcLut);
   } else {
     hsm = (out.hueCdf && Cin >= HUE_FILTER_CHROMA)
       ? lookupCdfMatch(out.hueCdf, hin)
