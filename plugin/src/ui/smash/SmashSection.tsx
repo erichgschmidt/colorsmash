@@ -590,7 +590,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           onChange={(e) => setTemperature(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
           disabled={!hasSnaps}
           style={passesSliderStyle}
-          title="Final pre-conversion warm/cool shift on the output Oklab (a, b). 0% = neutral. NEGATIVE = cool (shift toward blue-green). POSITIVE = warm (shift toward red-yellow). Pure global bias — applied AFTER all the structure-aware paths, so it composes with everything else. ±100% ≈ 30-byte channel shift on neutral inputs."
+          title="Relative warm/cool migration. 0% = no shift. POSITIVE = warm slider: cool pixels migrate TOWARD NEUTRAL (desaturate along the warm axis). At +100% cool pixels reach neutral gray. NEGATIVE = cool slider: warm pixels migrate toward neutral. At ±100% pixels never cross into opposite color (no literal green/blue tint) — the perception of cool/warm emerges from CONTRAST with un-migrated pixels, not by injecting opposite hue. Same-polarity pixels are always untouched."
         />
         <span style={passesValueStyle}>{temperature >= 0 ? "+" : ""}{Math.round(temperature * 100)}%</span>
       </div>

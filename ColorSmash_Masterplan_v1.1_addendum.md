@@ -648,25 +648,31 @@ Two changes to existing knobs based on user feedback:
 
 **INFLUENCE overdrive (zoneInfluence 0–200%).** Slider max raised from 100% to 200%, engine clamp from 1.0 to 2.0. Values above 100% over-rotate the smashed hue past the zone's hue and overshoot Csm past the cluster's chroma magnitude. Useful when the cluster's character is "right but underdone." `oklabToSrgbByte` clamps the result in-gamut.
 
-**TEMPERATURE → relative migration.** Earlier Phase 4.5m math was a uniform `(Δa, Δb)` bias — every pixel shifted regardless of its own warmth. User's intent: **only opposite-polarity pixels should migrate**:
+**TEMPERATURE → relative migration toward neutral (Phase 4.5n → 4.5o).** Earlier Phase 4.5m math was a uniform `(Δa, Δb)` bias — every pixel shifted regardless of its own warmth. Phase 4.5n introduced polarity-aware migration but lerped to the **mirror** (`-warmth`) at `|t|=1`, which sent warm pixels straight across the color wheel into green-blue. Per user feedback ("it acts more like a green hue shift; I'd expect the local color to remain and shift toward grays"), 4.5o lerps toward **neutral (0)** instead:
 
 ```
-warmth = aOut · 0.82 + bOut · 0.57            # project onto warm axis
-shouldShift = (t > 0 && warmth < 0)            # warm slider, cool pixel
-            ∨ (t < 0 && warmth > 0)            # cool slider, warm pixel
+warmth = aOut · 0.82 + bOut · 0.57             # project onto warm axis
+shouldShift = (t > 0 && warmth < 0)             # warm slider, cool pixel
+            ∨ (t < 0 && warmth > 0)             # cool slider, warm pixel
 if shouldShift:
-    newWarmth = warmth × (1 − 2|t|)            # |t|=0.5 → neutral; |t|=1 → mirror
+    newWarmth = warmth × (1 − |t|)              # NEW: lerp toward 0, never past
     Δproj = newWarmth − warmth
     aOut += Δproj × 0.82
     bOut += Δproj × 0.57
 ```
 
-- `t = +0.5` (warm slider, halfway): cool pixels migrate to neutral. Warm pixels untouched.
-- `t = +1.0`: cool pixels migrate to their warm mirror (full sign flip on the warm-axis projection).
-- `t = −0.5`: warm pixels migrate to neutral. Cool pixels untouched.
-- `t = −1.0`: warm pixels migrate to their cool mirror.
+| Slider | Behavior |
+|---|---|
+| `t = +0.5` (warm) | Cool pixels lose half their cool magnitude. Migrate toward gray. Warm pixels untouched. |
+| `t = +1.0` (warm) | Cool pixels reach neutral (warm-axis projection = 0). Never cross into warm territory. |
+| `t = −0.5` (cool) | Warm pixels lose half their warm magnitude. Migrate toward gray. Cool pixels untouched. |
+| `t = −1.0` (cool) | Warm pixels reach neutral. Never cross into cool territory. |
 
-Only the warm-axis projection is touched; the perpendicular (green↔magenta) component is preserved — warm/cool migration doesn't accidentally re-tint along an unrelated axis.
+The perceived "cool" or "warm" feeling at high slider values emerges from **contrast** with the un-migrated pixels (the warm-source becomes lower-saturation overall when t<0, so the residual warmth reads as the dominant note) — not from injecting opposite color hue. This matches the user's mental model: "shift those cools towards grays, to have it feel more natural, and have the perception of something feeling more green, not literally raw green."
+
+Regression test verifies: warm source + t=-1 produces output where `R−B` approaches 0 but does not become negative (≤-3 byte tolerance for rounding) — i.e., no sign-flip into cool territory.
+
+Only the warm-axis projection is modified; the perpendicular (green↔magenta) axis is preserved so migration doesn't re-tint along an unrelated direction.
 
 LUT-bakable. No new state; same single Color Lookup adjustment layer.
 

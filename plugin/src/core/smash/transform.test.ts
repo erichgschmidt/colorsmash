@@ -1164,6 +1164,55 @@ describe('applyTransform() zoneRatio (Phase 4.5k)', () => {
     expect(bOpposite).toBeGreaterThan(bSame);
   });
 
+  it('temperature lerps to NEUTRAL, never to mirror — warm pixel + t=-1 desaturates without crossing into green/blue (Phase 4.5o)', () => {
+    // Warm source so engine output is warm. With t=-1 the new math lerps
+    // toward 0 (neutral), so the warm-axis projection should land near
+    // zero but NOT cross to negative (which the prior 4.5n math did —
+    // sign-flipping to literal cool color).
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const baseline: SmashControls = { ...DEFAULT_SMASH_CONTROLS };
+    const ctrlCool: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, temperature: -1 },
+    };
+
+    const eng0 = smash(srcFeatures, tgtFeatures, profile, baseline);
+    const engT = smash(srcFeatures, tgtFeatures, profile, ctrlCool);
+
+    // For multiple gray inputs, the baseline engine outputs warm color.
+    // R−B is a quick warmth proxy (positive = warm). After t=-1, the
+    // output's R−B should:
+    //   • be CLOSER to 0 than baseline (toward neutral)
+    //   • NOT cross to negative (which would mean literal cool tint)
+    let allOK = true;
+    for (const v of [80, 130, 180]) {
+      const [r0, , b0] = applyTransform(eng0, v, v, v);
+      const [rT, , bT] = applyTransform(engT, v, v, v);
+
+      const baselineWarmth = r0 - b0;       // expected positive (warm source)
+      const cooledWarmth = rT - bT;
+
+      if (baselineWarmth <= 0) continue;     // skip if baseline isn't warm
+
+      // Should approach neutral (smaller magnitude)…
+      if (Math.abs(cooledWarmth) > Math.abs(baselineWarmth)) {
+        allOK = false;
+        break;
+      }
+      // …and not cross past 0 into the cool side.
+      if (cooledWarmth < -3) { // small tolerance for rounding
+        allOK = false;
+        break;
+      }
+    }
+    expect(allOK).toBe(true);
+  });
+
   it('zoneInfluence > 1 (overdrive) produces output that diverges further from default than zoneInfluence = 1', () => {
     // Bimodal source so clusters are distinct and zone routing has
     // meaningful direction to overshoot toward.

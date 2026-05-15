@@ -916,31 +916,40 @@ function applyTransformOnePass(
   let aOut = Cout * Math.cos(hout);
   let bOut = Cout * Math.sin(hout);
 
-  // Phase 4.5m/n — Temperature. RELATIVE warm/cool migration, NOT a uniform
-  // bias. The user's mental model: "+50% warm should take cools and push
-  // them halfway toward warm; warms stay put. −50% cool should take warms
-  // and push them halfway toward cool; cools stay put."
+  // Phase 4.5m/n/o — Temperature. RELATIVE migration toward NEUTRAL (not
+  // toward the mirror). Earlier Phase 4.5n math lerped to the sign-flipped
+  // warm-axis projection at |t|=1, which sent warm-orange pixels straight
+  // into the green-blue corner of Oklab — perceptually a "literal green
+  // shift," not the gentle "feels cooler / more like grays" effect the
+  // user expected. The fix: lerp toward 0 (neutral) instead of toward
+  // -warmth. Pixels desaturate along the warm axis as |t| approaches 1;
+  // they never cross into the opposite color territory.
   //
-  // Algorithm: project the pixel's (a, b) onto a warm axis (≈ red-orange
-  // direction in Oklab). The sign of that projection tells us which "side"
-  // the pixel sits on. Then:
-  //   • Positive temperature + cool pixel → reduce |warmth| toward 0,
-  //     and past 0 it flips into warm territory. At t=+0.5 → neutral.
-  //     At t=+1.0 → mirror sign (cool became its warm reflection).
-  //   • Negative temperature + warm pixel → symmetric, toward cool side.
-  //   • Same-sign pixel + temperature → no change (preserves the polarity
-  //     the user wants to keep).
+  // Algorithm:
+  //   warmth = aOut · WARM_A + bOut · WARM_B    (project onto warm axis)
+  //   shouldShift = (t > 0 ∧ warmth < 0) ∨ (t < 0 ∧ warmth > 0)
+  //   if shouldShift:
+  //     newWarmth = warmth × (1 − |t|)          (lerp toward 0, NOT mirror)
+  //     delta = newWarmth − warmth
+  //     aOut += delta × WARM_A
+  //     bOut += delta × WARM_B
   //
-  // We only modify the warm-axis projection, leaving the perpendicular
-  // component (green↔magenta axis) untouched — so warm/cool migration
-  // doesn't accidentally re-tint along an unrelated axis.
+  // Behavior:
+  //   t = +0.5 → cool pixels lose half their cool magnitude (toward gray)
+  //   t = +1.0 → cool pixels become neutral (warm-axis projection = 0)
+  //   t = −0.5 → warm pixels lose half their warm magnitude (toward gray)
+  //   t = −1.0 → warm pixels become neutral
+  //   any t   → opposite-polarity pixels untouched
+  //
+  // Perceived cool/warm emerges from the CONTRAST with un-migrated pixels,
+  // not from injecting opposite hue. The perpendicular axis (green↔magenta)
+  // is left alone so migration doesn't re-tint along an unrelated axis.
   const rawTemperature = controls.colorization?.temperature;
   const temperature =
     typeof rawTemperature === 'number' && Number.isFinite(rawTemperature)
       ? Math.max(-1, Math.min(1, rawTemperature))
       : 0;
   if (temperature !== 0) {
-    // Warm direction in Oklab (a, b). Red-yellow corner. Normalized.
     const WARM_A = 0.82;
     const WARM_B = 0.57;
     const warmth = aOut * WARM_A + bOut * WARM_B;
@@ -948,11 +957,8 @@ function applyTransformOnePass(
     const shouldShift = (temperature > 0 && isCool) || (temperature < 0 && !isCool);
     if (shouldShift) {
       const absT = Math.abs(temperature);
-      // New projection along warm axis:
-      //   absT = 0    → unchanged
-      //   absT = 0.5  → 0 (neutral)
-      //   absT = 1.0  → −warmth (full mirror)
-      const newWarmth = warmth * (1 - 2 * absT);
+      // Lerp warm-axis projection toward 0 (neutral). Never crosses sign.
+      const newWarmth = warmth * (1 - absT);
       const delta = newWarmth - warmth;
       aOut += delta * WARM_A;
       bOut += delta * WARM_B;
