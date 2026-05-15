@@ -130,9 +130,11 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           ...(typeof cz.paletteSnap === "boolean" ? { paletteSnap: cz.paletteSnap } : {}),
         }));
       }
-      // v1.21 Phase 4.5c — restore Passes (clamped to [1, 4]).
+      // v1.21 Phase 4.5c — restore Passes (clamped to [1, 4], fractional OK).
+      // Older save files written when passes was integer-only still load fine
+      // since integer values are valid floats too.
       if (typeof persisted?.passes === "number" && Number.isFinite(persisted.passes)) {
-        setPasses(Math.max(1, Math.min(4, Math.round(persisted.passes))));
+        setPasses(Math.max(1, Math.min(4, persisted.passes)));
       }
       loadedRef.current = true;
     })();
@@ -336,37 +338,27 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
         disabled={!hasSnaps}
       />
 
-      {/* Passes pill row (Phase 4.5c). Inline because it's a small, primary
-          intensity knob — not gated behind a disclosure. 1× = one transform
-          per pixel (current default). 2× and 3× bake the multi-pass compound
-          look (re-running the transform on its own output) directly into
-          the LUT, matching what the panel preview sometimes accidentally
-          showed when the snap captured a post-LUT layer. 4× is the engine
-          clamp ceiling — past that, output saturates/clips with no useful
-          additional change. */}
+      {/* Passes slider (Phase 4.5c, refined to continuous in 4.5e). Inline
+          because it's a small, primary intensity knob. 1.0× = one transform
+          per pixel (current default). Fractional values lerp between
+          consecutive integer-pass results — 1.5× is halfway between
+          single-apply and double-apply behavior. Range capped at 3.0× in
+          the UI because anything past ~2× is usually visibly over-the-top;
+          the engine clamp ceiling is 4 for direct callers. */}
       <div style={passesRowStyle}>
         <span style={passesLabelStyle}>PASSES</span>
-        {[1, 2, 3, 4].map((n) => {
-          const active = passes === n;
-          return (
-            <div
-              key={n}
-              onClick={() => { if (hasSnaps) setPasses(n); }}
-              title={
-                n === 1
-                  ? "Single transform per pixel (default)."
-                  : `Apply the transform ${n} times in succession on each pixel during LUT bake. Compounds chroma; useful when the source has a strong color story you want pushed further into a near-neutral target.`
-              }
-              style={{
-                ...passesPillStyle,
-                ...(active ? passesPillActiveStyle : passesPillInactiveStyle),
-                ...(hasSnaps ? {} : passesPillDisabledStyle),
-              }}
-            >
-              {n}×
-            </div>
-          );
-        })}
+        <input
+          type="range"
+          min={100}
+          max={300}
+          step={5}
+          value={Math.round(passes * 100)}
+          onChange={(e) => setPasses(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
+          disabled={!hasSnaps}
+          style={passesSliderStyle}
+          title="Drag for fine control over how many times the transform compounds per pixel. 1.0× = single pass (default). 1.5× lands halfway between single and double apply. Past 2× is usually over the top."
+        />
+        <span style={passesValueStyle}>{passes.toFixed(2)}×</span>
       </div>
 
       {/* Traits disclosure. Closed by default so the primary surface stays
@@ -552,35 +544,24 @@ const statusStyle: React.CSSProperties = {
   fontSize: 9, color: "#888", minWidth: 56, textAlign: "right",
 };
 
-// Passes pill row styles — small inline strip matching the SmashControlsBar
-// preset-chip vocabulary. Compact: a tag-style label on the left and four
-// pill buttons on the right.
+// Passes slider — small inline row with a label, native range slider, and
+// numeric readout. Slider min/max in 0.01 units (100..300 → 1.00×..3.00×)
+// because <input type="range"> wants integer values for clean step behavior.
 const passesRowStyle: React.CSSProperties = {
-  display: "flex", alignItems: "center", gap: 4,
+  display: "flex", alignItems: "center", gap: 8,
   marginTop: -2, // tuck under the controls bar
 };
 
 const passesLabelStyle: React.CSSProperties = {
   fontSize: 9, fontWeight: 600, letterSpacing: 1, color: "#888",
-  textTransform: "uppercase", marginRight: 4,
+  textTransform: "uppercase",
 };
 
-const passesPillStyle: React.CSSProperties = {
-  display: "inline-flex", alignItems: "center", justifyContent: "center",
-  height: 18, minWidth: 26,
-  border: "1px solid #1a1a1a", borderRadius: 2,
-  fontSize: 10, fontWeight: 600,
-  cursor: "pointer", userSelect: "none",
+const passesSliderStyle: React.CSSProperties = {
+  flex: 1, height: 14,
 };
 
-const passesPillActiveStyle: React.CSSProperties = {
-  background: "#6ab7ff", color: "#0f1620",
-};
-
-const passesPillInactiveStyle: React.CSSProperties = {
-  background: "#3a3a3a", color: "#aaa",
-};
-
-const passesPillDisabledStyle: React.CSSProperties = {
-  opacity: 0.4, cursor: "default",
+const passesValueStyle: React.CSSProperties = {
+  fontSize: 10, color: "#aaa", fontVariantNumeric: "tabular-nums",
+  minWidth: 38, textAlign: "right",
 };

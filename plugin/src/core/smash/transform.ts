@@ -353,14 +353,23 @@ export function smash(
  * `controls.passes` (default 1, clamped to [1, 4]). Each pass re-runs the
  * full transform on the previous pass's output. Compounding behavior: each
  * iteration pushes chroma further up source's CDF because the input's
- * chroma distribution shifts after pass 1. Users dial passes up to 2 or 3
- * to bake the "stale-preview" vivid look into the single Color Lookup
- * adjustment layer's LUT — equivalent to applying the LUT layer N times
- * in succession in PS, but baked into one layer.
+ * chroma distribution shifts after pass 1.
+ *
+ * Fractional passes (e.g., 1.5, 2.3) are linearly interpolated between
+ * consecutive integer-pass outputs:
+ *
+ *   passes = floor(N) + frac    (where 0 ≤ frac < 1)
+ *   floor_result = applyTransform iterated floor(N) times
+ *   ceil_result  = applyTransform once more on floor_result
+ *   output       = floor_result + (ceil_result − floor_result) × frac
+ *
+ * Equivalent to applying the LUT layer N times in succession in PS for
+ * integer N, with smooth interpolation between integer passes for finer
+ * control. The slider's "1.5×" lands halfway between single-apply and
+ * double-apply behavior.
  *
  * Identity for empty input: if all band transforms fellBack, the input pixel
- * is returned unchanged (after gamut compression, which leaves in-gamut input
- * alone) regardless of how many passes are requested.
+ * is returned unchanged regardless of how many passes are requested.
  */
 export function applyTransform(
   out: SmashEngineOutput,
@@ -369,17 +378,36 @@ export function applyTransform(
   b: number,
 ): Vec3 {
   const rawPasses = out.controls.passes ?? 1;
-  // Clamp to [1, 4]: 1 is a no-op loop (single transform), 4 is enough to
-  // hit visible diminishing returns on typical inputs. Round to int because
-  // a fractional pass count has no clean interpretation here.
-  const passes = Math.max(1, Math.min(4, Math.round(rawPasses)));
+  // Clamp to [1, 4] — engine ceiling. UI exposes 1.0–3.0 by default, but
+  // direct callers (tests, future scripts) can push to 4.
+  const passesFloat = Math.max(1, Math.min(4, rawPasses));
+  const N_floor = Math.floor(passesFloat);
+  const frac = passesFloat - N_floor;
+
+  // Run N_floor full passes. Intermediate values stay byte-quantized
+  // because applyTransformOnePass returns rounded sRGB bytes, so the
+  // input to each subsequent pass is well-defined.
   let cr = r;
   let cg = g;
   let cb = b;
-  for (let i = 0; i < passes; i++) {
+  for (let i = 0; i < N_floor; i++) {
     const [nr, ng, nb] = applyTransformOnePass(out, cr, cg, cb);
     cr = nr; cg = ng; cb = nb;
   }
+
+  // Fractional remainder: run one more pass and lerp between the floor
+  // result (cr/cg/cb) and the ceiling result by `frac`. Skipped at the
+  // engine clamp ceiling (passesFloat == 4) where there's no headroom
+  // for another pass.
+  if (frac > 0 && N_floor < 4) {
+    const [nr, ng, nb] = applyTransformOnePass(out, cr, cg, cb);
+    return [
+      Math.max(0, Math.min(255, Math.round(cr + (nr - cr) * frac))),
+      Math.max(0, Math.min(255, Math.round(cg + (ng - cg) * frac))),
+      Math.max(0, Math.min(255, Math.round(cb + (nb - cb) * frac))),
+    ];
+  }
+
   return [cr, cg, cb];
 }
 

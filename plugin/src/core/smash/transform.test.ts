@@ -438,6 +438,41 @@ describe('applyTransform() passes multi-pass bake', () => {
     expect(anyDiff).toBe(true);
   });
 
+  it('passes=1.5 produces output that lerps between passes=1 and passes=2 (fractional blend)', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const r = 64, g = 64, b = 64;
+
+    const ctrl1: SmashControls = { ...DEFAULT_SMASH_CONTROLS, passes: 1 };
+    const ctrl2: SmashControls = { ...DEFAULT_SMASH_CONTROLS, passes: 2 };
+    const ctrl15: SmashControls = { ...DEFAULT_SMASH_CONTROLS, passes: 1.5 };
+
+    const eng1 = smash(srcFeatures, tgtFeatures, profile, ctrl1);
+    const eng2 = smash(srcFeatures, tgtFeatures, profile, ctrl2);
+    const eng15 = smash(srcFeatures, tgtFeatures, profile, ctrl15);
+
+    const [r1, g1, b1] = applyTransform(eng1, r, g, b);
+    const [r2, g2, b2] = applyTransform(eng2, r, g, b);
+    const [r15, g15, b15] = applyTransform(eng15, r, g, b);
+
+    // For each channel, passes=1.5 result should sit between passes=1 and
+    // passes=2 results (within ±1 byte tolerance for rounding). Order can
+    // go either direction (1 < 2 or 1 > 2 depending on the channel and
+    // source structure), so we check the ordering both ways.
+    const between = (mid: number, a: number, b_: number) => {
+      const lo = Math.min(a, b_) - 1;
+      const hi = Math.max(a, b_) + 1;
+      return mid >= lo && mid <= hi;
+    };
+    expect(between(r15, r1, r2)).toBe(true);
+    expect(between(g15, g1, g2)).toBe(true);
+    expect(between(b15, b1, b2)).toBe(true);
+  });
+
   it('passes is clamped to [1, 4] — passes=0 behaves like passes=1, passes=10 like passes=4', () => {
     const srcRgba = warmOrangeBuffer32();
     const tgtRgba = gradientBuffer32();
