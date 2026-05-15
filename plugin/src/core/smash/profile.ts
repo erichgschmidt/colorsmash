@@ -29,8 +29,8 @@ export interface DnaExtractOptions {
   readonly bandCount?: 3 | 5 | 7;
   /** Default 'value'. Only 'value' supported in Phase 1. */
   readonly bandAxis?: BandAxis;
-  /** Default 5. Number of palette clusters. */
-  readonly clusterCount?: 3 | 5 | 7;
+  /** Default 5. Number of palette clusters; must be an integer in [3, 32]. */
+  readonly clusterCount?: number;
   /** Default 4 (matches features.ts default stride). */
   readonly sampleStride?: number;
   /** Optional base64 PNG thumbnail to embed. */

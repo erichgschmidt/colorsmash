@@ -53,6 +53,14 @@ export interface SmashPersisted {
    *  1 = full lerp to source's frequency-weighted joint cluster mean.
    *  Smooth, banding-free alternative to posterize. */
   distribution?: number;
+  /** v1.21 Phase 4.5j — zone routing trio. clusterCount is the number of
+   *  source palette zones (integer in [3, 32], default 5). zoneInfluence
+   *  is how strongly the zone path overrides default Hue-by-L (default 0).
+   *  detailRichness is how much intra-cluster variation is preserved when
+   *  the zone path is active (default 1). */
+  clusterCount?: number;
+  zoneInfluence?: number;
+  detailRichness?: number;
 }
 
 async function getDataFolder(): Promise<any | null> {

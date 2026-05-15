@@ -522,6 +522,66 @@ finalRGB = smoothRGB + (blendRGB − smoothRGB) × distribution
 
 **LUT-bakable.** Yes. Distribution is a pure function of (R, G, B) via (Lin, aIn, bIn) + frozen cluster table. ~16 cluster gaussian evaluations per pixel; ~50ns per cluster eval; ~1µs per pixel — negligible. Bakes into the single Color Lookup adjustment layer like everything else.
 
+### 8.4f — `zoneInfluence` + `detailRichness`: two-step zone routing (Phase 4.5j)
+
+**User vision** (verbatim): *"an extra step in the abstract phase (or pre-abstract phase) where we use the simplified zones almost as masks, to determine the 'relative scale' that each cluster should express… each cluster has lots of relative color relationships within it, often times values and colors that might technically be VERY different from a raw 1:1 color range or value swap… so it needs to simplify as a means to organize its application, but it also needs to be able to retrieve the distinct relative color associations from the source… not just 1:1 color swapping."*
+
+The two-step intuition: (1) use clusters as the coarse organizational framework — they capture source's joint modes and their populations, which `lumaCdf` then ensures the target's L distribution mirrors. (2) Within each cluster, don't just dump the centroid — preserve the cluster's internal value→color variation so the output retains source's nuance, not just its averaged identity.
+
+**What's new architecturally.** This is the first mechanic that uses **per-cluster sub-LUTs**. At engine build time:
+
+```
+For each source cluster c (k-means in CIE Lab via core/palette.ts, then Oklab):
+    clusterPixels = source features nearest to c's centroid (Oklab Euclidean)
+    c.subLUT = buildHueByLumaLut(clusterPixels)   // miniature Hue-by-L per cluster
+```
+
+These sub-LUTs live in `SmashCdfs.clusterSubLuts` and are computed once per snap change (not per slider tick).
+
+**Apply-time math.** After all other hue/chroma paths have computed `(hsm, Csm)`:
+
+```
+1. ROUTE: nearest cluster by L distance (1D scan of clusterLs, O(K), K=3..32)
+   bestIdx = argmin |Lin − clusterLs[k]|
+
+2. ZONE (a, b): blend cluster centroid vs cluster sub-LUT by detailRichness
+   (aCen, bCen) = clusters[bestIdx].centroidOklab
+   (aSub, bSub) = lookupHueByLuma(clusterSubLuts[bestIdx], Lin)
+   (aZone, bZone) = lerp(centroid, sub-LUT, detailRichness)
+
+3. POLAR: convert to (hZone, CZone)
+   CZone = √(aZone² + bZone²)
+   hZone = atan2(bZone, aZone)
+
+4. APPLY: lerp existing (hsm, Csm) toward zone result by zoneInfluence
+   hsm += circular_delta(hZone, hsm) × zoneInfluence
+   Csm += (CZone − Csm) × zoneInfluence
+```
+
+**The two sliders and the cluster count.**
+
+| Knob | Range | Default | What it does |
+|---|---|---|---|
+| `clusterCount` (ZONES) | 3–32 integer | 5 | Number of source palette zones. Re-extracts SourceDNA on change (~50ms). Coarse-grained at 3, fine-grained at 32. |
+| `zoneInfluence` (INFLUENCE) | 0–1 | 0 (off) | How strongly the zone-routed (hsm, Csm) replaces the default Hue-by-L/CDF result. |
+| `detailRichness` (DETAIL) | 0–1 | 1 | Inside the zone path, lerps between cluster CENTROID (0, flat within zone) and the cluster's own SUB-LUT at Lin (1, intra-cluster L→(a,b) variation). |
+
+**Why match by Lin (not Lout)?** Same reasoning as posterize §8.4d: the user thinks in terms of "target's own L bands map to source's clusters." Using post-lumaCdf Lout would scramble that intuition.
+
+**Why blend at (a, b) instead of full RGB (like posterize)?** Composes with the engine's `Lout` from lumaCdf + the trait gates. The zone path provides the COLOR (chroma + hue) but lets the engine decide LIGHTNESS independently — so the user can use Smash Amount + the Value trait to scale Lout while zone routing handles chroma identity. Posterize, by contrast, hard-snaps the whole RGB.
+
+**Composition.**
+- All earlier mechanics (CDF, Hue-by-L, lift, paletteSnap) run first to produce `(hsm, Csm)`.
+- Zone path lerps from that result toward `(hZone, CZone)` by `zoneInfluence`.
+- `distribution` and `posterize` then run on the gated RGB output (they're at the very end of the pipeline).
+- So a full chain at all-on would be: CDF + lift + Hue-by-L + paletteSnap (hue only) → zone routing (per-cluster blend) → gates → RGB → distribution (soft cluster blend on RGB) → posterize (hard snap on RGB).
+
+**LUT-bakable.** Yes. Pure function of (R, G, B) via Lin + frozen sub-LUTs + frozen cluster centroids. Per-pixel cost: 1 cluster scan (O(K)) + 1 sub-LUT lookup + a few trig ops. ~K × 5ns + 50ns ≈ negligible. Bakes into the Color Lookup adjustment layer like everything else.
+
+**Open question — do we still need Hue-by-L?**
+
+When `zoneInfluence=1` and `detailRichness=1`, the zone path effectively replaces the global Hue-by-L with a per-cluster set of Hue-by-L lookups. It's strictly more granular. The user has marked Hue-by-L for potential removal if zone routing covers its use cases in practice. Defer that decision until we see how the new mechanic feels across a few sessions.
+
 ### 8.5 What's still on the roadmap (Phase 5+)
 
 The four colorization mechanics in v1.1 §5 remain forward work:

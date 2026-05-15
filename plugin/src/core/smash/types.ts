@@ -183,6 +183,33 @@ export interface ColorizationOptions {
    *  co-cluster. Different from paletteSnap: paletteSnap re-aims hue
    *  only; distribution influences the entire pixel color. */
   readonly distribution?: number;
+  /** Phase 4.5j — Zone Influence. How strongly the cluster-routed
+   *  ("zone") path replaces the engine's default Hue-by-L when a target
+   *  pixel is mapped to a source cluster.
+   *
+   *  Range [0, 1]:
+   *    0.0 (default): no zone routing, output uses default Hue-by-L /
+   *        CDF / lift path unchanged
+   *    1.0: zone path fully replaces the default hue+chroma magnitude
+   *        with the cluster's contribution
+   *
+   *  Pairs with `detailRichness` to control what the zone path emits:
+   *  cluster centroid (no internal variation) vs the cluster's own
+   *  Hue-by-L sub-LUT (preserves intra-cluster L→(a,b) variation). */
+  readonly zoneInfluence?: number;
+  /** Phase 4.5j — Detail Richness. Inside the zone path, controls how
+   *  much intra-cluster variation is preserved.
+   *
+   *  Range [0, 1]:
+   *    0.0: zone emits the cluster's CENTROID (single (a,b) for every
+   *        pixel mapped to this cluster — flat within zone)
+   *    1.0 (default when zone path active): zone emits the cluster's
+   *        Hue-by-L SUB-LUT at the input pixel's L — preserves the
+   *        source's intra-cluster value→color variation
+   *  Intermediate: lerp between the two.
+   *
+   *  Only has effect when `zoneInfluence > 0`. */
+  readonly detailRichness?: number;
   // Future toggles (Phase 5+) added here:
   //   readonly stochasticPerL?: boolean;
   //   readonly conditionalCdf?: boolean;

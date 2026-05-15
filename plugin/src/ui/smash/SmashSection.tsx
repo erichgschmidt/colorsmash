@@ -97,6 +97,16 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   // joint Oklab space, frequency-weighted by cluster population. 0 = off,
   // 1 = full lerp to weighted cluster mean. Smooth alternative to posterize.
   const [distribution, setDistribution] = useState<number>(0);
+  // Phase 4.5j — Zone routing trio:
+  //   clusterCount: number of source clusters (3..32). Re-extracts SourceDNA
+  //                 when changed since clusters are computed during extraction.
+  //   zoneInfluence: how strongly the zone path replaces the default
+  //                  Hue-by-L for routed pixels.
+  //   detailRichness: within the zone path, how much intra-cluster
+  //                   variation is preserved (centroid vs sub-LUT).
+  const [clusterCount, setClusterCount] = useState<number>(5);
+  const [zoneInfluence, setZoneInfluence] = useState<number>(0);
+  const [detailRichness, setDetailRichness] = useState<number>(1);
   const [exportStatus, setExportStatus] = useState<string>("");
   const loadedRef = useRef<boolean>(false);
 
@@ -160,18 +170,32 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       if (typeof persisted?.distribution === "number" && Number.isFinite(persisted.distribution)) {
         setDistribution(Math.max(0, Math.min(1, persisted.distribution)));
       }
+      // v1.21 Phase 4.5j — restore zone routing trio (clusterCount int 3..32,
+      // zoneInfluence + detailRichness floats [0, 1]).
+      if (typeof persisted?.clusterCount === "number" && Number.isFinite(persisted.clusterCount)) {
+        setClusterCount(Math.max(3, Math.min(32, Math.round(persisted.clusterCount))));
+      }
+      if (typeof persisted?.zoneInfluence === "number" && Number.isFinite(persisted.zoneInfluence)) {
+        setZoneInfluence(Math.max(0, Math.min(1, persisted.zoneInfluence)));
+      }
+      if (typeof persisted?.detailRichness === "number" && Number.isFinite(persisted.detailRichness)) {
+        setDetailRichness(Math.max(0, Math.min(1, persisted.detailRichness)));
+      }
       loadedRef.current = true;
     })();
     return () => { cancelled = true; };
   }, []);
 
   // Save amount + traits + colorization + passes + proportionMatch +
-  // posterize + distribution on change (debounced 500ms). Skip until
-  // initial load resolved.
+  // posterize + distribution + zone trio on change (debounced 500ms).
+  // Skip until initial load resolved.
   useEffect(() => {
     if (!loadedRef.current) return;
-    saverRef.current?.({ amount, traits, colorization, passes, proportionMatch, posterize, distribution });
-  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution]);
+    saverRef.current?.({
+      amount, traits, colorization, passes, proportionMatch, posterize, distribution,
+      clusterCount, zoneInfluence, detailRichness,
+    });
+  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution, clusterCount, zoneInfluence, detailRichness]);
 
   // ── Heavy: features + DNA + profile + CDF LUTs. Depends on SNAPS ONLY,
   // so slider drags don't re-run extractFeatures (~100K pixels per call)
@@ -180,14 +204,16 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   // per snap change and reused on every drag.
   const snapDerived = useMemo(() => {
     if (!sourceSnap || !targetSnap) return null;
-    const sourceDNA = extractSourceDNA(sourceSnap.data, sourceSnap.width, sourceSnap.height);
-    const targetStructure = extractTargetStructure(targetSnap.data, targetSnap.width, targetSnap.height);
+    // clusterCount drives source/target DNA k-means; cdfs uses the resulting
+    // clusters to build per-cluster sub-LUTs for the zone-routing path.
+    const sourceDNA = extractSourceDNA(sourceSnap.data, sourceSnap.width, sourceSnap.height, { clusterCount });
+    const targetStructure = extractTargetStructure(targetSnap.data, targetSnap.width, targetSnap.height, { clusterCount });
     const profile = pairDNA(sourceDNA, targetStructure);
     const sourceFeatures = extractFeatures(sourceSnap.data, sourceSnap.width, sourceSnap.height, 4);
     const targetFeatures = extractFeatures(targetSnap.data, targetSnap.width, targetSnap.height, 4);
-    const cdfs = buildSmashCdfs(sourceFeatures, targetFeatures);
+    const cdfs = buildSmashCdfs(sourceFeatures, targetFeatures, sourceDNA.clusters);
     return { sourceDNA, targetStructure, profile, sourceFeatures, targetFeatures, cdfs };
-  }, [sourceSnap, targetSnap]);
+  }, [sourceSnap, targetSnap, clusterCount]);
 
   // ── Lighter: smash() invocation. Per slider tick — uses cached features
   // + profile + CDFs from above. The expensive build is now a no-op; smash()
@@ -201,7 +227,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       traits,
       // proportionMatch lives on colorization in the engine schema, so merge
       // it in here rather than carrying it around as a separate field.
-      colorization: { ...colorization, proportionMatch, posterize, distribution },
+      colorization: { ...colorization, proportionMatch, posterize, distribution, zoneInfluence, detailRichness },
       passes,
     };
     const engine = smash(
@@ -212,7 +238,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       snapDerived.cdfs,
     );
     return { sourceDNA: snapDerived.sourceDNA, engine };
-  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution]);
+  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, zoneInfluence, detailRichness]);
 
   // Propagate engine changes to the parent via useEffect, NOT inside the
   // useMemo body above. Calling setState on the parent during a child's
@@ -459,6 +485,60 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           title="Smooth-blend the output toward source's joint color distribution. For each pixel, all source clusters contribute weighted by (gaussian proximity in Oklab) × (cluster population). Result emphasizes source's high-frequency modes WITHOUT the banding of Posterize. Different from per-dim CDFs (which treat L, C, h independently); Distribution respects the joint distribution where source's pixels actually co-occur. 0% = off, 100% = full lerp to weighted cluster mean."
         />
         <span style={passesValueStyle}>{Math.round(distribution * 100)}%</span>
+      </div>
+
+      {/* Phase 4.5j — Zone routing trio. ZONES sets how many source palette
+          buckets exist (re-extracts DNA on change — slight pause). INFLUENCE
+          sets how strongly the per-cluster path overrides default Hue-by-L.
+          DETAIL sets, within the zone path, how much intra-cluster L→(a,b)
+          variation is preserved (0 = cluster's centroid, 1 = cluster's own
+          sub-LUT). */}
+      <div style={passesRowStyle}>
+        <span style={passesLabelStyle}>ZONES</span>
+        <input
+          type="range"
+          min={3}
+          max={32}
+          step={1}
+          value={clusterCount}
+          onChange={(e) => setClusterCount(parseInt((e.target as HTMLInputElement).value, 10))}
+          disabled={!hasSnaps}
+          style={passesSliderStyle}
+          title="Number of source palette zones (clusters) used by the zone-routing path. 3 = very coarse (Subtle / Balanced / Vivid groupings); 32 = fine-grained (smooth transitions). Changing this re-extracts the source DNA (~50ms pause). Default 5."
+        />
+        <span style={passesValueStyle}>{clusterCount}</span>
+      </div>
+
+      <div style={passesRowStyle}>
+        <span style={passesLabelStyle}>INFLUENCE</span>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={5}
+          value={Math.round(zoneInfluence * 100)}
+          onChange={(e) => setZoneInfluence(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
+          disabled={!hasSnaps}
+          style={passesSliderStyle}
+          title="How strongly the zone-routed path overrides the default Hue-by-L for each pixel. 0% = off (default path unchanged). 100% = each pixel's hue and chroma magnitude come entirely from its source cluster's contribution. Use DETAIL to control how much intra-cluster variation comes through."
+        />
+        <span style={passesValueStyle}>{Math.round(zoneInfluence * 100)}%</span>
+      </div>
+
+      <div style={passesRowStyle}>
+        <span style={passesLabelStyle}>DETAIL</span>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={5}
+          value={Math.round(detailRichness * 100)}
+          onChange={(e) => setDetailRichness(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
+          disabled={!hasSnaps}
+          style={passesSliderStyle}
+          title="Inside the zone path, how much intra-cluster L→(a,b) variation is preserved. 0% = cluster's CENTROID (flat color within zone). 100% = cluster's own Hue-by-L sub-LUT (preserves the source's value→color variation within each zone). Only takes effect when INFLUENCE > 0."
+        />
+        <span style={passesValueStyle}>{Math.round(detailRichness * 100)}%</span>
       </div>
 
       {/* Traits disclosure. Closed by default so the primary surface stays

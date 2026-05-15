@@ -100,10 +100,22 @@ describe('extractClusters', () => {
     }
   });
 
-  it('k=4 throws (not in {3, 5, 7})', () => {
+  it('k below 3 or above 32 throws (Phase 4.5j widened from {3,5,7} to [3, 32])', () => {
     const rgba = solidBuffer(32, 32, 100, 100, 100);
-    // TypeScript guards the type at compile time; bypass with cast for the runtime test.
-    expect(() => extractClusters(rgba, 32, 32, 4 as 3)).toThrow();
+    expect(() => extractClusters(rgba, 32, 32, 2)).toThrow();
+    expect(() => extractClusters(rgba, 32, 32, 33)).toThrow();
+    expect(() => extractClusters(rgba, 32, 32, 0)).toThrow();
+    expect(() => extractClusters(rgba, 32, 32, -1)).toThrow();
+    expect(() => extractClusters(rgba, 32, 32, 4.5)).toThrow(); // non-integer
+  });
+
+  it('k=4, 8, 16, 32 are accepted (Phase 4.5j widened range)', () => {
+    const rgba = halvedBuffer(64, 32, 255, 200, 50, 30, 80, 200);
+    for (const k of [4, 8, 16, 32]) {
+      const clusters = extractClusters(rgba, 64, 32, k);
+      expect(clusters.length).toBeLessThanOrEqual(k);
+      expect(clusters.length).toBeGreaterThan(0);
+    }
   });
 
   it('k=3 returns at most 3 clusters', () => {

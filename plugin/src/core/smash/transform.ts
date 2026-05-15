@@ -96,6 +96,13 @@ export interface SmashEngineOutput {
    * Hue-by-L's direction, producing broad colorization across L.
    */
   readonly sourceMedianChroma: number;
+  /** Phase 4.5j — per-cluster Hue-by-L sub-LUTs for zone routing. See
+   *  SmashCdfs for details. */
+  readonly clusterSubLuts: readonly HueByLumaLut[];
+  /** Phase 4.5j — per-cluster centroid L values. Parallel to clusterSubLuts. */
+  readonly clusterLs: Float32Array;
+  /** Phase 4.5j — per-cluster RGB centroids. Parallel to clusterSubLuts. */
+  readonly clusterRgbs: readonly Vec3[];
 }
 
 /** Chroma below this is too low to give a stable hue angle (atan2 noise
@@ -113,19 +120,45 @@ export interface SmashCdfs {
   readonly hueByLumaLut: HueByLumaLut | null;
   readonly targetMedianChroma: number;
   readonly sourceMedianChroma: number;
+  /** Phase 4.5j — per-cluster Hue-by-L sub-LUTs. Built by filtering source
+   *  features to those nearest each cluster (Oklab Euclidean) and then
+   *  running the same magnitude-preserving Hue-by-L builder on the subset.
+   *  Indexed parallel to `clusterLs`; empty when no clusters are supplied
+   *  to buildSmashCdfs. Used by applyTransform's zone-routing path so each
+   *  cluster gets its own L→(a,b) curve, preserving intra-cluster color
+   *  variation instead of collapsing to centroid. */
+  readonly clusterSubLuts: readonly HueByLumaLut[];
+  /** Phase 4.5j — per-cluster centroid L values (Oklab), one per entry in
+   *  `clusterSubLuts`. Used at apply time to route an input pixel to its
+   *  nearest cluster by 1D L distance. */
+  readonly clusterLs: Float32Array;
+  /** Phase 4.5j — per-cluster RGB centroid (matches `cluster.rgb`), parallel
+   *  to `clusterSubLuts` / `clusterLs`. Used as the "no internal variation"
+   *  endpoint of the detailRichness lerp inside the zone path. */
+  readonly clusterRgbs: readonly Vec3[];
 }
 
 /** Build the L/C/h CDF LUTs from a source/target feature pair. Pure work,
  *  no controls, no audit — call once per snap change and cache the result.
- *  smash() will use the cached CDFs if passed via the precomputedCdfs arg. */
+ *  smash() will use the cached CDFs if passed via the precomputedCdfs arg.
+ *
+ *  When `sourceClusters` is supplied, additionally builds per-cluster
+ *  Hue-by-L sub-LUTs for the zone-routing path (§8.4f). The clusters'
+ *  centroids drive nearest-cluster assignment via Oklab Euclidean distance;
+ *  features that land in each cluster are then fed through buildHueByLumaLut
+ *  to produce the cluster's sub-LUT. Total cost: ~N_features × N_clusters
+ *  assignment scan + N_clusters HueByLuma builds. ~10-30ms at 16k features
+ *  and 16 clusters — fine for snap-cached recompute, not for slider drag. */
 export function buildSmashCdfs(
   sourceFeatures: PixelFeatures[],
   targetFeatures: PixelFeatures[],
+  sourceClusters?: readonly { readonly centroidOklab: Vec3; readonly rgb: Vec3 }[],
 ): SmashCdfs {
   if (sourceFeatures.length === 0 || targetFeatures.length === 0) {
     return {
       lumaCdf: null, chromaCdf: null, hueCdf: null,
       hueByLumaLut: null, targetMedianChroma: 0, sourceMedianChroma: 0,
+      clusterSubLuts: [], clusterLs: new Float32Array(0), clusterRgbs: [],
     };
   }
   const srcLuma = new Float32Array(sourceFeatures.length);
@@ -169,9 +202,55 @@ export function buildSmashCdfs(
   const targetMedianChroma = tgtChromaSorted[Math.floor(tgtChromaSorted.length / 2)] ?? 0;
   const sourceMedianChroma = srcChromaSorted[Math.floor(srcChromaSorted.length / 2)] ?? 0;
 
+  // Phase 4.5j — per-cluster sub-LUTs for zone routing. For each cluster,
+  // collect the source features whose nearest centroid (by Oklab Euclidean)
+  // is this cluster, then build a Hue-by-L sub-LUT from that subset. The
+  // sub-LUT captures the cluster's INTERNAL L→(a,b) variation, which the
+  // engine then routes target pixels to via the zone-influence path.
+  let clusterSubLuts: HueByLumaLut[] = [];
+  let clusterLs: Float32Array = new Float32Array(0);
+  let clusterRgbs: Vec3[] = [];
+  if (sourceClusters && sourceClusters.length > 0) {
+    const K = sourceClusters.length;
+    const cLs = new Float32Array(K);
+    const cAs = new Float32Array(K);
+    const cBs = new Float32Array(K);
+    clusterRgbs = new Array<Vec3>(K);
+    for (let k = 0; k < K; k++) {
+      const c = sourceClusters[k];
+      cLs[k] = c.centroidOklab[0];
+      cAs[k] = c.centroidOklab[1];
+      cBs[k] = c.centroidOklab[2];
+      clusterRgbs[k] = c.rgb;
+    }
+    // Bucket features by nearest centroid in Oklab space.
+    const buckets: PixelFeatures[][] = new Array(K);
+    for (let k = 0; k < K; k++) buckets[k] = [];
+    for (let i = 0; i < sourceFeatures.length; i++) {
+      const f = sourceFeatures[i];
+      const [fL, fA, fB] = f.oklab;
+      let bestK = 0;
+      let bestD = Infinity;
+      for (let k = 0; k < K; k++) {
+        const dL = fL - cLs[k];
+        const dA = fA - cAs[k];
+        const dB = fB - cBs[k];
+        const d = dL * dL + dA * dA + dB * dB;
+        if (d < bestD) {
+          bestD = d;
+          bestK = k;
+        }
+      }
+      buckets[bestK].push(f);
+    }
+    clusterSubLuts = buckets.map((bucket) => buildHueByLumaLut(bucket));
+    clusterLs = cLs;
+  }
+
   return {
     lumaCdf, chromaCdf, hueCdf, hueByLumaLut,
     targetMedianChroma, sourceMedianChroma,
+    clusterSubLuts, clusterLs, clusterRgbs,
   };
 }
 
@@ -216,6 +295,11 @@ export const DEFAULT_SMASH_CONTROLS: SmashControls = {
     // to posterize. Users dial it up for joint-mode-aware smash without
     // banding.
     distribution: 0,
+    // Phase 4.5j: zoneInfluence + detailRichness default to 0 (off) —
+    // zone routing replaces nothing by default. Users dial up to engage
+    // per-cluster Hue-by-L sub-LUTs.
+    zoneInfluence: 0,
+    detailRichness: 1,
   },
   // Phase 4.5c: passes = 1 by default (one transform per pixel). Users can
   // dial up to 2 or 3 to bake the compounded "multi-pass" look into the LUT.
@@ -330,13 +414,16 @@ export function smash(
   // precomputed set when available (slider-drag fast path: ~5ms instead of
   // ~200-400ms per call). buildSmashCdfs is the canonical builder — call
   // it once per snap change and cache the result.
-  const cdfs = precomputedCdfs ?? buildSmashCdfs(sourceFeatures, targetFeatures);
+  const cdfs = precomputedCdfs ?? buildSmashCdfs(sourceFeatures, targetFeatures, profile.source.clusters);
   const lumaCdf = cdfs.lumaCdf;
   const chromaCdf = cdfs.chromaCdf;
   const hueCdf = cdfs.hueCdf;
   const hueByLumaLut = cdfs.hueByLumaLut;
   const targetMedianChroma = cdfs.targetMedianChroma;
   const sourceMedianChroma = cdfs.sourceMedianChroma;
+  const clusterSubLuts = cdfs.clusterSubLuts;
+  const clusterLs = cdfs.clusterLs;
+  const clusterRgbs = cdfs.clusterRgbs;
 
   // Record trait contributions from controls. The trait values can exceed 1
   // (Phase 3 oversample), so the audit stores raw products without clamping.
@@ -356,6 +443,7 @@ export function smash(
     profile, controls: c, bandTransforms, audit,
     lumaCdf, chromaCdf, hueCdf,
     hueByLumaLut, targetMedianChroma, sourceMedianChroma,
+    clusterSubLuts, clusterLs, clusterRgbs,
   };
 }
 
@@ -623,7 +711,7 @@ function applyTransformOnePass(
   const liftAmount = liftNeutralsActive
     ? liftNeutralness * Math.max(0, liftFloor - cdfMag)
     : 0;
-  const Csm = cdfMag + liftAmount;
+  let Csm = cdfMag + liftAmount;
 
   // Hue: source's L→(a,b) direction (Hue-by-L) when toggle ON and lookup
   // has a usable magnitude; per-pixel hue CDF fallback otherwise.
@@ -668,6 +756,64 @@ function applyTransformOnePass(
       hsm = bestHue;
     }
     // else: keep the hueByLuma/CDF hsm — source had no chromatic clusters
+  }
+
+  // Phase 4.5j — Zone routing. Two-step structure-aware path:
+  //   1. Route input pixel to its nearest source cluster by L distance
+  //      (1D — keeps assignment proportions correct since lumaCdf rank-maps
+  //      target's L distribution onto source's, and clusters tile source's
+  //      L range).
+  //   2. Compute the cluster's contribution in Oklab (a, b) space, blending
+  //      between the cluster's CENTROID (detailRichness=0, flat within
+  //      zone) and the cluster's own Hue-by-L SUB-LUT at Lin (detailRichness
+  //      =1, preserves intra-cluster value→color variation).
+  //   3. Lerp the existing (hsm, Csm) toward the zone result by zoneInfluence.
+  //
+  // This is the "use simplified zones as masks, but reference the non-
+  // abstracted source within each zone" mechanic — coarse routing by
+  // cluster, fine detail from the cluster's pixel distribution. Same
+  // structure-with-richness intent as paletteSnap + posterize, but applied
+  // in (a, b) space rather than full RGB so it composes with the engine's
+  // Lout / gate math instead of bypassing them.
+  const rawZoneInfluence = controls.colorization?.zoneInfluence;
+  const zoneInfluence =
+    typeof rawZoneInfluence === "number" && Number.isFinite(rawZoneInfluence)
+      ? Math.max(0, Math.min(1, rawZoneInfluence))
+      : 0;
+  if (zoneInfluence > 0 && out.clusterSubLuts.length > 0) {
+    const rawDetail = controls.colorization?.detailRichness;
+    const detail =
+      typeof rawDetail === "number" && Number.isFinite(rawDetail)
+        ? Math.max(0, Math.min(1, rawDetail))
+        : 1;
+    // Step 1: nearest cluster by L (1D scan, ~16-32 clusters)
+    const K = out.clusterSubLuts.length;
+    let bestIdx = 0;
+    let bestDist = Math.abs(Lin - out.clusterLs[0]);
+    for (let i = 1; i < K; i++) {
+      const d = Math.abs(Lin - out.clusterLs[i]);
+      if (d < bestDist) {
+        bestDist = d;
+        bestIdx = i;
+      }
+    }
+    // Step 2: cluster's (a, b) contribution
+    const centroid = out.profile.source.clusters[bestIdx].centroidOklab;
+    const aCen = centroid[1];
+    const bCen = centroid[2];
+    const [aSub, bSub] = lookupHueByLuma(out.clusterSubLuts[bestIdx], Lin);
+    const aZone = aCen + (aSub - aCen) * detail;
+    const bZone = bCen + (bSub - bCen) * detail;
+    const CZone = Math.sqrt(aZone * aZone + bZone * bZone);
+    // Step 3: lerp current (hsm, Csm) toward (hZone, CZone) by zoneInfluence
+    if (CZone > 1e-6) {
+      const hZone = Math.atan2(bZone, aZone);
+      let dh = hZone - hsm;
+      if (dh > Math.PI) dh -= 2 * Math.PI;
+      if (dh < -Math.PI) dh += 2 * Math.PI;
+      hsm = hsm + dh * zoneInfluence;
+    }
+    Csm = Csm + (CZone - Csm) * zoneInfluence;
   }
 
   // Per-pixel modulation of the master gate. neutral and accent stay clamped

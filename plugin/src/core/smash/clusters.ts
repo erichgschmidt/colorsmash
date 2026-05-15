@@ -8,7 +8,12 @@ import { extractPalette } from '../palette';
 import { srgbByteToOklab } from '../perceptual/oklab';
 import type { ClusterStats } from './types';
 
-const VALID_K = new Set([3, 5, 7]);
+// Cluster count was historically constrained to {3, 5, 7} for the shipped
+// palette UI. Pro's zone-routing path (§8.4f) needs finer granularity, so
+// we widen the bounds to [3, 32]. Callers in the shipped Color Match flow
+// still pass 3/5/7 and continue to work unchanged.
+const MIN_K = 3;
+const MAX_K = 32;
 
 /**
  * Extracts clusters from an image's RGBA buffer.
@@ -16,8 +21,9 @@ const VALID_K = new Set([3, 5, 7]);
  * @param rgba interleaved RGBA bytes (length = width * height * 4)
  * @param width image width in pixels
  * @param height image height in pixels
- * @param k number of clusters (3, 5, or 7 — matches the shipped 3/5/7 toggle).
- *          Default 5. Throws on values outside this set.
+ * @param k number of clusters. Default 5. Must be an integer in [3, 32]; values
+ *          outside this range throw rather than silently clamping (callers
+ *          should be explicit about the count they want).
  * @returns clusters sorted by weight (most-prevalent first, matching extractPalette).
  *          All clusters start unlocked, unanchored, with multiplier = 1.
  */
@@ -25,10 +31,10 @@ export function extractClusters(
   rgba: Uint8Array,
   width: number,
   height: number,
-  k: 3 | 5 | 7 = 5,
+  k: number = 5,
 ): ClusterStats[] {
-  if (!VALID_K.has(k)) {
-    throw new Error(`k must be 3, 5, or 7; got ${k}`);
+  if (!Number.isInteger(k) || k < MIN_K || k > MAX_K) {
+    throw new Error(`k must be an integer in [${MIN_K}, ${MAX_K}]; got ${k}`);
   }
 
   const swatches = extractPalette(rgba, width, height, k);

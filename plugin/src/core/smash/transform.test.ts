@@ -544,6 +544,114 @@ describe('applyTransform() liftNeutrals chroma floor', () => {
     expect(matchesAnyCluster).toBe(false);
   });
 
+  it('zone routing: zoneInfluence=0 produces identical output to default (off by default)', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const ctrlDefault: SmashControls = { ...DEFAULT_SMASH_CONTROLS };
+    const ctrlZero: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, zoneInfluence: 0 },
+    };
+
+    const engDefault = smash(srcFeatures, tgtFeatures, profile, ctrlDefault);
+    const engZero = smash(srcFeatures, tgtFeatures, profile, ctrlZero);
+
+    for (const input of [50, 128, 200]) {
+      const a = applyTransform(engDefault, input, input, input);
+      const b = applyTransform(engZero, input, input, input);
+      expect(a).toEqual(b);
+    }
+  });
+
+  it('zone routing: zoneInfluence=1 produces output different from default for a bimodal source', () => {
+    // Bimodal source so clusters are distinct enough that per-cluster sub-LUTs
+    // diverge from the global Hue-by-L average.
+    const total = 32 * 32;
+    const srcRgba = new Uint8Array(total * 4);
+    for (let i = 0; i < total; i++) {
+      const v = i / (total - 1);
+      if (v < 0.5) {
+        srcRgba[i * 4]     = 30; srcRgba[i * 4 + 1] = 30; srcRgba[i * 4 + 2] = 30;
+      } else {
+        srcRgba[i * 4]     = 230; srcRgba[i * 4 + 1] = 20; srcRgba[i * 4 + 2] = 20;
+      }
+      srcRgba[i * 4 + 3] = 255;
+    }
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const ctrlOff: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, zoneInfluence: 0 },
+    };
+    const ctrlOn: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, zoneInfluence: 1, detailRichness: 1 },
+    };
+
+    const engOff = smash(srcFeatures, tgtFeatures, profile, ctrlOff);
+    const engOn = smash(srcFeatures, tgtFeatures, profile, ctrlOn);
+
+    // For a target mid-tone, zone routing should pull output toward the
+    // nearest cluster's character, which differs from the global Hue-by-L
+    // average for a bimodal source. Any difference > 0 proves the path
+    // is wired and active.
+    let totalDelta = 0;
+    for (const input of [60, 120, 180]) {
+      const a = applyTransform(engOff, input, input, input);
+      const b = applyTransform(engOn, input, input, input);
+      totalDelta +=
+        Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]);
+    }
+    expect(totalDelta).toBeGreaterThan(0);
+  });
+
+  it('zone routing: detailRichness=0 vs 1 produce different outputs (centroid vs sub-LUT inside the zone)', () => {
+    // Use a warm-orange GRADIENT as the source so each cluster has genuine
+    // intra-cluster L variation — the sub-LUT lookup will differ from the
+    // centroid for non-centroid Lin values.
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const ctrlCentroid: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, zoneInfluence: 1, detailRichness: 0 },
+    };
+    const ctrlSubLut: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, zoneInfluence: 1, detailRichness: 1 },
+    };
+
+    const engCentroid = smash(srcFeatures, tgtFeatures, profile, ctrlCentroid);
+    const engSubLut = smash(srcFeatures, tgtFeatures, profile, ctrlSubLut);
+
+    // For at least one input pixel within a cluster's L range, the sub-LUT
+    // lookup should produce a different (a, b) than the cluster's centroid
+    // — and that difference propagates through to the output. Sample a few
+    // inputs across the L range and check that AT LEAST ONE pair diverges.
+    let anyDiverge = false;
+    for (const input of [40, 90, 140, 190, 240]) {
+      const a = applyTransform(engCentroid, input, input, input);
+      const b = applyTransform(engSubLut, input, input, input);
+      const diff =
+        Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]);
+      if (diff > 0) {
+        anyDiverge = true;
+        break;
+      }
+    }
+    expect(anyDiverge).toBe(true);
+  });
+
   it('distribution=0 produces identical output to default (off by default)', () => {
     const srcRgba = warmOrangeBuffer32();
     const tgtRgba = gradientBuffer32();
