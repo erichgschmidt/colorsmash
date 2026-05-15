@@ -227,23 +227,48 @@ export interface ColorizationOptions {
    *  "Loosen" (let the source's natural prevalence show through more) ↔
    *  slide toward +1. */
   readonly zoneRatio?: number;
-  /** Phase 4.5m — Temperature. Final-pass warm/cool shift applied to
-   *  the output's Oklab (a, b) after all other mechanics. Pure global
-   *  bias — doesn't read source/target structure, just nudges every
-   *  pixel toward warm or cool.
+  /** Phase 4.5m/n/o/p — Temperature. IMAGE-RELATIVE contrast stretch in
+   *  the warm/cool direction. The image's own estimated output-warmth
+   *  median is the neutral center; pixels' "warmness" is measured
+   *  relative to that center, not relative to Oklab's absolute warm axis.
+   *
+   *  This solves the "if the image is mostly warm, cranking warm does
+   *  nothing" problem: even an all-warm image has pixels that are
+   *  less-warm-than-median (image-relatively cool) and more-warm-than-
+   *  median (image-relatively warm). Temperature operates on those
+   *  relative distinctions.
    *
    *  Range [-1, +1]:
-   *    -1.0: full COOL shift — (a, b) gets (-Δa, -Δb), output drifts
-   *          toward blue-cyan
-   *     0.0 (default): no shift
-   *    +1.0: full WARM shift — (a, b) gets (+Δa, +Δb), output drifts
-   *          toward red-yellow
+   *    -1.0: pull image-relative-warm pixels DOWN toward the median
+   *          (warms compress; cools untouched)
+   *     0.0 (default): no change
+   *    +1.0: push image-relative-warm pixels UP away from the median
+   *          (warms stretch; cools untouched)
    *
-   *  Δa = temperature × 0.06, Δb = temperature × 0.04 (empirical scale
-   *  giving ~30-byte channel shift at ±1 without crushing in-gamut).
-   *  Applied AFTER the gates but BEFORE oklabToSrgbByte, so the shift
-   *  is in perceptual space and gamut-compressed naturally. */
+   *  Negative t mirrors: pulls image-relative-cool pixels UP toward
+   *  median (cools compress; warms untouched) — wait, that's wrong.
+   *  Actually: negative t pushes image-relative-COOL pixels DOWN (more
+   *  cool); image-relative-WARM pixels untouched. Symmetric.
+   *
+   *  Same-polarity pixels are always untouched. Pixels straddling the
+   *  median get continuously-varying treatment via the sensitivity
+   *  exponent. */
   readonly temperature?: number;
+  /** Phase 4.5p — Temperature Sensitivity. Controls how sharp the
+   *  warm/cool split is around the image's median warmth. Applied as
+   *  a power exponent on |relativeWarmth|:
+   *
+   *    sensitivity ∈ [0, 1]
+   *    exp = 3^(1 − 2·sensitivity)
+   *    relWarmth_adj = sign(relWarmth) × |relWarmth|^exp
+   *
+   *  Range [0, 1]:
+   *    0.0: exp = 3 — very SOFT split; pixels near median get little
+   *         change, the effect is concentrated on extreme outliers
+   *    0.5 (default): exp = 1 — linear, no sensitivity adjustment
+   *    1.0: exp = 1/3 — very SHARP split; even pixels slightly past
+   *         median get strong boost, producing distinct warm/cool zones */
+  readonly temperatureSensitivity?: number;
   // Future toggles (Phase 5+) added here:
   //   readonly stochasticPerL?: boolean;
   //   readonly conditionalCdf?: boolean;

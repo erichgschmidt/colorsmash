@@ -112,9 +112,12 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   // Stored in state as -100..+100 (slider int) for UI; converted to float
   // before passing to the engine.
   const [zoneRatio, setZoneRatio] = useState<number>(0);
-  // Phase 4.5m — temperature: warm/cool shift applied to output Oklab (a, b).
-  // Range -1..+1, default 0 (no shift). −1 = full cool, +1 = full warm.
+  // Phase 4.5m → 4.5p — temperature: IMAGE-RELATIVE contrast stretch
+  // around the image's own warmth median. Range -1..+1, default 0.
   const [temperature, setTemperature] = useState<number>(0);
+  // Phase 4.5p — temperature sensitivity. 0..1, default 0.5 (linear).
+  // 0 = soft split near median, 1 = sharp distinct warm/cool zones.
+  const [temperatureSensitivity, setTemperatureSensitivity] = useState<number>(0.5);
   const [exportStatus, setExportStatus] = useState<string>("");
   const loadedRef = useRef<boolean>(false);
 
@@ -195,6 +198,9 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       if (typeof persisted?.temperature === "number" && Number.isFinite(persisted.temperature)) {
         setTemperature(Math.max(-1, Math.min(1, persisted.temperature)));
       }
+      if (typeof persisted?.temperatureSensitivity === "number" && Number.isFinite(persisted.temperatureSensitivity)) {
+        setTemperatureSensitivity(Math.max(0, Math.min(1, persisted.temperatureSensitivity)));
+      }
       loadedRef.current = true;
     })();
     return () => { cancelled = true; };
@@ -207,9 +213,9 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     if (!loadedRef.current) return;
     saverRef.current?.({
       amount, traits, colorization, passes, proportionMatch, posterize, distribution,
-      clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature,
+      clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity,
     });
-  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution, clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature]);
+  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution, clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity]);
 
   // ── Heavy: features + DNA + profile + CDF LUTs. Depends on SNAPS ONLY,
   // so slider drags don't re-run extractFeatures (~100K pixels per call)
@@ -241,7 +247,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       traits,
       // proportionMatch lives on colorization in the engine schema, so merge
       // it in here rather than carrying it around as a separate field.
-      colorization: { ...colorization, proportionMatch, posterize, distribution, zoneInfluence, detailRichness, zoneRatio, temperature },
+      colorization: { ...colorization, proportionMatch, posterize, distribution, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity },
       passes,
     };
     const engine = smash(
@@ -252,7 +258,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       snapDerived.cdfs,
     );
     return { sourceDNA: snapDerived.sourceDNA, engine };
-  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, zoneInfluence, detailRichness, zoneRatio, temperature]);
+  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity]);
 
   // Propagate engine changes to the parent via useEffect, NOT inside the
   // useMemo body above. Calling setState on the parent during a child's
@@ -575,10 +581,13 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
         <span style={passesValueStyle}>{zoneRatio >= 0 ? "+" : ""}{Math.round(zoneRatio * 100)}%</span>
       </div>
 
-      {/* Phase 4.5m — Temperature. Final-pass warm/cool shift in Oklab
-          (a, b). Pure global bias applied after all structure-aware
-          mechanics. Cool drift toward blue/green; warm drift toward
-          red/yellow. ±100% ≈ 30-byte channel shift on neutral inputs. */}
+      {/* Phase 4.5m → 4.5p — Temperature, IMAGE-RELATIVE. Centered on
+          the image's own estimated output-warmth median. Slider pushes
+          image-relatively-warm pixels further warm (positive) or
+          image-relatively-cool pixels further cool (negative). Same-side
+          pixels are untouched. Works on uniformly-warm or uniformly-
+          cool images because "warm"/"cool" is judged relative to the
+          image's own median, not the absolute Oklab axis. */}
       <div style={passesRowStyle}>
         <span style={passesLabelStyle}>TEMPERATURE</span>
         <input
@@ -590,9 +599,31 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           onChange={(e) => setTemperature(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
           disabled={!hasSnaps}
           style={passesSliderStyle}
-          title="Relative warm/cool migration. 0% = no shift. POSITIVE = warm slider: cool pixels migrate TOWARD NEUTRAL (desaturate along the warm axis). At +100% cool pixels reach neutral gray. NEGATIVE = cool slider: warm pixels migrate toward neutral. At ±100% pixels never cross into opposite color (no literal green/blue tint) — the perception of cool/warm emerges from CONTRAST with un-migrated pixels, not by injecting opposite hue. Same-polarity pixels are always untouched."
+          title="IMAGE-RELATIVE warm/cool contrast stretch around the image's own warmth median. POSITIVE = pushes image-relatively-WARM pixels further warm (cools untouched). NEGATIVE = pushes image-relatively-COOL pixels further cool (warms untouched). Works on uniformly-warm/cool images because 'warm'/'cool' is judged relative to the image's own median, not Oklab's absolute axis. Use SENSITIVITY below to control how sharp the warm/cool split is around the median."
         />
         <span style={passesValueStyle}>{temperature >= 0 ? "+" : ""}{Math.round(temperature * 100)}%</span>
+      </div>
+
+      {/* Phase 4.5p — Temperature Sensitivity. Power exponent on the
+          relative-warmth signal. 0% (soft) = pixels near the median
+          barely move; effect concentrates on extreme outliers. 50%
+          (linear) = no sensitivity adjustment. 100% (sharp) = even
+          pixels just past the median get strong boost → distinct
+          warm/cool zones. */}
+      <div style={passesRowStyle}>
+        <span style={passesLabelStyle}>SENSITIVITY</span>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={5}
+          value={Math.round(temperatureSensitivity * 100)}
+          onChange={(e) => setTemperatureSensitivity(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
+          disabled={!hasSnaps}
+          style={passesSliderStyle}
+          title="How sharp the warm/cool split is around the image's median warmth. 0% = SOFT (near-median pixels barely move, effect on outliers only). 50% (default) = linear (no sensitivity adjustment). 100% = SHARP (every pixel past median gets strong boost → distinct warm/cool zones). Only effective when TEMPERATURE ≠ 0."
+        />
+        <span style={passesValueStyle}>{Math.round(temperatureSensitivity * 100)}%</span>
       </div>
 
       {/* Traits disclosure. Closed by default so the primary surface stays

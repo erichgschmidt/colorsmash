@@ -648,7 +648,29 @@ Two changes to existing knobs based on user feedback:
 
 **INFLUENCE overdrive (zoneInfluence 0–200%).** Slider max raised from 100% to 200%, engine clamp from 1.0 to 2.0. Values above 100% over-rotate the smashed hue past the zone's hue and overshoot Csm past the cluster's chroma magnitude. Useful when the cluster's character is "right but underdone." `oklabToSrgbByte` clamps the result in-gamut.
 
-**TEMPERATURE → relative migration toward neutral (Phase 4.5n → 4.5o).** Earlier Phase 4.5m math was a uniform `(Δa, Δb)` bias — every pixel shifted regardless of its own warmth. Phase 4.5n introduced polarity-aware migration but lerped to the **mirror** (`-warmth`) at `|t|=1`, which sent warm pixels straight across the color wheel into green-blue. Per user feedback ("it acts more like a green hue shift; I'd expect the local color to remain and shift toward grays"), 4.5o lerps toward **neutral (0)** instead:
+**TEMPERATURE evolution: Phase 4.5m → 4.5o → 4.5p.**
+
+- **4.5m** — uniform `(Δa, Δb)` bias: every pixel shifted, even if already on the slider's polarity. "Crank up warm on a warm image" did nothing visible to the warms (only cools migrated) but cooled the whole thing on `t < 0`.
+- **4.5n** — polarity-aware, but lerped to **mirror** (`-warmth`) → warm pixels swung into green-blue at `|t|=1`. Perceptually a literal hue rotation, not a temperature shift.
+- **4.5o** — polarity-aware, lerped to **neutral (0)** instead of mirror. Warm pixels desaturate toward gray. Still operated on **absolute** Oklab warm axis, so the user's complaint surfaced: "if the image is mostly warm, cranking warm does literally nothing." All pixels were on the same side of absolute zero → no migration.
+- **4.5p (current)** — **image-relative**. The image's own estimated output-warmth median is the neutral center; "warm" / "cool" are defined relative to *that*, not relative to absolute zero. Even uniformly-warm images have above-median and below-median pixels, so the slider always has something to act on.
+
+**Phase 4.5p math:**
+
+```
+medianW = estimatedOutputMedianWarmth   # computed at smash() time from 64 sample bakes
+warmth  = aOut · WARM_A + bOut · WARM_B
+relW    = warmth − medianW
+
+sensScale  = 3^(2·sensitivity − 1)       # sensitivity 0 → 1/3, 0.5 → 1, 1 → 3
+effective_t = min(1, |t| · sensScale)    # clamped so pixel cannot overshoot median
+
+shouldShift = (t > 0 ∧ relW < 0) ∨ (t < 0 ∧ relW > 0)
+if shouldShift:
+    delta = −relW · effective_t          # migrate TOWARD median
+    aOut += delta · WARM_A
+    bOut += delta · WARM_B
+```
 
 ```
 warmth = aOut · 0.82 + bOut · 0.57             # project onto warm axis
@@ -661,20 +683,34 @@ if shouldShift:
     bOut += Δproj × 0.57
 ```
 
-| Slider | Behavior |
-|---|---|
-| `t = +0.5` (warm) | Cool pixels lose half their cool magnitude. Migrate toward gray. Warm pixels untouched. |
-| `t = +1.0` (warm) | Cool pixels reach neutral (warm-axis projection = 0). Never cross into warm territory. |
-| `t = −0.5` (cool) | Warm pixels lose half their warm magnitude. Migrate toward gray. Cool pixels untouched. |
-| `t = −1.0` (cool) | Warm pixels reach neutral. Never cross into cool territory. |
+**Behavior table (Phase 4.5p):**
 
-The perceived "cool" or "warm" feeling at high slider values emerges from **contrast** with the un-migrated pixels (the warm-source becomes lower-saturation overall when t<0, so the residual warmth reads as the dominant note) — not from injecting opposite color hue. This matches the user's mental model: "shift those cools towards grays, to have it feel more natural, and have the perception of something feeling more green, not literally raw green."
+| Slider | Pixel above median (image-relative warm) | Pixel below median (image-relative cool) |
+|---|---|---|
+| `t = +0.5` (warm) | Untouched (same polarity) | Migrate halfway to median (gets warmer) |
+| `t = +1.0` (warm) | Untouched | Reach median (warmth_out = median) |
+| `t = −0.5` (cool) | Migrate halfway to median (gets cooler) | Untouched |
+| `t = −1.0` (cool) | Reach median | Untouched |
 
-Regression test verifies: warm source + t=-1 produces output where `R−B` approaches 0 but does not become negative (≤-3 byte tolerance for rounding) — i.e., no sign-flip into cool territory.
+`effective_t` is clamped at 1 (cannot overshoot past median) → the Phase 4.5o guarantee survives: warm source + `t=-1` still doesn't produce literal green/blue. Pixels reach the image's own median but no further.
 
-Only the warm-axis projection is modified; the perpendicular (green↔magenta) axis is preserved so migration doesn't re-tint along an unrelated direction.
+**Phase 4.5p — Sensitivity slider.** New `temperatureSensitivity ∈ [0, 1]` controls how fast pixels migrate given their distance from median:
 
-LUT-bakable. No new state; same single Color Lookup adjustment layer.
+- `0.0` (soft, `sensScale = 1/3`) — only outliers (far from median) migrate appreciably; near-median pixels barely move. Smooth gradient.
+- `0.5` (linear, `sensScale = 1`) — pixels migrate proportionally to their distance from median (default).
+- `1.0` (sharp, `sensScale = 3`) — even pixels just past median migrate fully (clamped at median). Distinct warm/cool zones emerge.
+
+**Median estimation** — at `smash()` time we run `applyTransform` (with `temperature=0` to break the recursion) at 64 RGB grid points (4×4×4), project each output onto the Oklab warm axis, and take the median. ~64 applyTransform calls per smash() — ~3ms on typical hardware. Snap-cached via `SmashCdfs`, recomputed only when controls change.
+
+**Why this matches the user's intent.** Earlier 4.5o was correct math against an absolute reference but felt wrong because the absolute reference is unmoored from the actual image. The image-relative reference makes the slider always operate on the SPREAD within the current image — even uniformly-warm imagery has internal warmth variation, and that's what the user wants to grade.
+
+Regression tests (both still pass):
+- 4.5o no-cross-past-zero: warm source + t=-1 still keeps R−B ≥ 0 (because image-cool pixels migrate UP toward median, image-warm pixels migrate DOWN toward median — both stay positive when median > 0).
+- 4.5p wiring: temperature produces measurable shift across a varied input set.
+
+Only the warm-axis projection is modified; the perpendicular (green↔magenta) axis is preserved.
+
+LUT-bakable. The median lives on engine output state, frozen by the time the LUT bake samples applyTransform.
 
 ### 8.5 What's still on the roadmap (Phase 5+)
 

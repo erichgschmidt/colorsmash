@@ -110,6 +110,14 @@ export interface SmashEngineOutput {
    *  the `distribution` mechanic). Always normalized so Σ = 1.
    *  Parallel to clusterSubLuts / clusterLs. */
   readonly adjustedClusterWeights: Float32Array;
+  /** Phase 4.5p — estimated median warmth of the engine's OUTPUT across
+   *  a 3×3×3 RGB sampling grid (27 points). Used as the "neutral center"
+   *  for the image-relative temperature mechanic. Computed at smash()
+   *  time by sampling applyTransform with temperature=0 (everything else
+   *  matching user controls), projecting each output onto the Oklab warm
+   *  axis, and taking the median. Approximate but cheap (~27 samples is
+   *  enough to anchor the median for typical natural images). */
+  readonly estimatedOutputMedianWarmth: number;
 }
 
 /** Chroma below this is too low to give a stable hue angle (atan2 noise
@@ -312,6 +320,9 @@ export const DEFAULT_SMASH_CONTROLS: SmashControls = {
     zoneRatio: 0,
     // Phase 4.5m: temperature defaults to 0 — no warm/cool shift.
     temperature: 0,
+    // Phase 4.5p: temperatureSensitivity defaults to 0.5 — linear
+    // exponent (no sharpening or softening of the median split).
+    temperatureSensitivity: 0.5,
   },
   // Phase 4.5c: passes = 1 by default (one transform per pixel). Users can
   // dial up to 2 or 3 to bake the compounded "multi-pass" look into the LUT.
@@ -487,12 +498,48 @@ export function smash(
   const elapsed = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - start;
   audit = finalize(audit, elapsed);
 
+  // Phase 4.5p — estimate output warmth median. Build a partial engine
+  // output with temperature explicitly forced to 0 so the sampled
+  // applyTransform call doesn't read back its own (yet-unset) median.
+  // Sample 27 RGB grid points (3×3×3), project each output onto the
+  // Oklab warm axis, take the median. This becomes the "neutral center"
+  // the image-relative temperature mechanic operates around.
+  const tempZeroControls: SmashControls = {
+    ...c,
+    colorization: { ...(c.colorization ?? {}), temperature: 0 },
+  };
+  const partialForSampling: SmashEngineOutput = {
+    profile, controls: tempZeroControls, bandTransforms, audit,
+    lumaCdf, chromaCdf, hueCdf,
+    hueByLumaLut, targetMedianChroma, sourceMedianChroma,
+    clusterSubLuts, clusterLs, clusterRgbs,
+    adjustedClusterWeights,
+    estimatedOutputMedianWarmth: 0, // placeholder; sampling ignores this field
+  };
+  const WARM_A = 0.82;
+  const WARM_B = 0.57;
+  const samplePoints: readonly number[] = [16, 96, 176, 240];
+  const warmthSamples: number[] = [];
+  for (const r of samplePoints) {
+    for (const g of samplePoints) {
+      for (const b of samplePoints) {
+        const [or, og, ob] = applyTransform(partialForSampling, r, g, b);
+        const [, ao, bo] = srgbByteToOklab(or, og, ob);
+        warmthSamples.push(ao * WARM_A + bo * WARM_B);
+      }
+    }
+  }
+  warmthSamples.sort((x, y) => x - y);
+  const estimatedOutputMedianWarmth =
+    warmthSamples[Math.floor(warmthSamples.length / 2)] ?? 0;
+
   return {
     profile, controls: c, bandTransforms, audit,
     lumaCdf, chromaCdf, hueCdf,
     hueByLumaLut, targetMedianChroma, sourceMedianChroma,
     clusterSubLuts, clusterLs, clusterRgbs,
     adjustedClusterWeights,
+    estimatedOutputMedianWarmth,
   };
 }
 
@@ -916,34 +963,32 @@ function applyTransformOnePass(
   let aOut = Cout * Math.cos(hout);
   let bOut = Cout * Math.sin(hout);
 
-  // Phase 4.5m/n/o — Temperature. RELATIVE migration toward NEUTRAL (not
-  // toward the mirror). Earlier Phase 4.5n math lerped to the sign-flipped
-  // warm-axis projection at |t|=1, which sent warm-orange pixels straight
-  // into the green-blue corner of Oklab — perceptually a "literal green
-  // shift," not the gentle "feels cooler / more like grays" effect the
-  // user expected. The fix: lerp toward 0 (neutral) instead of toward
-  // -warmth. Pixels desaturate along the warm axis as |t| approaches 1;
-  // they never cross into the opposite color territory.
+  // Phase 4.5p — Temperature, IMAGE-RELATIVE. The image's own estimated
+  // output-warmth median (`out.estimatedOutputMedianWarmth`) is the
+  // neutral center; "warm" and "cool" are decided relative to that
+  // center, not relative to Oklab's absolute warm axis. This is what
+  // makes the slider work on uniformly-warm or uniformly-cool images:
+  // an all-warm image still has pixels that are LESS warm than the
+  // median (image-relatively cool) and MORE warm than the median
+  // (image-relatively warm), and the slider acts on that distinction.
   //
   // Algorithm:
-  //   warmth = aOut · WARM_A + bOut · WARM_B    (project onto warm axis)
-  //   shouldShift = (t > 0 ∧ warmth < 0) ∨ (t < 0 ∧ warmth > 0)
-  //   if shouldShift:
-  //     newWarmth = warmth × (1 − |t|)          (lerp toward 0, NOT mirror)
-  //     delta = newWarmth − warmth
-  //     aOut += delta × WARM_A
-  //     bOut += delta × WARM_B
+  //   warmth = aOut · WARM_A + bOut · WARM_B
+  //   relW   = warmth − medianW
+  //   exp    = 3^(1 − 2·sensitivity)              # sensitivity ∈ [0, 1]
+  //   relW_s = sign(relW) · |relW|^exp            # sharpened by exponent
   //
-  // Behavior:
-  //   t = +0.5 → cool pixels lose half their cool magnitude (toward gray)
-  //   t = +1.0 → cool pixels become neutral (warm-axis projection = 0)
-  //   t = −0.5 → warm pixels lose half their warm magnitude (toward gray)
-  //   t = −1.0 → warm pixels become neutral
-  //   any t   → opposite-polarity pixels untouched
+  //   if t > 0 ∧ relW_s > 0:                      # warm slider, image-warm pixel
+  //     warmth' = warmth + t · relW_s · GAIN      # push further warm (contrast stretch)
+  //   if t < 0 ∧ relW_s < 0:                      # cool slider, image-cool pixel
+  //     warmth' = warmth + (−|t|) · |relW_s| · GAIN  # push further cool
+  //   else: warmth' = warmth                      # untouched (same-side preserved)
   //
-  // Perceived cool/warm emerges from the CONTRAST with un-migrated pixels,
-  // not from injecting opposite hue. The perpendicular axis (green↔magenta)
-  // is left alone so migration doesn't re-tint along an unrelated axis.
+  // Same-polarity-as-slider pixels move further from the median in the
+  // slider's direction; opposite-polarity pixels stay put. The result is
+  // a CONTRAST STRETCH along the warm/cool axis, anchored at the image's
+  // own center — distinct warm/cool zones emerge relative to the image's
+  // own balance rather than to an absolute reference.
   const rawTemperature = controls.colorization?.temperature;
   const temperature =
     typeof rawTemperature === 'number' && Number.isFinite(rawTemperature)
@@ -953,13 +998,38 @@ function applyTransformOnePass(
     const WARM_A = 0.82;
     const WARM_B = 0.57;
     const warmth = aOut * WARM_A + bOut * WARM_B;
-    const isCool = warmth < 0;
-    const shouldShift = (temperature > 0 && isCool) || (temperature < 0 && !isCool);
+    const medianW = out.estimatedOutputMedianWarmth;
+    const relW = warmth - medianW;
+    // Sensitivity controls migration SPEED (how quickly a pixel reaches
+    // the median given its distance). High sensitivity = pixels just past
+    // median migrate as if they were far (distinct zones emerge fast).
+    // Low sensitivity = only far-from-median pixels migrate appreciably
+    // (smooth gradient near median). Clamped to [0, 1] in effective_t so
+    // a pixel can never overshoot past the median into opposite-color
+    // territory — the "no literal green from warm" guarantee from Phase
+    // 4.5o is preserved across the median.
+    const rawSens = controls.colorization?.temperatureSensitivity;
+    const sensitivity =
+      typeof rawSens === 'number' && Number.isFinite(rawSens)
+        ? Math.max(0, Math.min(1, rawSens))
+        : 0.5;
+    // sensitivity 0 → scale 1/3 (slow)
+    // sensitivity 0.5 → scale 1 (linear, default)
+    // sensitivity 1 → scale 3 (fast)
+    const sensScale = Math.pow(3, 2 * sensitivity - 1);
+    // Effective migration fraction, capped at 1 (cannot pass median).
+    const effective_t = Math.min(1, Math.abs(temperature) * sensScale);
+    // Only opposite-polarity-to-slider pixels migrate (the user's
+    // intent: warm slider TARGETS image-cools and pushes them toward
+    // image-warm; cool slider TARGETS image-warms and pushes toward
+    // image-cool — both moves are toward the median).
+    const shouldShift =
+      (temperature > 0 && relW < 0) ||
+      (temperature < 0 && relW > 0);
     if (shouldShift) {
-      const absT = Math.abs(temperature);
-      // Lerp warm-axis projection toward 0 (neutral). Never crosses sign.
-      const newWarmth = warmth * (1 - absT);
-      const delta = newWarmth - warmth;
+      // delta moves warmth toward median by effective_t × |relW|.
+      // delta has sign opposite to relW → migrates toward 0 (median).
+      const delta = -relW * effective_t;
       aOut += delta * WARM_A;
       bOut += delta * WARM_B;
     }
