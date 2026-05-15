@@ -103,6 +103,13 @@ export interface SmashEngineOutput {
   readonly clusterLs: Float32Array;
   /** Phase 4.5j — per-cluster RGB centroids. Parallel to clusterSubLuts. */
   readonly clusterRgbs: readonly Vec3[];
+  /** Phase 4.5k — per-cluster effective weights AFTER applying the
+   *  `zoneRatio` power exponent. At zoneRatio=0 these match natural
+   *  weights; negative ratios flatten; positive ratios exaggerate
+   *  dominance. Used wherever cluster.weight participates (currently
+   *  the `distribution` mechanic). Always normalized so Σ = 1.
+   *  Parallel to clusterSubLuts / clusterLs. */
+  readonly adjustedClusterWeights: Float32Array;
 }
 
 /** Chroma below this is too low to give a stable hue angle (atan2 noise
@@ -300,6 +307,9 @@ export const DEFAULT_SMASH_CONTROLS: SmashControls = {
     // per-cluster Hue-by-L sub-LUTs.
     zoneInfluence: 0,
     detailRichness: 1,
+    // Phase 4.5k: zoneRatio defaults to 0 — natural cluster weights
+    // preserved as the source extracted them.
+    zoneRatio: 0,
   },
   // Phase 4.5c: passes = 1 by default (one transform per pixel). Users can
   // dial up to 2 or 3 to bake the compounded "multi-pass" look into the LUT.
@@ -425,6 +435,42 @@ export function smash(
   const clusterLs = cdfs.clusterLs;
   const clusterRgbs = cdfs.clusterRgbs;
 
+  // Phase 4.5k — adjusted cluster weights. Apply zoneRatio as a power
+  // exponent on the natural weights, then normalize. Cheap (K ≤ 32 pow
+  // ops + normalize), and lives on the engine output so per-pixel
+  // mechanics that consume cluster weights (today: `distribution`)
+  // don't have to recompute. Re-runs whenever smash() runs, which is
+  // every slider tick — fine since the cost is sub-millisecond.
+  const rawZoneRatio = c.colorization?.zoneRatio;
+  const zoneRatio =
+    typeof rawZoneRatio === 'number' && Number.isFinite(rawZoneRatio)
+      ? Math.max(-1, Math.min(1, rawZoneRatio))
+      : 0;
+  const K = profile.source.clusters.length;
+  const adjustedClusterWeights = new Float32Array(K);
+  if (K > 0) {
+    // Map zoneRatio ∈ [-1, +1] → exponent k ∈ [1/e, e] via exp(x). This
+    // gives a symmetric "tighten / loosen" feel — −1 fully flattens
+    // (still some variance because weights are nonzero), +1 sharply
+    // amplifies dominance.
+    const k = Math.exp(zoneRatio);
+    let sum = 0;
+    for (let i = 0; i < K; i++) {
+      const w = profile.source.clusters[i].weight;
+      const adj = w > 0 ? Math.pow(w, k) : 0;
+      adjustedClusterWeights[i] = adj;
+      sum += adj;
+    }
+    if (sum > 0) {
+      for (let i = 0; i < K; i++) adjustedClusterWeights[i] /= sum;
+    } else {
+      // Degenerate: all weights zero (shouldn't happen). Fall back to
+      // uniform so downstream mechanics don't divide by zero.
+      const uniform = 1 / K;
+      for (let i = 0; i < K; i++) adjustedClusterWeights[i] = uniform;
+    }
+  }
+
   // Record trait contributions from controls. The trait values can exceed 1
   // (Phase 3 oversample), so the audit stores raw products without clamping.
   const traits = c.traits;
@@ -444,6 +490,7 @@ export function smash(
     lumaCdf, chromaCdf, hueCdf,
     hueByLumaLut, targetMedianChroma, sourceMedianChroma,
     clusterSubLuts, clusterLs, clusterRgbs,
+    adjustedClusterWeights,
   };
 }
 
@@ -878,6 +925,7 @@ function applyTransformOnePass(
       : 0;
   if (distribution > 0 && out.profile.source.clusters.length > 0) {
     const clusters = out.profile.source.clusters;
+    const adjWeights = out.adjustedClusterWeights;
     const SIGMA = 0.15;
     const sigmaSq2 = 2 * SIGMA * SIGMA;
     let sumW = 0;
@@ -891,9 +939,10 @@ function applyTransformOnePass(
       const dA = aIn - cA;
       const dB = bIn - cB;
       const dist2 = dL * dL + dA * dA + dB * dB;
-      // Weight = cluster.population × gaussian falloff. Clusters with
-      // more source pixels (high frequency) dominate the blend.
-      const w = c.weight * Math.exp(-dist2 / sigmaSq2);
+      // Weight = adjusted population (zoneRatio-modulated, Phase 4.5k)
+      // × gaussian falloff. zoneRatio < 0 flattens weights so minority
+      // clusters get more voice; > 0 exaggerates dominance.
+      const w = adjWeights[i] * Math.exp(-dist2 / sigmaSq2);
       sumW += w;
       sumR += c.rgb[0] * w;
       sumG += c.rgb[1] * w;

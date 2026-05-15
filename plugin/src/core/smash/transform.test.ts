@@ -842,3 +842,312 @@ describe('applyTransform() passes multi-pass bake', () => {
     expect(out10).toEqual(out4);
   });
 });
+
+// ────────── DIAGNOSTIC: toggle-isolation sweep ──────────
+//
+// Empirical sweep that verifies hueByLuma, liftNeutrals, and paletteSnap
+// still produce measurable output deltas when every other newer mechanic
+// (zoneInfluence, posterize, distribution) is explicitly disabled. Logs a
+// readable table; asserts at least one toggle combination differs from the
+// rest (i.e. the three toggles aren't all dead together).
+describe('toggle isolation diagnostic — hueByLuma / liftNeutrals / paletteSnap', () => {
+  // Shared rig: warm orange source + grayscale gradient target. Source has
+  // strong chroma, target is fully neutral — the worst-case "colorize a
+  // grayscale" scenario where hueByLuma + liftNeutrals are designed to do
+  // their heaviest lifting.
+  function buildRig() {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+    return { profile, srcFeatures, tgtFeatures };
+  }
+
+  // Base controls: everything that could route around hueByLuma/liftNeutrals/
+  // paletteSnap is turned OFF.
+  function baseControls(): SmashControls {
+    return {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        hueByLuma: true,
+        liftNeutrals: true,
+        paletteSnap: false,
+        proportionMatch: 1.0,
+        posterize: 0,
+        distribution: 0,
+        zoneInfluence: 0,
+        detailRichness: 1,
+        zoneRatio: 0,
+      },
+    };
+  }
+
+  const PROBE_INPUTS = [30, 90, 150, 220];
+
+  function totalSpread(samples: ReadonlyArray<readonly [number, number, number]>): number {
+    // Total channel-spread across the probe set: sum of |max-min| per channel.
+    let rMax = -Infinity, rMin = Infinity;
+    let gMax = -Infinity, gMin = Infinity;
+    let bMax = -Infinity, bMin = Infinity;
+    for (const [r, g, b] of samples) {
+      if (r > rMax) rMax = r; if (r < rMin) rMin = r;
+      if (g > gMax) gMax = g; if (g < gMin) gMin = g;
+      if (b > bMax) bMax = b; if (b < bMin) bMin = b;
+    }
+    return (rMax - rMin) + (gMax - gMin) + (bMax - bMin);
+  }
+
+  function maxByteDiff(
+    a: ReadonlyArray<readonly [number, number, number]>,
+    b: ReadonlyArray<readonly [number, number, number]>,
+  ): number {
+    let d = 0;
+    for (let i = 0; i < a.length; i++) {
+      d = Math.max(d, Math.abs(a[i][0] - b[i][0]));
+      d = Math.max(d, Math.abs(a[i][1] - b[i][1]));
+      d = Math.max(d, Math.abs(a[i][2] - b[i][2]));
+    }
+    return d;
+  }
+
+  function fmtRgb(rgb: readonly [number, number, number]): string {
+    return `(${String(rgb[0]).padStart(3)},${String(rgb[1]).padStart(3)},${String(rgb[2]).padStart(3)})`;
+  }
+
+  function sweep(
+    controls: SmashControls,
+    rig: ReturnType<typeof buildRig>,
+  ): Array<readonly [number, number, number]> {
+    const eng = smash(rig.srcFeatures, rig.tgtFeatures, rig.profile, controls);
+    return PROBE_INPUTS.map((v) => {
+      const [r, g, b] = applyTransform(eng, v, v, v);
+      return [r, g, b] as const;
+    });
+  }
+
+  it('hueByLuma × liftNeutrals four-cell + paletteSnap pair: log table, assert at least one toggle moves output', () => {
+    const rig = buildRig();
+
+    // Four cells of (hueByLuma, liftNeutrals) with paletteSnap=false.
+    const variants: Array<{ label: string; ctrl: SmashControls }> = [
+      {
+        label: 'hueByLuma=ON   liftNeutrals=ON ',
+        ctrl: { ...baseControls(), colorization: { ...baseControls().colorization, hueByLuma: true,  liftNeutrals: true  } },
+      },
+      {
+        label: 'hueByLuma=OFF  liftNeutrals=ON ',
+        ctrl: { ...baseControls(), colorization: { ...baseControls().colorization, hueByLuma: false, liftNeutrals: true  } },
+      },
+      {
+        label: 'hueByLuma=ON   liftNeutrals=OFF',
+        ctrl: { ...baseControls(), colorization: { ...baseControls().colorization, hueByLuma: true,  liftNeutrals: false } },
+      },
+      {
+        label: 'hueByLuma=OFF  liftNeutrals=OFF',
+        ctrl: { ...baseControls(), colorization: { ...baseControls().colorization, hueByLuma: false, liftNeutrals: false } },
+      },
+    ];
+
+    const results = variants.map((v) => ({ label: v.label, samples: sweep(v.ctrl, rig) }));
+
+    // paletteSnap pair (other toggles at default ON state).
+    const snapOff: SmashControls = { ...baseControls(), colorization: { ...baseControls().colorization, paletteSnap: false } };
+    const snapOn:  SmashControls = { ...baseControls(), colorization: { ...baseControls().colorization, paletteSnap: true  } };
+    const snapOffSamples = sweep(snapOff, rig);
+    const snapOnSamples  = sweep(snapOn,  rig);
+
+    // ── Log the diagnostic table.
+    const lines: string[] = [];
+    lines.push('');
+    lines.push('=== TOGGLE ISOLATION DIAGNOSTIC ===');
+    lines.push('Source: warmOrangeBuffer32 (chromatic)');
+    lines.push('Target: gradientBuffer32   (grayscale)');
+    lines.push('Zone-routing controls OFF: zoneInfluence=0, posterize=0, distribution=0, paletteSnap=false');
+    lines.push('Probe inputs (gray): ' + PROBE_INPUTS.join(', '));
+    lines.push('');
+    lines.push('-- hueByLuma × liftNeutrals four-cell --');
+    lines.push('control set                       | in=30          in=90          in=150         in=220         | spread');
+    for (const r of results) {
+      const row = r.samples.map(fmtRgb).join('  ');
+      lines.push(`${r.label} | ${row} | ${totalSpread(r.samples)}`);
+    }
+    lines.push('');
+    lines.push('-- paletteSnap pair (other toggles default ON) --');
+    lines.push(`paletteSnap=OFF                   | ${snapOffSamples.map(fmtRgb).join('  ')} | ${totalSpread(snapOffSamples)}`);
+    lines.push(`paletteSnap=ON                    | ${snapOnSamples.map(fmtRgb).join('  ')} | ${totalSpread(snapOnSamples)}`);
+    lines.push('');
+
+    // Pairwise max-byte diffs to surface "which toggle moved what".
+    lines.push('-- pairwise max-byte diffs --');
+    const onOn   = results[0].samples;
+    const offOn  = results[1].samples;
+    const onOff  = results[2].samples;
+    const offOff = results[3].samples;
+    lines.push(`hueByLuma flip (ON,ON) vs (OFF,ON)         : maxByteDiff=${maxByteDiff(onOn,  offOn)}`);
+    lines.push(`hueByLuma flip (ON,OFF) vs (OFF,OFF)       : maxByteDiff=${maxByteDiff(onOff, offOff)}`);
+    lines.push(`liftNeutrals flip (ON,ON) vs (ON,OFF)      : maxByteDiff=${maxByteDiff(onOn,  onOff)}`);
+    lines.push(`liftNeutrals flip (OFF,ON) vs (OFF,OFF)    : maxByteDiff=${maxByteDiff(offOn, offOff)}`);
+    lines.push(`paletteSnap flip OFF vs ON                 : maxByteDiff=${maxByteDiff(snapOffSamples, snapOnSamples)}`);
+    lines.push('');
+
+    // eslint-disable-next-line no-console
+    console.log(lines.join('\n'));
+
+    // Assertion: at least one of the four hueByLuma×liftNeutrals combinations
+    // produces a DIFFERENT result from the others (proves the toggles aren't
+    // ALL dead simultaneously).
+    const variantSpreads = results.map((r) => totalSpread(r.samples));
+    const maxPairwiseDiff = Math.max(
+      maxByteDiff(onOn,  offOn),
+      maxByteDiff(onOn,  onOff),
+      maxByteDiff(onOn,  offOff),
+      maxByteDiff(offOn, onOff),
+      maxByteDiff(offOn, offOff),
+      maxByteDiff(onOff, offOff),
+    );
+    expect(maxPairwiseDiff).toBeGreaterThan(0);
+    // Sanity: spreads should be non-zero (otherwise the engine is producing
+    // identical output for all 4 probe inputs, which would mean something
+    // broader is wrong).
+    expect(Math.max(...variantSpreads)).toBeGreaterThan(0);
+  });
+});
+
+// ────────── 12. zoneRatio (Phase 4.5k) ──────────
+
+describe('applyTransform() zoneRatio (Phase 4.5k)', () => {
+  it('zoneRatio is reflected in engine output\'s adjustedClusterWeights', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const ctrlNeutral: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, zoneRatio: 0 },
+    };
+    const ctrlFlatten: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, zoneRatio: -1 },
+    };
+    const ctrlAmplify: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, zoneRatio: +1 },
+    };
+
+    const engNeutral = smash(srcFeatures, tgtFeatures, profile, ctrlNeutral);
+    const engFlatten = smash(srcFeatures, tgtFeatures, profile, ctrlFlatten);
+    const engAmplify = smash(srcFeatures, tgtFeatures, profile, ctrlAmplify);
+
+    // All three engine outputs should have a non-empty adjustedClusterWeights
+    // array that sums to ~1 (normalized).
+    for (const eng of [engNeutral, engFlatten, engAmplify]) {
+      expect(eng.adjustedClusterWeights.length).toBeGreaterThan(0);
+      let sum = 0;
+      for (let i = 0; i < eng.adjustedClusterWeights.length; i++) sum += eng.adjustedClusterWeights[i];
+      expect(sum).toBeCloseTo(1, 5);
+    }
+
+    // The flatten regime should produce a MORE uniform weight distribution
+    // (smaller max−min spread). The amplify regime should produce a LESS
+    // uniform distribution (larger spread).
+    const spread = (arr: Float32Array): number => {
+      let mn = arr[0], mx = arr[0];
+      for (let i = 1; i < arr.length; i++) {
+        if (arr[i] < mn) mn = arr[i];
+        if (arr[i] > mx) mx = arr[i];
+      }
+      return mx - mn;
+    };
+    const sNeutral = spread(engNeutral.adjustedClusterWeights);
+    const sFlatten = spread(engFlatten.adjustedClusterWeights);
+    const sAmplify = spread(engAmplify.adjustedClusterWeights);
+
+    expect(sFlatten).toBeLessThan(sNeutral);
+    expect(sAmplify).toBeGreaterThan(sNeutral);
+  });
+
+  it('zoneRatio influences distribution mechanic output (different weights → different blend)', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const ctrlFlatten: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        distribution: 1.0,
+        zoneRatio: -1,
+      },
+    };
+    const ctrlAmplify: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        distribution: 1.0,
+        zoneRatio: +1,
+      },
+    };
+
+    const engFlatten = smash(srcFeatures, tgtFeatures, profile, ctrlFlatten);
+    const engAmplify = smash(srcFeatures, tgtFeatures, profile, ctrlAmplify);
+
+    // With distribution=1, the blend uses adjustedClusterWeights heavily.
+    // Different weights → at least some probe inputs should produce
+    // different outputs between the two engines.
+    let anyDifference = false;
+    for (const input of [60, 120, 180]) {
+      const a = applyTransform(engFlatten, input, input, input);
+      const b = applyTransform(engAmplify, input, input, input);
+      if (
+        Math.abs(a[0] - b[0]) > 0 ||
+        Math.abs(a[1] - b[1]) > 0 ||
+        Math.abs(a[2] - b[2]) > 0
+      ) {
+        anyDifference = true;
+        break;
+      }
+    }
+    expect(anyDifference).toBe(true);
+  });
+
+  it('zoneRatio out of range is clamped (zoneRatio=2 behaves like +1, -2 like -1)', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const ctrlPlus1: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, zoneRatio: +1 },
+    };
+    const ctrlPlus2: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, zoneRatio: +2 },
+    };
+    const ctrlMinus1: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, zoneRatio: -1 },
+    };
+    const ctrlMinus2: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, zoneRatio: -2 },
+    };
+
+    const e1 = smash(srcFeatures, tgtFeatures, profile, ctrlPlus1);
+    const e2 = smash(srcFeatures, tgtFeatures, profile, ctrlPlus2);
+    const m1 = smash(srcFeatures, tgtFeatures, profile, ctrlMinus1);
+    const m2 = smash(srcFeatures, tgtFeatures, profile, ctrlMinus2);
+
+    // Adjusted weights should be identical (clamp at boundary).
+    for (let i = 0; i < e1.adjustedClusterWeights.length; i++) {
+      expect(e1.adjustedClusterWeights[i]).toBeCloseTo(e2.adjustedClusterWeights[i], 6);
+      expect(m1.adjustedClusterWeights[i]).toBeCloseTo(m2.adjustedClusterWeights[i], 6);
+    }
+  });
+});

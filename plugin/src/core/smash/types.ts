@@ -210,6 +210,23 @@ export interface ColorizationOptions {
    *
    *  Only has effect when `zoneInfluence > 0`. */
   readonly detailRichness?: number;
+  /** Phase 4.5k — Zone Ratio. Modulates the source clusters' weight
+   *  distribution. Applied as a power exponent: adjusted_weight ∝
+   *  natural_weight^k where k = exp(zoneRatio × LN_SCALE). Affects every
+   *  mechanic that reads cluster.weight (today: `distribution`'s soft
+   *  Gaussian blend; tomorrow: anything that uses cluster population).
+   *
+   *  Range [-1, +1]:
+   *    -1.0: k ≈ 1/e — flatten weights toward uniform. All zones
+   *          contribute more equally — minority colors get equal voice.
+   *     0.0 (default): k = 1 — natural weights unchanged.
+   *    +1.0: k ≈ e — exaggerate dominance. High-population clusters
+   *          dominate even more; minorities recede.
+   *
+   *  "Tighten" the zones (make them more similar) ↔ slide toward −1.
+   *  "Loosen" (let the source's natural prevalence show through more) ↔
+   *  slide toward +1. */
+  readonly zoneRatio?: number;
   // Future toggles (Phase 5+) added here:
   //   readonly stochasticPerL?: boolean;
   //   readonly conditionalCdf?: boolean;

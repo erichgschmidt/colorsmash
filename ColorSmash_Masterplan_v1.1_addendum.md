@@ -582,6 +582,37 @@ These sub-LUTs live in `SmashCdfs.clusterSubLuts` and are computed once per snap
 
 When `zoneInfluence=1` and `detailRichness=1`, the zone path effectively replaces the global Hue-by-L with a per-cluster set of Hue-by-L lookups. It's strictly more granular. The user has marked Hue-by-L for potential removal if zone routing covers its use cases in practice. Defer that decision until we see how the new mechanic feels across a few sessions.
 
+### 8.4g — `zoneRatio`: source-side cluster weight modulation (Phase 4.5k)
+
+**User vision** (verbatim): *"I need a ratio slider to increase or reduce a source zone relationship (add or tighten zones relative to one another)"*.
+
+The source clusters carry a `weight` field (fraction of source pixels). This drives any mechanic that weights by frequency — today, the `distribution` mechanic's Gaussian-weighted blend. Source A with 90% red / 10% blue gets a very different `distribution` output than Source B with 50% red / 50% blue, even if the cluster centroids are identical. `zoneRatio` lets the user nudge those weights without re-extracting the source.
+
+**Mechanic.** Compute adjusted weights at `smash()` time:
+
+```
+k = exp(zoneRatio)     // zoneRatio ∈ [-1, +1] → k ∈ [1/e, e]
+for each cluster i:
+  adjusted_weight[i] ∝ natural_weight[i]^k
+normalize so Σ = 1
+```
+
+| zoneRatio | k | Effect on 90/10 source |
+|---|---|---|
+| -1.0 | 0.37 | weights → 0.96 / 0.83 ≈ near-uniform → minority gets equal voice |
+| 0.0 (default) | 1.0 | 0.9 / 0.1 — natural |
+| +1.0 | 2.72 | 0.99 / 0.0008 — minority almost vanishes |
+
+Symmetric, intuitive: "tighten" the zones (slide negative) makes the distribution treat them more equally; "loosen" (slide positive) lets dominance run wild.
+
+**Storage.** `SmashEngineOutput.adjustedClusterWeights: Float32Array` (one slot per cluster, normalized). Computed once per `smash()` call (sub-millisecond), reused by all per-pixel mechanics that consume weights.
+
+**Currently consumed by.** Only `distribution` (replaces the `c.weight × gaussian` blend with `adjustedWeight × gaussian`). Future mechanics that want frequency-aware behavior can read `adjustedClusterWeights` for the user-modulated version without re-doing the power-exponent math per pixel.
+
+**UI.** Inline slider below DETAIL, labeled ZONE RATIO. Range -100..+100% in 5% steps. Default 0% (natural).
+
+**LUT-bakable.** Yes — adjustedClusterWeights is engine-time state, frozen by the time the LUT bake samples applyTransform.
+
 ### 8.5 What's still on the roadmap (Phase 5+)
 
 The four colorization mechanics in v1.1 §5 remain forward work:

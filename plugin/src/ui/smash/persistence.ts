@@ -61,6 +61,9 @@ export interface SmashPersisted {
   clusterCount?: number;
   zoneInfluence?: number;
   detailRichness?: number;
+  /** v1.21 Phase 4.5k — zone ratio. -1..+1, default 0 (natural).
+   *  Modulates source cluster weights via power exponent. */
+  zoneRatio?: number;
 }
 
 async function getDataFolder(): Promise<any | null> {

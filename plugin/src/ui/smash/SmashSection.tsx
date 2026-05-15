@@ -107,6 +107,11 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   const [clusterCount, setClusterCount] = useState<number>(5);
   const [zoneInfluence, setZoneInfluence] = useState<number>(0);
   const [detailRichness, setDetailRichness] = useState<number>(1);
+  // Phase 4.5k — zoneRatio modulates cluster weight distribution.
+  // Range -1..+1, default 0 (natural). −1 flattens; +1 amplifies dominance.
+  // Stored in state as -100..+100 (slider int) for UI; converted to float
+  // before passing to the engine.
+  const [zoneRatio, setZoneRatio] = useState<number>(0);
   const [exportStatus, setExportStatus] = useState<string>("");
   const loadedRef = useRef<boolean>(false);
 
@@ -181,6 +186,9 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       if (typeof persisted?.detailRichness === "number" && Number.isFinite(persisted.detailRichness)) {
         setDetailRichness(Math.max(0, Math.min(1, persisted.detailRichness)));
       }
+      if (typeof persisted?.zoneRatio === "number" && Number.isFinite(persisted.zoneRatio)) {
+        setZoneRatio(Math.max(-1, Math.min(1, persisted.zoneRatio)));
+      }
       loadedRef.current = true;
     })();
     return () => { cancelled = true; };
@@ -193,9 +201,9 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     if (!loadedRef.current) return;
     saverRef.current?.({
       amount, traits, colorization, passes, proportionMatch, posterize, distribution,
-      clusterCount, zoneInfluence, detailRichness,
+      clusterCount, zoneInfluence, detailRichness, zoneRatio,
     });
-  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution, clusterCount, zoneInfluence, detailRichness]);
+  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution, clusterCount, zoneInfluence, detailRichness, zoneRatio]);
 
   // ── Heavy: features + DNA + profile + CDF LUTs. Depends on SNAPS ONLY,
   // so slider drags don't re-run extractFeatures (~100K pixels per call)
@@ -227,7 +235,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       traits,
       // proportionMatch lives on colorization in the engine schema, so merge
       // it in here rather than carrying it around as a separate field.
-      colorization: { ...colorization, proportionMatch, posterize, distribution, zoneInfluence, detailRichness },
+      colorization: { ...colorization, proportionMatch, posterize, distribution, zoneInfluence, detailRichness, zoneRatio },
       passes,
     };
     const engine = smash(
@@ -238,7 +246,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       snapDerived.cdfs,
     );
     return { sourceDNA: snapDerived.sourceDNA, engine };
-  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, zoneInfluence, detailRichness]);
+  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, zoneInfluence, detailRichness, zoneRatio]);
 
   // Propagate engine changes to the parent via useEffect, NOT inside the
   // useMemo body above. Calling setState on the parent during a child's
@@ -539,6 +547,26 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           title="Inside the zone path, how much intra-cluster L→(a,b) variation is preserved. 0% = cluster's CENTROID (flat color within zone). 100% = cluster's own Hue-by-L sub-LUT (preserves the source's value→color variation within each zone). Only takes effect when INFLUENCE > 0."
         />
         <span style={passesValueStyle}>{Math.round(detailRichness * 100)}%</span>
+      </div>
+
+      {/* Phase 4.5k — Zone Ratio. Modulates the source clusters' weight
+          distribution. Affects every mechanic that reads cluster.weight
+          (today: Distribution). Slider stores -100..+100 ints for UI
+          tidiness; we map to a -1..+1 float when passing to the engine. */}
+      <div style={passesRowStyle}>
+        <span style={passesLabelStyle}>ZONE RATIO</span>
+        <input
+          type="range"
+          min={-100}
+          max={100}
+          step={5}
+          value={Math.round(zoneRatio * 100)}
+          onChange={(e) => setZoneRatio(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
+          disabled={!hasSnaps}
+          style={passesSliderStyle}
+          title="Modulates source's cluster weights. 0% (default) = natural distribution. NEGATIVE = flatten (minority colors get more equal voice in the Distribution blend). POSITIVE = amplify dominance (high-population clusters dominate even more). Affects mechanics that read cluster.weight (currently DISTRIBUTION)."
+        />
+        <span style={passesValueStyle}>{zoneRatio >= 0 ? "+" : ""}{Math.round(zoneRatio * 100)}%</span>
       </div>
 
       {/* Traits disclosure. Closed by default so the primary surface stays
