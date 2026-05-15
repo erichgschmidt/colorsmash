@@ -1115,6 +1115,65 @@ describe('applyTransform() zoneRatio (Phase 4.5k)', () => {
     expect(anyDifference).toBe(true);
   });
 
+  it('temperature shifts output toward warm (R>B) for positive, cool (B>R) for negative', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const ctrlNeutral: SmashControls = { ...DEFAULT_SMASH_CONTROLS };
+    const ctrlWarm: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, temperature: 1 },
+    };
+    const ctrlCool: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, temperature: -1 },
+    };
+
+    const engNeutral = smash(srcFeatures, tgtFeatures, profile, ctrlNeutral);
+    const engWarm = smash(srcFeatures, tgtFeatures, profile, ctrlWarm);
+    const engCool = smash(srcFeatures, tgtFeatures, profile, ctrlCool);
+
+    // Sample a mid-gray input on the GRADIENT target — the temperature shift
+    // should move (R - B) noticeably positive for warm, noticeably negative
+    // for cool, compared to neutral.
+    const [nR, , nB] = applyTransform(engNeutral, 128, 128, 128);
+    const [wR, , wB] = applyTransform(engWarm, 128, 128, 128);
+    const [cR, , cB] = applyTransform(engCool, 128, 128, 128);
+
+    const neutralBias = nR - nB;
+    const warmBias = wR - wB;
+    const coolBias = cR - cB;
+
+    expect(warmBias).toBeGreaterThan(neutralBias);
+    expect(coolBias).toBeLessThan(neutralBias);
+  });
+
+  it('temperature=0 produces identical output to default (off by default)', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const ctrlDefault: SmashControls = { ...DEFAULT_SMASH_CONTROLS };
+    const ctrlZero: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, temperature: 0 },
+    };
+
+    const engDefault = smash(srcFeatures, tgtFeatures, profile, ctrlDefault);
+    const engZero = smash(srcFeatures, tgtFeatures, profile, ctrlZero);
+
+    for (const input of [50, 128, 200]) {
+      const a = applyTransform(engDefault, input, input, input);
+      const b = applyTransform(engZero, input, input, input);
+      expect(a).toEqual(b);
+    }
+  });
+
   it('zoneRatio out of range is clamped (zoneRatio=2 behaves like +1, -2 like -1)', () => {
     const srcRgba = warmOrangeBuffer32();
     const tgtRgba = gradientBuffer32();

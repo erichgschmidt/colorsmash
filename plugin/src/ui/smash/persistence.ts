@@ -64,6 +64,9 @@ export interface SmashPersisted {
   /** v1.21 Phase 4.5k — zone ratio. -1..+1, default 0 (natural).
    *  Modulates source cluster weights via power exponent. */
   zoneRatio?: number;
+  /** v1.21 Phase 4.5m — temperature. -1..+1, default 0 (no shift).
+   *  Negative = cool, positive = warm. Final-pass Oklab (a, b) shift. */
+  temperature?: number;
 }
 
 async function getDataFolder(): Promise<any | null> {

@@ -310,6 +310,8 @@ export const DEFAULT_SMASH_CONTROLS: SmashControls = {
     // Phase 4.5k: zoneRatio defaults to 0 — natural cluster weights
     // preserved as the source extracted them.
     zoneRatio: 0,
+    // Phase 4.5m: temperature defaults to 0 — no warm/cool shift.
+    temperature: 0,
   },
   // Phase 4.5c: passes = 1 by default (one transform per pixel). Users can
   // dial up to 2 or 3 to bake the compounded "multi-pass" look into the LUT.
@@ -903,9 +905,30 @@ function applyTransformOnePass(
     Cout = Math.max(0, Sout * Lout);
   }
 
-  // Reconstruct Oklab and convert back to bytes.
-  const aOut = Cout * Math.cos(hout);
-  const bOut = Cout * Math.sin(hout);
+  // Reconstruct Oklab.
+  let aOut = Cout * Math.cos(hout);
+  let bOut = Cout * Math.sin(hout);
+
+  // Phase 4.5m — Temperature. Final pre-conversion warm/cool shift in
+  // Oklab (a, b). Pure global bias, applied after the engine's
+  // structure-aware paths have done their work. Scale chosen empirically:
+  // ±1 maps to ≈30-byte channel shift on neutral inputs without crushing
+  // pixels at the gamut edge (ACES already gamut-compressed earlier).
+  //   Warm direction: +a (toward red) and +b (toward yellow)
+  //   Cool direction: −a (toward green) and −b (toward blue)
+  // Subsequent oklabToSrgbByte handles clipping when the shift drives a
+  // pixel out of sRGB.
+  const rawTemperature = controls.colorization?.temperature;
+  const temperature =
+    typeof rawTemperature === 'number' && Number.isFinite(rawTemperature)
+      ? Math.max(-1, Math.min(1, rawTemperature))
+      : 0;
+  if (temperature !== 0) {
+    aOut += temperature * 0.06;
+    bOut += temperature * 0.04;
+  }
+
+  // Convert to bytes.
   let [finalR, finalG, finalB] = oklabToSrgbByte(Lout, aOut, bOut);
 
   // Phase 4.5i — Distribution. Soft Gaussian-weighted cluster blend in

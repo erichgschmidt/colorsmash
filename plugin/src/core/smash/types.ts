@@ -227,6 +227,23 @@ export interface ColorizationOptions {
    *  "Loosen" (let the source's natural prevalence show through more) ↔
    *  slide toward +1. */
   readonly zoneRatio?: number;
+  /** Phase 4.5m — Temperature. Final-pass warm/cool shift applied to
+   *  the output's Oklab (a, b) after all other mechanics. Pure global
+   *  bias — doesn't read source/target structure, just nudges every
+   *  pixel toward warm or cool.
+   *
+   *  Range [-1, +1]:
+   *    -1.0: full COOL shift — (a, b) gets (-Δa, -Δb), output drifts
+   *          toward blue-cyan
+   *     0.0 (default): no shift
+   *    +1.0: full WARM shift — (a, b) gets (+Δa, +Δb), output drifts
+   *          toward red-yellow
+   *
+   *  Δa = temperature × 0.06, Δb = temperature × 0.04 (empirical scale
+   *  giving ~30-byte channel shift at ±1 without crushing in-gamut).
+   *  Applied AFTER the gates but BEFORE oklabToSrgbByte, so the shift
+   *  is in perceptual space and gamut-compressed naturally. */
+  readonly temperature?: number;
   // Future toggles (Phase 5+) added here:
   //   readonly stochasticPerL?: boolean;
   //   readonly conditionalCdf?: boolean;

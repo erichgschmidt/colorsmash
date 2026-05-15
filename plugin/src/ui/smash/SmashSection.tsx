@@ -112,6 +112,9 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   // Stored in state as -100..+100 (slider int) for UI; converted to float
   // before passing to the engine.
   const [zoneRatio, setZoneRatio] = useState<number>(0);
+  // Phase 4.5m — temperature: warm/cool shift applied to output Oklab (a, b).
+  // Range -1..+1, default 0 (no shift). −1 = full cool, +1 = full warm.
+  const [temperature, setTemperature] = useState<number>(0);
   const [exportStatus, setExportStatus] = useState<string>("");
   const loadedRef = useRef<boolean>(false);
 
@@ -189,6 +192,9 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       if (typeof persisted?.zoneRatio === "number" && Number.isFinite(persisted.zoneRatio)) {
         setZoneRatio(Math.max(-1, Math.min(1, persisted.zoneRatio)));
       }
+      if (typeof persisted?.temperature === "number" && Number.isFinite(persisted.temperature)) {
+        setTemperature(Math.max(-1, Math.min(1, persisted.temperature)));
+      }
       loadedRef.current = true;
     })();
     return () => { cancelled = true; };
@@ -201,9 +207,9 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     if (!loadedRef.current) return;
     saverRef.current?.({
       amount, traits, colorization, passes, proportionMatch, posterize, distribution,
-      clusterCount, zoneInfluence, detailRichness, zoneRatio,
+      clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature,
     });
-  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution, clusterCount, zoneInfluence, detailRichness, zoneRatio]);
+  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution, clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature]);
 
   // ── Heavy: features + DNA + profile + CDF LUTs. Depends on SNAPS ONLY,
   // so slider drags don't re-run extractFeatures (~100K pixels per call)
@@ -235,7 +241,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       traits,
       // proportionMatch lives on colorization in the engine schema, so merge
       // it in here rather than carrying it around as a separate field.
-      colorization: { ...colorization, proportionMatch, posterize, distribution, zoneInfluence, detailRichness, zoneRatio },
+      colorization: { ...colorization, proportionMatch, posterize, distribution, zoneInfluence, detailRichness, zoneRatio, temperature },
       passes,
     };
     const engine = smash(
@@ -246,7 +252,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       snapDerived.cdfs,
     );
     return { sourceDNA: snapDerived.sourceDNA, engine };
-  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, zoneInfluence, detailRichness, zoneRatio]);
+  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, zoneInfluence, detailRichness, zoneRatio, temperature]);
 
   // Propagate engine changes to the parent via useEffect, NOT inside the
   // useMemo body above. Calling setState on the parent during a child's
@@ -567,6 +573,26 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           title="Modulates source's cluster weights. 0% (default) = natural distribution. NEGATIVE = flatten (minority colors get more equal voice in the Distribution blend). POSITIVE = amplify dominance (high-population clusters dominate even more). Affects mechanics that read cluster.weight (currently DISTRIBUTION)."
         />
         <span style={passesValueStyle}>{zoneRatio >= 0 ? "+" : ""}{Math.round(zoneRatio * 100)}%</span>
+      </div>
+
+      {/* Phase 4.5m — Temperature. Final-pass warm/cool shift in Oklab
+          (a, b). Pure global bias applied after all structure-aware
+          mechanics. Cool drift toward blue/green; warm drift toward
+          red/yellow. ±100% ≈ 30-byte channel shift on neutral inputs. */}
+      <div style={passesRowStyle}>
+        <span style={passesLabelStyle}>TEMPERATURE</span>
+        <input
+          type="range"
+          min={-100}
+          max={100}
+          step={5}
+          value={Math.round(temperature * 100)}
+          onChange={(e) => setTemperature(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
+          disabled={!hasSnaps}
+          style={passesSliderStyle}
+          title="Final pre-conversion warm/cool shift on the output Oklab (a, b). 0% = neutral. NEGATIVE = cool (shift toward blue-green). POSITIVE = warm (shift toward red-yellow). Pure global bias — applied AFTER all the structure-aware paths, so it composes with everything else. ±100% ≈ 30-byte channel shift on neutral inputs."
+        />
+        <span style={passesValueStyle}>{temperature >= 0 ? "+" : ""}{Math.round(temperature * 100)}%</span>
       </div>
 
       {/* Traits disclosure. Closed by default so the primary surface stays

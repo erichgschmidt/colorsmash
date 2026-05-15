@@ -613,6 +613,35 @@ Symmetric, intuitive: "tighten" the zones (slide negative) makes the distributio
 
 **LUT-bakable.** Yes — adjustedClusterWeights is engine-time state, frozen by the time the LUT bake samples applyTransform.
 
+### 8.4h — `temperature`: warm/cool final-pass shift (Phase 4.5m)
+
+**User vision** (verbatim): *"a warm cool slider would also help. intensity of cool vs warm, ratio of cool warm, influence by value, color, saturation etc."*
+
+Scoped MVP: single global warm/cool slider. Per-L / per-C / per-S modulators deferred — they're orthogonal and cheap to add once the base mechanic is shipped.
+
+**Mechanic.** Final pre-conversion shift on output Oklab `(a, b)`:
+
+```
+Δa = temperature × 0.06    # +a = warm (red), −a = cool (green)
+Δb = temperature × 0.04    # +b = warm (yellow), −b = cool (blue)
+aOut += Δa
+bOut += Δb
+```
+
+Coefficients chosen empirically: at ±1 produces ≈ 30-byte channel shift on neutral inputs without crushing pixels at the gamut edge (ACES gamut compression already ran upstream so most outputs have headroom).
+
+**Where it sits.** After all structure-aware paths (CDF, Hue-by-L, lift, zone routing, paletteSnap), after the gates set `Cout` / `hout`, after `aOut`/`bOut` are reconstructed from polar — but BEFORE `oklabToSrgbByte`. So it's a perceptual-space shift; oklabToSrgbByte's clipping handles any gamut excursions naturally.
+
+**Composition.**
+- Every other mechanic is a global mood overlay's friend — Distribution, Posterize, paletteSnap, zone routing all still run as usual; temperature just biases the final Oklab (a, b) before sRGB conversion.
+- Composes with Passes — each pass's intermediate output gets warm-shifted, so multi-pass with temperature can compound the warmth/coolness across iterations.
+
+**LUT-bakable.** Yes. Pure function of (R, G, B) → (R', G', B') via the rest of the pipeline plus a final constant (a, b) offset. Bakes into the Color Lookup adjustment layer like everything else.
+
+**UI.** TEMPERATURE slider inline below ZONE RATIO. Range -100..+100% step 5, default 0%. Sign-prefixed value display.
+
+**Future work.** Per-L modulation (only affect highlights / only affect shadows), per-C modulation (only affect saturated pixels), per-S modulation. Each adds one more slider. None changes the core math — just multiplies `(Δa, Δb)` by a per-pixel scalar derived from Lin / Cin / Sin.
+
 ### 8.5 What's still on the roadmap (Phase 5+)
 
 The four colorization mechanics in v1.1 §5 remain forward work:
