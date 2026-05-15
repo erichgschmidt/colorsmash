@@ -93,6 +93,10 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   // (each output pixel is the nearest source CLUSTER's RGB by L distance).
   // Produces bold L-banded posterized output at high values.
   const [posterize, setPosterize] = useState<number>(0);
+  // Phase 4.5i — Distribution: soft Gaussian-weighted cluster blend in
+  // joint Oklab space, frequency-weighted by cluster population. 0 = off,
+  // 1 = full lerp to weighted cluster mean. Smooth alternative to posterize.
+  const [distribution, setDistribution] = useState<number>(0);
   const [exportStatus, setExportStatus] = useState<string>("");
   const loadedRef = useRef<boolean>(false);
 
@@ -152,17 +156,22 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       if (typeof persisted?.posterize === "number" && Number.isFinite(persisted.posterize)) {
         setPosterize(Math.max(0, Math.min(1, persisted.posterize)));
       }
+      // v1.21 Phase 4.5i — restore Distribution (clamped to [0, 1]).
+      if (typeof persisted?.distribution === "number" && Number.isFinite(persisted.distribution)) {
+        setDistribution(Math.max(0, Math.min(1, persisted.distribution)));
+      }
       loadedRef.current = true;
     })();
     return () => { cancelled = true; };
   }, []);
 
   // Save amount + traits + colorization + passes + proportionMatch +
-  // posterize on change (debounced 500ms). Skip until initial load resolved.
+  // posterize + distribution on change (debounced 500ms). Skip until
+  // initial load resolved.
   useEffect(() => {
     if (!loadedRef.current) return;
-    saverRef.current?.({ amount, traits, colorization, passes, proportionMatch, posterize });
-  }, [amount, traits, colorization, passes, proportionMatch, posterize]);
+    saverRef.current?.({ amount, traits, colorization, passes, proportionMatch, posterize, distribution });
+  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution]);
 
   // ── Heavy: features + DNA + profile + CDF LUTs. Depends on SNAPS ONLY,
   // so slider drags don't re-run extractFeatures (~100K pixels per call)
@@ -192,7 +201,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       traits,
       // proportionMatch lives on colorization in the engine schema, so merge
       // it in here rather than carrying it around as a separate field.
-      colorization: { ...colorization, proportionMatch, posterize },
+      colorization: { ...colorization, proportionMatch, posterize, distribution },
       passes,
     };
     const engine = smash(
@@ -203,7 +212,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       snapDerived.cdfs,
     );
     return { sourceDNA: snapDerived.sourceDNA, engine };
-  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize]);
+  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution]);
 
   // Propagate engine changes to the parent via useEffect, NOT inside the
   // useMemo body above. Calling setState on the parent during a child's
@@ -426,6 +435,30 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           title="Snap output pixels to the nearest source CLUSTER's full color (RGB, not just hue) — matched by L distance. 0% = off (smooth output). 100% = full snap, hard posterize into N source-derived bands. Different from Palette Snap (which only re-aims hue direction); Posterize replaces the entire pixel color."
         />
         <span style={passesValueStyle}>{Math.round(posterize * 100)}%</span>
+      </div>
+
+      {/* Phase 4.5i — Distribution. Soft Gaussian-weighted blend across
+          ALL source clusters in joint Oklab (L+a+b) space. Each cluster's
+          contribution is weighted by both gaussian proximity to the input
+          pixel AND the cluster's population (frequency in source). Result
+          is smooth (no banding, unlike posterize) but naturally emphasizes
+          source's high-density modes (unlike per-dim CDFs which treat L,
+          C, h independently). This is the "color smash with structure"
+          knob the user asked for. */}
+      <div style={passesRowStyle}>
+        <span style={passesLabelStyle}>DISTRIBUTION</span>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={5}
+          value={Math.round(distribution * 100)}
+          onChange={(e) => setDistribution(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
+          disabled={!hasSnaps}
+          style={passesSliderStyle}
+          title="Smooth-blend the output toward source's joint color distribution. For each pixel, all source clusters contribute weighted by (gaussian proximity in Oklab) × (cluster population). Result emphasizes source's high-frequency modes WITHOUT the banding of Posterize. Different from per-dim CDFs (which treat L, C, h independently); Distribution respects the joint distribution where source's pixels actually co-occur. 0% = off, 100% = full lerp to weighted cluster mean."
+        />
+        <span style={passesValueStyle}>{Math.round(distribution * 100)}%</span>
       </div>
 
       {/* Traits disclosure. Closed by default so the primary surface stays

@@ -492,6 +492,81 @@ describe('applyTransform() liftNeutrals chroma floor', () => {
     }
   });
 
+  it('distribution=1 produces smooth output that converges toward a weighted cluster blend, not a hard snap', () => {
+    // Bimodal source (same fixture as posterize test) to ensure distinct
+    // clusters exist for the soft blend.
+    const total = 32 * 32;
+    const srcRgba = new Uint8Array(total * 4);
+    for (let i = 0; i < total; i++) {
+      const v = i / (total - 1);
+      if (v < 0.5) {
+        srcRgba[i * 4]     = 30; srcRgba[i * 4 + 1] = 30; srcRgba[i * 4 + 2] = 30;
+      } else {
+        srcRgba[i * 4]     = 230; srcRgba[i * 4 + 1] = 20; srcRgba[i * 4 + 2] = 20;
+      }
+      srcRgba[i * 4 + 3] = 255;
+    }
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const ctrlDistribution: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { distribution: 1.0 },
+    };
+    const ctrlPosterize: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { posterize: 1.0 },
+    };
+
+    const engDist = smash(srcFeatures, tgtFeatures, profile, ctrlDistribution);
+    const engPost = smash(srcFeatures, tgtFeatures, profile, ctrlPosterize);
+
+    // For a target L between two clusters' L positions, distribution should
+    // produce an interpolated (non-cluster-snapped) output. Posterize
+    // produces exactly one of the cluster's RGB values. So at the
+    // intermediate L, the two should differ.
+    const [dr, dg, db] = applyTransform(engDist, 128, 128, 128);
+    const [pr, pg, pb] = applyTransform(engPost, 128, 128, 128);
+
+    const dist = Math.abs(dr - pr) + Math.abs(dg - pg) + Math.abs(db - pb);
+    // Distribution and posterize should diverge by AT LEAST a few bytes at
+    // an intermediate L — distribution interpolates, posterize snaps.
+    expect(dist).toBeGreaterThan(5);
+
+    // Sanity: distribution output should NOT equal any single cluster's RGB
+    // (it's a blend, not a snap).
+    const matchesAnyCluster = profile.source.clusters.some((c) => {
+      const [cr, cg, cb] = c.rgb;
+      return Math.abs(dr - cr) <= 1 && Math.abs(dg - cg) <= 1 && Math.abs(db - cb) <= 1;
+    });
+    expect(matchesAnyCluster).toBe(false);
+  });
+
+  it('distribution=0 produces identical output to default (off by default)', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const ctrlDefault: SmashControls = { ...DEFAULT_SMASH_CONTROLS };
+    const ctrlZero: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, distribution: 0 },
+    };
+
+    const engDefault = smash(srcFeatures, tgtFeatures, profile, ctrlDefault);
+    const engZero = smash(srcFeatures, tgtFeatures, profile, ctrlZero);
+
+    for (const input of [50, 128, 200]) {
+      const a = applyTransform(engDefault, input, input, input);
+      const b = applyTransform(engZero, input, input, input);
+      expect(a).toEqual(b);
+    }
+  });
+
   it('posterize=0 produces identical output to default (off by default)', () => {
     const srcRgba = warmOrangeBuffer32();
     const tgtRgba = gradientBuffer32();

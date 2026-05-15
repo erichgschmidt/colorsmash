@@ -164,6 +164,25 @@ export interface ColorizationOptions {
    *  Cluster count is fixed at SourceDNA extraction time; finer control
    *  over band count is future work. */
   readonly posterize?: number;
+  /** Phase 4.5i — Distribution. Soft Gaussian-weighted cluster blend in
+   *  joint Oklab (L+a+b) space. Each output pixel is influenced by ALL
+   *  source clusters, weighted by both spatial proximity (gaussian
+   *  falloff) and cluster population (frequency in source). Produces a
+   *  smooth, banding-free output that naturally emphasizes source's
+   *  high-density color modes — the "smash with structure" knob.
+   *
+   *  Range [0, 1]:
+   *    0.0 (default): no blend, output is engine's smooth result
+   *    0.5: 50/50 lerp between smooth output and weighted cluster mean
+   *    1.0: full lerp to weighted cluster mean
+   *
+   *  Different from posterize: posterize SNAPS to one cluster (banded);
+   *  distribution BLENDS across all clusters (smooth). Different from
+   *  per-dim CDFs: those treat L, C, h independently; distribution
+   *  respects the joint distribution where source's pixels actually
+   *  co-cluster. Different from paletteSnap: paletteSnap re-aims hue
+   *  only; distribution influences the entire pixel color. */
+  readonly distribution?: number;
   // Future toggles (Phase 5+) added here:
   //   readonly stochasticPerL?: boolean;
   //   readonly conditionalCdf?: boolean;

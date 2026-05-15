@@ -212,6 +212,10 @@ export const DEFAULT_SMASH_CONTROLS: SmashControls = {
     // Phase 4.5h: posterize defaults to 0 (off) — output is the engine's
     // smooth result. Users dial it up for the L-banded cluster-snap look.
     posterize: 0,
+    // Phase 4.5i: distribution defaults to 0 (off) — smooth alternative
+    // to posterize. Users dial it up for joint-mode-aware smash without
+    // banding.
+    distribution: 0,
   },
   // Phase 4.5c: passes = 1 by default (one transform per pixel). Users can
   // dial up to 2 or 3 to bake the compounded "multi-pass" look into the LUT.
@@ -710,6 +714,54 @@ function applyTransformOnePass(
   const aOut = Cout * Math.cos(hout);
   const bOut = Cout * Math.sin(hout);
   let [finalR, finalG, finalB] = oklabToSrgbByte(Lout, aOut, bOut);
+
+  // Phase 4.5i — Distribution. Soft Gaussian-weighted cluster blend in
+  // joint Oklab (L+a+b) space. Each output pixel is pulled toward the
+  // weighted mean of ALL source clusters, where each cluster's weight is
+  // its population (fraction of source pixels) × gaussian proximity to
+  // the input pixel's Oklab position. Smooth, banding-free, naturally
+  // emphasizes source's high-density modes ("smash with structure"). Sigma
+  // tuned at 0.15 in Oklab L+a+b combined — moderate softness: enough to
+  // favor nearby clusters, soft enough to interpolate smoothly between
+  // them. Applied BEFORE posterize so a user with both knobs >0 sees the
+  // distribution-blended result get posterized (hard snap takes precedence).
+  const rawDistribution = controls.colorization?.distribution;
+  const distribution =
+    typeof rawDistribution === "number" && Number.isFinite(rawDistribution)
+      ? Math.max(0, Math.min(1, rawDistribution))
+      : 0;
+  if (distribution > 0 && out.profile.source.clusters.length > 0) {
+    const clusters = out.profile.source.clusters;
+    const SIGMA = 0.15;
+    const sigmaSq2 = 2 * SIGMA * SIGMA;
+    let sumW = 0;
+    let sumR = 0;
+    let sumG = 0;
+    let sumB = 0;
+    for (let i = 0; i < clusters.length; i++) {
+      const c = clusters[i];
+      const [cL, cA, cB] = c.centroidOklab;
+      const dL = Lin - cL;
+      const dA = aIn - cA;
+      const dB = bIn - cB;
+      const dist2 = dL * dL + dA * dA + dB * dB;
+      // Weight = cluster.population × gaussian falloff. Clusters with
+      // more source pixels (high frequency) dominate the blend.
+      const w = c.weight * Math.exp(-dist2 / sigmaSq2);
+      sumW += w;
+      sumR += c.rgb[0] * w;
+      sumG += c.rgb[1] * w;
+      sumB += c.rgb[2] * w;
+    }
+    if (sumW > 1e-9) {
+      const blendR = sumR / sumW;
+      const blendG = sumG / sumW;
+      const blendB = sumB / sumW;
+      finalR = Math.max(0, Math.min(255, Math.round(finalR + (blendR - finalR) * distribution)));
+      finalG = Math.max(0, Math.min(255, Math.round(finalG + (blendG - finalG) * distribution)));
+      finalB = Math.max(0, Math.min(255, Math.round(finalB + (blendB - finalB) * distribution)));
+    }
+  }
 
   // Phase 4.5h — Posterize. Lerp the final RGB toward the nearest source
   // CLUSTER's RGB (chosen by L distance to the INPUT pixel's L — matches

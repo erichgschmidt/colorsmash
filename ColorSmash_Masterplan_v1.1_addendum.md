@@ -472,6 +472,56 @@ finalRGB = smoothRGB + (cluster.rgb − smoothRGB) × posterize
 
 **LUT-bakable.** Yes — `posterize` is purely a function of input RGB (via Lin) and frozen cluster table, with no per-pixel state. Bakes into the single Color Lookup adjustment layer alongside everything else.
 
+### 8.4e — `distribution`: soft joint-mode density blend (Phase 4.5i)
+
+**User vision** (verbatim): *"I want a posterize sort of logic to color application, but not the posterize effect. I want it to remain a color smash type of application, but emphasize the distribution… using histograms to find the overlaps that are highest frequency in the source, as the 'effect' we are trying to imprint onto another."*
+
+**The gap this closes.** Earlier mechanics fall into two camps:
+- **Per-dimension marginals** (Phase 3/4 CDFs): smooth output, treats L, C, h as independent. Loses joint co-occurrence — doesn't know that the source has "dark warm + bright red", only that it has "some dark + some bright" and "some warm + some red".
+- **Cluster snap** (paletteSnap, posterize): respects joint distribution (clusters ARE joint modes), but SNAPS (hard pick). Produces banding.
+
+`distribution` lives in between: respects joint co-occurrence like clusters do, but blends smoothly across all clusters weighted by both gaussian proximity AND cluster population. The result is **smooth like a CDF but joint like clusters** — exactly the "smash with structure" intuition.
+
+**Mechanic.** Applied at the end of `applyTransformOnePass`, *before* posterize:
+
+```
+SIGMA = 0.15    # Oklab L+a+b joint distance softness
+
+for each source cluster c:
+    dist² = (Lin − c.L)² + (aIn − c.a)² + (bIn − c.b)²
+    weight[c] = c.population × exp(−dist² / 2σ²)
+
+blendRGB = Σ(c.rgb × weight[c]) / Σ(weight[c])
+finalRGB = smoothRGB + (blendRGB − smoothRGB) × distribution
+```
+
+- **`c.population`** is the existing `cluster.weight` field — fraction of source pixels in that cluster. High-frequency clusters dominate the blend ("emphasize the distribution").
+- **Gaussian falloff** weights clusters by proximity to the input pixel's joint Oklab position. Distant clusters contribute less.
+- **`σ = 0.15`** combined-Oklab is empirically tuned: aggressive enough to favor nearby clusters, soft enough to interpolate smoothly between them. Could become user-tunable later if "how soft" matters.
+
+| Slider | Result |
+|---|---|
+| 0.0 (default) | No blend, output is engine's smooth result |
+| 0.3 | Subtle pull toward source's modal regions, gradient stays smooth |
+| 0.7 | Strong joint-mode emphasis, source's "color personality" dominates |
+| 1.0 | Full lerp — output is the frequency-weighted joint mean of source's clusters at this input's Oklab position |
+
+**Comparison across all four cluster-aware knobs:**
+
+| Knob | Match space | Match mode | Output |
+|---|---|---|---|
+| `paletteSnap` | Hue (1D, circular) | Hard pick | Smooth gradient of source-derived hues |
+| `posterize` | L (1D, linear) | Hard pick | Banded into N cluster RGBs |
+| `distribution` (this) | Joint Oklab (3D) | Soft Gaussian + frequency | Smooth, joint, frequency-weighted |
+| Per-dim CDFs | L, C, h marginals | Rank-mapped | Smooth, but joint-blind |
+
+**Composition.**
+- Applied BEFORE posterize — if both are on, posterize hard-snaps the distribution-blended result. (Rare to want both at high values; one or the other.)
+- Stacks with all the gates that come earlier (CDF, Hue-by-L, Lift, Proportion, paletteSnap) since those produce the "smoothRGB" that distribution lerps from.
+- Stacks with passes — each pass's intermediate uses distribution.
+
+**LUT-bakable.** Yes. Distribution is a pure function of (R, G, B) via (Lin, aIn, bIn) + frozen cluster table. ~16 cluster gaussian evaluations per pixel; ~50ns per cluster eval; ~1µs per pixel — negligible. Bakes into the single Color Lookup adjustment layer like everything else.
+
 ### 8.5 What's still on the roadmap (Phase 5+)
 
 The four colorization mechanics in v1.1 §5 remain forward work:

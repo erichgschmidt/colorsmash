@@ -49,6 +49,10 @@ export interface SmashPersisted {
    *  smooth output). 1 = full snap to nearest source cluster's RGB,
    *  producing posterized L-band coloration. */
   posterize?: number;
+  /** v1.21 Phase 4.5i — distribution strength [0, 1]. 0 = off (default).
+   *  1 = full lerp to source's frequency-weighted joint cluster mean.
+   *  Smooth, banding-free alternative to posterize. */
+  distribution?: number;
 }
 
 async function getDataFolder(): Promise<any | null> {
