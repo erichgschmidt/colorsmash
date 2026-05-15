@@ -992,7 +992,7 @@ function applyTransformOnePass(
   const rawTemperature = controls.colorization?.temperature;
   const temperature =
     typeof rawTemperature === 'number' && Number.isFinite(rawTemperature)
-      ? Math.max(-1, Math.min(1, rawTemperature))
+      ? Math.max(-2, Math.min(2, rawTemperature))
       : 0;
   if (temperature !== 0) {
     const WARM_A = 0.82;
@@ -1004,21 +1004,29 @@ function applyTransformOnePass(
     // the median given its distance). High sensitivity = pixels just past
     // median migrate as if they were far (distinct zones emerge fast).
     // Low sensitivity = only far-from-median pixels migrate appreciably
-    // (smooth gradient near median). Clamped to [0, 1] in effective_t so
-    // a pixel can never overshoot past the median into opposite-color
-    // territory — the "no literal green from warm" guarantee from Phase
-    // 4.5o is preserved across the median.
+    // (smooth gradient near median).
+    //
+    // Phase 4.5q: extended ranges. Temperature [-2, +2], Sensitivity
+    // [0, 2]. effective_t is now capped at 3 (was 1) — values between 1
+    // and 3 OVERDRIVE the migration: pixels push PAST the median into
+    // opposite-color territory. Below 1, the prior "no-cross" guarantee
+    // still holds. The 3 ceiling prevents arbitrary blowups; well below
+    // any visible-saturation limit since sRGB gamut clipping kicks in
+    // earlier.
     const rawSens = controls.colorization?.temperatureSensitivity;
     const sensitivity =
       typeof rawSens === 'number' && Number.isFinite(rawSens)
-        ? Math.max(0, Math.min(1, rawSens))
+        ? Math.max(0, Math.min(2, rawSens))
         : 0.5;
-    // sensitivity 0 → scale 1/3 (slow)
-    // sensitivity 0.5 → scale 1 (linear, default)
-    // sensitivity 1 → scale 3 (fast)
+    // sensitivity 0   → scale 1/3 (slow / soft)
+    // sensitivity 0.5 → scale 1   (linear, default)
+    // sensitivity 1   → scale 3   (sharp — distinct zones at default t)
+    // sensitivity 2   → scale 27  (very sharp — even tiny relW gets full push)
     const sensScale = Math.pow(3, 2 * sensitivity - 1);
-    // Effective migration fraction, capped at 1 (cannot pass median).
-    const effective_t = Math.min(1, Math.abs(temperature) * sensScale);
+    // Effective migration fraction. Capped at 3 — at default t and
+    // sensitivity≤1 still ≤1 (no-cross). Above 1, pixel pushes past
+    // median into opposite-color territory (explicit overdrive).
+    const effective_t = Math.min(3, Math.abs(temperature) * sensScale);
     // Only opposite-polarity-to-slider pixels migrate (the user's
     // intent: warm slider TARGETS image-cools and pushes them toward
     // image-warm; cool slider TARGETS image-warms and pushes toward
@@ -1027,8 +1035,7 @@ function applyTransformOnePass(
       (temperature > 0 && relW < 0) ||
       (temperature < 0 && relW > 0);
     if (shouldShift) {
-      // delta moves warmth toward median by effective_t × |relW|.
-      // delta has sign opposite to relW → migrates toward 0 (median).
+      // delta moves warmth toward (and possibly past) median.
       const delta = -relW * effective_t;
       aOut += delta * WARM_A;
       bOut += delta * WARM_B;

@@ -196,10 +196,10 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
         setZoneRatio(Math.max(-1, Math.min(1, persisted.zoneRatio)));
       }
       if (typeof persisted?.temperature === "number" && Number.isFinite(persisted.temperature)) {
-        setTemperature(Math.max(-1, Math.min(1, persisted.temperature)));
+        setTemperature(Math.max(-2, Math.min(2, persisted.temperature)));
       }
       if (typeof persisted?.temperatureSensitivity === "number" && Number.isFinite(persisted.temperatureSensitivity)) {
-        setTemperatureSensitivity(Math.max(0, Math.min(1, persisted.temperatureSensitivity)));
+        setTemperatureSensitivity(Math.max(0, Math.min(2, persisted.temperatureSensitivity)));
       }
       loadedRef.current = true;
     })();
@@ -592,14 +592,14 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
         <span style={passesLabelStyle}>TEMPERATURE</span>
         <input
           type="range"
-          min={-100}
-          max={100}
+          min={-200}
+          max={200}
           step={5}
           value={Math.round(temperature * 100)}
           onChange={(e) => setTemperature(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
           disabled={!hasSnaps}
           style={passesSliderStyle}
-          title="IMAGE-RELATIVE warm/cool contrast stretch around the image's own warmth median. POSITIVE = pushes image-relatively-WARM pixels further warm (cools untouched). NEGATIVE = pushes image-relatively-COOL pixels further cool (warms untouched). Works on uniformly-warm/cool images because 'warm'/'cool' is judged relative to the image's own median, not Oklab's absolute axis. Use SENSITIVITY below to control how sharp the warm/cool split is around the median."
+          title="IMAGE-RELATIVE warm/cool contrast stretch around the image's own warmth median. 0% = no shift. ±100% = opposite-polarity pixels reach the median (gradient compressed but stays on same side of absolute zero). ±100–200% = OVERDRIVE: pixels push PAST the median into opposite-color territory. POSITIVE warms image-cool pixels (image-warms untouched). NEGATIVE cools image-warm pixels (image-cools untouched). Use SENSITIVITY below to sharpen or soften the median split."
         />
         <span style={passesValueStyle}>{temperature >= 0 ? "+" : ""}{Math.round(temperature * 100)}%</span>
       </div>
@@ -615,13 +615,13 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
         <input
           type="range"
           min={0}
-          max={100}
+          max={200}
           step={5}
           value={Math.round(temperatureSensitivity * 100)}
           onChange={(e) => setTemperatureSensitivity(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
           disabled={!hasSnaps}
           style={passesSliderStyle}
-          title="How sharp the warm/cool split is around the image's median warmth. 0% = SOFT (near-median pixels barely move, effect on outliers only). 50% (default) = linear (no sensitivity adjustment). 100% = SHARP (every pixel past median gets strong boost → distinct warm/cool zones). Only effective when TEMPERATURE ≠ 0."
+          title="How sharp the warm/cool split is around the image's median warmth. 0% = SOFT (near-median pixels barely move). 50% (default) = linear. 100% = SHARP (every pixel past median gets full boost → distinct zones). 100–200% = OVERDRIVE: even pixels right at the median migrate hard, combined with TEMPERATURE overdrive lets you push way past the median for extreme effects. Only effective when TEMPERATURE ≠ 0."
         />
         <span style={passesValueStyle}>{Math.round(temperatureSensitivity * 100)}%</span>
       </div>
