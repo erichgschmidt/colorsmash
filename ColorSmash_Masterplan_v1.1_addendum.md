@@ -439,6 +439,39 @@ liftFloor = proportionMatch × srcLutMag(Lsm) + (1 − proportionMatch) × sourc
 
 **Falls back gracefully:** when `hueByLumaLut` is null, `srcLutMag` is undefined and the engine uses `sourceMedianChroma` regardless of slider position — no NaN, no surprise.
 
+### 8.4d — `posterize`: L-banded full cluster snap (Phase 4.5h)
+
+**User vision** (sketched as a mockup, see Section 8 history): take the source's distinct color palette (~5–16 distinct hues from k-means), and *paint* the target's L bands with those colors directly — a grayscale photo becomes a posterized illustration in source's palette.
+
+**Problem this addresses.** `paletteSnap` re-aims hue *direction* only. It doesn't replace the pixel's L or chroma magnitude, so the output is still a smooth gradient of source-derived hues — not the bold posterized banding the user envisioned. Goal #2 (color identity expression) is partially served by paletteSnap; full identity expression as discrete bands is what posterize does.
+
+**Mechanic.** A new continuous knob `posterize ∈ [0, 1]`. Applied at the *end* of `applyTransformOnePass`, *after* the engine has computed the smooth output via L-CDF, chroma lift, Hue-by-L, gamut compression, etc:
+
+```
+for each cluster c in SourceDNA.clusters:
+    dL = |Lin − c.centroidOklab.L|
+pick cluster with min dL
+finalRGB = smoothRGB + (cluster.rgb − smoothRGB) × posterize
+```
+
+| Value | Behavior |
+|---|---|
+| 0.0 (default) | No snap. Output is the engine's smooth result, exactly as before. |
+| 0.3 | Subtle pull toward the palette — color "personality" of source comes through, gradient still mostly smooth. |
+| 0.7 | Strong posterize bands visible, with some smoothing remaining. |
+| 1.0 | Full snap. Each output pixel IS exactly one of the source clusters' RGBs — hard posterized illustration look. |
+
+**Why match by `Lin` (input L) and not `Lout`?** Matches user's intuition that target's *own* L bands route to clusters: a dancer's mid-tone face → source's mid-tone cluster. Using `Lout` (post-lumaCdf) would route by the rank-mapped lightness, which can compress wildly for bimodal sources and produces less intuitive band placement.
+
+**Orthogonal to all other mechanics.**
+- Composes with `paletteSnap` (which only modulates hue): the smooth output that posterize then snaps from already has paletteSnap's hue routing baked in.
+- Composes with `passes` (multi-pass): each pass's intermediate output uses posterize. At passes>1, intermediate posterized values feed the next pass.
+- Composes with `liftNeutrals` + `proportionMatch`: those determine the smooth output, posterize then snaps it.
+
+**Cluster count.** Determined at SourceDNA extraction time (currently 16 by default in `core/smash/clusters.ts`). For more aggressive posterize banding (the user's mockup looks like ~5 bands), the cluster count would need to be tunable — future work. With 16 clusters, posterize=1.0 still produces a posterized look but with finer banding than the mockup.
+
+**LUT-bakable.** Yes — `posterize` is purely a function of input RGB (via Lin) and frozen cluster table, with no per-pixel state. Bakes into the single Color Lookup adjustment layer alongside everything else.
+
 ### 8.5 What's still on the roadmap (Phase 5+)
 
 The four colorization mechanics in v1.1 §5 remain forward work:

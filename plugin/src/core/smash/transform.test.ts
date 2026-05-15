@@ -447,6 +447,74 @@ describe('applyTransform() liftNeutrals chroma floor', () => {
     expect(looseSpreadLow).toBeGreaterThan(tightSpreadLow);
   });
 
+  it('posterize=1.0 snaps each output pixel to one of the source clusters\' RGB', () => {
+    // Build a bimodal source with very distinct clusters so the snap is
+    // unambiguous: dark-gray cluster (low L) + vivid-red cluster (high L).
+    const total = 32 * 32;
+    const srcRgba = new Uint8Array(total * 4);
+    for (let i = 0; i < total; i++) {
+      const v = i / (total - 1);
+      if (v < 0.5) {
+        srcRgba[i * 4]     = 30; srcRgba[i * 4 + 1] = 30; srcRgba[i * 4 + 2] = 30;
+      } else {
+        srcRgba[i * 4]     = 230; srcRgba[i * 4 + 1] = 20; srcRgba[i * 4 + 2] = 20;
+      }
+      srcRgba[i * 4 + 3] = 255;
+    }
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const ctrl: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { posterize: 1.0 },
+    };
+    const engine = smash(srcFeatures, tgtFeatures, profile, ctrl);
+
+    // For each test input pixel, the posterize=1 output should equal
+    // exactly one of the source clusters' RGB values (within ±1 byte
+    // tolerance for rounding accumulated through the pipeline).
+    const clusters = profile.source.clusters;
+    expect(clusters.length).toBeGreaterThan(0);
+
+    const matches = (out: readonly [number, number, number]) =>
+      clusters.some((c) => {
+        const [cr, cg, cb] = c.rgb;
+        return Math.abs(out[0] - cr) <= 1
+          && Math.abs(out[1] - cg) <= 1
+          && Math.abs(out[2] - cb) <= 1;
+      });
+
+    for (const input of [30, 90, 150, 220]) {
+      const [r, g, b] = applyTransform(engine, input, input, input);
+      expect(matches([r, g, b] as const)).toBe(true);
+    }
+  });
+
+  it('posterize=0 produces identical output to default (off by default)', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const ctrlDefault: SmashControls = { ...DEFAULT_SMASH_CONTROLS };
+    const ctrlZero: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, posterize: 0 },
+    };
+
+    const engDefault = smash(srcFeatures, tgtFeatures, profile, ctrlDefault);
+    const engZero = smash(srcFeatures, tgtFeatures, profile, ctrlZero);
+
+    for (const input of [50, 128, 200]) {
+      const a = applyTransform(engDefault, input, input, input);
+      const b = applyTransform(engZero, input, input, input);
+      expect(a).toEqual(b);
+    }
+  });
+
   it('engine output exposes sourceMedianChroma >= 0 (non-negative)', () => {
     const srcRgba = warmOrangeBuffer32();
     const tgtRgba = gradientBuffer32();

@@ -89,6 +89,10 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   // color/neutral structure), 0.0 = loose (global median lift, uniform
   // colorization). Slider lerps between the two regimes.
   const [proportionMatch, setProportionMatch] = useState<number>(1.0);
+  // Phase 4.5h — Posterize: 0 = off (engine's smooth output), 1 = full snap
+  // (each output pixel is the nearest source CLUSTER's RGB by L distance).
+  // Produces bold L-banded posterized output at high values.
+  const [posterize, setPosterize] = useState<number>(0);
   const [exportStatus, setExportStatus] = useState<string>("");
   const loadedRef = useRef<boolean>(false);
 
@@ -144,17 +148,21 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       if (typeof persisted?.proportionMatch === "number" && Number.isFinite(persisted.proportionMatch)) {
         setProportionMatch(Math.max(0, Math.min(1, persisted.proportionMatch)));
       }
+      // v1.21 Phase 4.5h — restore Posterize (clamped to [0, 1]).
+      if (typeof persisted?.posterize === "number" && Number.isFinite(persisted.posterize)) {
+        setPosterize(Math.max(0, Math.min(1, persisted.posterize)));
+      }
       loadedRef.current = true;
     })();
     return () => { cancelled = true; };
   }, []);
 
-  // Save amount + traits + colorization + passes + proportionMatch on
-  // change (debounced 500ms). Skip until initial load resolved.
+  // Save amount + traits + colorization + passes + proportionMatch +
+  // posterize on change (debounced 500ms). Skip until initial load resolved.
   useEffect(() => {
     if (!loadedRef.current) return;
-    saverRef.current?.({ amount, traits, colorization, passes, proportionMatch });
-  }, [amount, traits, colorization, passes, proportionMatch]);
+    saverRef.current?.({ amount, traits, colorization, passes, proportionMatch, posterize });
+  }, [amount, traits, colorization, passes, proportionMatch, posterize]);
 
   // ── Heavy: features + DNA + profile + CDF LUTs. Depends on SNAPS ONLY,
   // so slider drags don't re-run extractFeatures (~100K pixels per call)
@@ -184,7 +192,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       traits,
       // proportionMatch lives on colorization in the engine schema, so merge
       // it in here rather than carrying it around as a separate field.
-      colorization: { ...colorization, proportionMatch },
+      colorization: { ...colorization, proportionMatch, posterize },
       passes,
     };
     const engine = smash(
@@ -195,7 +203,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       snapDerived.cdfs,
     );
     return { sourceDNA: snapDerived.sourceDNA, engine };
-  }, [snapDerived, amount, traits, colorization, passes, proportionMatch]);
+  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize]);
 
   // Propagate engine changes to the parent via useEffect, NOT inside the
   // useMemo body above. Calling setState on the parent during a child's
@@ -394,6 +402,30 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           title="How tightly the output's color/neutral ratio matches the source's. 100% (tight, default): lift floor uses source's chroma at the target's smashed L — dark areas of source come through dark, bright/chromatic areas come through chromatic. 0% (loose): lift floor uses source's GLOBAL median chroma — uniform colorization across L, ignoring source's structure. Affects only when Lift Neutrals is on."
         />
         <span style={passesValueStyle}>{Math.round(proportionMatch * 100)}%</span>
+      </div>
+
+      {/* Phase 4.5h — Posterize. Lerps the final RGB toward the nearest
+          source CLUSTER's full RGB (matched by L distance — dark target
+          pixels → dark cluster, highlights → bright cluster, etc.). 0% =
+          off (default, smooth engine output). 100% = full snap (output
+          IS the cluster's RGB), producing bold L-banded posterized
+          coloration using only the source's actual palette colors.
+          Different from paletteSnap (which only re-aims hue direction):
+          posterize replaces the entire pixel L+a+b. */}
+      <div style={passesRowStyle}>
+        <span style={passesLabelStyle}>POSTERIZE</span>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={5}
+          value={Math.round(posterize * 100)}
+          onChange={(e) => setPosterize(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
+          disabled={!hasSnaps}
+          style={passesSliderStyle}
+          title="Snap output pixels to the nearest source CLUSTER's full color (RGB, not just hue) — matched by L distance. 0% = off (smooth output). 100% = full snap, hard posterize into N source-derived bands. Different from Palette Snap (which only re-aims hue direction); Posterize replaces the entire pixel color."
+        />
+        <span style={passesValueStyle}>{Math.round(posterize * 100)}%</span>
       </div>
 
       {/* Traits disclosure. Closed by default so the primary surface stays

@@ -45,6 +45,10 @@ export interface SmashPersisted {
    *  lift floor, mirrors source's structure). 0 = loose (global median lift,
    *  uniform colorization). Default 1. */
   proportionMatch?: number;
+  /** v1.21 Phase 4.5h — posterize strength [0, 1]. 0 = off (default,
+   *  smooth output). 1 = full snap to nearest source cluster's RGB,
+   *  producing posterized L-band coloration. */
+  posterize?: number;
 }
 
 async function getDataFolder(): Promise<any | null> {

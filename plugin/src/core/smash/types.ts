@@ -152,6 +152,18 @@ export interface ColorizationOptions {
    *    0.5: 50/50 blend.
    *  Only affects the engine when liftNeutrals is on. */
   readonly proportionMatch?: number;
+  /** Phase 4.5h — Posterize. Lerps the final RGB output toward the
+   *  nearest source CLUSTER's full RGB (L + a + b — not just hue, unlike
+   *  paletteSnap). Cluster nearness scored by L distance (matches user's
+   *  L-band-routing mockup: dark target pixels snap to dark cluster,
+   *  highlights snap to bright cluster, etc.). Range [0, 1]:
+   *    0.0 (default): no posterize, output is the engine's smooth result
+   *    0.5: 50/50 blend between smooth output and cluster's RGB
+   *    1.0: full snap — output IS the cluster's RGB, hard posterized
+   *         banding into N source-derived colors
+   *  Cluster count is fixed at SourceDNA extraction time; finer control
+   *  over band count is future work. */
+  readonly posterize?: number;
   // Future toggles (Phase 5+) added here:
   //   readonly stochasticPerL?: boolean;
   //   readonly conditionalCdf?: boolean;

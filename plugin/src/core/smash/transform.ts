@@ -209,6 +209,9 @@ export const DEFAULT_SMASH_CONTROLS: SmashControls = {
     // source's chroma at the smashed L, preserving source's L→C structure
     // and the output's color/neutral proportions.
     proportionMatch: 1.0,
+    // Phase 4.5h: posterize defaults to 0 (off) — output is the engine's
+    // smooth result. Users dial it up for the L-banded cluster-snap look.
+    posterize: 0,
   },
   // Phase 4.5c: passes = 1 by default (one transform per pixel). Users can
   // dial up to 2 or 3 to bake the compounded "multi-pass" look into the LUT.
@@ -706,7 +709,37 @@ function applyTransformOnePass(
   // Reconstruct Oklab and convert back to bytes.
   const aOut = Cout * Math.cos(hout);
   const bOut = Cout * Math.sin(hout);
-  const [finalR, finalG, finalB] = oklabToSrgbByte(Lout, aOut, bOut);
+  let [finalR, finalG, finalB] = oklabToSrgbByte(Lout, aOut, bOut);
+
+  // Phase 4.5h — Posterize. Lerp the final RGB toward the nearest source
+  // CLUSTER's RGB (chosen by L distance to the INPUT pixel's L — matches
+  // user's L-band-routing intuition: dark target pixels snap to dark
+  // cluster, highlights to bright cluster, etc.). posterize ∈ [0, 1]:
+  // 0 = no snap (default), 1 = full snap (output IS cluster's RGB).
+  // Unlike paletteSnap which only re-aims hue direction, posterize
+  // replaces the entire pixel — producing bold posterized banding when
+  // dialed high, with the source's actual palette as the band colors.
+  const rawPosterize = controls.colorization?.posterize;
+  const posterize =
+    typeof rawPosterize === "number" && Number.isFinite(rawPosterize)
+      ? Math.max(0, Math.min(1, rawPosterize))
+      : 0;
+  if (posterize > 0 && out.profile.source.clusters.length > 0) {
+    const clusters = out.profile.source.clusters;
+    let bestIdx = 0;
+    let bestDist = Math.abs(Lin - clusters[0].centroidOklab[0]);
+    for (let i = 1; i < clusters.length; i++) {
+      const d = Math.abs(Lin - clusters[i].centroidOklab[0]);
+      if (d < bestDist) {
+        bestDist = d;
+        bestIdx = i;
+      }
+    }
+    const [cR, cG, cB] = clusters[bestIdx].rgb;
+    finalR = Math.max(0, Math.min(255, Math.round(finalR + (cR - finalR) * posterize)));
+    finalG = Math.max(0, Math.min(255, Math.round(finalG + (cG - finalG) * posterize)));
+    finalB = Math.max(0, Math.min(255, Math.round(finalB + (cB - finalB) * posterize)));
+  }
 
   return [finalR, finalG, finalB];
 }
