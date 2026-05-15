@@ -70,6 +70,12 @@ export interface SmashPersisted {
   /** v1.21 Phase 4.5p — temperature sensitivity. 0..1, default 0.5.
    *  Soft (0) vs sharp (1) split around the image's warmth median. */
   temperatureSensitivity?: number;
+  /** v1.21 Phase 4.5l — zone edge softness. 0..1, default 0.
+   *  Hard pick (0, byte-exact 4.5j) → soft gaussian blend (1). */
+  zoneEdgeSoftness?: number;
+  /** v1.21 Phase 4.5l — zone edge shift. -1..+1, default 0.
+   *  Slides K-1 boundary midpoints along target L axis. */
+  zoneEdgeShift?: number;
 }
 
 async function getDataFolder(): Promise<any | null> {

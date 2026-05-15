@@ -111,6 +111,14 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   const [clusterCount, setClusterCount] = useState<number>(5);
   const [zoneInfluence, setZoneInfluence] = useState<number>(0);
   const [detailRichness, setDetailRichness] = useState<number>(1);
+  // Phase 4.5l — target-side zone routing controls:
+  //   zoneEdgeSoftness: 0..1, default 0 (hard pick). 1 = wide gaussian
+  //     blur across neighbouring clusters.
+  //   zoneEdgeShift:    -1..+1, default 0 (boundaries at natural midpoints).
+  //     -1 = boundaries pulled toward L=0 (shadow zones squeezed);
+  //     +1 = pushed toward L=1 (highlight zones squeezed).
+  const [zoneEdgeSoftness, setZoneEdgeSoftness] = useState<number>(0);
+  const [zoneEdgeShift, setZoneEdgeShift] = useState<number>(0);
   // Phase 4.5k — zoneRatio modulates cluster weight distribution.
   // Range -1..+1, default 0 (natural). −1 flattens; +1 amplifies dominance.
   // Stored in state as -100..+100 (slider int) for UI; converted to float
@@ -196,6 +204,12 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       if (typeof persisted?.detailRichness === "number" && Number.isFinite(persisted.detailRichness)) {
         setDetailRichness(Math.max(0, Math.min(1, persisted.detailRichness)));
       }
+      if (typeof persisted?.zoneEdgeSoftness === "number" && Number.isFinite(persisted.zoneEdgeSoftness)) {
+        setZoneEdgeSoftness(Math.max(0, Math.min(1, persisted.zoneEdgeSoftness)));
+      }
+      if (typeof persisted?.zoneEdgeShift === "number" && Number.isFinite(persisted.zoneEdgeShift)) {
+        setZoneEdgeShift(Math.max(-1, Math.min(1, persisted.zoneEdgeShift)));
+      }
       if (typeof persisted?.zoneRatio === "number" && Number.isFinite(persisted.zoneRatio)) {
         setZoneRatio(Math.max(-1, Math.min(1, persisted.zoneRatio)));
       }
@@ -218,8 +232,9 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     saverRef.current?.({
       amount, traits, colorization, passes, proportionMatch, posterize, distribution,
       clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity,
+      zoneEdgeSoftness, zoneEdgeShift,
     });
-  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution, clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity]);
+  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution, clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift]);
 
   // ── Heavy: features + DNA + profile + CDF LUTs. Depends on SNAPS ONLY,
   // so slider drags don't re-run extractFeatures (~100K pixels per call)
@@ -251,7 +266,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       traits,
       // proportionMatch lives on colorization in the engine schema, so merge
       // it in here rather than carrying it around as a separate field.
-      colorization: { ...colorization, proportionMatch, posterize, distribution, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity },
+      colorization: { ...colorization, proportionMatch, posterize, distribution, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift },
       passes,
     };
     const engine = smash(
@@ -262,7 +277,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       snapDerived.cdfs,
     );
     return { sourceDNA: snapDerived.sourceDNA, engine };
-  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity]);
+  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift]);
 
   // Propagate engine changes to the parent via useEffect, NOT inside the
   // useMemo body above. Calling setState on the parent during a child's
@@ -563,6 +578,45 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           title="Inside the zone path, how much intra-cluster L→(a,b) variation is preserved. 0% = cluster's CENTROID (flat color within zone). 100% = cluster's own Hue-by-L sub-LUT (preserves the source's value→color variation within each zone). Only takes effect when INFLUENCE > 0."
         />
         <span style={passesValueStyle}>{Math.round(detailRichness * 100)}%</span>
+      </div>
+
+      {/* Phase 4.5l — EDGE SOFTNESS. Controls hardness of boundaries
+          between source clusters during zone routing. 0% = argmin pick
+          (4.5j default, byte-exact bake). 100% = wide gaussian blur. */}
+      <div style={passesRowStyle}>
+        <span style={passesLabelStyle}>EDGE SOFTNESS</span>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={5}
+          value={Math.round(zoneEdgeSoftness * 100)}
+          onChange={(e) => setZoneEdgeSoftness(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
+          disabled={!hasSnaps}
+          style={passesSliderStyle}
+          title="How sharp the boundaries between zones are. 0% = HARD edges (each target L picks exactly one source cluster, the 4.5j default). 100% = SOFT edges (target L blends contributions from neighbouring clusters via gaussian falloff). Only takes effect when INFLUENCE > 0."
+        />
+        <span style={passesValueStyle}>{Math.round(zoneEdgeSoftness * 100)}%</span>
+      </div>
+
+      {/* Phase 4.5l — EDGE SHIFT. Slides K-1 boundary midpoints along the
+          target L axis. Negative = boundaries down (shadows squeezed),
+          positive = boundaries up (highlights squeezed). 0% = boundaries
+          at natural sorted-cluster midpoints. */}
+      <div style={passesRowStyle}>
+        <span style={passesLabelStyle}>EDGE SHIFT</span>
+        <input
+          type="range"
+          min={-100}
+          max={100}
+          step={5}
+          value={Math.round(zoneEdgeShift * 100)}
+          onChange={(e) => setZoneEdgeShift(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
+          disabled={!hasSnaps}
+          style={passesSliderStyle}
+          title="Slide the zone boundaries along the target L axis. 0% = NATURAL (boundaries at source-cluster midpoints — 4.5j default). NEGATIVE = squeeze shadow zones (boundaries move toward L=0; mid/highlight zones expand to cover more of target L). POSITIVE = squeeze highlight zones. Captures the 'MOVE those edges to COMPRESS' intent — pulling a boundary from L=0.5 to L=0.25 automatically compresses target's [0, 0.5] range into the shadow band. Only takes effect when INFLUENCE > 0."
+        />
+        <span style={passesValueStyle}>{zoneEdgeShift >= 0 ? "+" : ""}{Math.round(zoneEdgeShift * 100)}%</span>
       </div>
 
       {/* Phase 4.5k — Zone Ratio. Modulates the source clusters' weight

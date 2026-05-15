@@ -1287,6 +1287,166 @@ describe('applyTransform() zoneRatio (Phase 4.5k)', () => {
     }
   });
 
+  it('Phase 4.5l: zoneEdgeSoftness=0 + zoneEdgeShift=0 produces output bit-identical to absent (4.5j argmin path)', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    // Engage zone routing so the path actually runs.
+    const ctrlAbsent: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        zoneInfluence: 1,
+        detailRichness: 1,
+      },
+    };
+    const ctrlExplicitZero: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        zoneInfluence: 1,
+        detailRichness: 1,
+        zoneEdgeSoftness: 0,
+        zoneEdgeShift: 0,
+      },
+    };
+
+    const engAbsent = smash(srcFeatures, tgtFeatures, profile, ctrlAbsent);
+    const engExplicit = smash(srcFeatures, tgtFeatures, profile, ctrlExplicitZero);
+
+    for (const v of [30, 90, 150, 220]) {
+      const a = applyTransform(engAbsent, v, v, v);
+      const b = applyTransform(engExplicit, v, v, v);
+      expect(a).toEqual(b);
+    }
+  });
+
+  it('Phase 4.5l: zoneEdgeShift moves boundaries; pixels right of a shifted boundary route to a different cluster', () => {
+    // Build a bimodal source so the boundary between the two clusters is
+    // unambiguous. Without shift, the natural midpoint is roughly at L=0.5.
+    // With shift=-1, the boundary moves toward L=0; pixels at L=0.4 (formerly
+    // in the "cool" band) should now route to the warm band.
+    const total = 32 * 32;
+    const srcRgba = new Uint8Array(total * 4);
+    for (let i = 0; i < total; i++) {
+      const v = i / (total - 1);
+      if (v < 0.5) {
+        srcRgba[i * 4]     = 30;  srcRgba[i * 4 + 1] = 30;  srcRgba[i * 4 + 2] = 30;
+      } else {
+        srcRgba[i * 4]     = 230; srcRgba[i * 4 + 1] = 20;  srcRgba[i * 4 + 2] = 20;
+      }
+      srcRgba[i * 4 + 3] = 255;
+    }
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const ctrlNatural: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        zoneInfluence: 1,
+        detailRichness: 0, // centroid only — sharper differentiation
+        zoneEdgeSoftness: 0,
+        zoneEdgeShift: 0,
+      },
+    };
+    const ctrlShiftedDown: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        zoneInfluence: 1,
+        detailRichness: 0,
+        zoneEdgeSoftness: 0,
+        zoneEdgeShift: -1, // boundary pulled toward L=0
+      },
+    };
+
+    const engNatural = smash(srcFeatures, tgtFeatures, profile, ctrlNatural);
+    const engShifted = smash(srcFeatures, tgtFeatures, profile, ctrlShiftedDown);
+
+    // The engine's zoneBoundaries arrays should differ: shifted has a lower
+    // boundary than natural.
+    expect(engShifted.zoneBoundaries.length).toBeGreaterThan(0);
+    expect(engShifted.zoneBoundaries.length).toBe(engNatural.zoneBoundaries.length);
+    for (let i = 0; i < engNatural.zoneBoundaries.length; i++) {
+      expect(engShifted.zoneBoundaries[i]).toBeLessThan(engNatural.zoneBoundaries[i]);
+    }
+
+    // For at least one input on the shadow side of the natural boundary
+    // (Lin < natural midpoint, ~0.375 for this bimodal source), the two
+    // engines should route to different clusters → different output.
+    // Natural picks the dark cluster; shift=-1 collapses the boundary
+    // to ≈0, so everything routes to the red cluster.
+    let anyDifferent = false;
+    for (const v of [30, 50, 80, 110]) {
+      const a = applyTransform(engNatural, v, v, v);
+      const b = applyTransform(engShifted, v, v, v);
+      if (a[0] !== b[0] || a[1] !== b[1] || a[2] !== b[2]) {
+        anyDifferent = true;
+        break;
+      }
+    }
+    expect(anyDifferent).toBe(true);
+  });
+
+  it('Phase 4.5l: zoneEdgeSoftness>0 produces output distinct from the argmin path', () => {
+    const total = 32 * 32;
+    const srcRgba = new Uint8Array(total * 4);
+    for (let i = 0; i < total; i++) {
+      const v = i / (total - 1);
+      if (v < 0.5) {
+        srcRgba[i * 4]     = 30;  srcRgba[i * 4 + 1] = 30;  srcRgba[i * 4 + 2] = 30;
+      } else {
+        srcRgba[i * 4]     = 230; srcRgba[i * 4 + 1] = 20;  srcRgba[i * 4 + 2] = 20;
+      }
+      srcRgba[i * 4 + 3] = 255;
+    }
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const ctrlHard: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        zoneInfluence: 1,
+        detailRichness: 0,
+        zoneEdgeSoftness: 0,
+      },
+    };
+    const ctrlSoft: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        zoneInfluence: 1,
+        detailRichness: 0,
+        zoneEdgeSoftness: 1, // full blur
+      },
+    };
+
+    const engHard = smash(srcFeatures, tgtFeatures, profile, ctrlHard);
+    const engSoft = smash(srcFeatures, tgtFeatures, profile, ctrlSoft);
+
+    // Near a boundary, soft routing should produce a blend rather than a
+    // hard cluster pick — at least one mid-range probe should differ.
+    let anyDifferent = false;
+    for (const v of [100, 128, 156]) {
+      const a = applyTransform(engHard, v, v, v);
+      const b = applyTransform(engSoft, v, v, v);
+      if (a[0] !== b[0] || a[1] !== b[1] || a[2] !== b[2]) {
+        anyDifferent = true;
+        break;
+      }
+    }
+    expect(anyDifferent).toBe(true);
+  });
+
   it('zoneRatio out of range is clamped (zoneRatio=2 behaves like +1, -2 like -1)', () => {
     const srcRgba = warmOrangeBuffer32();
     const tgtRgba = gradientBuffer32();

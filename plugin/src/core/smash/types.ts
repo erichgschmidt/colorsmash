@@ -269,6 +269,32 @@ export interface ColorizationOptions {
    *    1.0: exp = 1/3 — very SHARP split; even pixels slightly past
    *         median get strong boost, producing distinct warm/cool zones */
   readonly temperatureSensitivity?: number;
+  /** Phase 4.5l — Zone Edge Softness. How sharp the boundaries between
+   *  source clusters are during zone routing. 0 = hard pick (argmin —
+   *  matches Phase 4.5j behavior). 1 = wide gaussian blur across
+   *  neighbouring clusters. Only takes effect when zoneInfluence > 0.
+   *  Short-circuits to the existing argmin path when value < 0.005,
+   *  preserving byte-exact bakes for presets that use the default. */
+  readonly zoneEdgeSoftness?: number;
+  /** Phase 4.5l — Zone Edge Shift. Slides the K-1 boundary midpoints
+   *  between adjacent source clusters along the target L axis.
+   *
+   *  Range [-1, +1]:
+   *    -1: boundaries pulled toward L=0 (shadow zones squeezed; mid/
+   *        highlight zones expand to cover more of target L)
+   *     0 (default): boundaries at natural sorted-cluster midpoints
+   *        (matches Phase 4.5j behavior exactly)
+   *    +1: boundaries pushed toward L=1 (highlight zones squeezed)
+   *
+   *  Bias function `sin(π × (i+1)/K)` makes inner boundaries move more
+   *  than outer boundaries — keeps the extreme zones from collapsing
+   *  to zero width.
+   *
+   *  Captures the user's "MOVE those edges to COMPRESS" intent. Moving
+   *  a boundary from L=0.5 to L=0.25 automatically compresses target's
+   *  [0, 0.5] L range into the [0, 0.25] routing band; that "compression"
+   *  is just endpoint sliding on the routing function. */
+  readonly zoneEdgeShift?: number;
   // Future toggles (Phase 5+) added here:
   //   readonly stochasticPerL?: boolean;
   //   readonly conditionalCdf?: boolean;

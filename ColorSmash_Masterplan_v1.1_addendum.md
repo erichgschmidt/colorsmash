@@ -712,6 +712,118 @@ Only the warm-axis projection is modified; the perpendicular (green↔magenta) a
 
 LUT-bakable. The median lives on engine output state, frozen by the time the LUT bake samples applyTransform.
 
+### 8.4j — `zoneEdgeSoftness` + `zoneEdgeShift`: target-side L routing controls (Phase 4.5l)
+
+**User vision** (verbatim): *"my target dynamic range of 5 zones has a lot of fall off, or snappy edges — we can blur or tighten those edges. We should also be able to MOVE those edges to COMPRESS their relationships."*
+
+Where Phase 4.5j (§8.4f) defined *how a target pixel finds its source cluster* (1D nearest by `Lin` against `clusterLs`) and *what color it pulls from that cluster* (centroid ↔ sub-LUT lerp by `detailRichness`), this phase gives the user **explicit control over the L-axis routing function on the target side**: the shape of the boundaries between zones, where those boundaries land, and how the L range below/above a boundary is rescaled into the bands the engine sees.
+
+This is a **target-side L remap that feeds zone routing**, not a change to the source clusters or their sub-LUTs. The clusters stay frozen at extraction time; only the function `Lin → (which cluster, how strongly)` becomes user-shapeable.
+
+**Conceptual mapping (user words → engine math).** The user described three things, which collapse into two sliders:
+
+| User language | What it controls | Engine surface |
+|---|---|---|
+| "blur or tighten edges" | Hardness of the boundary between two adjacent L-zones | Gaussian falloff width around each midpoint (soft assignment) |
+| "MOVE those edges" | Position of each zone boundary along the L axis | Per-boundary L offset, applied to the natural midpoint between two centroid Ls |
+| "COMPRESS their relationships" (e.g. 0–50% squished to 0–25%) | Nonlinear remap of target L *before* routing | Falls out for free from moving the boundaries — band widths are just `m_i − m_{i−1}` |
+
+The third bullet is subsumed by the second: moving a boundary from L=0.5 to L=0.25 *is* compressing the [0, 0.5] target L range into the band that routes to the shadow cluster. No extra knob needed.
+
+**What was added.** Two new sliders below DETAIL in `SmashSection.tsx`:
+
+| Knob | Range | Default | What it does |
+|---|---|---|---|
+| `zoneEdgeSoftness` (EDGE SOFTNESS) | 0–1 | 0 | Hardness of zone boundaries. 0 = argmin (today's Phase 4.5j behavior, bit-identical). 1 = wide gaussian blur across neighbouring clusters. |
+| `zoneEdgeShift` (EDGE SHIFT) | −1 to +1 | 0 | Slide all K−1 zone boundaries along the target L axis. Negative = shadow zones squeezed toward dark, mid/highlight zones expand. Positive = highlight zones squeezed. |
+
+**Mechanism — sorted clusters and K−1 boundaries.** The current `clusterLs` is stored in k-means index order; for this mechanic the engine needs sorted-by-L access. The engine builds a `clusterOrderByL: Int32Array(K)` permutation (sorted_pos → kmeans_idx) at `smash()` time, leaving `paletteSnap`'s and `distribution`'s existing indexing untouched. Sorted centroid Ls `L_0 < L_1 < ... < L_{K-1}` then define K−1 natural boundary midpoints:
+
+```
+m_i^natural = (L_i + L_{i+1}) / 2          for i = 0..K-2
+```
+
+**Mechanism — boundary shift.** EDGE SHIFT warps the natural midpoints toward uniform spacing (`(i+1)/K`), with a sin-shaped bias function that lets central boundaries move more than the outermost two (so the darkest/lightest bands never collapse to zero width):
+
+```
+t = zoneEdgeShift                          # in [-1, +1]
+bias_i = sin(π × (i+1)/K)                  # 0 at extremes, 1 at K/2
+if t >= 0:
+  m_i^shifted = m_i^natural + t × (1 − m_i^natural) × bias_i
+else:
+  m_i^shifted = m_i^natural + t × m_i^natural × bias_i
+```
+
+The K−1 shifted boundaries land in `SmashEngineOutput.zoneBoundaries: Float32Array(K-1)`, recomputed only when `clusterCount`, `clusterLs`, or `zoneEdgeShift` changes.
+
+**Mechanism — soft assignment.** EDGE SOFTNESS replaces the hard `argmin |Lin − clusterLs[k]|` with a gaussian-weighted soft pick. Each cluster (in sorted-by-L order) gets a weight from its distance to `Lin`, with σ controlled by the slider:
+
+```
+σ = ε + zoneEdgeSoftness × σ_max           # σ_max = 0.10, ε ≈ 1e-4
+w_k = exp(-(Lin − clusterLs[sorted_k])² / (2σ²))
+w_k /= Σ w_k
+(aZone, bZone) = Σ_k w_k × (centroid_k.ab + detail × (subLUT_k(Lin) − centroid_k.ab))
+```
+
+`σ_max = 0.10` in Oklab L is chosen so at softness=1 a typical 5-zone palette (centroids ~0.2 apart) sees neighbour weights ≈ exp(-2) ≈ 0.14 of the winner — a strong but not total blur. The short-circuit `softness < 0.005` falls back to the existing argmin path, preserving the cheap O(K)-compare + 1-subLUT-eval cost for users who don't engage the slider. At softness > 0, the per-pixel cost rises to K sub-LUT evals per pixel (~250 ns vs ~50 ns at K=5), still negligible inside the LUT bake.
+
+**Engine state added.** Two new fields on `SmashCdfs` / `SmashEngineOutput`, computed once per `smash()` call (sub-millisecond, no allocations per pixel):
+
+```typescript
+clusterOrderByL: Int32Array;       // length K, sorted-pos → kmeans-idx permutation
+zoneBoundaries:  Float32Array;     // length K-1, m_i^shifted ascending
+```
+
+Engine-time-only. Per-pixel hot path does one binary search (or linear scan, fine at K ≤ 32) over `zoneBoundaries` plus K gaussian evals. Neither slider triggers re-extraction — `clusterCount` (ZONES) is still the only knob that rebuilds the cluster table.
+
+**Worked example (user's verbatim scenario).** 5 zones → 4 boundaries. Say sorted clusterLs = [0.10, 0.30, 0.50, 0.72, 0.90].
+
+| | natural midpoint | after EDGE SHIFT = −0.5 | meaning |
+|---|---|---|---|
+| m₀ (shadow→darkmid) | 0.20 | 0.10 | shadow band squeezes from [0, 0.20] to [0, 0.10] |
+| m₁ (darkmid→mid) | 0.40 | 0.25 | "1–50% squishes to 1–25%" — matches user's example |
+| m₂ (mid→highmid) | 0.61 | 0.55 | mid band shifts down |
+| m₃ (highmid→highlight) | 0.81 | 0.78 | highlight barely moves (outer bias) |
+
+After the shift, target L values in [0.25, 0.55] route to the "mid" cluster (was [0.40, 0.61]). The middle grays are now darker, and the upper 50% of target L (0.50–1.0) gets spread across mid + highmid + highlight bands proportionally to the new boundaries.
+
+If EDGE SOFTNESS is then turned up to 30%, the [0.25, 0.55] mid band still *dominates* in that L range, but pixels near 0.25 also pick up ~20% of the darkmid cluster's color, and pixels near 0.55 pick up ~20% of the highmid cluster's. The "snappy edges" become smooth crossfades.
+
+**Composition with other Phase 4.5 mechanics.**
+
+```
+ZONES (clusterCount) ─┬─ rebuilds clusterLs / subLuts / centroids (DNA-level)
+                     │
+EDGE SHIFT ──────────┼─→ shifts boundaries (engine-time, sub-ms)
+                     │       │
+EDGE SOFTNESS ───────┼───────┼─→ per-pixel soft assignment
+                     │       │
+DETAIL ──────────────┼───────┼─→ per-pixel centroid↔subLUT lerp inside each w_k contribution
+                     │       │
+INFLUENCE ───────────┴───────┴─→ final lerp toward (hZone, CZone)
+
+ZONE RATIO ──→ adjustedClusterWeights (4.5k, distribution-only, independent)
+```
+
+- **With INFLUENCE = 0**: zone path doesn't run; both new sliders are inert.
+- **With ZONES change**: boundaries recompute automatically (depends on sorted clusterLs).
+- **With ZONE RATIO** (4.5k): orthogonal — RATIO reweights how *source* contributes to the `distribution` mechanic; EDGE SHIFT moves where *target* hands off between zones during routing.
+- **With DETAIL** (4.5j): unchanged composition. detail still controls centroid↔subLUT lerp inside each cluster's contribution, just now summed across K clusters instead of picked from one.
+- **With softness=0 + shift=0**: output bit-identical to today's Phase 4.5j. Existing presets and LUT bakes remain stable.
+
+**LUT bakability.** Yes. Both knobs are pure functions of (R, G, B) via `Lin` plus frozen engine state (`clusterOrderByL`, `zoneBoundaries`, sub-LUTs, centroids). Per-pixel cost: K gaussian evals + K sub-LUT lookups + a weighted sum; ~250 ns at K=5 with softness > 0, still well inside the 4096-cell LUT bake budget. At softness=0 the engine short-circuits to the existing single-cluster path and the bake cost matches Phase 4.5j byte-for-byte — a regression test guards exact-match against a frozen 4.5j bake.
+
+**Persistence + recipe IO.** Two new fields on `colorization`:
+
+```typescript
+zoneEdgeSoftness?: number;   // [0, 1], default 0
+zoneEdgeShift?: number;      // [-1, +1], default 0
+```
+
+Both get the standard `typeof === "number" && Number.isFinite(...)` + clamp guard at persistence restore. Both serialize in recipe v1.21+ alongside the slot already taken by `zoneInfluence` / `detailRichness` / `zoneRatio`.
+
+**Open questions resolved.** The design doc raised six open questions (Q1–Q6) before implementation. All six were resolved per the design's recommended defaults: single global EDGE SHIFT (Q1), endpoint sliding rather than area-preserving compression (Q2), Path A boundary-aware routing rather than Path B L pre-warp (Q3), permutation index over in-place sort (Q4), SOFTNESS kept separate from DETAIL (Q5), zone-routing-only scope rather than coupling to posterize / distribution (Q6). Deferred to 4.5m if requested later: per-boundary K−1 sliders and a global `EDGE SQUEEZE` knob for pushing all boundaries toward/away from the L midpoint.
+
 ### 8.5 What's still on the roadmap (Phase 5+)
 
 The four colorization mechanics in v1.1 §5 remain forward work:

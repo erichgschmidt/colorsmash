@@ -103,6 +103,23 @@ export interface SmashEngineOutput {
   readonly clusterLs: Float32Array;
   /** Phase 4.5j — per-cluster RGB centroids. Parallel to clusterSubLuts. */
   readonly clusterRgbs: readonly Vec3[];
+  /** Phase 4.5l — permutation that maps sorted-by-L position → kmeans
+   *  index. `clusterOrderByL[i]` is the kmeans index of the i-th cluster
+   *  in ascending L order. Used by the soft-routing path to iterate
+   *  clusters in L order without mutating any underlying array (other
+   *  consumers like paletteSnap and distribution read clusters in their
+   *  kmeans index order). */
+  readonly clusterOrderByL: Int32Array;
+  /** Phase 4.5l — sorted centroid Ls (ascending). Parallel to
+   *  clusterOrderByL: `sortedClusterLs[i] === clusterLs[clusterOrderByL[i]]`. */
+  readonly sortedClusterLs: Float32Array;
+  /** Phase 4.5l — shifted zone boundaries between adjacent sorted clusters
+   *  in ascending L order. Length = K-1. `zoneBoundaries[i]` is the L
+   *  position separating sorted clusters i and i+1. Computed from natural
+   *  midpoints + zoneEdgeShift via a sin-biased lerp toward uniform
+   *  spacing (so inner boundaries move more than extreme ones). Empty
+   *  array when K <= 1. */
+  readonly zoneBoundaries: Float32Array;
   /** Phase 4.5k — per-cluster effective weights AFTER applying the
    *  `zoneRatio` power exponent. At zoneRatio=0 these match natural
    *  weights; negative ratios flatten; positive ratios exaggerate
@@ -151,6 +168,11 @@ export interface SmashCdfs {
    *  to `clusterSubLuts` / `clusterLs`. Used as the "no internal variation"
    *  endpoint of the detailRichness lerp inside the zone path. */
   readonly clusterRgbs: readonly Vec3[];
+  /** Phase 4.5l — permutation: sorted-by-L position → kmeans index.
+   *  See SmashEngineOutput.clusterOrderByL for details. */
+  readonly clusterOrderByL: Int32Array;
+  /** Phase 4.5l — sorted centroid Ls (ascending). */
+  readonly sortedClusterLs: Float32Array;
 }
 
 /** Build the L/C/h CDF LUTs from a source/target feature pair. Pure work,
@@ -174,6 +196,7 @@ export function buildSmashCdfs(
       lumaCdf: null, chromaCdf: null, hueCdf: null,
       hueByLumaLut: null, targetMedianChroma: 0, sourceMedianChroma: 0,
       clusterSubLuts: [], clusterLs: new Float32Array(0), clusterRgbs: [],
+      clusterOrderByL: new Int32Array(0), sortedClusterLs: new Float32Array(0),
     };
   }
   const srcLuma = new Float32Array(sourceFeatures.length);
@@ -262,10 +285,30 @@ export function buildSmashCdfs(
     clusterLs = cLs;
   }
 
+  // Phase 4.5l — sort permutation. Need ascending-by-L iteration order for
+  // zone-routing boundary math (4.5l). Build a permutation index instead
+  // of resorting the source arrays so downstream consumers (paletteSnap,
+  // distribution) that read clusters in kmeans index order are unaffected.
+  let clusterOrderByL: Int32Array;
+  let sortedClusterLs: Float32Array;
+  if (clusterLs.length > 0) {
+    const K = clusterLs.length;
+    const indices = new Array<number>(K);
+    for (let i = 0; i < K; i++) indices[i] = i;
+    indices.sort((a, b) => clusterLs[a] - clusterLs[b]);
+    clusterOrderByL = Int32Array.from(indices);
+    sortedClusterLs = new Float32Array(K);
+    for (let i = 0; i < K; i++) sortedClusterLs[i] = clusterLs[clusterOrderByL[i]];
+  } else {
+    clusterOrderByL = new Int32Array(0);
+    sortedClusterLs = new Float32Array(0);
+  }
+
   return {
     lumaCdf, chromaCdf, hueCdf, hueByLumaLut,
     targetMedianChroma, sourceMedianChroma,
     clusterSubLuts, clusterLs, clusterRgbs,
+    clusterOrderByL, sortedClusterLs,
   };
 }
 
@@ -323,6 +366,11 @@ export const DEFAULT_SMASH_CONTROLS: SmashControls = {
     // Phase 4.5p: temperatureSensitivity defaults to 0.5 — linear
     // exponent (no sharpening or softening of the median split).
     temperatureSensitivity: 0.5,
+    // Phase 4.5l: target-side zone routing controls. Both default to 0
+    // — boundaries at natural cluster midpoints with hard pick (matches
+    // Phase 4.5j behavior byte-for-byte).
+    zoneEdgeSoftness: 0,
+    zoneEdgeShift: 0,
   },
   // Phase 4.5c: passes = 1 by default (one transform per pixel). Users can
   // dial up to 2 or 3 to bake the compounded "multi-pass" look into the LUT.
@@ -447,6 +495,39 @@ export function smash(
   const clusterSubLuts = cdfs.clusterSubLuts;
   const clusterLs = cdfs.clusterLs;
   const clusterRgbs = cdfs.clusterRgbs;
+  const clusterOrderByL = cdfs.clusterOrderByL;
+  const sortedClusterLs = cdfs.sortedClusterLs;
+
+  // Phase 4.5l — Compute shifted zone boundaries from sorted cluster Ls
+  // + zoneEdgeShift. K-1 boundaries between adjacent sorted clusters,
+  // each shifted toward 0 (negative t) or 1 (positive t) using a
+  // sin-shaped bias that moves inner boundaries more than outer ones —
+  // keeps the extreme zones from collapsing to zero width even at ±1.
+  // Re-runs per smash() call (sub-ms cost).
+  const rawZoneEdgeShift = c.colorization?.zoneEdgeShift;
+  const zoneEdgeShift =
+    typeof rawZoneEdgeShift === 'number' && Number.isFinite(rawZoneEdgeShift)
+      ? Math.max(-1, Math.min(1, rawZoneEdgeShift))
+      : 0;
+  const Kclusters = sortedClusterLs.length;
+  const zoneBoundaries = new Float32Array(Math.max(0, Kclusters - 1));
+  for (let i = 0; i < Kclusters - 1; i++) {
+    const natural = (sortedClusterLs[i] + sortedClusterLs[i + 1]) * 0.5;
+    if (zoneEdgeShift === 0) {
+      zoneBoundaries[i] = natural;
+    } else {
+      // sin-biased lerp toward L=0 or L=1, scaled by |t| × (distance to
+      // target endpoint). Inner boundaries (mid-range) move more than
+      // outer boundaries (near L=0 or L=1).
+      const bias = Math.sin(Math.PI * (i + 1) / Kclusters);
+      if (zoneEdgeShift > 0) {
+        zoneBoundaries[i] = natural + zoneEdgeShift * (1 - natural) * bias;
+      } else {
+        // zoneEdgeShift is negative — moves boundary toward 0
+        zoneBoundaries[i] = natural + zoneEdgeShift * natural * bias;
+      }
+    }
+  }
 
   // Phase 4.5k — adjusted cluster weights. Apply zoneRatio as a power
   // exponent on the natural weights, then normalize. Cheap (K ≤ 32 pow
@@ -513,6 +594,7 @@ export function smash(
     lumaCdf, chromaCdf, hueCdf,
     hueByLumaLut, targetMedianChroma, sourceMedianChroma,
     clusterSubLuts, clusterLs, clusterRgbs,
+    clusterOrderByL, sortedClusterLs, zoneBoundaries,
     adjustedClusterWeights,
     estimatedOutputMedianWarmth: 0, // placeholder; sampling ignores this field
   };
@@ -538,6 +620,7 @@ export function smash(
     lumaCdf, chromaCdf, hueCdf,
     hueByLumaLut, targetMedianChroma, sourceMedianChroma,
     clusterSubLuts, clusterLs, clusterRgbs,
+    clusterOrderByL, sortedClusterLs, zoneBoundaries,
     adjustedClusterWeights,
     estimatedOutputMedianWarmth,
   };
@@ -889,26 +972,81 @@ function applyTransformOnePass(
       typeof rawDetail === "number" && Number.isFinite(rawDetail)
         ? Math.max(0, Math.min(1, rawDetail))
         : 1;
-    // Step 1: nearest cluster by L (1D scan, ~16-32 clusters)
-    const K = out.clusterSubLuts.length;
-    let bestIdx = 0;
-    let bestDist = Math.abs(Lin - out.clusterLs[0]);
-    for (let i = 1; i < K; i++) {
-      const d = Math.abs(Lin - out.clusterLs[i]);
-      if (d < bestDist) {
-        bestDist = d;
-        bestIdx = i;
+    // Phase 4.5l — read soft/shift controls. Short-circuit to the
+    // existing argmin path when both are at default (preserves byte-
+    // exact 4.5j behavior for users who don't engage these knobs).
+    const rawSoftness = controls.colorization?.zoneEdgeSoftness;
+    const softness =
+      typeof rawSoftness === "number" && Number.isFinite(rawSoftness)
+        ? Math.max(0, Math.min(1, rawSoftness))
+        : 0;
+    const rawShift = controls.colorization?.zoneEdgeShift;
+    const shift =
+      typeof rawShift === "number" && Number.isFinite(rawShift)
+        ? Math.max(-1, Math.min(1, rawShift))
+        : 0;
+    const useSoftPath = softness >= 0.005 || Math.abs(shift) >= 0.005;
+
+    let aZone: number;
+    let bZone: number;
+    if (useSoftPath && out.zoneBoundaries.length > 0) {
+      // Phase 4.5l soft routing — boundary-aware soft assignment in
+      // sorted-by-L order, with gaussian falloff outside each cluster's
+      // band. Each cluster k owns L interval [zoneBoundaries[k-1],
+      // zoneBoundaries[k]] (with implicit 0 / 1 endpoints). Weight is 1
+      // inside the band and decays exp(-d²/2σ²) outside.
+      const K = out.sortedClusterLs.length;
+      const SIGMA_MAX = 0.10;
+      const sigma = 1e-4 + softness * SIGMA_MAX;
+      const twoSigmaSq = 2 * sigma * sigma;
+      let sumW = 0;
+      let sumA = 0;
+      let sumB = 0;
+      for (let k = 0; k < K; k++) {
+        const lo = k === 0 ? 0 : out.zoneBoundaries[k - 1];
+        const hi = k === K - 1 ? 1 : out.zoneBoundaries[k];
+        let d = 0;
+        if (Lin < lo) d = lo - Lin;
+        else if (Lin > hi) d = Lin - hi;
+        const w = Math.exp(-d * d / twoSigmaSq);
+        const kmeansIdx = out.clusterOrderByL[k];
+        const centroid = out.profile.source.clusters[kmeansIdx].centroidOklab;
+        const [aSub, bSub] = lookupHueByLuma(out.clusterSubLuts[kmeansIdx], Lin);
+        const aContrib = centroid[1] + (aSub - centroid[1]) * detail;
+        const bContrib = centroid[2] + (bSub - centroid[2]) * detail;
+        sumW += w;
+        sumA += w * aContrib;
+        sumB += w * bContrib;
       }
+      if (sumW > 1e-9) {
+        aZone = sumA / sumW;
+        bZone = sumB / sumW;
+      } else {
+        aZone = 0;
+        bZone = 0;
+      }
+    } else {
+      // Phase 4.5j argmin path (byte-identical to pre-4.5l behavior).
+      const K = out.clusterSubLuts.length;
+      let bestIdx = 0;
+      let bestDist = Math.abs(Lin - out.clusterLs[0]);
+      for (let i = 1; i < K; i++) {
+        const d = Math.abs(Lin - out.clusterLs[i]);
+        if (d < bestDist) {
+          bestDist = d;
+          bestIdx = i;
+        }
+      }
+      const centroid = out.profile.source.clusters[bestIdx].centroidOklab;
+      const aCen = centroid[1];
+      const bCen = centroid[2];
+      const [aSub, bSub] = lookupHueByLuma(out.clusterSubLuts[bestIdx], Lin);
+      aZone = aCen + (aSub - aCen) * detail;
+      bZone = bCen + (bSub - bCen) * detail;
     }
-    // Step 2: cluster's (a, b) contribution
-    const centroid = out.profile.source.clusters[bestIdx].centroidOklab;
-    const aCen = centroid[1];
-    const bCen = centroid[2];
-    const [aSub, bSub] = lookupHueByLuma(out.clusterSubLuts[bestIdx], Lin);
-    const aZone = aCen + (aSub - aCen) * detail;
-    const bZone = bCen + (bSub - bCen) * detail;
+
     const CZone = Math.sqrt(aZone * aZone + bZone * bZone);
-    // Step 3: lerp current (hsm, Csm) toward (hZone, CZone) by zoneInfluence
+    // Lerp current (hsm, Csm) toward (hZone, CZone) by zoneInfluence
     if (CZone > 1e-6) {
       const hZone = Math.atan2(bZone, aZone);
       let dh = hZone - hsm;
