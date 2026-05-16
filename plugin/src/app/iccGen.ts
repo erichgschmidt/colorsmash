@@ -157,6 +157,38 @@ function writeUint32BE(buf: Uint8Array, off: number, v: number) {
  * Preset: same as before — non-separable blend math (Color / Hue / etc.)
  * gets folded into each CLUT sample via applyPresetPostprocess.
  */
+/**
+ * Wrap a pre-built CLUT byte block in the ICC DeviceLink template (prefix +
+ * CLUT + suffix) and patch the three grid-dependent header fields. This is
+ * the shared assembly stage — `generateIccDeviceLinkBase64` (free, from
+ * curves) and the Pro Smash apply (from an arbitrary 3D LUT) both route
+ * through it, so the byte-level ICC layout + patching can never diverge
+ * between the two paths.
+ *
+ * `clut` must be `gridSize³ × 3 × 2` bytes: per grid point, 16-bit big-endian
+ * R, G, B; input channel R varies SLOWEST, B fastest (ICC mft2 order).
+ */
+export function assembleIccDeviceLink(clut: Uint8Array, gridSize: number): string {
+  if (gridSize < 2 || gridSize > 256) {
+    throw new Error(`Invalid LUT grid size ${gridSize}; expected 2..256.`);
+  }
+  const prefix = b64ToBytes(ICC_PREFIX_B64); // 372 bytes — captured from 33³ reference
+  const suffix = b64ToBytes(ICC_SUFFIX_B64); // 14 bytes — output tables + padding
+  const totalSize = prefix.length + clut.length + suffix.length;
+  const a2b0Length = clut.length + A2B0_OVERHEAD; // mft2 + tables + CLUT
+  const out = new Uint8Array(totalSize);
+  out.set(prefix, 0);
+  out.set(clut, prefix.length);
+  out.set(suffix, prefix.length + clut.length);
+  // Patch grid-dependent fields. The template's stored values are for the
+  // captured 33³ reference; PS rejects the profile (→ the Color Lookup layer
+  // applies nothing) if these don't match the actual assembled bytes.
+  writeUint32BE(out, PATCH_OFFSET_PROFILE_SIZE, totalSize);
+  writeUint32BE(out, PATCH_OFFSET_A2B0_LENGTH, a2b0Length);
+  out[PATCH_OFFSET_GRID_BYTE] = gridSize & 0xff;
+  return bytesToB64(out);
+}
+
 export function generateIccDeviceLinkBase64(
   curves: ChannelCurves,
   preset: Preset = "color",
@@ -169,18 +201,6 @@ export function generateIccDeviceLinkBase64(
   // Apply strength lerp ONCE up front — both buildClut and any future
   // postprocess in the profile will see the lerped curves.
   const effectiveCurves = strength >= 1 ? curves : lerpCurvesTowardIdentity(curves, strength);
-  const prefix = b64ToBytes(ICC_PREFIX_B64); // 372 bytes — captured from 33³ reference
-  const suffix = b64ToBytes(ICC_SUFFIX_B64); // 14 bytes — output tables + padding
   const clut = buildClut(effectiveCurves, preset, gridSize);
-  const totalSize = prefix.length + clut.length + suffix.length;
-  const a2b0Length = clut.length + A2B0_OVERHEAD; // mft2 + tables + CLUT
-  const out = new Uint8Array(totalSize);
-  out.set(prefix, 0);
-  out.set(clut, prefix.length);
-  out.set(suffix, prefix.length + clut.length);
-  // Patch grid-dependent fields:
-  writeUint32BE(out, PATCH_OFFSET_PROFILE_SIZE, totalSize);
-  writeUint32BE(out, PATCH_OFFSET_A2B0_LENGTH, a2b0Length);
-  out[PATCH_OFFSET_GRID_BYTE] = gridSize & 0xff;
-  return bytesToB64(out);
+  return assembleIccDeviceLink(clut, gridSize);
 }

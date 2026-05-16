@@ -1,16 +1,18 @@
 // Install a Smash-baked 3D LUT as a Color Lookup adjustment layer.
 //
 // Mirrors applyLut.ts's tryLoadLutIntoActiveLayer descriptor (LUT3DFileData +
-// ICC profile, batchPlay-installed) — but builds the ICC CLUT directly from
-// the Smash engine's Float32Array LUT instead of from ChannelCurves. The
-// ICC prefix/suffix bytes are reused verbatim from _iccTemplate.ts (Adobe's
-// 33³ reference profile, captured 2026-04). No mask attachment, group
-// placement, or selection composition — those are Phase 2 polish.
+// ICC profile, batchPlay-installed). The ICC DeviceLink profile — which is
+// what PS actually RENDERS from — is assembled by iccGen's shared
+// assembleIccDeviceLink, the exact same prefix/CLUT/suffix wrapper +
+// header-field patching the proven free Match path uses; only the CLUT bytes
+// are Smash-specific (built from the engine's Float32Array LUT instead of
+// from ChannelCurves). No mask attachment, group placement, or selection
+// composition — those are Phase 2 polish.
 //
 // 33³ only for v0 — the ICC prefix template bakes the grid size in.
 
 import { action, app, executeAsModal } from "../../services/photoshop";
-import { ICC_PREFIX_B64, ICC_SUFFIX_B64 } from "../_iccTemplate";
+import { assembleIccDeviceLink } from "../iccGen";
 import { bakeSmashLut, serializeSmashCube, type SmashEngineOutput } from "../../core/smash";
 
 const APPLY_LAYER_NAME = "Smash LUT";
@@ -39,14 +41,6 @@ export interface ApplySmashLutResult {
    *  Just a diagnostic — callers don't need to act on it. */
   replacedInPlace?: boolean;
   error?: string;
-}
-
-/** Decode base64 to bytes. atob is exposed in UXP's panel JS runtime. */
-function b64ToBytes(b64: string): Uint8Array {
-  const bin = atob(b64);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
 }
 
 function bytesToB64(bytes: Uint8Array): string {
@@ -94,22 +88,6 @@ function buildSmashClut(values: Float32Array, n: number): Uint8Array {
   return out;
 }
 
-/** Build the full ICC DeviceLink profile bytes for a Smash LUT. */
-function buildSmashIccBase64(values: Float32Array, n: number): string {
-  if (n !== SMASH_GRID) {
-    throw new Error(`Smash Apply currently locked to ${SMASH_GRID}³; got ${n}.`);
-  }
-  const prefix = b64ToBytes(ICC_PREFIX_B64);
-  const suffix = b64ToBytes(ICC_SUFFIX_B64);
-  const clut = buildSmashClut(values, n);
-  const total = prefix.length + clut.length + suffix.length;
-  const buf = new Uint8Array(total);
-  buf.set(prefix, 0);
-  buf.set(clut, prefix.length);
-  buf.set(suffix, prefix.length + clut.length);
-  return bytesToB64(buf);
-}
-
 /** Find a layer by id anywhere in the doc tree (top-level + inside groups). */
 function findLayerById(layers: any[], id: number): any | null {
   for (const l of layers) {
@@ -140,7 +118,13 @@ export async function applySmashLut(
     const lut = bakeSmashLut(engine, SMASH_GRID);
     const cubeText = serializeSmashCube(lut, APPLY_LAYER_NAME);
     const cubeB64 = bytesToB64(asciiStringToBytes(cubeText));
-    const profileB64 = buildSmashIccBase64(lut.values, SMASH_GRID);
+    // Build the ICC DeviceLink profile that PS actually renders from. Routes
+    // through iccGen's shared assembleIccDeviceLink — the SAME assembly +
+    // header-field patching the proven free Match path uses — so the Smash
+    // ICC can't drift from the working free one. (The previous hand-rolled
+    // path skipped the size / A2B0-length / grid-byte patches, which made PS
+    // reject the profile and apply nothing → the dull, untransformed look.)
+    const profileB64 = assembleIccDeviceLink(buildSmashClut(lut.values, SMASH_GRID), SMASH_GRID);
     const stamp = Date.now();
     const displayName = `${APPLY_LAYER_NAME}_${stamp}.cube`;
 
