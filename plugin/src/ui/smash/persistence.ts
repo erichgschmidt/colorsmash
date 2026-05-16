@@ -65,6 +65,9 @@ export interface SmashPersisted {
    *  [0,1] blends toward the random per-pixel draw; `seed` makes the grain
    *  reproducible. */
   stochastic?: { amount?: number; seeded?: boolean; seed?: number };
+  /** v1.21 Phase 7.x — SOURCE MIX bar drag mode: true = adaptive (↔),
+   *  false = handle drag. */
+  sourceMixAdaptive?: boolean;
   /** v1.21 Phase 4.5j — zone routing trio. clusterCount is the number of
    *  source palette zones (integer in [3, 32], default 5). zoneInfluence
    *  is how strongly the zone path overrides default Hue-by-L (default 0).

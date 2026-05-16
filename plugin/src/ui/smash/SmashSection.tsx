@@ -19,7 +19,6 @@ import {
   DEFAULT_COLORIZATION_TOGGLES,
   type ColorizationToggleState,
 } from "./ColorizationToggles";
-import { ClusterRatioBar } from "./ClusterRatioBar";
 import { RatioBar, type RatioBarSwatch } from "./RatioBar";
 import type { TraitAmounts, AxisRatio } from "../../core/smash/types";
 import {
@@ -255,6 +254,10 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   // persisted — multipliers are tied to a specific source image's clusters,
   // so carrying them across sources would mis-apply (same as PaletteStrip).
   const [clusterMultipliers, setClusterMultipliers] = useState<number[]>([]);
+  // Phase 7.x — SOURCE MIX drag mode: false = handle drag (redistribute
+  // between neighbours), true = adaptive (grow/shrink one cluster, others
+  // rebalance). Mirrors the SOURCE RATIOS bars' ↔ toggle.
+  const [sourceMixAdaptive, setSourceMixAdaptive] = useState<boolean>(false);
   // Phase 6 — SOURCE RATIOS: Value / Hue / Chroma axes. Simple mode = one
   // tilt slider per axis; Detailed mode = a per-band ratio bar (count toggle
   // + adaptive drag). The Simple ⇄ Detailed chip flips all axes; both the
@@ -336,6 +339,10 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       // v1.21 Phase 8 — restore Sliced OT (clamped to [0, 1]).
       if (typeof persisted?.slicedOt === "number" && Number.isFinite(persisted.slicedOt)) {
         setSlicedOt(Math.max(0, Math.min(1, persisted.slicedOt)));
+      }
+      // v1.21 Phase 7.x — restore the SOURCE MIX drag mode.
+      if (typeof persisted?.sourceMixAdaptive === "boolean") {
+        setSourceMixAdaptive(persisted.sourceMixAdaptive);
       }
       // v1.21 Phase 7 — restore Stochastic amount + seed.
       if (persisted?.stochastic && typeof persisted.stochastic === "object") {
@@ -428,12 +435,13 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       stochastic: { amount: stochasticAmount, seeded: true, seed: stochasticSeed },
       clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity,
       zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias,
+      sourceMixAdaptive,
       ratioMode,
       valueAxis: { tilt: valueAxis.tilt, bandCount: valueAxis.bandCount, weights: valueAxis.weights, adaptive: valueAxis.adaptive },
       hueAxis: { tilt: hueAxis.tilt, bandCount: hueAxis.bandCount, weights: hueAxis.weights, adaptive: hueAxis.adaptive },
       chromaAxis: { tilt: chromaAxis.tilt, bandCount: chromaAxis.bandCount, weights: chromaAxis.weights, adaptive: chromaAxis.adaptive },
     });
-  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, slicedOt, stochasticAmount, stochasticSeed, clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias, ratioMode, valueAxis, hueAxis, chromaAxis]);
+  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, slicedOt, stochasticAmount, stochasticSeed, clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias, sourceMixAdaptive, ratioMode, valueAxis, hueAxis, chromaAxis]);
 
   // ── Heavy: features + DNA + profile + CDF LUTs. Depends on SNAPS ONLY,
   // so slider drags don't re-run extractFeatures (~100K pixels per call)
@@ -1035,23 +1043,29 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       </div>
 
       {/* Phase 4.5s — SOURCE MIX. The Color Match ratio bar ported to Smash:
-          drag the dividers to reweight how prominent each source cluster is
-          in the smashed output. Feeds the engine's adjustedClusterWeights
-          (consumed by DISTRIBUTION). Segmented by the ZONES count directly
-          above; multipliers reset to neutral whenever the source / ZONES
-          change. Double-click the bar to reset all multipliers to neutral. */}
+          reweight how prominent each source cluster is in the smashed
+          output. Feeds the engine's adjustedClusterWeights (consumed by
+          DISTRIBUTION). Segmented by the ZONES count directly above;
+          multipliers reset to neutral whenever the source / ZONES change.
+          Phase 7.x — migrated to the generic RatioBar, gaining the ↔
+          adaptive drag mode (grow/shrink one cluster, others rebalance
+          proportionally), matching the SOURCE RATIOS bars. No count toggle —
+          the ZONES slider owns the cluster count. */}
       <div style={sourceMixWrapStyle}>
         <span
           style={passesLabelStyle}
-          title="SOURCE MIX — drag the white dividers on the bar below to reweight how prominent each source cluster is in the smashed output. Apply the ratio FROM the source and control it ON the target. Feeds the DISTRIBUTION mechanic (dial DISTRIBUTION up to hear the re-mixed weighting). Segmented by the ZONES count directly above. Double-click the bar to reset all to neutral."
+          title="SOURCE MIX — reweight how prominent each source cluster is in the smashed output. Apply the ratio FROM the source and control it ON the target. Feeds the DISTRIBUTION mechanic (dial DISTRIBUTION up to hear the re-mixed weighting). Segmented by the ZONES count directly above. ↔ toggles adaptive drag (grow/shrink one cluster, others rebalance) vs handle drag (redistribute between neighbours). Double-click the bar to reset all to neutral."
         >
           SOURCE MIX
         </span>
-        <ClusterRatioBar
+        <RatioBar
           swatches={pipeline ? pipeline.sourceDNA.clusters : []}
           multipliers={clusterMultipliers}
           setMultipliers={setClusterMultipliers}
+          adaptive={sourceMixAdaptive}
+          setAdaptive={setSourceMixAdaptive}
           disabled={!hasSnaps}
+          title="Source cluster mix — drag to reweight how prominent each source cluster is in the smashed output. ↔ switches between adaptive and handle drag. Double-click to reset to neutral."
         />
       </div>
 

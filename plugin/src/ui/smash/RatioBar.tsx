@@ -2,8 +2,7 @@
 // weighted, colored segments. Each segment's width = natural weight × user
 // multiplier; dragging redistributes mass. The Color Match PaletteStrip
 // experience, generalized for the Smash section: it powers the SOURCE RATIOS
-// axes (Value first; Hue / Saturation to follow) and can later replace the
-// SOURCE MIX ClusterRatioBar.
+// axes (Value / Hue / Chroma) and the SOURCE MIX cluster bar.
 //
 // Two drag modes, mirroring PaletteStrip:
 //   • handle mode (default): drag a divider between two segments — mass is
