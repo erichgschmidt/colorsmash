@@ -20,7 +20,8 @@ import {
   type ColorizationToggleState,
 } from "./ColorizationToggles";
 import { ClusterRatioBar } from "./ClusterRatioBar";
-import type { TraitAmounts } from "../../core/smash/types";
+import { RatioBar } from "./RatioBar";
+import type { TraitAmounts, AxisRatio } from "../../core/smash/types";
 import {
   extractFeatures,
   extractSourceDNA,
@@ -92,6 +93,23 @@ const INLINE_DEFAULTS = {
   temperatureSensitivity: 0.5,
   temperatureLBias: 0,
 } as const;
+
+// ────────── source-ratio helpers (Phase 6) ──────────
+
+// Simple-mode Value tilt uses a fixed 5-band ramp. Detailed mode lets the
+// user pick the band count via the bar's count toggle.
+const VALUE_SIMPLE_BANDS = 5;
+
+// Convert the Simple-mode tilt slider (-1..+1) into per-band multipliers:
+// a linear ramp pivoting on the mid band. tilt > 0 boosts highlight bands
+// and suppresses shadow bands; tilt < 0 does the reverse. tilt 0 → all-1
+// (neutral, a strict no-op in the engine).
+function simpleTiltMultipliers(tilt: number): number[] {
+  return Array.from({ length: VALUE_SIMPLE_BANDS }, (_, b) => {
+    const centerNorm = (b + 0.5) / VALUE_SIMPLE_BANDS; // 0.1 .. 0.9
+    return Math.max(0, 1 + tilt * (centerNorm - 0.5) * 2);
+  });
+}
 
 // ────────── component ──────────
 
@@ -167,6 +185,17 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   // persisted — multipliers are tied to a specific source image's clusters,
   // so carrying them across sources would mis-apply (same as PaletteStrip).
   const [clusterMultipliers, setClusterMultipliers] = useState<number[]>([]);
+  // Phase 6 — SOURCE RATIOS: Value axis. Simple mode = one shadow↔highlight
+  // tilt slider; Detailed mode = a per-band ratio bar (count toggle +
+  // adaptive drag). Both states are kept so flipping modes is non-
+  // destructive. valueWeights is source-independent (a band is just an
+  // L-range slice), so it only resets when the band count changes.
+  const [valueRatioOpen, setValueRatioOpen] = useState<boolean>(false);
+  const [valueRatioMode, setValueRatioMode] = useState<"simple" | "detailed">("simple");
+  const [valueTilt, setValueTilt] = useState<number>(0);
+  const [valueBandCount, setValueBandCount] = useState<number>(5);
+  const [valueWeights, setValueWeights] = useState<number[]>(() => [1, 1, 1, 1, 1]);
+  const [valueAdaptive, setValueAdaptive] = useState<boolean>(false);
   const [exportStatus, setExportStatus] = useState<string>("");
   const loadedRef = useRef<boolean>(false);
 
@@ -263,6 +292,29 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       if (typeof persisted?.temperatureLBias === "number" && Number.isFinite(persisted.temperatureLBias)) {
         setTemperatureLBias(Math.max(-1, Math.min(1, persisted.temperatureLBias)));
       }
+      // v1.21 Phase 6 — restore SOURCE RATIOS Value-axis state.
+      if (persisted?.valueRatioMode === "simple" || persisted?.valueRatioMode === "detailed") {
+        setValueRatioMode(persisted.valueRatioMode);
+      }
+      if (typeof persisted?.valueTilt === "number" && Number.isFinite(persisted.valueTilt)) {
+        setValueTilt(Math.max(-1, Math.min(1, persisted.valueTilt)));
+      }
+      if (typeof persisted?.valueAdaptive === "boolean") {
+        setValueAdaptive(persisted.valueAdaptive);
+      }
+      {
+        const bc = persisted?.valueBandCount;
+        const vw = persisted?.valueWeights;
+        if (typeof bc === "number" && Number.isInteger(bc) && bc >= 2 && bc <= 12) {
+          setValueBandCount(bc);
+          if (Array.isArray(vw) && vw.length === bc
+              && vw.every((x) => typeof x === "number" && Number.isFinite(x) && x >= 0)) {
+            setValueWeights(vw.slice());
+          } else {
+            setValueWeights(Array(bc).fill(1));
+          }
+        }
+      }
       loadedRef.current = true;
     })();
     return () => { cancelled = true; };
@@ -278,8 +330,9 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       conditionalCdf,
       clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity,
       zoneEdgeSoftness, zoneEdgeShift, temperatureLBias,
+      valueRatioMode, valueTilt, valueBandCount, valueWeights, valueAdaptive,
     });
-  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias]);
+  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, valueRatioMode, valueTilt, valueBandCount, valueWeights, valueAdaptive]);
 
   // ── Heavy: features + DNA + profile + CDF LUTs. Depends on SNAPS ONLY,
   // so slider drags don't re-run extractFeatures (~100K pixels per call)
@@ -316,13 +369,20 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   // per drag (vs. ~1s before this refactor).
   const pipeline = useMemo<EnginePipeline | null>(() => {
     if (!snapDerived) return null;
+    // Phase 6 — resolve the Value source ratio from whichever mode is
+    // active. Simple → a 5-band tilt ramp; Detailed → the per-band bar
+    // weights. Always sent (even at neutral) so the engine echoes back
+    // valueRatioNaturalWeights for the bar to draw.
+    const valueRatio: AxisRatio = valueRatioMode === "simple"
+      ? { bandCount: VALUE_SIMPLE_BANDS, multipliers: simpleTiltMultipliers(valueTilt) }
+      : { bandCount: valueBandCount, multipliers: valueWeights };
     const controls = {
       ...DEFAULT_SMASH_CONTROLS,
       global: amount,
       traits,
       // proportionMatch lives on colorization in the engine schema, so merge
       // it in here rather than carrying it around as a separate field.
-      colorization: { ...colorization, proportionMatch, posterize, distribution, conditionalCdf, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias },
+      colorization: { ...colorization, proportionMatch, posterize, distribution, conditionalCdf, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, valueRatio },
       passes,
     };
     const engine = smash(
@@ -333,7 +393,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       snapDerived.cdfs,
     );
     return { sourceDNA: snapDerived.sourceDNA, engine };
-  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias]);
+  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, valueRatioMode, valueTilt, valueBandCount, valueWeights]);
 
   // Propagate engine changes to the parent via useEffect, NOT inside the
   // useMemo body above. Calling setState on the parent during a child's
@@ -377,6 +437,35 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     // the current length so the bar stays in sync with the cluster count.
     setClusterMultipliers((prev) => prev.map(() => 1));
   };
+
+  // Phase 6 — Value-axis band count change. The weights array is rebuilt to
+  // the new length at neutral (a band is just an L-range slice, so there's
+  // no meaningful old→new mapping).
+  const onValueBandCountChange = (n: number) => {
+    setValueBandCount(n);
+    setValueWeights(Array(n).fill(1));
+  };
+
+  // Reset the whole SOURCE RATIOS section (the ✕ on its header).
+  const resetValueRatio = () => {
+    setValueTilt(0);
+    setValueBandCount(5);
+    setValueWeights([1, 1, 1, 1, 1]);
+    setValueAdaptive(false);
+  };
+
+  // Grayscale swatches for the Value ratio bar — a dark→light ramp, one
+  // segment per L band, each carrying the source's natural population in
+  // that band (echoed from the engine). Falls back to a uniform bar before
+  // the first engine run.
+  const valueBarSwatches = useMemo(() => {
+    const nat = pipeline?.engine.valueRatioNaturalWeights;
+    const n = nat && nat.length > 0 ? nat.length : valueBandCount;
+    return Array.from({ length: n }, (_, b) => {
+      const gray = Math.round(255 * ((b + 0.5) / n));
+      return { rgb: [gray, gray, gray] as const, weight: nat ? nat[b] : 1 / n };
+    });
+  }, [pipeline, valueBandCount]);
 
   // Track Smash LUT layer ids we've created. Default Apply replaces the most
   // recent one in place; "+" fork mode creates a new one and auto-hides the
@@ -925,6 +1014,89 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
         />
       )}
 
+      {/* Phase 6 — SOURCE RATIOS. Reshape the source's per-axis histogram;
+          the target follows via the CDF match. Value axis ships first.
+          Simple mode = one tilt slider per axis; Detailed mode = a per-band
+          ratio bar with count toggle + adaptive drag. The Simple/Detailed
+          chip flips all axes; both states are kept so it's non-destructive. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        <div
+          style={{ ...traitsHeaderStyle, flex: 1 }}
+          onClick={() => setValueRatioOpen((o) => !o)}
+          title={valueRatioOpen
+            ? "Hide source ratios"
+            : "Show source ratios — reshape the source's tonal/color distribution; the target matches it via the CDF"}
+        >
+          <span style={{ width: 10, display: "inline-block", textAlign: "center" }}>
+            {valueRatioOpen ? "▾" : "▸"}
+          </span>
+          <span>SOURCE RATIOS</span>
+        </div>
+        {valueRatioOpen && (
+          <>
+            <div
+              onClick={(e) => {
+                e.stopPropagation();
+                setValueRatioMode((m) => (m === "simple" ? "detailed" : "simple"));
+              }}
+              title={valueRatioMode === "simple"
+                ? "Simple: one tilt slider per axis. Click for Detailed — per-band ratio bars with count toggle + adaptive drag."
+                : "Detailed: per-band ratio bars. Click for Simple — one tilt slider per axis."}
+              style={modeChipStyle}
+            >
+              {valueRatioMode === "simple" ? "Simple" : "Detailed"}
+            </div>
+            <div
+              onClick={(e) => { e.stopPropagation(); resetValueRatio(); }}
+              title="Reset all source ratios to neutral (tilt 0, bands 5, weights neutral)."
+              style={resetButtonStyle}
+            >
+              ✕
+            </div>
+          </>
+        )}
+      </div>
+      {valueRatioOpen && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {valueRatioMode === "simple" ? (
+            <div
+              style={passesRowStyle}
+              onDoubleClick={() => { if (hasSnaps) setValueTilt(0); }}
+            >
+              <span style={passesLabelStyle}>VALUE</span>
+              <input
+                type="range"
+                min={-100}
+                max={100}
+                step={5}
+                value={Math.round(valueTilt * 100)}
+                onChange={(e) => setValueTilt(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
+                disabled={!hasSnaps}
+                style={passesSliderStyle}
+                title="VALUE tilt — shifts the SOURCE's tonal balance before the match. NEGATIVE favors shadows (the source reads as having more dark mass); POSITIVE favors highlights. The target's value distribution follows. Switch the section to Detailed for per-band control."
+              />
+              <span style={passesValueStyle}>{valueTilt > 0 ? "+" : ""}{Math.round(valueTilt * 100)}%</span>
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={passesLabelStyle}>VALUE</span>
+              <RatioBar
+                swatches={valueBarSwatches}
+                multipliers={valueWeights}
+                setMultipliers={setValueWeights}
+                adaptive={valueAdaptive}
+                setAdaptive={setValueAdaptive}
+                count={valueBandCount}
+                countOptions={[3, 5, 7]}
+                setCount={onValueBandCountChange}
+                disabled={!hasSnaps}
+                title="Source VALUE ratio — drag to reweight how much tonal mass the source carries in each lightness band (dark → light). The target's value distribution follows via the CDF match. Use the count chips to re-bin, ↔ for adaptive drag, double-click to reset."
+              />
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Phase 4.5+ — colorization toggles. Auto-detect grayscale targets and
           engage cross-dimensional inference when active toggles say so. The
           engine ignores the toggles for colorful targets (per-dimension CDF
@@ -1051,6 +1223,17 @@ const resetButtonStyle: React.CSSProperties = {
   fontSize: 10, fontWeight: 700, lineHeight: 1,
   cursor: "pointer", userSelect: "none",
   flexShrink: 0,
+};
+
+// Simple/Detailed mode chip on the SOURCE RATIOS header — neutral pill,
+// distinct from the coral ✕ reset so it doesn't read as destructive.
+const modeChipStyle: React.CSSProperties = {
+  display: "inline-flex", alignItems: "center", justifyContent: "center",
+  height: 17, padding: "0 6px",
+  background: "#3a3a3a", color: "#bbb",
+  border: "1px solid #1a1a1a", borderRadius: 2,
+  fontSize: 9, fontWeight: 600, lineHeight: 1,
+  cursor: "pointer", userSelect: "none", flexShrink: 0,
 };
 
 const placeholderStyle: React.CSSProperties = {

@@ -114,6 +114,18 @@ export interface TraitAmounts {
   readonly accent: number;
 }
 
+/** v1.21 Phase 6 — a source-axis ratio. The user edits the SOURCE's
+ *  histogram along one dimension (Value / Hue / Saturation) by reweighting
+ *  per-band multipliers; the engine reshapes the source distribution before
+ *  the CDF match so the target follows the edited shape. */
+export interface AxisRatio {
+  /** Number of equal-width bands the axis is binned into. Integer ≥ 2. */
+  readonly bandCount: number;
+  /** Per-band user multipliers, length === bandCount. 1 = neutral; an
+   *  all-1 array (or a length mismatch) is treated as a strict no-op. */
+  readonly multipliers: readonly number[];
+}
+
 /** v1.21 Phase 4.5+ — cross-dimensional colorization toggles. Activate when
  *  per-dimension CDF can't redistribute color the target lacks (grayscale
  *  target case). Each toggle is one of the four mechanics in v1.1 addendum
@@ -349,6 +361,19 @@ export interface ColorizationOptions {
    *  magnitude path unconditionally and the CDF-fallback hue branch — when
    *  Hue-by-L is on it still owns hue direction. */
   readonly conditionalCdf?: number;
+  /** Phase 6 — Value source ratio. Reweights the SOURCE's L (lightness)
+   *  histogram by per-band multipliers before the CDF match runs, so the
+   *  target's tonal distribution follows the user-edited source shape —
+   *  "apply the ratio from the source, the target matches it."
+   *
+   *  `bandCount` is the number of equal-width L bands (the bar's count
+   *  toggle / Simple-mode fixed 5). `multipliers` is one weight per band,
+   *  1 = neutral. An all-1 array, a length mismatch, or an absent field
+   *  are all strict no-ops — the engine reuses the natural lumaCdf
+   *  byte-for-byte, so existing presets and bakes are unchanged.
+   *
+   *  First of the planned source-ratio axes (Hue / Saturation to follow). */
+  readonly valueRatio?: AxisRatio;
   // Future toggles (Phase 5+) added here:
   //   readonly stochasticPerL?: boolean;
   //   readonly slicedOt?: boolean;

@@ -13,6 +13,7 @@ import { srgbByteToOklab, oklabToSrgbByte } from '../perceptual/oklab';
 import { buildCdfMatchLut, lookupCdfMatch, type CdfMatchLut } from './cdfMatch';
 import { buildHueByLumaLut, lookupHueByLuma, type HueByLumaLut } from './hueByLuma';
 import { buildConditionalCdf, type ConditionalCdf } from './conditionalCdf';
+import { naturalBandWeights, reweightSourceByBands, isNeutralRatio } from './axisRatio';
 
 // ────────── constants ──────────
 
@@ -136,6 +137,12 @@ export interface SmashEngineOutput {
    *  axis, and taking the median. Approximate but cheap (~27 samples is
    *  enough to anchor the median for typical natural images). */
   readonly estimatedOutputMedianWarmth: number;
+  /** Phase 6 — natural per-band weights of the SOURCE's L histogram, binned
+   *  into `colorization.valueRatio.bandCount` equal-width bands (default 5
+   *  when no valueRatio control is set). Normalized to sum 1. The UI reads
+   *  this to draw the Value source-ratio bar's segment widths at their
+   *  unedited proportions. */
+  readonly valueRatioNaturalWeights: Float32Array;
   /** Phase 5 — per-L-bucket chroma + hue CDFs for the conditionalCdf
    *  mechanic. Built once per snap change. Null when no features were
    *  provided (degenerate input). Null entries inside it are sparse
@@ -182,6 +189,11 @@ export interface SmashCdfs {
   /** Phase 5 — per-L-bucket chroma + hue CDFs for the conditionalCdf
    *  mechanic. Null on degenerate (empty-feature) input. */
   readonly conditionalCdf: ConditionalCdf | null;
+  /** Phase 6 — source / target Oklab L values, ascending. Kept so smash()
+   *  can cheaply rebuild a reweighted lumaCdf for the Value source-ratio
+   *  bar without re-deriving features. Empty on degenerate input. */
+  readonly srcLumaSorted: Float32Array;
+  readonly tgtLumaSorted: Float32Array;
 }
 
 /** Build the L/C/h CDF LUTs from a source/target feature pair. Pure work,
@@ -207,6 +219,7 @@ export function buildSmashCdfs(
       clusterSubLuts: [], clusterLs: new Float32Array(0), clusterRgbs: [],
       clusterOrderByL: new Int32Array(0), sortedClusterLs: new Float32Array(0),
       conditionalCdf: null,
+      srcLumaSorted: new Float32Array(0), tgtLumaSorted: new Float32Array(0),
     };
   }
   const srcLuma = new Float32Array(sourceFeatures.length);
@@ -320,12 +333,18 @@ export function buildSmashCdfs(
   const conditionalCdf = buildConditionalCdf(
     sourceFeatures, targetFeatures, VIABILITY_THRESHOLD, HUE_FILTER_CHROMA);
 
+  // Phase 6 — sorted L arrays, kept for the Value source-ratio bar's
+  // per-drag lumaCdf rebuild (reweight + buildCdfMatchLut, ~1-3ms).
+  const srcLumaSorted = srcLuma.slice().sort();
+  const tgtLumaSorted = tgtLuma.slice().sort();
+
   return {
     lumaCdf, chromaCdf, hueCdf, hueByLumaLut,
     targetMedianChroma, sourceMedianChroma,
     clusterSubLuts, clusterLs, clusterRgbs,
     clusterOrderByL, sortedClusterLs,
     conditionalCdf,
+    srcLumaSorted, tgtLumaSorted,
   };
 }
 
@@ -510,7 +529,32 @@ export function smash(
   // ~200-400ms per call). buildSmashCdfs is the canonical builder — call
   // it once per snap change and cache the result.
   const cdfs = precomputedCdfs ?? buildSmashCdfs(sourceFeatures, targetFeatures, profile.source.clusters);
-  const lumaCdf = cdfs.lumaCdf;
+
+  // Phase 6 — Value source ratio. Reweight the SOURCE's L histogram by the
+  // user's per-band multipliers BEFORE the CDF match, so the target's tonal
+  // distribution follows the edited source shape. bandCount defaults to 5
+  // (the bar's default) so valueRatioNaturalWeights is always populated for
+  // the UI even when the user hasn't touched the bar. The lumaCdf rebuild
+  // only runs when the ratio is non-neutral — neutral is byte-exact.
+  const valueRatio = c.colorization?.valueRatio;
+  const valueRatioBandCount =
+    valueRatio && Number.isInteger(valueRatio.bandCount) && valueRatio.bandCount >= 2
+      ? valueRatio.bandCount
+      : 5;
+  const valueRatioNaturalWeights =
+    naturalBandWeights(cdfs.srcLumaSorted, valueRatioBandCount);
+  let lumaCdf = cdfs.lumaCdf;
+  if (
+    valueRatio &&
+    cdfs.srcLumaSorted.length > 0 &&
+    cdfs.tgtLumaSorted.length > 0 &&
+    !isNeutralRatio(valueRatio.multipliers, valueRatioBandCount)
+  ) {
+    const reweighted = reweightSourceByBands(
+      cdfs.srcLumaSorted, valueRatioBandCount, valueRatio.multipliers);
+    lumaCdf = buildCdfMatchLut(reweighted, cdfs.tgtLumaSorted);
+  }
+
   const chromaCdf = cdfs.chromaCdf;
   const hueCdf = cdfs.hueCdf;
   const hueByLumaLut = cdfs.hueByLumaLut;
@@ -634,6 +678,7 @@ export function smash(
     clusterOrderByL, sortedClusterLs, zoneBoundaries,
     adjustedClusterWeights,
     estimatedOutputMedianWarmth: 0, // placeholder; sampling ignores this field
+    valueRatioNaturalWeights,
     conditionalCdf,
   };
   const WARM_A = 0.82;
@@ -661,6 +706,7 @@ export function smash(
     clusterOrderByL, sortedClusterLs, zoneBoundaries,
     adjustedClusterWeights,
     estimatedOutputMedianWarmth,
+    valueRatioNaturalWeights,
     conditionalCdf,
   };
 }

@@ -1834,3 +1834,132 @@ describe('applyTransform() conditionalCdf (Phase 5)', () => {
     }
   });
 });
+
+// ────────── 14. valueRatio — source Value ratio (Phase 6) ──────────
+
+describe('smash() valueRatio (Phase 6)', () => {
+  it('exposes valueRatioNaturalWeights at the requested band count, summing to ~1', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const eng = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        valueRatio: { bandCount: 7, multipliers: [1, 1, 1, 1, 1, 1, 1] },
+      },
+    });
+    expect(eng.valueRatioNaturalWeights.length).toBe(7);
+    let sum = 0;
+    for (let i = 0; i < eng.valueRatioNaturalWeights.length; i++) {
+      sum += eng.valueRatioNaturalWeights[i];
+    }
+    expect(sum).toBeCloseTo(1, 4);
+  });
+
+  it('neutral (all-1) valueRatio is byte-identical to the field omitted', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const engOmit = smash(srcFeatures, tgtFeatures, profile, DEFAULT_SMASH_CONTROLS);
+    const engNeutral = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        valueRatio: { bandCount: 5, multipliers: [1, 1, 1, 1, 1] },
+      },
+    });
+    for (let v = 0; v <= 255; v += 17) {
+      const a = applyTransform(engOmit, v, v, v);
+      const b = applyTransform(engNeutral, v, v, v);
+      expect(a[0]).toBe(b[0]);
+      expect(a[1]).toBe(b[1]);
+      expect(a[2]).toBe(b[2]);
+    }
+  });
+
+  it('engaged valueRatio diverges from neutral', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const engNeutral = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        valueRatio: { bandCount: 5, multipliers: [1, 1, 1, 1, 1] },
+      },
+    });
+    const engShadow = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        valueRatio: { bandCount: 5, multipliers: [4, 1, 1, 1, 1] },
+      },
+    });
+    let anyDifference = false;
+    for (let v = 16; v <= 240 && !anyDifference; v += 16) {
+      const a = applyTransform(engNeutral, v, v, v);
+      const b = applyTransform(engShadow, v, v, v);
+      if (a[0] !== b[0] || a[1] !== b[1] || a[2] !== b[2]) anyDifference = true;
+    }
+    expect(anyDifference).toBe(true);
+  });
+
+  it('shadow-boosted source ratio darkens the output vs a highlight-boosted one', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const engShadow = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        valueRatio: { bandCount: 5, multipliers: [4, 2, 1, 0.5, 0.25] },
+      },
+    });
+    const engHighlight = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        valueRatio: { bandCount: 5, multipliers: [0.25, 0.5, 1, 2, 4] },
+      },
+    });
+    let sumShadow = 0;
+    let sumHighlight = 0;
+    for (let v = 0; v <= 255; v += 8) {
+      const a = applyTransform(engShadow, v, v, v);
+      const b = applyTransform(engHighlight, v, v, v);
+      sumShadow += a[0] + a[1] + a[2];
+      sumHighlight += b[0] + b[1] + b[2];
+    }
+    // Reweighting the source toward shadows pulls the matched target darker.
+    expect(sumShadow).toBeLessThan(sumHighlight);
+  });
+
+  it('degenerate snap (empty features) with valueRatio → no throw, finite output', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+
+    const eng = smash([], [], profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        valueRatio: { bandCount: 5, multipliers: [4, 1, 1, 1, 0] },
+      },
+    });
+    expect(eng.valueRatioNaturalWeights.length).toBe(5);
+    expect(() => applyTransform(eng, 128, 128, 128)).not.toThrow();
+  });
+});

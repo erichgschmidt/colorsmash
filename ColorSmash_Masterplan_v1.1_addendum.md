@@ -889,13 +889,35 @@ So SOURCE MIX and ZONE RATIO compose: the bar sets the per-cluster ratio, ZONE R
 
 **LUT bakability.** Yes — every input is the pixel's own `Cin`/`hin`/`Lsm` or frozen engine state. ~4 extra `lookupCdfMatch` per pixel when engaged; zero at the `0` default (guard short-circuits).
 
-### 8.5 What's still on the roadmap (Phase 5+)
+### 8.6 — `valueRatio`: SOURCE RATIOS, Value axis (Phase 6)
+
+**Shipped (first axis).** A new family — *source-axis ratio bars* — lets the user reshape the **source's** histogram along one dimension; the target then follows via the existing CDF match. This is the pre-shaping-anchors roadmap item (§7) realized as the ratio-bar UX. The **Value (L)** axis ships first; Hue and Saturation follow the same pattern.
+
+**Why it composes for free.** The engine already builds `lumaCdf` from the source's L distribution and rank-maps the target onto it. A source value ratio is therefore *just a reweighting of the source L histogram before the CDF is built* — no transform-side change at all. `applyTransformOnePass` is untouched; the whole mechanic lives in `smash()`'s CDF assembly.
+
+**Mechanic.** New module `core/smash/axisRatio.ts`. `buildSmashCdfs` now keeps `srcLumaSorted` / `tgtLumaSorted` on `SmashCdfs`. When the user's `valueRatio` is non-neutral, `smash()` calls `reweightSourceByBands(srcLumaSorted, bandCount, multipliers)` — bins the sorted source L into N equal-width bands, resamples each band's slice so band b contributes `M × (count_b × mult_b)/Σ` samples (a band at multiplier 0 vanishes; boosted bands occupy more of the distribution), concatenates (still globally sorted since bands are L-ordered), and rebuilds `lumaCdf = buildCdfMatchLut(reweighted, tgtLumaSorted)`. ~1–3 ms per drag — cheap enough to skip the snap-cache. `smash()` also exposes `valueRatioNaturalWeights` (the source's natural per-band L populations) for the UI to draw the bar.
+
+**Control.** New `colorization.valueRatio?: AxisRatio` where `AxisRatio = { bandCount, multipliers[] }`. Absent, all-1, or a length-mismatched array are all strict no-ops — the engine reuses the cached `lumaCdf` byte-for-byte, so existing presets/bakes are unchanged.
+
+**UI — SOURCE RATIOS section.** A new collapsible section with a **Simple ⇄ Detailed** chip:
+
+- **Simple** — one *VALUE* tilt slider (−1…+1): a shadow↔highlight balance. Internally a 5-band ramp; tilt 0 = neutral.
+- **Detailed** — a `RatioBar` (the generalized, mass-conserving ratio bar): a band-count toggle (3/5/7), an adaptive (↔ body-drag) mode, and handle-drag. Grayscale segments, widths = source's natural L populations × user multipliers.
+
+The toggle is **non-destructive**: the Simple `tilt` and the Detailed `{bandCount, weights}` are independent state — flipping modes never discards either. `valueWeights` is source-independent (a band is just an L-range slice) so it only resets when the band count changes. Both states persist (`color-smash-smash.json`).
+
+**`RatioBar` component.** `ClusterRatioBar` generalized into a reusable `RatioBar` (handle + adaptive drag, optional count toggle). SOURCE MIX still uses `ClusterRatioBar` pending the ZONES-vs-count-toggle decision; it can migrate to `RatioBar` later.
+
+**LUT bakability.** Yes — the reweighted `lumaCdf` is frozen engine state; `applyTransform` consumes it exactly as before. Zero per-pixel cost change.
+
+### 8.5 What's still on the roadmap
 
 Remaining forward work from v1.1 §5:
 
+- **Source Hue + Saturation ratios** (Phase 6 cont.). Same `axisRatio` pattern as Value, on the hue and chroma/saturation histograms.
 - **Stochastic per-L-band sampling** (Toggle 2). Per-pixel random sample from source's bucket distribution. NOT LUT-bakable (same input → different output requires per-pixel state) but works as a panel-preview-only mode the user can rasterize.
 - **Sliced optimal transport** (Toggle 4). Math-heavy, gives the strongest distribution preservation; benchmark before implementing.
-- **Pre-shaping anchors** (§7). User-defined 1D LUTs per dimension applied before the CDF match. Composes with everything above.
 - **Per-chroma / per-saturation temperature modulators** (Phase 4.5t). Companions to the shipped `temperatureLBias` per-L modulator — see `temperature-modulators-design.md`.
+- **Target-side ratios.** Source ratios shipped first; a target-output-shaping variant may follow if the source-only model proves limiting.
 
-The order is roughly: Phase 5 conditional CDF (shipped) → Phase 4.5t temperature C/S modulators → Phase 6 anchors → Phase 7 stochastic preview mode → Phase 8 sliced OT.
+The order is roughly: Phase 5 conditional CDF (shipped) → Phase 6 source Value ratio (shipped) → Phase 6 Hue + Saturation ratios → Phase 4.5t temperature C/S modulators → Phase 7 stochastic preview mode → Phase 8 sliced OT.
