@@ -63,6 +63,11 @@ export interface SmashSectionProps {
    *  current LUT-based preview (which the parent will restore on the next
    *  engine change). Receives a Uint8Array of RGBA bytes plus dimensions. */
   onTestBake?: (pixels: Uint8Array, width: number, height: number) => void;
+  /** Target document + layer ids. Used by Test Bake to read the target at
+   *  FULL resolution and write the ground-truth bake as a layer aligned to
+   *  the target. Null when nothing is picked. */
+  targetDocId?: number | null;
+  targetLayerId?: number | null;
 }
 
 // ────────── internal pipeline type ──────────
@@ -164,7 +169,7 @@ function buildAxisSwatches(
 // ────────── component ──────────
 
 export function SmashSection(props: SmashSectionProps): JSX.Element {
-  const { sourceSnap, targetSnap, onEngineChange, onTestBake } = props;
+  const { sourceSnap, targetSnap, onEngineChange, onTestBake, targetDocId, targetLayerId } = props;
 
   const [amount, setAmount] = useState<number>(SMASH_PRESET_AMOUNTS.strong);
   const [traits, setTraits] = useState<TraitAmounts>(DEFAULT_TRAIT_AMOUNTS);
@@ -739,20 +744,25 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     // stochastic output (the grain) instead of the deterministic ground
     // truth, since the live LUT preview can't show stochastic.
     const stochastic = stochasticAmount > 0;
-    setExportStatus(stochastic ? "baking stochastic image…" : "baking test image…");
+    setExportStatus("baking test image…");
     try {
-      const baked = stochastic
+      // Instant preview-tier feedback into the panel tile.
+      const snapBake = stochastic
         ? bakeTargetStochastic(pipeline.engine, targetSnap.data, targetSnap.width, targetSnap.height)
         : bakeTargetPerPixel(pipeline.engine, targetSnap.data, targetSnap.width, targetSnap.height);
-      // Panel-tile preview (existing diagnostic surface).
-      onTestBake?.(baked, targetSnap.width, targetSnap.height);
-      // Write a real pixel layer so the user can compare on-canvas.
-      const result = await applySmashTestBake(baked, targetSnap.width, targetSnap.height);
-      if (result.ok) {
-        setExportStatus(
-          `test bake layer added: "${result.layerName}" (${result.width}×${result.height} preview-res — engine ground truth, no LUT)`);
+      onTestBake?.(snapBake, targetSnap.width, targetSnap.height);
+      // Full-res, target-aligned ground-truth layer for on-canvas A/B.
+      if (typeof targetDocId === "number" && typeof targetLayerId === "number") {
+        setExportStatus("baking test image… (full-res layer)");
+        const result = await applySmashTestBake(pipeline.engine, targetDocId, targetLayerId);
+        if (result.ok) {
+          setExportStatus(
+            `test bake layer added: "${result.layerName}" (${result.width}×${result.height}, aligned to target — engine ground truth, no LUT)`);
+        } else {
+          setExportStatus(`test bake error: ${result.error ?? "unknown"}`);
+        }
       } else {
-        setExportStatus(`test bake error: ${result.error ?? "unknown"}`);
+        setExportStatus("test bake shown in panel (no target layer id for a full-res layer)");
       }
     } catch (err: any) {
       setExportStatus(`test bake error: ${err?.message ?? err}`);

@@ -3879,6 +3879,8 @@ export function MatchTab() {
         <SmashSection
           sourceSnap={srcSnap}
           targetSnap={tgt.snap}
+          targetDocId={tgtDocId}
+          targetLayerId={targetId}
           onEngineChange={setSmashEngine}
           onTestBake={(pixels, w, h) => {
             // Diagnostic: push the per-pixel ground-truth bake into the
