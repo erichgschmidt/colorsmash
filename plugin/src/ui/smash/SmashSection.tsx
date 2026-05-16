@@ -173,9 +173,13 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   // surface, not part of the primary editing loop. User opens it on
   // demand to inspect trait contributions, band fallbacks, etc.
   const [auditOpen, setAuditOpen] = useState<boolean>(false);
-  // ENGINE inline-slider stack — collapsed by default so the panel opens
-  // compact (the section holds 16+ advanced sliders). User expands on demand.
+  // ENGINE inline-slider stack — split into three collapsible groups, all
+  // collapsed by default so the panel opens compact. ENGINE = core
+  // distribution matching; ZONES = cluster routing + weighting; TEMPERATURE
+  // = warm/cool. User expands the group they want.
   const [engineOpen, setEngineOpen] = useState<boolean>(false);
+  const [zonesOpen, setZonesOpen] = useState<boolean>(false);
+  const [tempOpen, setTempOpen] = useState<boolean>(false);
   // Phase 4.5c — Passes: how many times applyTransform iterates per pixel
   // during the LUT bake. 1 = default (single transform). 2-3 emulates the
   // "stale-preview multi-pass" look the user accidentally discovered when
@@ -494,31 +498,67 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   const preset = detectPreset(amount);
   const onPresetChange = (next: SmashPreset) => setAmount(SMASH_PRESET_AMOUNTS[next]);
 
-  // Reset every inline ENGINE slider to its default in one click (the ✕
-  // on the ENGINE section header). Per-slider reset is via double-click
-  // on an individual row (wired inline on each row below).
-  const resetAllInline = () => {
+  // Per-group ✕ resets — each ENGINE sub-section header has its own. Per-
+  // slider reset is double-click on the row.
+  const resetEngineGroup = () => {
     setPasses(INLINE_DEFAULTS.passes);
     setProportionMatch(INLINE_DEFAULTS.proportionMatch);
     setPosterize(INLINE_DEFAULTS.posterize);
     setDistribution(INLINE_DEFAULTS.distribution);
     setConditionalCdf(INLINE_DEFAULTS.conditionalCdf);
     setSlicedOt(INLINE_DEFAULTS.slicedOt);
+  };
+  const resetZonesGroup = () => {
     setClusterCount(INLINE_DEFAULTS.clusterCount);
     setZoneInfluence(INLINE_DEFAULTS.zoneInfluence);
     setDetailRichness(INLINE_DEFAULTS.detailRichness);
     setZoneEdgeSoftness(INLINE_DEFAULTS.zoneEdgeSoftness);
     setZoneEdgeShift(INLINE_DEFAULTS.zoneEdgeShift);
     setZoneRatio(INLINE_DEFAULTS.zoneRatio);
+    // Source-mix multipliers back to neutral (all-1), keeping the current
+    // length so the bar stays in sync with the cluster count.
+    setClusterMultipliers((prev) => prev.map(() => 1));
+  };
+  const resetTempGroup = () => {
     setTemperature(INLINE_DEFAULTS.temperature);
     setTemperatureSensitivity(INLINE_DEFAULTS.temperatureSensitivity);
     setTemperatureLBias(INLINE_DEFAULTS.temperatureLBias);
     setTemperatureCBias(INLINE_DEFAULTS.temperatureCBias);
     setTemperatureSBias(INLINE_DEFAULTS.temperatureSBias);
-    // Phase 4.5s — source-mix multipliers back to neutral (all-1), keeping
-    // the current length so the bar stays in sync with the cluster count.
-    setClusterMultipliers((prev) => prev.map(() => 1));
   };
+
+  // Shared collapsible group-header (chevron + label + ✕ reset shown when
+  // open) — used by the three ENGINE sub-sections.
+  const renderGroupHeader = (
+    label: string,
+    isOpen: boolean,
+    setOpen: React.Dispatch<React.SetStateAction<boolean>>,
+    onReset: () => void,
+    openTip: string,
+    resetTip: string,
+  ): JSX.Element => (
+    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+      <div
+        style={{ ...traitsHeaderStyle, flex: 1 }}
+        onClick={() => setOpen((o) => !o)}
+        title={isOpen ? `Hide the ${label} sliders` : openTip}
+      >
+        <span style={{ width: 10, display: "inline-block", textAlign: "center" }}>
+          {isOpen ? "▾" : "▸"}
+        </span>
+        <span>{label}</span>
+      </div>
+      {isOpen && (
+        <div
+          onClick={(e) => { e.stopPropagation(); if (hasSnaps) onReset(); }}
+          title={resetTip}
+          style={resetButtonStyle}
+        >
+          ✕
+        </div>
+      )}
+    </div>
+  );
 
   // Reset the whole SOURCE RATIOS section to neutral (the ✕ on its header).
   const resetRatios = () => {
@@ -728,32 +768,15 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
         disabled={!hasSnaps}
       />
 
-      {/* ENGINE section header — collapsible disclosure of the inline-slider
-          stack (collapsed by default). The chevron toggles; the ✕ resets
-          every inline slider to its default. Per-slider reset is double-click
-          on a row. */}
-      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-        <div style={{ ...traitsHeaderStyle, flex: 1 }}
-          onClick={() => setEngineOpen((o) => !o)}
-          title={engineOpen
-            ? "Hide the ENGINE sliders"
-            : "Show the ENGINE sliders: PASSES, PROPORTION, POSTERIZE, DISTRIBUTION, CONDITIONAL, SLICED OT, ZONES, INFLUENCE, DETAIL, EDGE SOFTNESS/SHIFT, ZONE RATIO, SOURCE MIX, TEMPERATURE, SENSITIVITY, TARGET L/C/S."}
-        >
-          <span style={{ width: 10, display: "inline-block", textAlign: "center" }}>
-            {engineOpen ? "▾" : "▸"}
-          </span>
-          <span>ENGINE</span>
-        </div>
-        {engineOpen && (
-          <div
-            onClick={(e) => { e.stopPropagation(); if (hasSnaps) resetAllInline(); }}
-            title="Reset all ENGINE sliders to their defaults (PASSES 1.0×, PROPORTION 100%, POSTERIZE/DISTRIBUTION/CONDITIONAL/SLICED OT 0%, ZONES 5, INFLUENCE 0%, DETAIL 100%, EDGE SOFTNESS/SHIFT 0, ZONE RATIO 0, SOURCE MIX neutral, TEMPERATURE 0, SENSITIVITY 50%, TARGET L/C/S 0)."
-            style={resetButtonStyle}
-          >
-            ✕
-          </div>
-        )}
-      </div>
+      {/* ENGINE group — core distribution matching. One of three collapsible
+          ENGINE sub-sections (ENGINE / ZONES / TEMPERATURE), all collapsed by
+          default. Chevron toggles; the ✕ resets just this group. Per-slider
+          reset is double-click on a row. */}
+      {renderGroupHeader(
+        "ENGINE", engineOpen, setEngineOpen, resetEngineGroup,
+        "Show the ENGINE sliders — core distribution matching: PASSES, PROPORTION, POSTERIZE, DISTRIBUTION, CONDITIONAL, SLICED OT.",
+        "Reset the ENGINE group to defaults (PASSES 1.0×, PROPORTION 100%, POSTERIZE/DISTRIBUTION/CONDITIONAL/SLICED OT 0%).",
+      )}
       {engineOpen && (
        <>
 
@@ -915,13 +938,26 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
         />
         <span style={passesValueStyle}>{Math.round(slicedOt * 100)}%</span>
       </div>
+      </>
+      )}
 
-      {/* Phase 4.5j — Zone routing trio. ZONES sets how many source palette
-          buckets exist (re-extracts DNA on change — slight pause). INFLUENCE
-          sets how strongly the per-cluster path overrides default Hue-by-L.
-          DETAIL sets, within the zone path, how much intra-cluster L→(a,b)
-          variation is preserved (0 = cluster's centroid, 1 = cluster's own
-          sub-LUT). */}
+      {/* ZONES group — cluster routing + weighting. ZONES sets the source
+          cluster count and segments the SOURCE MIX bar directly below it;
+          ZONE RATIO / INFLUENCE / DETAIL / EDGE * drive the zone-routing
+          path. */}
+      {renderGroupHeader(
+        "ZONES", zonesOpen, setZonesOpen, resetZonesGroup,
+        "Show the ZONES sliders — cluster routing + weighting: ZONES, SOURCE MIX, INFLUENCE, DETAIL, EDGE SOFTNESS/SHIFT, ZONE RATIO.",
+        "Reset the ZONES group to defaults (ZONES 5, SOURCE MIX neutral, INFLUENCE 0%, DETAIL 100%, EDGE SOFTNESS/SHIFT 0, ZONE RATIO 0).",
+      )}
+      {zonesOpen && (
+       <>
+
+      {/* Phase 4.5j — ZONES sets how many source palette buckets exist
+          (re-extracts DNA on change — slight pause) and how many segments
+          the SOURCE MIX bar below splits into. INFLUENCE sets how strongly
+          the per-cluster path overrides default Hue-by-L; DETAIL sets how
+          much intra-cluster L→(a,b) variation the zone path preserves. */}
       <div
         style={passesRowStyle}
         onDoubleClick={() => { if (hasSnaps) setClusterCount(INLINE_DEFAULTS.clusterCount); }}
@@ -939,6 +975,27 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           title="Number of source palette zones (clusters) used by the zone-routing path. 3 = very coarse (Subtle / Balanced / Vivid groupings); 32 = fine-grained (smooth transitions). Changing this re-extracts the source DNA (~50ms pause). Default 5."
         />
         <span style={passesValueStyle}>{clusterCount}</span>
+      </div>
+
+      {/* Phase 4.5s — SOURCE MIX. The Color Match ratio bar ported to Smash:
+          drag the dividers to reweight how prominent each source cluster is
+          in the smashed output. Feeds the engine's adjustedClusterWeights
+          (consumed by DISTRIBUTION). Segmented by the ZONES count directly
+          above; multipliers reset to neutral whenever the source / ZONES
+          change. Double-click the bar to reset all multipliers to neutral. */}
+      <div style={sourceMixWrapStyle}>
+        <span
+          style={passesLabelStyle}
+          title="SOURCE MIX — drag the white dividers on the bar below to reweight how prominent each source cluster is in the smashed output. Apply the ratio FROM the source and control it ON the target. Feeds the DISTRIBUTION mechanic (dial DISTRIBUTION up to hear the re-mixed weighting). Segmented by the ZONES count directly above. Double-click the bar to reset all to neutral."
+        >
+          SOURCE MIX
+        </span>
+        <ClusterRatioBar
+          swatches={pipeline ? pipeline.sourceDNA.clusters : []}
+          multipliers={clusterMultipliers}
+          setMultipliers={setClusterMultipliers}
+          disabled={!hasSnaps}
+        />
       </div>
 
       <div
@@ -1047,26 +1104,19 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
         <span style={passesValueStyle}>{zoneRatio >= 0 ? "+" : ""}{Math.round(zoneRatio * 100)}%</span>
       </div>
 
-      {/* Phase 4.5s — SOURCE MIX. The Color Match ratio bar ported to Smash:
-          drag the dividers to reweight how prominent each source cluster is
-          in the smashed output. Feeds the engine's adjustedClusterWeights
-          (consumed by DISTRIBUTION). The bar is segmented by the ZONES count;
-          multipliers reset to neutral whenever the source / ZONES change.
-          Double-click the bar to reset all multipliers to neutral. */}
-      <div style={sourceMixWrapStyle}>
-        <span
-          style={passesLabelStyle}
-          title="SOURCE MIX — drag the white dividers on the bar below to reweight how prominent each source cluster is in the smashed output. Apply the ratio FROM the source and control it ON the target. Feeds the DISTRIBUTION mechanic (dial DISTRIBUTION up to hear the re-mixed weighting). Segmented by the ZONES count above. Double-click the bar to reset all to neutral."
-        >
-          SOURCE MIX
-        </span>
-        <ClusterRatioBar
-          swatches={pipeline ? pipeline.sourceDNA.clusters : []}
-          multipliers={clusterMultipliers}
-          setMultipliers={setClusterMultipliers}
-          disabled={!hasSnaps}
-        />
-      </div>
+      </>
+      )}
+
+      {/* TEMPERATURE group — image-relative warm/cool grading. TEMPERATURE +
+          SENSITIVITY drive the shift; TARGET L/C/S restrict it to a slice of
+          the lightness / chroma / saturation range. */}
+      {renderGroupHeader(
+        "TEMPERATURE", tempOpen, setTempOpen, resetTempGroup,
+        "Show the TEMPERATURE sliders — image-relative warm/cool grading: TEMPERATURE, SENSITIVITY, TARGET L, TARGET C, TARGET S.",
+        "Reset the TEMPERATURE group to defaults (TEMPERATURE 0, SENSITIVITY 50%, TARGET L/C/S 0).",
+      )}
+      {tempOpen && (
+       <>
 
       {/* Phase 4.5m → 4.5p — Temperature, IMAGE-RELATIVE. Centered on
           the image's own estimated output-warmth median. Slider pushes
