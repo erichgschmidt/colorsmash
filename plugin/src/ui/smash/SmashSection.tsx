@@ -172,6 +172,9 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   // surface, not part of the primary editing loop. User opens it on
   // demand to inspect trait contributions, band fallbacks, etc.
   const [auditOpen, setAuditOpen] = useState<boolean>(false);
+  // ENGINE inline-slider stack — collapsed by default so the panel opens
+  // compact (the section holds 16+ advanced sliders). User expands on demand.
+  const [engineOpen, setEngineOpen] = useState<boolean>(false);
   // Phase 4.5c — Passes: how many times applyTransform iterates per pixel
   // during the LUT bake. 1 = default (single transform). 2-3 emulates the
   // "stale-preview multi-pass" look the user accidentally discovered when
@@ -716,24 +719,34 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
         disabled={!hasSnaps}
       />
 
-      {/* ENGINE section header — label + ✕ reset-all. Not a disclosure
-          (the inline sliders stay visible); the ✕ resets every inline
-          slider to its default. Per-slider reset is double-click on a row. */}
+      {/* ENGINE section header — collapsible disclosure of the inline-slider
+          stack (collapsed by default). The chevron toggles; the ✕ resets
+          every inline slider to its default. Per-slider reset is double-click
+          on a row. */}
       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-        <div style={{ ...traitsHeaderStyle, flex: 1, cursor: "default" }}
-          title="ENGINE controls: PASSES, PROPORTION, POSTERIZE, DISTRIBUTION, CONDITIONAL, ZONES, INFLUENCE, DETAIL, EDGE SOFTNESS/SHIFT, ZONE RATIO, SOURCE MIX, TEMPERATURE, SENSITIVITY, TARGET L/C/S. Double-click any slider to reset just that one; click the ✕ to reset them all."
+        <div style={{ ...traitsHeaderStyle, flex: 1 }}
+          onClick={() => setEngineOpen((o) => !o)}
+          title={engineOpen
+            ? "Hide the ENGINE sliders"
+            : "Show the ENGINE sliders: PASSES, PROPORTION, POSTERIZE, DISTRIBUTION, CONDITIONAL, ZONES, INFLUENCE, DETAIL, EDGE SOFTNESS/SHIFT, ZONE RATIO, SOURCE MIX, TEMPERATURE, SENSITIVITY, TARGET L/C/S."}
         >
-          <span style={{ width: 10, display: "inline-block" }} />
+          <span style={{ width: 10, display: "inline-block", textAlign: "center" }}>
+            {engineOpen ? "▾" : "▸"}
+          </span>
           <span>ENGINE</span>
         </div>
-        <div
-          onClick={() => { if (hasSnaps) resetAllInline(); }}
-          title="Reset all ENGINE sliders to their defaults (PASSES 1.0×, PROPORTION 100%, POSTERIZE/DISTRIBUTION/CONDITIONAL 0%, ZONES 5, INFLUENCE 0%, DETAIL 100%, EDGE SOFTNESS/SHIFT 0, ZONE RATIO 0, SOURCE MIX neutral, TEMPERATURE 0, SENSITIVITY 50%, TARGET L/C/S 0)."
-          style={resetButtonStyle}
-        >
-          ✕
-        </div>
+        {engineOpen && (
+          <div
+            onClick={(e) => { e.stopPropagation(); if (hasSnaps) resetAllInline(); }}
+            title="Reset all ENGINE sliders to their defaults (PASSES 1.0×, PROPORTION 100%, POSTERIZE/DISTRIBUTION/CONDITIONAL 0%, ZONES 5, INFLUENCE 0%, DETAIL 100%, EDGE SOFTNESS/SHIFT 0, ZONE RATIO 0, SOURCE MIX neutral, TEMPERATURE 0, SENSITIVITY 50%, TARGET L/C/S 0)."
+            style={resetButtonStyle}
+          >
+            ✕
+          </div>
+        )}
       </div>
+      {engineOpen && (
+       <>
 
       {/* Passes slider (Phase 4.5c, refined to continuous in 4.5e). Inline
           because it's a small, primary intensity knob. 1.0× = one transform
@@ -1139,6 +1152,8 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
         />
         <span style={passesValueStyle}>{temperatureSBias >= 0 ? "+" : ""}{Math.round(temperatureSBias * 100)}%</span>
       </div>
+      </>
+      )}
 
       {/* Traits disclosure. Closed by default so the primary surface stays
           the one-big-knob + preset row. Opens to reveal six trait sliders
