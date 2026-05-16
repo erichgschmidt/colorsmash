@@ -19,6 +19,7 @@ import {
   DEFAULT_COLORIZATION_TOGGLES,
   type ColorizationToggleState,
 } from "./ColorizationToggles";
+import { ClusterRatioBar } from "./ClusterRatioBar";
 import type { TraitAmounts } from "../../core/smash/types";
 import {
   extractFeatures,
@@ -155,6 +156,12 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   // Phase 4.5r — temperature L bias. -1..+1, default 0 (uniform).
   // -1 = full bias to shadows, +1 = full bias to highlights.
   const [temperatureLBias, setTemperatureLBias] = useState<number>(0);
+  // Phase 4.5s — per-cluster source-mix multipliers (the Color Match ratio
+  // bar ported to Smash). Length tracks the source cluster count; reset to
+  // all-1 whenever the source / cluster count changes (effect below). Not
+  // persisted — multipliers are tied to a specific source image's clusters,
+  // so carrying them across sources would mis-apply (same as PaletteStrip).
+  const [clusterMultipliers, setClusterMultipliers] = useState<number[]>([]);
   const [exportStatus, setExportStatus] = useState<string>("");
   const loadedRef = useRef<boolean>(false);
 
@@ -282,6 +289,17 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     return { sourceDNA, targetStructure, profile, sourceFeatures, targetFeatures, cdfs };
   }, [sourceSnap, targetSnap, clusterCount]);
 
+  // Phase 4.5s — reset the source-mix multipliers to neutral (all-1) whenever
+  // snapDerived changes. snapDerived only recomputes when source/target snaps
+  // or clusterCount change — never on a slider/bar drag — so this resets the
+  // bar exactly when the underlying cluster set changes and leaves user drags
+  // untouched in between. Mirrors PaletteStrip's "reset on every source
+  // change" behavior.
+  useEffect(() => {
+    if (!snapDerived) { setClusterMultipliers([]); return; }
+    setClusterMultipliers(snapDerived.sourceDNA.clusters.map(() => 1));
+  }, [snapDerived]);
+
   // ── Lighter: smash() invocation. Per slider tick — uses cached features
   // + profile + CDFs from above. The expensive build is now a no-op; smash()
   // just records the audit and returns the engine output. Sub-millisecond
@@ -294,7 +312,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       traits,
       // proportionMatch lives on colorization in the engine schema, so merge
       // it in here rather than carrying it around as a separate field.
-      colorization: { ...colorization, proportionMatch, posterize, distribution, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias },
+      colorization: { ...colorization, proportionMatch, posterize, distribution, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias },
       passes,
     };
     const engine = smash(
@@ -305,7 +323,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       snapDerived.cdfs,
     );
     return { sourceDNA: snapDerived.sourceDNA, engine };
-  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias]);
+  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias]);
 
   // Propagate engine changes to the parent via useEffect, NOT inside the
   // useMemo body above. Calling setState on the parent during a child's
@@ -344,6 +362,9 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     setTemperature(INLINE_DEFAULTS.temperature);
     setTemperatureSensitivity(INLINE_DEFAULTS.temperatureSensitivity);
     setTemperatureLBias(INLINE_DEFAULTS.temperatureLBias);
+    // Phase 4.5s — source-mix multipliers back to neutral (all-1), keeping
+    // the current length so the bar stays in sync with the cluster count.
+    setClusterMultipliers((prev) => prev.map(() => 1));
   };
 
   // Track Smash LUT layer ids we've created. Default Apply replaces the most
@@ -736,6 +757,27 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
         <span style={passesValueStyle}>{zoneRatio >= 0 ? "+" : ""}{Math.round(zoneRatio * 100)}%</span>
       </div>
 
+      {/* Phase 4.5s — SOURCE MIX. The Color Match ratio bar ported to Smash:
+          drag the dividers to reweight how prominent each source cluster is
+          in the smashed output. Feeds the engine's adjustedClusterWeights
+          (consumed by DISTRIBUTION). The bar is segmented by the ZONES count;
+          multipliers reset to neutral whenever the source / ZONES change.
+          Double-click the bar to reset all multipliers to neutral. */}
+      <div style={sourceMixWrapStyle}>
+        <span
+          style={passesLabelStyle}
+          title="SOURCE MIX — drag the white dividers on the bar below to reweight how prominent each source cluster is in the smashed output. Apply the ratio FROM the source and control it ON the target. Feeds the DISTRIBUTION mechanic (dial DISTRIBUTION up to hear the re-mixed weighting). Segmented by the ZONES count above. Double-click the bar to reset all to neutral."
+        >
+          SOURCE MIX
+        </span>
+        <ClusterRatioBar
+          swatches={pipeline ? pipeline.sourceDNA.clusters : []}
+          multipliers={clusterMultipliers}
+          setMultipliers={setClusterMultipliers}
+          disabled={!hasSnaps}
+        />
+      </div>
+
       {/* Phase 4.5m → 4.5p — Temperature, IMAGE-RELATIVE. Centered on
           the image's own estimated output-warmth median. Slider pushes
           image-relatively-warm pixels further warm (positive) or
@@ -1040,4 +1082,11 @@ const passesSliderStyle: React.CSSProperties = {
 const passesValueStyle: React.CSSProperties = {
   fontSize: 10, color: "#aaa", fontVariantNumeric: "tabular-nums",
   minWidth: 38, textAlign: "right",
+};
+
+// SOURCE MIX wrapper — a label stacked above the full-width cluster ratio
+// bar. Column layout (unlike the slider rows) so the bar gets the panel's
+// full horizontal width for its draggable segments.
+const sourceMixWrapStyle: React.CSSProperties = {
+  display: "flex", flexDirection: "column", gap: 4, marginTop: -2,
 };

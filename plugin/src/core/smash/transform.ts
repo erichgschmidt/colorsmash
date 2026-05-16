@@ -545,6 +545,16 @@ export function smash(
       : 0;
   const K = profile.source.clusters.length;
   const adjustedClusterWeights = new Float32Array(K);
+  // Phase 4.5s — per-cluster user multipliers from the Smash ratio bar.
+  // Read index-by-index; any missing/invalid entry falls back to 1.0 so a
+  // stale-length array (e.g. mid-render after a clusterCount change)
+  // degrades gracefully instead of corrupting the weight distribution.
+  const rawMultipliers = c.colorization?.clusterMultipliers;
+  const clusterMultiplierAt = (i: number): number => {
+    if (!Array.isArray(rawMultipliers)) return 1;
+    const m = rawMultipliers[i];
+    return typeof m === 'number' && Number.isFinite(m) && m >= 0 ? m : 1;
+  };
   if (K > 0) {
     // Map zoneRatio ∈ [-1, +1] → exponent k ∈ [1/e, e] via exp(x). This
     // gives a symmetric "tighten / loosen" feel — −1 fully flattens
@@ -553,7 +563,9 @@ export function smash(
     const k = Math.exp(zoneRatio);
     let sum = 0;
     for (let i = 0; i < K; i++) {
-      const w = profile.source.clusters[i].weight;
+      // Natural prevalence × user multiplier, THEN the zoneRatio exponent.
+      // Multiplier first so the exponent acts on the user-adjusted ratio.
+      const w = profile.source.clusters[i].weight * clusterMultiplierAt(i);
       const adj = w > 0 ? Math.pow(w, k) : 0;
       adjustedClusterWeights[i] = adj;
       sum += adj;

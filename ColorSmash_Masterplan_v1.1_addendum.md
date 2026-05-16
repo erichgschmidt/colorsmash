@@ -845,6 +845,34 @@ Both get the standard `typeof === "number" && Number.isFinite(...)` + clamp guar
 
 **Open questions resolved.** The design doc raised six open questions (Q1–Q6) before implementation. All six were resolved per the design's recommended defaults: single global EDGE SHIFT (Q1), endpoint sliding rather than area-preserving compression (Q2), Path A boundary-aware routing rather than Path B L pre-warp (Q3), permutation index over in-place sort (Q4), SOFTNESS kept separate from DETAIL (Q5), zone-routing-only scope rather than coupling to posterize / distribution (Q6). Deferred to 4.5m if requested later: per-boundary K−1 sliders and a global `EDGE SQUEEZE` knob for pushing all boundaries toward/away from the L midpoint.
 
+### 8.4k — `clusterMultipliers`: the SOURCE MIX ratio bar (Phase 4.5s)
+
+**Shipped.** The Color Match "ratio slider" (`PaletteStrip`) ported to the Smash section as a draggable per-cluster bar — the user's request: *"apply the ratio from the source and control it on the target."*
+
+**Control.** New field on `colorization`:
+
+```typescript
+clusterMultipliers?: readonly number[];   // one entry per source cluster, default 1.0
+```
+
+The Smash panel renders a **SOURCE MIX** bar below ZONE RATIO. Each source cluster is a segment whose width = natural prevalence × user multiplier; dragging a divider between two segments redistributes weight mass-conservingly across that pair (lifted verbatim from `PaletteStrip.startHandleDrag`). Double-click the bar resets all multipliers to neutral.
+
+**Engine wiring.** In `smash()`, the multiplier is folded into the existing `adjustedClusterWeights` computation *before* the `zoneRatio` power exponent:
+
+```
+adjusted[i] = (cluster.weight[i] × clusterMultiplier[i]) ^ exp(zoneRatio)   // then normalized
+```
+
+So SOURCE MIX and ZONE RATIO compose: the bar sets the per-cluster ratio, ZONE RATIO then tightens/loosens the whole distribution. Every mechanic that reads `adjustedClusterWeights` (today: `distribution`) sees the re-weighted mix automatically — including the LUT bake, so preview and export stay consistent.
+
+**Graceful degradation.** The engine reads `clusterMultipliers` index-by-index; any missing or non-finite entry falls back to `1.0`. A stale-length array (e.g. mid-render right after a ZONES change, before the reset effect fires) therefore degrades to neutral rather than corrupting the weights — no throw, no length assertion.
+
+**No count toggle.** Unlike `PaletteStrip` (fixed 3/5/7 buttons), the Smash bar has no count control — the ENGINE > ZONES slider (3–32) already owns cluster count. Segment count tracks ZONES.
+
+**Not persisted.** Multipliers are tied to one source image's extracted clusters; carrying them across sources would mis-apply. The UI resets `clusterMultipliers` to all-1 whenever `snapDerived` changes (source/target snap or ZONES count) — mirroring `PaletteStrip`'s "reset on every source change" behavior.
+
+**LUT bakability.** Yes — `adjustedClusterWeights` is frozen engine state, identical to the `zoneRatio` path. Zero per-pixel cost beyond what `distribution` already pays.
+
 ### 8.5 What's still on the roadmap (Phase 5+)
 
 The four colorization mechanics in v1.1 §5 remain forward work:

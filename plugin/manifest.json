@@ -1,7 +1,7 @@
 {
   "manifestVersion": 5,
-  "id": "44bb5649",
-  "name": "Color Smash",
+  "id": "44bb5649-pro",
+  "name": "Color Smash Pro",
   "version": "1.20.70",
   "description": "Per-channel histogram color match into a single editable Curves adjustment layer.",
   "author": {
@@ -26,19 +26,89 @@
     {
       "type": "panel",
       "id": "colorSmashPanel",
-      "label": { "default": "Color Smash" },
-      "minimumSize": { "width": 220, "height": 300 },
-      "maximumSize": { "width": 1000, "height": 2000 },
-      "preferredDockedSize": { "width": 260, "height": 800 },
-      "preferredFloatingSize": { "width": 260, "height": 800 },
+      "label": {
+        "default": "Color Smash"
+      },
+      "minimumSize": {
+        "width": 220,
+        "height": 300
+      },
+      "maximumSize": {
+        "width": 1000,
+        "height": 2000
+      },
+      "preferredDockedSize": {
+        "width": 260,
+        "height": 800
+      },
+      "preferredFloatingSize": {
+        "width": 260,
+        "height": 800
+      },
       "icons": [
-        { "width": 23, "height": 23, "path": "icons/icon-light.png", "scale": [1, 2], "theme": ["lightest", "light", "medium"], "species": ["chrome"] },
-        { "width": 23, "height": 23, "path": "icons/icon-dark.png", "scale": [1, 2], "theme": ["dark", "darkest"], "species": ["chrome"] }
+        {
+          "width": 23,
+          "height": 23,
+          "path": "icons/icon-light.png",
+          "scale": [
+            1,
+            2
+          ],
+          "theme": [
+            "lightest",
+            "light",
+            "medium"
+          ],
+          "species": [
+            "chrome"
+          ]
+        },
+        {
+          "width": 23,
+          "height": 23,
+          "path": "icons/icon-dark.png",
+          "scale": [
+            1,
+            2
+          ],
+          "theme": [
+            "dark",
+            "darkest"
+          ],
+          "species": [
+            "chrome"
+          ]
+        }
       ]
     }
   ],
   "icons": [
-    { "width": 23, "height": 23, "path": "icons/icon-light.png", "scale": [1, 2], "theme": ["lightest", "light", "medium"] },
-    { "width": 23, "height": 23, "path": "icons/icon-dark.png", "scale": [1, 2], "theme": ["dark", "darkest"] }
+    {
+      "width": 23,
+      "height": 23,
+      "path": "icons/icon-light.png",
+      "scale": [
+        1,
+        2
+      ],
+      "theme": [
+        "lightest",
+        "light",
+        "medium"
+      ]
+    },
+    {
+      "width": 23,
+      "height": 23,
+      "path": "icons/icon-dark.png",
+      "scale": [
+        1,
+        2
+      ],
+      "theme": [
+        "dark",
+        "darkest"
+      ]
+    }
   ]
 }

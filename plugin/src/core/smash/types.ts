@@ -227,6 +227,21 @@ export interface ColorizationOptions {
    *  "Loosen" (let the source's natural prevalence show through more) ↔
    *  slide toward +1. */
   readonly zoneRatio?: number;
+  /** Phase 4.5s — Cluster Multipliers. Per-cluster user weight multipliers,
+   *  one entry per source cluster, parallel to `profile.source.clusters`.
+   *  Default (and the meaning of a missing or out-of-range entry) is 1.0 —
+   *  neutral. The engine multiplies each cluster's natural prevalence by
+   *  its multiplier BEFORE the `zoneRatio` power exponent, then normalizes.
+   *
+   *  This is the "ratio bar" from Color Match ported to Smash: drag a
+   *  source cluster up to make its color more prominent in the target
+   *  output, or down to suppress it. Feeds every mechanic that consumes
+   *  `adjustedClusterWeights` (today: `distribution`).
+   *
+   *  Length is expected to match the cluster count; the engine reads
+   *  index-by-index and falls back to 1.0 for any missing/invalid entry,
+   *  so a stale-length array degrades gracefully rather than throwing. */
+  readonly clusterMultipliers?: readonly number[];
   /** Phase 4.5m/n/o/p — Temperature. IMAGE-RELATIVE contrast stretch in
    *  the warm/cool direction. The image's own estimated output-warmth
    *  median is the neutral center; pixels' "warmness" is measured

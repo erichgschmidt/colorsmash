@@ -1115,6 +1115,117 @@ describe('applyTransform() zoneRatio (Phase 4.5k)', () => {
     expect(anyDifference).toBe(true);
   });
 
+  // ────────── clusterMultipliers (Phase 4.5s) ──────────
+
+  it('clusterMultipliers reweight adjustedClusterWeights — boosting one cluster raises its normalized share', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const K = profile.source.clusters.length;
+    expect(K).toBeGreaterThan(1);
+
+    const ctrlNeutral: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization },
+    };
+    // Boost cluster 0 by 4×, leave the rest neutral.
+    const boosted = profile.source.clusters.map((_, i) => (i === 0 ? 4 : 1));
+    const ctrlBoost: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, clusterMultipliers: boosted },
+    };
+
+    const engNeutral = smash(srcFeatures, tgtFeatures, profile, ctrlNeutral);
+    const engBoost = smash(srcFeatures, tgtFeatures, profile, ctrlBoost);
+
+    // Both stay normalized to ~1.
+    const sum = (a: Float32Array) => {
+      let s = 0;
+      for (let i = 0; i < a.length; i++) s += a[i];
+      return s;
+    };
+    expect(sum(engNeutral.adjustedClusterWeights)).toBeCloseTo(1, 5);
+    expect(sum(engBoost.adjustedClusterWeights)).toBeCloseTo(1, 5);
+
+    // Cluster 0's share rises; every other cluster's share falls.
+    expect(engBoost.adjustedClusterWeights[0]).toBeGreaterThan(
+      engNeutral.adjustedClusterWeights[0],
+    );
+    for (let i = 1; i < K; i++) {
+      expect(engBoost.adjustedClusterWeights[i]).toBeLessThanOrEqual(
+        engNeutral.adjustedClusterWeights[i] + 1e-6,
+      );
+    }
+  });
+
+  it('clusterMultipliers degrade gracefully — missing array and stale-length array behave like all-neutral', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const baseline = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization },
+    });
+    // Stale array shorter than the cluster count — missing entries fall back
+    // to 1.0; explicit 1s for the present entries → identical to baseline.
+    const stale = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, clusterMultipliers: [1] },
+    });
+    // Explicit all-1 array of the correct length — also identical.
+    const allOnes = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        clusterMultipliers: profile.source.clusters.map(() => 1),
+      },
+    });
+
+    expect(stale.adjustedClusterWeights.length).toBe(baseline.adjustedClusterWeights.length);
+    for (let i = 0; i < baseline.adjustedClusterWeights.length; i++) {
+      expect(stale.adjustedClusterWeights[i]).toBeCloseTo(baseline.adjustedClusterWeights[i], 6);
+      expect(allOnes.adjustedClusterWeights[i]).toBeCloseTo(baseline.adjustedClusterWeights[i], 6);
+    }
+  });
+
+  it('clusterMultipliers influence distribution mechanic output', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const engNeutral = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, distribution: 1.0 },
+    });
+    const engBoost = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        distribution: 1.0,
+        clusterMultipliers: profile.source.clusters.map((_, i) => (i === 0 ? 8 : 1)),
+      },
+    });
+
+    let anyDifference = false;
+    for (const input of [60, 120, 180]) {
+      const a = applyTransform(engNeutral, input, input, input);
+      const b = applyTransform(engBoost, input, input, input);
+      if (a[0] !== b[0] || a[1] !== b[1] || a[2] !== b[2]) {
+        anyDifference = true;
+        break;
+      }
+    }
+    expect(anyDifference).toBe(true);
+  });
+
   it('temperature operates image-relatively: across input range, at least some pixels shift in each direction (Phase 4.5p)', () => {
     // Bimodal source produces output that spans cool through warm.
     // Image-relative temperature targets pixels based on their warmth
