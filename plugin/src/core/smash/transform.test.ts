@@ -2090,3 +2090,118 @@ describe('smash() hueRatio + chromaRatio (Phase 6)', () => {
     expect(anyDifference).toBe(true);
   });
 });
+
+// ────────── 16. temperature C / S bias (Phase 4.5t) ──────────
+
+describe('applyTransform() temperature C/S bias (Phase 4.5t)', () => {
+  it('exposes targetChromaP95 / targetSaturationP95 (>0 for a chromatic target)', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = coolBlueBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const eng = smash(srcFeatures, tgtFeatures, profile, DEFAULT_SMASH_CONTROLS);
+    expect(eng.targetChromaP95).toBeGreaterThan(0);
+    expect(eng.targetSaturationP95).toBeGreaterThan(0);
+    expect(Number.isFinite(eng.targetChromaP95)).toBe(true);
+    expect(Number.isFinite(eng.targetSaturationP95)).toBe(true);
+  });
+
+  it('default no-op — C/S bias 0 is byte-identical to the fields omitted (with temperature on)', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = coolBlueBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const engOmit = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, temperature: 1 },
+    });
+    const engZero = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        temperature: 1, temperatureCBias: 0, temperatureSBias: 0,
+      },
+    });
+    for (let v = 0; v <= 255; v += 17) {
+      const a = applyTransform(engOmit, v, v, v);
+      const b = applyTransform(engZero, v, v, v);
+      expect(a[0]).toBe(b[0]);
+      expect(a[1]).toBe(b[1]);
+      expect(a[2]).toBe(b[2]);
+    }
+  });
+
+  it('engaged temperatureCBias diverges from neutral when temperature is on', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = coolBlueBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const base = { ...DEFAULT_SMASH_CONTROLS.colorization, temperature: 1.5, temperatureSensitivity: 1 };
+    const engNeutral = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS, colorization: { ...base, temperatureCBias: 0 },
+    });
+    const engBiased = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS, colorization: { ...base, temperatureCBias: 1 },
+    });
+    let anyDifference = false;
+    for (let v = 0; v <= 255 && !anyDifference; v += 8) {
+      const a = applyTransform(engNeutral, v, v, v);
+      const b = applyTransform(engBiased, v, v, v);
+      if (a[0] !== b[0] || a[1] !== b[1] || a[2] !== b[2]) anyDifference = true;
+    }
+    expect(anyDifference).toBe(true);
+  });
+
+  it('engaged temperatureSBias diverges from neutral when temperature is on', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = coolBlueBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const base = { ...DEFAULT_SMASH_CONTROLS.colorization, temperature: 1.5, temperatureSensitivity: 1 };
+    const engNeutral = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS, colorization: { ...base, temperatureSBias: 0 },
+    });
+    const engBiased = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS, colorization: { ...base, temperatureSBias: 1 },
+    });
+    let anyDifference = false;
+    for (let v = 0; v <= 255 && !anyDifference; v += 8) {
+      const a = applyTransform(engNeutral, v, v, v);
+      const b = applyTransform(engBiased, v, v, v);
+      if (a[0] !== b[0] || a[1] !== b[1] || a[2] !== b[2]) anyDifference = true;
+    }
+    expect(anyDifference).toBe(true);
+  });
+
+  it('grayscale target (targetChromaP95 ≈ 0) with C/S bias → no NaN, finite in-gamut output', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32(); // fully neutral target
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const eng = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        temperature: 1, temperatureCBias: 1, temperatureSBias: -1,
+      },
+    });
+    for (let v = 0; v <= 255; v += 15) {
+      const out = applyTransform(eng, v, v, v);
+      for (const ch of out) {
+        expect(Number.isFinite(ch)).toBe(true);
+        expect(ch).toBeGreaterThanOrEqual(0);
+        expect(ch).toBeLessThanOrEqual(255);
+      }
+    }
+  });
+});

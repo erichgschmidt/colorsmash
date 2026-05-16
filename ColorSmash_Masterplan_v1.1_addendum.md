@@ -661,7 +661,13 @@ UI label: `TARGET L`. Slider -100..+100% step 5%, default 0. Tooltip explains th
 
 Composes orthogonally with `temperature` and `temperatureSensitivity` — those decide *how much* shift to apply; the bias decides *where on the L axis* to apply it. With the bias at 0, the engine output matches Phase 4.5p byte-for-byte (regression test verifies).
 
-**Future work.** Per-C modulation (only affect saturated pixels), per-S modulation. Each adds one more slider following the same pattern as `temperatureLBias`: multiply the migration delta by a per-pixel weight derived from Cin or Sin.
+**Phase 4.5t — Temperature C / S Bias (per-chroma + per-saturation modulators).** Shipped. Two new controls `temperatureCBias` / `temperatureSBias ∈ [-1, +1]`, default `0`, completing the per-axis temperature modulator family alongside `temperatureLBias`. Each multiplies the migration delta by a linear per-pixel weight: C Bias from the pixel's input chroma `Cin`, S Bias from input saturation `Sin = C/L` (clamped `[0,2]`, matching `features.ts`).
+
+Both are **image-relative** like the rest of the temperature mechanic: `Cin`/`Sin` are normalized against the *target's* 95th-percentile chroma / saturation — two new frozen `SmashEngineOutput` scalars (`targetChromaP95`, `targetSaturationP95`, computed in `smash()` via a `percentile` helper). p95 (not max) rejects specular/noise outliers; a fully-neutral target gives p95 ≈ 0 and the `Math.max(p95, 1e-4)` guard degrades the control to "uniform" rather than NaN.
+
+Why two controls and not one "vividness" knob: `S = C/L` makes chroma and saturation diverge exactly where artistic intent diverges — a dark rich color is high-saturation at only moderate chroma; a bright pastel is the same chroma but low-saturation. C Bias targets absolute colorfulness, S Bias targets colorfulness-per-lightness.
+
+All three TARGET biases compose **multiplicatively**: `delta = -relW · effective_t · lWeight · cWeight · sWeight`. With every bias at 0 each weight is exactly 1, so output is byte-identical to Phase 4.5r (regression test verifies). UI labels `TARGET C` / `TARGET S` directly below `TARGET L`. Fully LUT-bakable — each weight is a pure function of the pixel's own `Cin`/`Lin` plus the frozen p95 anchors.
 
 ### 8.4i — Refinements (Phase 4.5n)
 
@@ -918,7 +924,6 @@ Remaining forward work from v1.1 §5:
 
 - **Stochastic per-L-band sampling** (Toggle 2). Per-pixel random sample from source's bucket distribution. NOT LUT-bakable (same input → different output requires per-pixel state) but works as a panel-preview-only mode the user can rasterize.
 - **Sliced optimal transport** (Toggle 4). Math-heavy, gives the strongest distribution preservation; benchmark before implementing.
-- **Per-chroma / per-saturation temperature modulators** (Phase 4.5t). Companions to the shipped `temperatureLBias` per-L modulator — see `temperature-modulators-design.md`.
 - **Target-side ratios.** Source ratios shipped first; a target-output-shaping variant may follow if the source-only model proves limiting.
 
-The order is roughly: Phase 5 conditional CDF (shipped) → Phase 6 source Value / Hue / Chroma ratios (shipped) → Phase 4.5t temperature C/S modulators → Phase 7 stochastic preview mode → Phase 8 sliced OT.
+The order is roughly: Phase 5 conditional CDF (shipped) → Phase 6 source Value / Hue / Chroma ratios (shipped) → Phase 4.5t temperature C/S modulators (shipped) → Phase 7 stochastic preview mode → Phase 8 sliced OT.

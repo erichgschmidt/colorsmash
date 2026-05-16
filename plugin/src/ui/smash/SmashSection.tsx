@@ -92,6 +92,8 @@ const INLINE_DEFAULTS = {
   temperature: 0,
   temperatureSensitivity: 0.5,
   temperatureLBias: 0,
+  temperatureCBias: 0,
+  temperatureSBias: 0,
 } as const;
 
 // ────────── source-ratio helpers (Phase 6) ──────────
@@ -224,6 +226,11 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   // Phase 4.5r — temperature L bias. -1..+1, default 0 (uniform).
   // -1 = full bias to shadows, +1 = full bias to highlights.
   const [temperatureLBias, setTemperatureLBias] = useState<number>(0);
+  // Phase 4.5t — temperature C / S bias. -1..+1, default 0 (uniform).
+  // Restrict the temperature shift to a chroma (C) or saturation (S) slice:
+  // -1 = muted/desaturated pixels only, +1 = vivid/saturated pixels only.
+  const [temperatureCBias, setTemperatureCBias] = useState<number>(0);
+  const [temperatureSBias, setTemperatureSBias] = useState<number>(0);
   // Phase 4.5s — per-cluster source-mix multipliers (the Color Match ratio
   // bar ported to Smash). Length tracks the source cluster count; reset to
   // all-1 whenever the source / cluster count changes (effect below). Not
@@ -337,6 +344,13 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       if (typeof persisted?.temperatureLBias === "number" && Number.isFinite(persisted.temperatureLBias)) {
         setTemperatureLBias(Math.max(-1, Math.min(1, persisted.temperatureLBias)));
       }
+      // v1.21 Phase 4.5t — restore temperature C / S bias (clamped [-1, 1]).
+      if (typeof persisted?.temperatureCBias === "number" && Number.isFinite(persisted.temperatureCBias)) {
+        setTemperatureCBias(Math.max(-1, Math.min(1, persisted.temperatureCBias)));
+      }
+      if (typeof persisted?.temperatureSBias === "number" && Number.isFinite(persisted.temperatureSBias)) {
+        setTemperatureSBias(Math.max(-1, Math.min(1, persisted.temperatureSBias)));
+      }
       // v1.21 Phase 6 — restore SOURCE RATIOS state (section mode + 3 axes).
       if (persisted?.ratioMode === "simple" || persisted?.ratioMode === "detailed") {
         setRatioMode(persisted.ratioMode);
@@ -380,13 +394,13 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       amount, traits, colorization, passes, proportionMatch, posterize, distribution,
       conditionalCdf,
       clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity,
-      zoneEdgeSoftness, zoneEdgeShift, temperatureLBias,
+      zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias,
       ratioMode,
       valueAxis: { tilt: valueAxis.tilt, bandCount: valueAxis.bandCount, weights: valueAxis.weights, adaptive: valueAxis.adaptive },
       hueAxis: { tilt: hueAxis.tilt, bandCount: hueAxis.bandCount, weights: hueAxis.weights, adaptive: hueAxis.adaptive },
       chromaAxis: { tilt: chromaAxis.tilt, bandCount: chromaAxis.bandCount, weights: chromaAxis.weights, adaptive: chromaAxis.adaptive },
     });
-  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, ratioMode, valueAxis, hueAxis, chromaAxis]);
+  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias, ratioMode, valueAxis, hueAxis, chromaAxis]);
 
   // ── Heavy: features + DNA + profile + CDF LUTs. Depends on SNAPS ONLY,
   // so slider drags don't re-run extractFeatures (~100K pixels per call)
@@ -436,7 +450,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       traits,
       // proportionMatch lives on colorization in the engine schema, so merge
       // it in here rather than carrying it around as a separate field.
-      colorization: { ...colorization, proportionMatch, posterize, distribution, conditionalCdf, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, valueRatio, hueRatio, chromaRatio },
+      colorization: { ...colorization, proportionMatch, posterize, distribution, conditionalCdf, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias, valueRatio, hueRatio, chromaRatio },
       passes,
     };
     const engine = smash(
@@ -447,7 +461,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       snapDerived.cdfs,
     );
     return { sourceDNA: snapDerived.sourceDNA, engine };
-  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, ratioMode, valueAxis, hueAxis, chromaAxis]);
+  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias, ratioMode, valueAxis, hueAxis, chromaAxis]);
 
   // Propagate engine changes to the parent via useEffect, NOT inside the
   // useMemo body above. Calling setState on the parent during a child's
@@ -487,6 +501,8 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     setTemperature(INLINE_DEFAULTS.temperature);
     setTemperatureSensitivity(INLINE_DEFAULTS.temperatureSensitivity);
     setTemperatureLBias(INLINE_DEFAULTS.temperatureLBias);
+    setTemperatureCBias(INLINE_DEFAULTS.temperatureCBias);
+    setTemperatureSBias(INLINE_DEFAULTS.temperatureSBias);
     // Phase 4.5s — source-mix multipliers back to neutral (all-1), keeping
     // the current length so the bar stays in sync with the cluster count.
     setClusterMultipliers((prev) => prev.map(() => 1));
@@ -705,14 +721,14 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           slider to its default. Per-slider reset is double-click on a row. */}
       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
         <div style={{ ...traitsHeaderStyle, flex: 1, cursor: "default" }}
-          title="ENGINE controls: PASSES, PROPORTION, POSTERIZE, DISTRIBUTION, CONDITIONAL, ZONES, INFLUENCE, DETAIL, EDGE SOFTNESS/SHIFT, ZONE RATIO, SOURCE MIX, TEMPERATURE, SENSITIVITY, TARGET L. Double-click any slider to reset just that one; click the ✕ to reset them all."
+          title="ENGINE controls: PASSES, PROPORTION, POSTERIZE, DISTRIBUTION, CONDITIONAL, ZONES, INFLUENCE, DETAIL, EDGE SOFTNESS/SHIFT, ZONE RATIO, SOURCE MIX, TEMPERATURE, SENSITIVITY, TARGET L/C/S. Double-click any slider to reset just that one; click the ✕ to reset them all."
         >
           <span style={{ width: 10, display: "inline-block" }} />
           <span>ENGINE</span>
         </div>
         <div
           onClick={() => { if (hasSnaps) resetAllInline(); }}
-          title="Reset all ENGINE sliders to their defaults (PASSES 1.0×, PROPORTION 100%, POSTERIZE/DISTRIBUTION/CONDITIONAL 0%, ZONES 5, INFLUENCE 0%, DETAIL 100%, EDGE SOFTNESS/SHIFT 0, ZONE RATIO 0, SOURCE MIX neutral, TEMPERATURE 0, SENSITIVITY 50%, TARGET L 0)."
+          title="Reset all ENGINE sliders to their defaults (PASSES 1.0×, PROPORTION 100%, POSTERIZE/DISTRIBUTION/CONDITIONAL 0%, ZONES 5, INFLUENCE 0%, DETAIL 100%, EDGE SOFTNESS/SHIFT 0, ZONE RATIO 0, SOURCE MIX neutral, TEMPERATURE 0, SENSITIVITY 50%, TARGET L/C/S 0)."
           style={resetButtonStyle}
         >
           ✕
@@ -1077,6 +1093,51 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           title="Restricts the TEMPERATURE shift to a slice of the L range. 0% (default) = UNIFORM — all L gets the shift. NEGATIVE = focus on SHADOWS — only low-L pixels migrate; highlights are untouched. POSITIVE = focus on HIGHLIGHTS — only high-L pixels migrate; shadows are untouched. ±100% = full bias (the opposite side is fully spared). Linear ramp between the two endpoints. Only effective when TEMPERATURE ≠ 0."
         />
         <span style={passesValueStyle}>{temperatureLBias >= 0 ? "+" : ""}{Math.round(temperatureLBias * 100)}%</span>
+      </div>
+
+      {/* Phase 4.5t — Temperature C Bias. Restricts the temperature shift to
+          a slice of the CHROMA range. 0% = uniform. Negative = muted/neutral
+          pixels only; positive = vivid pixels only. Composes with TARGET L. */}
+      <div
+        style={passesRowStyle}
+        onDoubleClick={() => { if (hasSnaps) setTemperatureCBias(INLINE_DEFAULTS.temperatureCBias); }}
+      >
+        <span style={passesLabelStyle}>TARGET C</span>
+        <input
+          type="range"
+          min={-100}
+          max={100}
+          step={5}
+          value={Math.round(temperatureCBias * 100)}
+          onChange={(e) => setTemperatureCBias(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
+          disabled={!hasSnaps}
+          style={passesSliderStyle}
+          title="Restricts the TEMPERATURE shift to a slice of the CHROMA range. 0% (default) = UNIFORM — every chroma level gets the shift. NEGATIVE = focus on MUTED/NEUTRAL pixels — only low-chroma pixels migrate; vivid pixels are untouched. POSITIVE = focus on VIVID pixels — only high-chroma pixels migrate; neutrals are untouched. Chroma is measured relative to this target image's own 95th-percentile chroma. ±100% = full bias. Composes with TARGET L and TARGET S — set all three to sculpt an exact (lightness, chroma, saturation) region. Only effective when TEMPERATURE ≠ 0."
+        />
+        <span style={passesValueStyle}>{temperatureCBias >= 0 ? "+" : ""}{Math.round(temperatureCBias * 100)}%</span>
+      </div>
+
+      {/* Phase 4.5t — Temperature S Bias. Restricts the temperature shift to
+          a slice of the SATURATION range (S = C/L — colorfulness relative to
+          lightness). 0% = uniform. Negative = desaturated only; positive =
+          punchy/saturated only. */}
+      <div
+        style={passesRowStyle}
+        onDoubleClick={() => { if (hasSnaps) setTemperatureSBias(INLINE_DEFAULTS.temperatureSBias); }}
+      >
+        <span style={passesLabelStyle}>TARGET S</span>
+        <input
+          type="range"
+          min={-100}
+          max={100}
+          step={5}
+          value={Math.round(temperatureSBias * 100)}
+          onChange={(e) => setTemperatureSBias(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
+          disabled={!hasSnaps}
+          style={passesSliderStyle}
+          title="Restricts the TEMPERATURE shift to a slice of the SATURATION range (S = colorfulness relative to lightness — a dark rich color is high-saturation even at moderate chroma). 0% (default) = UNIFORM. NEGATIVE = focus on DESATURATED pixels — only low-saturation pixels migrate. POSITIVE = focus on PUNCHY/SATURATED pixels — only high-saturation pixels migrate. Saturation is measured relative to this target image's own 95th-percentile saturation. Composes with TARGET L and TARGET C. Only effective when TEMPERATURE ≠ 0."
+        />
+        <span style={passesValueStyle}>{temperatureSBias >= 0 ? "+" : ""}{Math.round(temperatureSBias * 100)}%</span>
       </div>
 
       {/* Traits disclosure. Closed by default so the primary surface stays

@@ -345,6 +345,46 @@ export interface ColorizationOptions {
    *  forward work; this one ships the L-axis modulator first because
    *  shadows/highlights/mids is the most-asked-for split. */
   readonly temperatureLBias?: number;
+  /** Phase 4.5t — Temperature C Bias. Limits the temperature mechanic to a
+   *  slice of the CHROMA range — "vivid pixels only," "muted/neutral pixels
+   *  only," or anywhere in between. Multiplies the per-pixel migration delta
+   *  by a linear weight derived from the pixel's INPUT chroma (Cin),
+   *  normalized image-relatively against the target's 95th-percentile
+   *  chroma so the control behaves consistently across muted vs neon images.
+   *
+   *  Range [-1, +1]:
+   *    -1: full bias toward LOW CHROMA — only neutral/muted pixels migrate
+   *     0 (default): uniform — every chroma level gets the temperature shift
+   *    +1: full bias toward HIGH CHROMA — only vivid pixels migrate
+   *
+   *  Weight formula (cNorm = Cin / targetChromaP95, clamped [0,1]):
+   *    if cBias === 0: weight = 1
+   *    if cBias  >  0: weight = lerp(1, cNorm,     |cBias|)
+   *    if cBias  <  0: weight = lerp(1, 1−cNorm,   |cBias|)
+   *
+   *  Composes multiplicatively with `temperatureLBias` and
+   *  `temperatureSBias`. */
+  readonly temperatureCBias?: number;
+  /** Phase 4.5t — Temperature S Bias. Same idea as `temperatureCBias` but
+   *  along the SATURATION axis (S = C / L — colorfulness relative to
+   *  lightness). A dark richly-colored pixel has moderate chroma but high
+   *  saturation; a bright pastel has the same chroma but low saturation —
+   *  C Bias targets absolute colorfulness, S Bias targets colorfulness-per-
+   *  lightness, and the two diverge exactly where artistic intent diverges.
+   *
+   *  Range [-1, +1]:
+   *    -1: full bias toward LOW SATURATION — only desaturated pixels migrate
+   *     0 (default): uniform
+   *    +1: full bias toward HIGH SATURATION — only saturated pixels migrate
+   *
+   *  Weight formula (sNorm = Sin / targetSaturationP95, clamped [0,1]):
+   *    if sBias === 0: weight = 1
+   *    if sBias  >  0: weight = lerp(1, sNorm,     |sBias|)
+   *    if sBias  <  0: weight = lerp(1, 1−sNorm,   |sBias|)
+   *
+   *  Composes multiplicatively with `temperatureLBias` and
+   *  `temperatureCBias`. */
+  readonly temperatureSBias?: number;
   /** Phase 5 — Conditional CDF P(color | L). Amount in [0, 1] controlling
    *  how far chroma + hue are matched against PER-L-BUCKET source
    *  distributions instead of the global chroma / hue CDFs.

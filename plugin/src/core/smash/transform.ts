@@ -137,6 +137,15 @@ export interface SmashEngineOutput {
    *  axis, and taking the median. Approximate but cheap (~27 samples is
    *  enough to anchor the median for typical natural images). */
   readonly estimatedOutputMedianWarmth: number;
+  /** Phase 4.5t — 95th-percentile INPUT chroma of the target image, in Oklab
+   *  C units. Normalization anchor for `temperatureCBias`'s weight ramp: a
+   *  pixel at this chroma maps to cNorm = 1. p95 (not max) so specular/noise
+   *  outliers don't compress the ramp. 0 on a fully-neutral target. */
+  readonly targetChromaP95: number;
+  /** Phase 4.5t — 95th-percentile INPUT saturation (S = C/L, clamped [0,2]
+   *  as in features.ts) of the target image. Normalization anchor for
+   *  `temperatureSBias`. */
+  readonly targetSaturationP95: number;
   /** Phase 6 — natural per-band weights of the SOURCE's histogram for each
    *  source-ratio axis (Value / Hue / Chroma), binned into that axis's
    *  `bandCount` equal-width bands (default 5 when no control is set).
@@ -432,6 +441,10 @@ export const DEFAULT_SMASH_CONTROLS: SmashControls = {
     // Phase 4.5r: temperatureLBias defaults to 0 — uniform across all
     // L values (matches Phase 4.5p behavior).
     temperatureLBias: 0,
+    // Phase 4.5t: temperatureCBias / temperatureSBias default to 0 —
+    // uniform across all chroma / saturation, temperature unrestricted.
+    temperatureCBias: 0,
+    temperatureSBias: 0,
     // Phase 5: conditionalCdf defaults to 0 — global chroma / hue CDFs
     // only, byte-identical to the Phase 4 path. Users dial it up to
     // match chroma + hue against per-L-bucket source distributions.
@@ -506,6 +519,17 @@ function computeBandColors(
     }
   }
   return out;
+}
+
+/** Phase 4.5t — p-th percentile of a numeric array (p in [0,1]). Used for
+ *  the temperature C/S bias normalization anchors. p95 (not max) rejects
+ *  single-pixel specular / noise outliers. Returns 0 for an empty array. */
+function percentile(values: number[], p: number): number {
+  if (values.length === 0) return 0;
+  const sorted = values.slice().sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1,
+    Math.max(0, Math.round((sorted.length - 1) * p)));
+  return sorted[idx];
 }
 
 /** Resolved state for one source-ratio axis: the (possibly reweighted) CDF
@@ -778,6 +802,12 @@ export function smash(
     ...c,
     colorization: { ...(c.colorization ?? {}), temperature: 0 },
   };
+  // Phase 4.5t — target chroma / saturation p95: normalization anchors for
+  // the temperature C/S bias weight ramps. Computed once from the target
+  // features (already extracted). Frozen on the engine output before the
+  // bake samples anything, so the C/S modulators stay LUT-bakable.
+  const targetChromaP95 = percentile(targetFeatures.map((f) => f.chroma), 0.95);
+  const targetSaturationP95 = percentile(targetFeatures.map((f) => f.saturation), 0.95);
   const partialForSampling: SmashEngineOutput = {
     profile, controls: tempZeroControls, bandTransforms, audit,
     lumaCdf, chromaCdf, hueCdf,
@@ -786,6 +816,7 @@ export function smash(
     clusterOrderByL, sortedClusterLs, zoneBoundaries,
     adjustedClusterWeights,
     estimatedOutputMedianWarmth: 0, // placeholder; sampling ignores this field
+    targetChromaP95, targetSaturationP95,
     valueRatioNaturalWeights, valueRatioBandColors,
     hueRatioNaturalWeights, hueRatioBandColors,
     chromaRatioNaturalWeights, chromaRatioBandColors,
@@ -816,6 +847,7 @@ export function smash(
     clusterOrderByL, sortedClusterLs, zoneBoundaries,
     adjustedClusterWeights,
     estimatedOutputMedianWarmth,
+    targetChromaP95, targetSaturationP95,
     valueRatioNaturalWeights, valueRatioBandColors,
     hueRatioNaturalWeights, hueRatioBandColors,
     chromaRatioNaturalWeights, chromaRatioBandColors,
@@ -1470,8 +1502,42 @@ function applyTransformOnePass(
         // lerp(1, target, |lBias|): at lBias=0 → 1 (uniform), at lBias=±1 → target
         lWeight = 1 + absBias * (target - 1);
       }
-      // delta moves warmth toward (and possibly past) median, scaled by lWeight.
-      const delta = -relW * effective_t * lWeight;
+      // Phase 4.5t — Temperature C Bias: linear weight on the migration
+      // delta from the pixel's INPUT chroma, normalized image-relatively
+      // against the target's 95th-percentile chroma.
+      const rawCBias = controls.colorization?.temperatureCBias;
+      const cBias =
+        typeof rawCBias === 'number' && Number.isFinite(rawCBias)
+          ? Math.max(-1, Math.min(1, rawCBias))
+          : 0;
+      let cWeight = 1;
+      if (cBias !== 0) {
+        const cNorm = Math.max(0, Math.min(1,
+          Cin / Math.max(out.targetChromaP95, 1e-4)));
+        const target = cBias > 0 ? cNorm : 1 - cNorm;
+        cWeight = 1 + Math.abs(cBias) * (target - 1);
+      }
+
+      // Phase 4.5t — Temperature S Bias: same, on INPUT saturation (S = C/L,
+      // clamped [0,2] to match features.ts so the p95 anchor's units agree).
+      const rawSBias = controls.colorization?.temperatureSBias;
+      const sBias =
+        typeof rawSBias === 'number' && Number.isFinite(rawSBias)
+          ? Math.max(-1, Math.min(1, rawSBias))
+          : 0;
+      let sWeight = 1;
+      if (sBias !== 0) {
+        const Sin = Math.min(2, Cin / Math.max(Lin, 1e-6));
+        const sNorm = Math.max(0, Math.min(1,
+          Sin / Math.max(out.targetSaturationP95, 1e-4)));
+        const target = sBias > 0 ? sNorm : 1 - sNorm;
+        sWeight = 1 + Math.abs(sBias) * (target - 1);
+      }
+
+      // delta moves warmth toward (and possibly past) median, scaled by all
+      // three TARGET biases. With every bias at 0 each weight is exactly 1,
+      // so delta is byte-identical to the Phase 4.5r output.
+      const delta = -relW * effective_t * lWeight * cWeight * sWeight;
       aOut += delta * WARM_A;
       bOut += delta * WARM_B;
     }

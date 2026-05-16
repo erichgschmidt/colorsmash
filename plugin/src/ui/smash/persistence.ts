@@ -84,6 +84,12 @@ export interface SmashPersisted {
    *  Limits the temperature shift to a slice of the L range
    *  (-1 = shadows only, +1 = highlights only). */
   temperatureLBias?: number;
+  /** v1.21 Phase 4.5t — temperature C / S bias. Each -1..+1, default 0.
+   *  Limit the temperature shift to a slice of the chroma (C) or
+   *  saturation (S) range (-1 = muted/desaturated only, +1 = vivid/
+   *  saturated only). */
+  temperatureCBias?: number;
+  temperatureSBias?: number;
   /** v1.21 Phase 6 — SOURCE RATIOS. `ratioMode` picks the Simple (tilt
    *  slider) vs Detailed (per-band bar) view for the whole section; the
    *  three axes each persist their own tilt + band count + weights +
