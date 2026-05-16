@@ -38,6 +38,7 @@ import {
 } from "../../core/smash";
 import { loadSmashSettings, makeSmashSaver, type SmashPersisted, type SmashPersistedAxis } from "./persistence";
 import { applySmashLut } from "../../app/smash/applySmashLut";
+import { applySmashTestBake } from "../../app/smash/applySmashTestBake";
 
 // ────────── public types ──────────
 
@@ -726,27 +727,33 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   };
 
   // Test Bake — diagnostic: render the engine's per-pixel ground-truth output
-  // (no LUT, no interpolation, no grid quantization) into the panel preview.
-  // The user A/Bs against the LUT-applied PS canvas to see whether the
-  // canvas's deviation from the panel preview is the LUT's fidelity loss vs
-  // the engine's intent. Any subsequent engine change (slider/toggle) reverts
-  // the preview to the live LUT path automatically.
-  const onTestBakeClick = () => {
-    if (!pipeline || !targetSnap || !onTestBake) return;
+  // (no 3D LUT, no trilinear interpolation, no grid quantization). It writes
+  // the result as a real "Smash Test Bake" PIXEL LAYER in the document so the
+  // user can A/B it on-canvas against an Apply'd "Smash LUT" Color Lookup
+  // layer — a definitive engine-intent vs LUT-path comparison. It also still
+  // pushes the bake into the panel preview tile. The layer is at preview-tier
+  // resolution (the snapshot the engine ran on).
+  const onTestBakeClick = async () => {
+    if (!pipeline || !targetSnap) return;
     // Phase 7 — when STOCHASTIC is engaged, Test Bake renders the per-pixel
     // stochastic output (the grain) instead of the deterministic ground
     // truth, since the live LUT preview can't show stochastic.
     const stochastic = stochasticAmount > 0;
     setExportStatus(stochastic ? "baking stochastic image…" : "baking test image…");
     try {
-      const t0 = typeof performance !== "undefined" ? performance.now() : Date.now();
       const baked = stochastic
         ? bakeTargetStochastic(pipeline.engine, targetSnap.data, targetSnap.width, targetSnap.height)
         : bakeTargetPerPixel(pipeline.engine, targetSnap.data, targetSnap.width, targetSnap.height);
-      const t1 = typeof performance !== "undefined" ? performance.now() : Date.now();
-      onTestBake(baked, targetSnap.width, targetSnap.height);
-      setExportStatus(
-        `${stochastic ? "stochastic" : "test"} bake shown (${Math.round(t1 - t0)} ms — touch any control to revert)`);
+      // Panel-tile preview (existing diagnostic surface).
+      onTestBake?.(baked, targetSnap.width, targetSnap.height);
+      // Write a real pixel layer so the user can compare on-canvas.
+      const result = await applySmashTestBake(baked, targetSnap.width, targetSnap.height);
+      if (result.ok) {
+        setExportStatus(
+          `test bake layer added: "${result.layerName}" (${result.width}×${result.height} preview-res — engine ground truth, no LUT)`);
+      } else {
+        setExportStatus(`test bake error: ${result.error ?? "unknown"}`);
+      }
     } catch (err: any) {
       setExportStatus(`test bake error: ${err?.message ?? err}`);
     }
@@ -1485,9 +1492,9 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
             +
           </div>
           <div
-            style={pipeline && onTestBake ? actionButtonStyle : actionButtonDisabledStyle}
+            style={pipeline ? actionButtonStyle : actionButtonDisabledStyle}
             onClick={onTestBakeClick}
-            title="Diagnostic: render the engine's per-pixel ground-truth output (no LUT, no interpolation) into the panel preview. A/B against the LUT-applied PS canvas to see whether the LUT is losing fidelity vs the engine's intent. Touch any control to revert to the live LUT preview."
+            title="Diagnostic: render the engine's per-pixel ground-truth output (no 3D LUT, no interpolation, no grid quantization) as a new 'Smash Test Bake' pixel layer in the document — and into the panel preview tile. A/B that layer against an Apply'd 'Smash LUT' Color Lookup layer to see whether the LUT path is losing fidelity vs the engine's true intent. The layer is at preview-tier resolution."
           >
             Test Bake
           </div>

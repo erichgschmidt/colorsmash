@@ -16,12 +16,13 @@ function makeBand(overrides: {
   neutralDensity: number;
   accentDensity: number;
   sampleCount: number;
+  bounds?: [number, number];
 }): BandStats {
   return {
     axis: "value",
     index: 0,
     label: overrides.label,
-    bounds: [0, 1],
+    bounds: overrides.bounds ?? [0, 1],
     softWidth: 0,
     center: 0.5,
     pixelRatio: overrides.pixelRatio,
@@ -139,20 +140,29 @@ describe("SourceDNAStrip", () => {
     expect(bg).not.toContain("repeating-linear-gradient");
   });
 
-  it("segment flexGrow values are proportional to pixelRatio", () => {
-    const bands = [shadowsBand, midsBand, highlightsBand]; // ratios: 0.3, 0.5, 0.2
+  it("segment flexGrow values are proportional to each band's luma-range span", () => {
+    // Bands are equal-population by construction, so the strip weights width
+    // by luma-range SPAN instead. Distinct spans here: 0.2 / 0.5 / 0.3.
+    const base = {
+      pixelRatio: 1 / 3, medianOklab: [0.5, 0, 0] as [number, number, number],
+      neutralDensity: 0, accentDensity: 0, sampleCount: 100,
+    };
+    const bands = [
+      makeBand({ ...base, label: "Shadows", bounds: [0.0, 0.2] }),
+      makeBand({ ...base, label: "Mids", bounds: [0.2, 0.7] }),
+      makeBand({ ...base, label: "Highlights", bounds: [0.7, 1.0] }),
+    ];
     const result = SourceDNAStrip({ bands });
     const segments = getChildren(result as React.ReactElement);
 
     const growValues: number[] = segments.map((s) => s.props.style.flexGrow as number);
     const growSum = growValues.reduce((a, b) => a + b, 0);
 
-    // Each segment's flexGrow / total should approximate its pixelRatio.
-    const totalRatio = bands.reduce((s, b) => s + b.pixelRatio, 0);
-    bands.forEach((band, i) => {
-      const expected = band.pixelRatio / totalRatio;
-      const actual = growValues[i] / growSum;
-      expect(actual).toBeCloseTo(expected, 2);
+    // Each segment's flexGrow / total should approximate its luma-span share.
+    const spans = bands.map((b) => b.bounds[1] - b.bounds[0]);
+    const totalSpan = spans.reduce((a, b) => a + b, 0);
+    bands.forEach((_, i) => {
+      expect(growValues[i] / growSum).toBeCloseTo(spans[i] / totalSpan, 2);
     });
   });
 

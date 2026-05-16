@@ -1,7 +1,15 @@
 // Source DNA Strip — primary trust-builder for the Smash UI.
 // Shows how the engine read the reference image, organized by Shadows / Mids /
-// Highlights bands. Segments are weighted by pixel ratio and colored by band
-// median Oklab. Styled to feel like a sibling of PaletteStrip.
+// Highlights bands.
+//
+// Segment WIDTH = the band's luma-range span. The engine cuts bands at equal
+// PERCENTILES (each band holds ~1/3 of the pixels by construction — see
+// bands.ts), so a pixel-ratio width would always be a useless flat 33/33/33.
+// The luma SPAN, by contrast, is genuinely image-dependent: a high-key image
+// packs its dark pixels into a narrow shadow band and spreads its bright
+// pixels across a wide highlight band, so the strip reads as "mostly
+// highlights" — an honest picture of the source's tonal shape. Segments are
+// colored by band median Oklab. Styled to feel like a sibling of PaletteStrip.
 
 import React from "react";
 import type { BandStats } from "../../core/smash/types";
@@ -62,8 +70,12 @@ export function SourceDNAStrip(props: SourceDNAStripProps): JSX.Element | null {
 
   if (bands.length === 0) return null;
 
-  // Total pixelRatio for proportional width calculation.
-  const totalRatio = bands.reduce((sum, b) => sum + b.pixelRatio, 0) || 1;
+  // Segment width tracks each band's luma-range SPAN (bounds width), not its
+  // pixel ratio — the bands are equal-population by construction, so pixel
+  // ratio is always a flat ~1/3 and conveys nothing. The span varies per
+  // image and shows the source's tonal distribution shape.
+  const bandSpan = (b: BandStats): number => Math.max(0, b.bounds[1] - b.bounds[0]);
+  const totalSpan = bands.reduce((sum, b) => sum + bandSpan(b), 0) || 1;
 
   const stripStyle: React.CSSProperties = {
     display: "flex",
@@ -79,9 +91,9 @@ export function SourceDNAStrip(props: SourceDNAStripProps): JSX.Element | null {
   return (
     <div style={stripStyle}>
       {bands.map((band, i) => {
-        // Proportional flex-grow with a minimum pixel floor so empty bands
-        // stay visible and selectable.
-        const proportion = band.pixelRatio / totalRatio;
+        // Proportional flex-grow by luma-range span, with a minimum pixel
+        // floor so thin / empty bands stay visible and selectable.
+        const proportion = bandSpan(band) / totalSpan;
         const flexGrow = Math.max(MIN_SEGMENT_PX / height, proportion);
 
         const txt = textColor(band);
@@ -162,7 +174,7 @@ export function SourceDNAStrip(props: SourceDNAStripProps): JSX.Element | null {
             key={`dna-band-${i}`}
             style={segmentStyle}
             onClick={handleClick}
-            title={`${band.label} — ${(band.pixelRatio * 100).toFixed(1)}% of image`}
+            title={`${band.label} — luma ${Math.round(band.bounds[0] * 100)}–${Math.round(band.bounds[1] * 100)} (spans ${(proportion * 100).toFixed(0)}% of the tonal range; bands are equal-population, ~${(100 / bands.length).toFixed(0)}% of pixels each)`}
           >
             <div style={labelStyle}>{band.label}</div>
             <div style={pipRowStyle}>
