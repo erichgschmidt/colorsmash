@@ -177,6 +177,22 @@ type SmashSectionKey =
   | "colorization"
   | "audit";
 
+// Sections that gate an engine mechanic — each gets an enable/disable
+// toggle. SMASH AUDIT is diagnostic-only (no mechanics) and excluded.
+type ToggleableSectionKey = Exclude<SmashSectionKey, "audit">;
+
+// Enable/disable toggle box on a section header. Filled blue ✓ = enabled
+// (the section's controls affect the output); hollow = disabled (forced to
+// no-op).
+const enableToggleStyle = (on: boolean): React.CSSProperties => ({
+  width: 13, height: 13, flexShrink: 0, boxSizing: "border-box",
+  borderRadius: 2, cursor: "pointer", userSelect: "none",
+  border: `1px solid ${on ? "#6ab7ff" : "#666"}`,
+  background: on ? "#6ab7ff" : "transparent",
+  color: "#0f1620", fontSize: 9, fontWeight: 700, lineHeight: 1,
+  display: "inline-flex", alignItems: "center", justifyContent: "center",
+});
+
 // ────────── component ──────────
 
 export function SmashSection(props: SmashSectionProps): JSX.Element {
@@ -193,6 +209,13 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   const [openSection, setOpenSection] = useState<SmashSectionKey | null>(null);
   const toggleSection = (k: SmashSectionKey) =>
     setOpenSection((cur) => (cur === k ? null : k));
+  // Per-section enable/disable — a QA aid. A disabled section's controls are
+  // forced to their inert (no-op) values when the engine is built, so each
+  // mechanic can be tested in isolation. Default: all enabled. Session-only
+  // (not persisted) so a reload never leaves a section silently off.
+  const [sectionEnabled, setSectionEnabled] = useState<Record<ToggleableSectionKey, boolean>>({
+    engine: true, zones: true, temperature: true, traits: true, ratios: true, colorization: true,
+  });
   const engineOpen = openSection === "engine";
   const zonesOpen = openSection === "zones";
   const tempOpen = openSection === "temperature";
@@ -496,21 +519,47 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   // per drag (vs. ~1s before this refactor).
   const pipeline = useMemo<EnginePipeline | null>(() => {
     if (!snapDerived) return null;
-    // Phase 6 — resolve the Value / Hue / Chroma source ratios from the
-    // active section mode. Simple → a 5-band tilt ramp; Detailed → the
-    // per-band bar weights. Always sent (even at neutral) so the engine
-    // echoes back each axis's natural weights + band colors for the bars.
-    const valueRatio: AxisRatio = resolveAxisControl(ratioMode, valueAxis);
-    const hueRatio: AxisRatio = resolveAxisControl(ratioMode, hueAxis);
-    const chromaRatio: AxisRatio = resolveAxisControl(ratioMode, chromaAxis);
+    // Per-section enable/disable. A disabled section's controls are forced to
+    // their inert (no-op) values here, before the engine is built — so each
+    // mechanic group can be tested in isolation. The accordion/section keys
+    // map onto these gates.
+    const se = sectionEnabled;
+    // ENGINE group — distribution-matching mechanics.
+    const fxPasses = se.engine ? passes : 1;
+    const fxProportionMatch = se.engine ? proportionMatch : 1;
+    const fxPosterize = se.engine ? posterize : 0;
+    const fxDistribution = se.engine ? distribution : 0;
+    const fxConditionalCdf = se.engine ? conditionalCdf : 0;
+    const fxSlicedOt = se.engine ? slicedOt : 0;
+    // ZONES group — cluster routing + weighting.
+    const fxZoneInfluence = se.zones ? zoneInfluence : 0;
+    const fxDetailRichness = se.zones ? detailRichness : 1;
+    const fxZoneEdgeSoftness = se.zones ? zoneEdgeSoftness : 0;
+    const fxZoneEdgeShift = se.zones ? zoneEdgeShift : 0;
+    const fxZoneRatio = se.zones ? zoneRatio : 0;
+    const fxClusterMultipliers = se.zones ? clusterMultipliers : clusterMultipliers.map(() => 1);
+    // TEMPERATURE group — temperature 0 makes sensitivity / L/C/S bias moot.
+    const fxTemperature = se.temperature ? temperature : 0;
+    // TRAITS — default amounts (the standard, no custom trait tweak).
+    const fxTraits = se.traits ? traits : DEFAULT_TRAIT_AMOUNTS;
+    // COLORIZATION — all cross-dimensional toggles off (inert).
+    const fxColorization = se.colorization
+      ? colorization
+      : { hueByLuma: false, liftNeutrals: false, paletteSnap: false };
+    // SOURCE RATIOS — neutral axes (all-1 multipliers) when disabled.
+    // Always sent (even at neutral) so the engine echoes back each axis's
+    // natural weights + band colors for the bars.
+    const valueRatio: AxisRatio = resolveAxisControl(ratioMode, se.ratios ? valueAxis : NEUTRAL_AXIS);
+    const hueRatio: AxisRatio = resolveAxisControl(ratioMode, se.ratios ? hueAxis : NEUTRAL_AXIS);
+    const chromaRatio: AxisRatio = resolveAxisControl(ratioMode, se.ratios ? chromaAxis : NEUTRAL_AXIS);
     const controls = {
       ...DEFAULT_SMASH_CONTROLS,
       global: amount,
-      traits,
+      traits: fxTraits,
       // proportionMatch lives on colorization in the engine schema, so merge
       // it in here rather than carrying it around as a separate field.
-      colorization: { ...colorization, proportionMatch, posterize, distribution, conditionalCdf, slicedOt, stochastic: { amount: stochasticAmount, seeded: true, seed: stochasticSeed }, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias, valueRatio, hueRatio, chromaRatio },
-      passes,
+      colorization: { ...fxColorization, proportionMatch: fxProportionMatch, posterize: fxPosterize, distribution: fxDistribution, conditionalCdf: fxConditionalCdf, slicedOt: fxSlicedOt, stochastic: { amount: stochasticAmount, seeded: true, seed: stochasticSeed }, zoneInfluence: fxZoneInfluence, detailRichness: fxDetailRichness, zoneRatio: fxZoneRatio, clusterMultipliers: fxClusterMultipliers, temperature: fxTemperature, temperatureSensitivity, zoneEdgeSoftness: fxZoneEdgeSoftness, zoneEdgeShift: fxZoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias, valueRatio, hueRatio, chromaRatio },
+      passes: fxPasses,
     };
     const engine = smash(
       snapDerived.sourceFeatures,
@@ -520,7 +569,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       snapDerived.cdfs,
     );
     return { sourceDNA: snapDerived.sourceDNA, engine };
-  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, slicedOt, stochasticAmount, stochasticSeed, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias, ratioMode, valueAxis, hueAxis, chromaAxis]);
+  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, slicedOt, stochasticAmount, stochasticSeed, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias, ratioMode, valueAxis, hueAxis, chromaAxis, sectionEnabled]);
 
   // Propagate engine changes to the parent via useEffect, NOT inside the
   // useMemo body above. Calling setState on the parent during a child's
@@ -572,39 +621,64 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     setTemperatureSBias(INLINE_DEFAULTS.temperatureSBias);
   };
 
-  // Shared collapsible group-header (chevron + label + ✕ reset shown when
-  // open) — used by the three ENGINE sub-sections. `onToggle` runs the
-  // accordion toggle so opening this group collapses any other open section.
+  // Small enable/disable toggle box for a section header. Click stops
+  // propagation so it doesn't also expand/collapse the accordion.
+  const renderEnableToggle = (key: ToggleableSectionKey): JSX.Element => {
+    const on = sectionEnabled[key];
+    return (
+      <div
+        onClick={(e) => {
+          e.stopPropagation();
+          setSectionEnabled((s) => ({ ...s, [key]: !s[key] }));
+        }}
+        title={on
+          ? "Section ENABLED — its controls affect the output. Click to disable it (its mechanics drop to no-op, so you can test the other sections in isolation)."
+          : "Section DISABLED — its controls are bypassed (forced to no-op). Click to re-enable."}
+        style={enableToggleStyle(on)}
+      >
+        {on ? "✓" : ""}
+      </div>
+    );
+  };
+
+  // Shared collapsible group-header: enable toggle + chevron + label + ✕
+  // reset (shown when open) — used by the three ENGINE sub-sections.
+  // Clicking the label runs the accordion toggle so opening this group
+  // collapses any other open section. A disabled section's label dims.
   const renderGroupHeader = (
     label: string,
-    isOpen: boolean,
-    onToggle: () => void,
+    sectionKey: ToggleableSectionKey,
     onReset: () => void,
     openTip: string,
     resetTip: string,
-  ): JSX.Element => (
-    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-      <div
-        style={{ ...traitsHeaderStyle, flex: 1 }}
-        onClick={onToggle}
-        title={isOpen ? `Hide the ${label} sliders` : openTip}
-      >
-        <span style={{ width: 10, display: "inline-block", textAlign: "center" }}>
-          {isOpen ? "▾" : "▸"}
-        </span>
-        <span>{label}</span>
-      </div>
-      {isOpen && (
+  ): JSX.Element => {
+    const isOpen = openSection === sectionKey;
+    const enabled = sectionEnabled[sectionKey];
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        {renderEnableToggle(sectionKey)}
         <div
-          onClick={(e) => { e.stopPropagation(); if (hasSnaps) onReset(); }}
-          title={resetTip}
-          style={resetButtonStyle}
+          style={{ ...traitsHeaderStyle, flex: 1, opacity: enabled ? 1 : 0.45 }}
+          onClick={() => toggleSection(sectionKey)}
+          title={isOpen ? `Hide the ${label} sliders` : openTip}
         >
-          ✕
+          <span style={{ width: 10, display: "inline-block", textAlign: "center" }}>
+            {isOpen ? "▾" : "▸"}
+          </span>
+          <span>{label}</span>
         </div>
-      )}
-    </div>
-  );
+        {isOpen && (
+          <div
+            onClick={(e) => { e.stopPropagation(); if (hasSnaps) onReset(); }}
+            title={resetTip}
+            style={resetButtonStyle}
+          >
+            ✕
+          </div>
+        )}
+      </div>
+    );
+  };
 
   // Reset the whole SOURCE RATIOS section to neutral (the ✕ on its header).
   const resetRatios = () => {
@@ -838,7 +912,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           default. Chevron toggles; the ✕ resets just this group. Per-slider
           reset is double-click on a row. */}
       {renderGroupHeader(
-        "ENGINE", engineOpen, () => toggleSection("engine"), resetEngineGroup,
+        "ENGINE", "engine", resetEngineGroup,
         "Show the ENGINE sliders — core distribution matching: PASSES, PROPORTION, POSTERIZE, DISTRIBUTION, CONDITIONAL, SLICED OT, STOCHASTIC.",
         "Reset the ENGINE group to defaults (PASSES 1.0×, PROPORTION 100%, POSTERIZE/DISTRIBUTION/CONDITIONAL/SLICED OT/STOCHASTIC 0%).",
       )}
@@ -1041,7 +1115,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           ZONE RATIO / INFLUENCE / DETAIL / EDGE * drive the zone-routing
           path. */}
       {renderGroupHeader(
-        "ZONES", zonesOpen, () => toggleSection("zones"), resetZonesGroup,
+        "ZONES", "zones", resetZonesGroup,
         "Show the ZONES sliders — cluster routing + weighting: ZONES, SOURCE MIX, INFLUENCE, DETAIL, EDGE SOFTNESS/SHIFT, ZONE RATIO.",
         "Reset the ZONES group to defaults (ZONES 5, SOURCE MIX neutral, INFLUENCE 0%, DETAIL 100%, EDGE SOFTNESS/SHIFT 0, ZONE RATIO 0).",
       )}
@@ -1212,7 +1286,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           SENSITIVITY drive the shift; TARGET L/C/S restrict it to a slice of
           the lightness / chroma / saturation range. */}
       {renderGroupHeader(
-        "TEMPERATURE", tempOpen, () => toggleSection("temperature"), resetTempGroup,
+        "TEMPERATURE", "temperature", resetTempGroup,
         "Show the TEMPERATURE sliders — image-relative warm/cool grading: TEMPERATURE, SENSITIVITY, TARGET L, TARGET C, TARGET S.",
         "Reset the TEMPERATURE group to defaults (TEMPERATURE 0, SENSITIVITY 50%, TARGET L/C/S 0).",
       )}
@@ -1345,8 +1419,9 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           Value + Neutral differentially affect the output; the others are
           recorded in the audit but no-op in applyTransform until Phase 2b. */}
       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        {renderEnableToggle("traits")}
         <div
-          style={{ ...traitsHeaderStyle, flex: 1 }}
+          style={{ ...traitsHeaderStyle, flex: 1, opacity: sectionEnabled.traits ? 1 : 0.45 }}
           onClick={() => toggleSection("traits")}
           title={traitsOpen ? "Hide trait sliders" : "Show trait sliders"}
         >
@@ -1382,8 +1457,9 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           ratio bar with count toggle + adaptive drag. The Simple/Detailed
           chip flips all axes; both states are kept so it's non-destructive. */}
       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        {renderEnableToggle("ratios")}
         <div
-          style={{ ...traitsHeaderStyle, flex: 1 }}
+          style={{ ...traitsHeaderStyle, flex: 1, opacity: sectionEnabled.ratios ? 1 : 0.45 }}
           onClick={() => toggleSection("ratios")}
           title={ratioOpen
             ? "Hide source ratios"
@@ -1444,8 +1520,9 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           handles those correctly). Disclosure pattern matches TRAITS above,
           with a ✕ reset shown when open. */}
       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        {renderEnableToggle("colorization")}
         <div
-          style={{ ...traitsHeaderStyle, flex: 1 }}
+          style={{ ...traitsHeaderStyle, flex: 1, opacity: sectionEnabled.colorization ? 1 : 0.45 }}
           onClick={() => toggleSection("colorization")}
           title={colorizationOpen ? "Hide colorization toggles" : "Show colorization toggles (cross-dimensional mechanics for grayscale targets)"}
         >
