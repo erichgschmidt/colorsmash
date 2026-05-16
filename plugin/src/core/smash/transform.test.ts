@@ -1963,3 +1963,130 @@ describe('smash() valueRatio (Phase 6)', () => {
     expect(() => applyTransform(eng, 128, 128, 128)).not.toThrow();
   });
 });
+
+// ────────── 15. hue + chroma source ratios (Phase 6) ──────────
+
+describe('smash() hueRatio + chromaRatio (Phase 6)', () => {
+  it('exposes per-axis band colors + weights at the requested band count', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = coolBlueBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const eng = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        hueRatio: { bandCount: 6, multipliers: [1, 1, 1, 1, 1, 1] },
+        chromaRatio: { bandCount: 4, multipliers: [1, 1, 1, 1] },
+      },
+    });
+    expect(eng.hueRatioNaturalWeights.length).toBe(6);
+    expect(eng.hueRatioBandColors.length).toBe(6);
+    expect(eng.chromaRatioNaturalWeights.length).toBe(4);
+    expect(eng.chromaRatioBandColors.length).toBe(4);
+    // Band colors are sRGB bytes in range.
+    for (const [r, g, b] of eng.hueRatioBandColors) {
+      for (const ch of [r, g, b]) {
+        expect(ch).toBeGreaterThanOrEqual(0);
+        expect(ch).toBeLessThanOrEqual(255);
+      }
+    }
+  });
+
+  it('neutral hue/chroma ratios are byte-identical to the fields omitted', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = coolBlueBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const engOmit = smash(srcFeatures, tgtFeatures, profile, DEFAULT_SMASH_CONTROLS);
+    const engNeutral = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        hueRatio: { bandCount: 5, multipliers: [1, 1, 1, 1, 1] },
+        chromaRatio: { bandCount: 5, multipliers: [1, 1, 1, 1, 1] },
+      },
+    });
+    for (let v = 0; v <= 255; v += 17) {
+      const a = applyTransform(engOmit, v, v, v);
+      const b = applyTransform(engNeutral, v, v, v);
+      expect(a[0]).toBe(b[0]);
+      expect(a[1]).toBe(b[1]);
+      expect(a[2]).toBe(b[2]);
+    }
+  });
+
+  it('engaged chromaRatio diverges from neutral', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const engNeutral = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        chromaRatio: { bandCount: 5, multipliers: [1, 1, 1, 1, 1] },
+      },
+    });
+    const engBoost = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        chromaRatio: { bandCount: 5, multipliers: [4, 2, 1, 0.5, 0.25] },
+      },
+    });
+    // Probe CHROMATIC inputs — near-neutral pixels get their chroma floored
+    // by liftNeutrals, which would mask the chroma-CDF change.
+    const probes: ReadonlyArray<readonly [number, number, number]> = [
+      [200, 90, 40], [60, 130, 200], [180, 60, 170], [90, 190, 70], [220, 200, 50],
+    ];
+    let anyDifference = false;
+    for (const [pr, pg, pb] of probes) {
+      const a = applyTransform(engNeutral, pr, pg, pb);
+      const b = applyTransform(engBoost, pr, pg, pb);
+      if (a[0] !== b[0] || a[1] !== b[1] || a[2] !== b[2]) { anyDifference = true; break; }
+    }
+    expect(anyDifference).toBe(true);
+  });
+
+  it('engaged hueRatio diverges from neutral on a chromatic pair', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = coolBlueBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const engNeutral = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        hueByLuma: false, // let the hue CDF own hue so hueRatio is observable
+        hueRatio: { bandCount: 5, multipliers: [1, 1, 1, 1, 1] },
+      },
+    });
+    const engBoost = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        hueByLuma: false,
+        hueRatio: { bandCount: 5, multipliers: [5, 1, 1, 1, 0.2] },
+      },
+    });
+    const probes: ReadonlyArray<readonly [number, number, number]> = [
+      [200, 90, 40], [60, 130, 200], [180, 60, 170], [90, 190, 70], [220, 200, 50],
+    ];
+    let anyDifference = false;
+    for (const [pr, pg, pb] of probes) {
+      const a = applyTransform(engNeutral, pr, pg, pb);
+      const b = applyTransform(engBoost, pr, pg, pb);
+      if (a[0] !== b[0] || a[1] !== b[1] || a[2] !== b[2]) { anyDifference = true; break; }
+    }
+    expect(anyDifference).toBe(true);
+  });
+});

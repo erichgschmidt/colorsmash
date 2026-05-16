@@ -20,7 +20,7 @@ import {
   type ColorizationToggleState,
 } from "./ColorizationToggles";
 import { ClusterRatioBar } from "./ClusterRatioBar";
-import { RatioBar } from "./RatioBar";
+import { RatioBar, type RatioBarSwatch } from "./RatioBar";
 import type { TraitAmounts, AxisRatio } from "../../core/smash/types";
 import {
   extractFeatures,
@@ -36,7 +36,7 @@ import {
   type SmashEngineOutput,
   type SourceDNA,
 } from "../../core/smash";
-import { loadSmashSettings, makeSmashSaver, type SmashPersisted } from "./persistence";
+import { loadSmashSettings, makeSmashSaver, type SmashPersisted, type SmashPersistedAxis } from "./persistence";
 import { applySmashLut } from "../../app/smash/applySmashLut";
 
 // ────────── public types ──────────
@@ -96,18 +96,63 @@ const INLINE_DEFAULTS = {
 
 // ────────── source-ratio helpers (Phase 6) ──────────
 
-// Simple-mode Value tilt uses a fixed 5-band ramp. Detailed mode lets the
-// user pick the band count via the bar's count toggle.
-const VALUE_SIMPLE_BANDS = 5;
+// Simple-mode tilt uses a fixed 5-band ramp. Detailed mode lets the user
+// pick the band count via the bar's count toggle.
+const SIMPLE_BANDS = 5;
 
-// Convert the Simple-mode tilt slider (-1..+1) into per-band multipliers:
-// a linear ramp pivoting on the mid band. tilt > 0 boosts highlight bands
-// and suppresses shadow bands; tilt < 0 does the reverse. tilt 0 → all-1
+// Per-axis UI state. `tilt` drives Simple mode; `bandCount` / `weights` /
+// `adaptive` drive Detailed mode. Both are kept so the section's Simple ⇄
+// Detailed toggle is non-destructive.
+interface AxisRatioUI {
+  readonly tilt: number;       // Simple-mode tilt, -1..+1
+  readonly bandCount: number;  // Detailed-mode band count
+  readonly weights: number[];  // Detailed-mode per-band multipliers
+  readonly adaptive: boolean;  // Detailed-mode drag style
+}
+
+const NEUTRAL_AXIS: AxisRatioUI = { tilt: 0, bandCount: 5, weights: [1, 1, 1, 1, 1], adaptive: false };
+
+// Convert the Simple-mode tilt (-1..+1) into per-band multipliers: a linear
+// ramp pivoting on the mid band. tilt > 0 boosts the high bands and
+// suppresses the low bands; tilt < 0 does the reverse. tilt 0 → all-1
 // (neutral, a strict no-op in the engine).
 function simpleTiltMultipliers(tilt: number): number[] {
-  return Array.from({ length: VALUE_SIMPLE_BANDS }, (_, b) => {
-    const centerNorm = (b + 0.5) / VALUE_SIMPLE_BANDS; // 0.1 .. 0.9
+  return Array.from({ length: SIMPLE_BANDS }, (_, b) => {
+    const centerNorm = (b + 0.5) / SIMPLE_BANDS; // 0.1 .. 0.9
     return Math.max(0, 1 + tilt * (centerNorm - 0.5) * 2);
+  });
+}
+
+// Resolve an axis's UI state into the engine's AxisRatio control for the
+// active section mode.
+function resolveAxisControl(mode: "simple" | "detailed", axis: AxisRatioUI): AxisRatio {
+  return mode === "simple"
+    ? { bandCount: SIMPLE_BANDS, multipliers: simpleTiltMultipliers(axis.tilt) }
+    : { bandCount: axis.bandCount, multipliers: axis.weights };
+}
+
+// Build a ratio bar's segments from the engine's echoed natural per-band
+// weights + mean band colors. Falls back to a gray ramp before the first
+// engine run.
+function buildAxisSwatches(
+  natural: Float32Array | undefined,
+  colors: readonly (readonly [number, number, number])[] | undefined,
+  fallbackCount: number,
+): RatioBarSwatch[] {
+  const n = natural && natural.length > 0 ? natural.length : fallbackCount;
+  return Array.from({ length: n }, (_, b) => {
+    let rgb: readonly [number, number, number];
+    if (colors && colors[b]) {
+      rgb = [
+        Math.round(colors[b][0]),
+        Math.round(colors[b][1]),
+        Math.round(colors[b][2]),
+      ] as const;
+    } else {
+      const g = Math.round(255 * ((b + 0.5) / n));
+      rgb = [g, g, g] as const;
+    }
+    return { rgb, weight: natural ? natural[b] : 1 / n };
   });
 }
 
@@ -185,17 +230,17 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   // persisted — multipliers are tied to a specific source image's clusters,
   // so carrying them across sources would mis-apply (same as PaletteStrip).
   const [clusterMultipliers, setClusterMultipliers] = useState<number[]>([]);
-  // Phase 6 — SOURCE RATIOS: Value axis. Simple mode = one shadow↔highlight
-  // tilt slider; Detailed mode = a per-band ratio bar (count toggle +
-  // adaptive drag). Both states are kept so flipping modes is non-
-  // destructive. valueWeights is source-independent (a band is just an
-  // L-range slice), so it only resets when the band count changes.
-  const [valueRatioOpen, setValueRatioOpen] = useState<boolean>(false);
-  const [valueRatioMode, setValueRatioMode] = useState<"simple" | "detailed">("simple");
-  const [valueTilt, setValueTilt] = useState<number>(0);
-  const [valueBandCount, setValueBandCount] = useState<number>(5);
-  const [valueWeights, setValueWeights] = useState<number[]>(() => [1, 1, 1, 1, 1]);
-  const [valueAdaptive, setValueAdaptive] = useState<boolean>(false);
+  // Phase 6 — SOURCE RATIOS: Value / Hue / Chroma axes. Simple mode = one
+  // tilt slider per axis; Detailed mode = a per-band ratio bar (count toggle
+  // + adaptive drag). The Simple ⇄ Detailed chip flips all axes; both the
+  // tilt and the {bandCount, weights} are kept so the flip is non-
+  // destructive. `weights` is source-independent (a band is just an
+  // axis-range slice), so it only resets when that axis's band count changes.
+  const [ratioOpen, setRatioOpen] = useState<boolean>(false);
+  const [ratioMode, setRatioMode] = useState<"simple" | "detailed">("simple");
+  const [valueAxis, setValueAxis] = useState<AxisRatioUI>(NEUTRAL_AXIS);
+  const [hueAxis, setHueAxis] = useState<AxisRatioUI>(NEUTRAL_AXIS);
+  const [chromaAxis, setChromaAxis] = useState<AxisRatioUI>(NEUTRAL_AXIS);
   const [exportStatus, setExportStatus] = useState<string>("");
   const loadedRef = useRef<boolean>(false);
 
@@ -292,29 +337,35 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       if (typeof persisted?.temperatureLBias === "number" && Number.isFinite(persisted.temperatureLBias)) {
         setTemperatureLBias(Math.max(-1, Math.min(1, persisted.temperatureLBias)));
       }
-      // v1.21 Phase 6 — restore SOURCE RATIOS Value-axis state.
-      if (persisted?.valueRatioMode === "simple" || persisted?.valueRatioMode === "detailed") {
-        setValueRatioMode(persisted.valueRatioMode);
+      // v1.21 Phase 6 — restore SOURCE RATIOS state (section mode + 3 axes).
+      if (persisted?.ratioMode === "simple" || persisted?.ratioMode === "detailed") {
+        setRatioMode(persisted.ratioMode);
       }
-      if (typeof persisted?.valueTilt === "number" && Number.isFinite(persisted.valueTilt)) {
-        setValueTilt(Math.max(-1, Math.min(1, persisted.valueTilt)));
-      }
-      if (typeof persisted?.valueAdaptive === "boolean") {
-        setValueAdaptive(persisted.valueAdaptive);
-      }
-      {
-        const bc = persisted?.valueBandCount;
-        const vw = persisted?.valueWeights;
-        if (typeof bc === "number" && Number.isInteger(bc) && bc >= 2 && bc <= 12) {
-          setValueBandCount(bc);
-          if (Array.isArray(vw) && vw.length === bc
-              && vw.every((x) => typeof x === "number" && Number.isFinite(x) && x >= 0)) {
-            setValueWeights(vw.slice());
-          } else {
-            setValueWeights(Array(bc).fill(1));
+      const restoreAxis = (
+        p: SmashPersistedAxis | undefined,
+        setAxis: React.Dispatch<React.SetStateAction<AxisRatioUI>>,
+      ): void => {
+        if (!p || typeof p !== "object") return;
+        setAxis((prev) => {
+          let { tilt, bandCount, weights, adaptive } = prev;
+          if (typeof p.tilt === "number" && Number.isFinite(p.tilt)) {
+            tilt = Math.max(-1, Math.min(1, p.tilt));
           }
-        }
-      }
+          if (typeof p.adaptive === "boolean") adaptive = p.adaptive;
+          if (typeof p.bandCount === "number" && Number.isInteger(p.bandCount)
+              && p.bandCount >= 2 && p.bandCount <= 12) {
+            bandCount = p.bandCount;
+            weights = (Array.isArray(p.weights) && p.weights.length === p.bandCount
+              && p.weights.every((x) => typeof x === "number" && Number.isFinite(x) && x >= 0))
+              ? p.weights.slice()
+              : Array(p.bandCount).fill(1);
+          }
+          return { tilt, bandCount, weights, adaptive };
+        });
+      };
+      restoreAxis(persisted?.valueAxis, setValueAxis);
+      restoreAxis(persisted?.hueAxis, setHueAxis);
+      restoreAxis(persisted?.chromaAxis, setChromaAxis);
       loadedRef.current = true;
     })();
     return () => { cancelled = true; };
@@ -330,9 +381,12 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       conditionalCdf,
       clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity,
       zoneEdgeSoftness, zoneEdgeShift, temperatureLBias,
-      valueRatioMode, valueTilt, valueBandCount, valueWeights, valueAdaptive,
+      ratioMode,
+      valueAxis: { tilt: valueAxis.tilt, bandCount: valueAxis.bandCount, weights: valueAxis.weights, adaptive: valueAxis.adaptive },
+      hueAxis: { tilt: hueAxis.tilt, bandCount: hueAxis.bandCount, weights: hueAxis.weights, adaptive: hueAxis.adaptive },
+      chromaAxis: { tilt: chromaAxis.tilt, bandCount: chromaAxis.bandCount, weights: chromaAxis.weights, adaptive: chromaAxis.adaptive },
     });
-  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, valueRatioMode, valueTilt, valueBandCount, valueWeights, valueAdaptive]);
+  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, ratioMode, valueAxis, hueAxis, chromaAxis]);
 
   // ── Heavy: features + DNA + profile + CDF LUTs. Depends on SNAPS ONLY,
   // so slider drags don't re-run extractFeatures (~100K pixels per call)
@@ -369,20 +423,20 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   // per drag (vs. ~1s before this refactor).
   const pipeline = useMemo<EnginePipeline | null>(() => {
     if (!snapDerived) return null;
-    // Phase 6 — resolve the Value source ratio from whichever mode is
-    // active. Simple → a 5-band tilt ramp; Detailed → the per-band bar
-    // weights. Always sent (even at neutral) so the engine echoes back
-    // valueRatioNaturalWeights for the bar to draw.
-    const valueRatio: AxisRatio = valueRatioMode === "simple"
-      ? { bandCount: VALUE_SIMPLE_BANDS, multipliers: simpleTiltMultipliers(valueTilt) }
-      : { bandCount: valueBandCount, multipliers: valueWeights };
+    // Phase 6 — resolve the Value / Hue / Chroma source ratios from the
+    // active section mode. Simple → a 5-band tilt ramp; Detailed → the
+    // per-band bar weights. Always sent (even at neutral) so the engine
+    // echoes back each axis's natural weights + band colors for the bars.
+    const valueRatio: AxisRatio = resolveAxisControl(ratioMode, valueAxis);
+    const hueRatio: AxisRatio = resolveAxisControl(ratioMode, hueAxis);
+    const chromaRatio: AxisRatio = resolveAxisControl(ratioMode, chromaAxis);
     const controls = {
       ...DEFAULT_SMASH_CONTROLS,
       global: amount,
       traits,
       // proportionMatch lives on colorization in the engine schema, so merge
       // it in here rather than carrying it around as a separate field.
-      colorization: { ...colorization, proportionMatch, posterize, distribution, conditionalCdf, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, valueRatio },
+      colorization: { ...colorization, proportionMatch, posterize, distribution, conditionalCdf, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, valueRatio, hueRatio, chromaRatio },
       passes,
     };
     const engine = smash(
@@ -393,7 +447,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       snapDerived.cdfs,
     );
     return { sourceDNA: snapDerived.sourceDNA, engine };
-  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, valueRatioMode, valueTilt, valueBandCount, valueWeights]);
+  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, ratioMode, valueAxis, hueAxis, chromaAxis]);
 
   // Propagate engine changes to the parent via useEffect, NOT inside the
   // useMemo body above. Calling setState on the parent during a child's
@@ -438,34 +492,82 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     setClusterMultipliers((prev) => prev.map(() => 1));
   };
 
-  // Phase 6 — Value-axis band count change. The weights array is rebuilt to
-  // the new length at neutral (a band is just an L-range slice, so there's
-  // no meaningful old→new mapping).
-  const onValueBandCountChange = (n: number) => {
-    setValueBandCount(n);
-    setValueWeights(Array(n).fill(1));
+  // Reset the whole SOURCE RATIOS section to neutral (the ✕ on its header).
+  const resetRatios = () => {
+    setValueAxis(NEUTRAL_AXIS);
+    setHueAxis(NEUTRAL_AXIS);
+    setChromaAxis(NEUTRAL_AXIS);
   };
 
-  // Reset the whole SOURCE RATIOS section (the ✕ on its header).
-  const resetValueRatio = () => {
-    setValueTilt(0);
-    setValueBandCount(5);
-    setValueWeights([1, 1, 1, 1, 1]);
-    setValueAdaptive(false);
-  };
-
-  // Grayscale swatches for the Value ratio bar — a dark→light ramp, one
-  // segment per L band, each carrying the source's natural population in
-  // that band (echoed from the engine). Falls back to a uniform bar before
+  // Ratio-bar segments per axis, built from the engine's echoed natural
+  // per-band weights + mean band colors. Falls back to a gray ramp before
   // the first engine run.
-  const valueBarSwatches = useMemo(() => {
-    const nat = pipeline?.engine.valueRatioNaturalWeights;
-    const n = nat && nat.length > 0 ? nat.length : valueBandCount;
-    return Array.from({ length: n }, (_, b) => {
-      const gray = Math.round(255 * ((b + 0.5) / n));
-      return { rgb: [gray, gray, gray] as const, weight: nat ? nat[b] : 1 / n };
-    });
-  }, [pipeline, valueBandCount]);
+  const valueBarSwatches = useMemo(
+    () => buildAxisSwatches(
+      pipeline?.engine.valueRatioNaturalWeights,
+      pipeline?.engine.valueRatioBandColors,
+      valueAxis.bandCount),
+    [pipeline, valueAxis.bandCount]);
+  const hueBarSwatches = useMemo(
+    () => buildAxisSwatches(
+      pipeline?.engine.hueRatioNaturalWeights,
+      pipeline?.engine.hueRatioBandColors,
+      hueAxis.bandCount),
+    [pipeline, hueAxis.bandCount]);
+  const chromaBarSwatches = useMemo(
+    () => buildAxisSwatches(
+      pipeline?.engine.chromaRatioNaturalWeights,
+      pipeline?.engine.chromaRatioBandColors,
+      chromaAxis.bandCount),
+    [pipeline, chromaAxis.bandCount]);
+
+  // Render one SOURCE RATIOS axis row — a tilt slider in Simple mode, a
+  // RatioBar in Detailed mode. `setAxis` is the axis's state setter.
+  const renderRatioAxis = (
+    label: string,
+    axis: AxisRatioUI,
+    setAxis: React.Dispatch<React.SetStateAction<AxisRatioUI>>,
+    swatches: RatioBarSwatch[],
+    simpleTip: string,
+    detailedTip: string,
+  ): JSX.Element => (
+    ratioMode === "simple" ? (
+      <div
+        style={passesRowStyle}
+        onDoubleClick={() => { if (hasSnaps) setAxis((s) => ({ ...s, tilt: 0 })); }}
+      >
+        <span style={passesLabelStyle}>{label}</span>
+        <input
+          type="range"
+          min={-100}
+          max={100}
+          step={5}
+          value={Math.round(axis.tilt * 100)}
+          onChange={(e) => setAxis((s) => ({ ...s, tilt: parseInt((e.target as HTMLInputElement).value, 10) / 100 }))}
+          disabled={!hasSnaps}
+          style={passesSliderStyle}
+          title={simpleTip}
+        />
+        <span style={passesValueStyle}>{axis.tilt > 0 ? "+" : ""}{Math.round(axis.tilt * 100)}%</span>
+      </div>
+    ) : (
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <span style={passesLabelStyle}>{label}</span>
+        <RatioBar
+          swatches={swatches}
+          multipliers={axis.weights}
+          setMultipliers={(w) => setAxis((s) => ({ ...s, weights: w }))}
+          adaptive={axis.adaptive}
+          setAdaptive={(a) => setAxis((s) => ({ ...s, adaptive: a }))}
+          count={axis.bandCount}
+          countOptions={[3, 5, 7]}
+          setCount={(n) => setAxis((s) => ({ ...s, bandCount: n, weights: Array(n).fill(1) }))}
+          disabled={!hasSnaps}
+          title={detailedTip}
+        />
+      </div>
+    )
+  );
 
   // Track Smash LUT layer ids we've created. Default Apply replaces the most
   // recent one in place; "+" fork mode creates a new one and auto-hides the
@@ -1015,40 +1117,40 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       )}
 
       {/* Phase 6 — SOURCE RATIOS. Reshape the source's per-axis histogram;
-          the target follows via the CDF match. Value axis ships first.
+          the target follows via the CDF match. Value / Hue / Chroma axes.
           Simple mode = one tilt slider per axis; Detailed mode = a per-band
           ratio bar with count toggle + adaptive drag. The Simple/Detailed
           chip flips all axes; both states are kept so it's non-destructive. */}
       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
         <div
           style={{ ...traitsHeaderStyle, flex: 1 }}
-          onClick={() => setValueRatioOpen((o) => !o)}
-          title={valueRatioOpen
+          onClick={() => setRatioOpen((o) => !o)}
+          title={ratioOpen
             ? "Hide source ratios"
             : "Show source ratios — reshape the source's tonal/color distribution; the target matches it via the CDF"}
         >
           <span style={{ width: 10, display: "inline-block", textAlign: "center" }}>
-            {valueRatioOpen ? "▾" : "▸"}
+            {ratioOpen ? "▾" : "▸"}
           </span>
           <span>SOURCE RATIOS</span>
         </div>
-        {valueRatioOpen && (
+        {ratioOpen && (
           <>
             <div
               onClick={(e) => {
                 e.stopPropagation();
-                setValueRatioMode((m) => (m === "simple" ? "detailed" : "simple"));
+                setRatioMode((m) => (m === "simple" ? "detailed" : "simple"));
               }}
-              title={valueRatioMode === "simple"
+              title={ratioMode === "simple"
                 ? "Simple: one tilt slider per axis. Click for Detailed — per-band ratio bars with count toggle + adaptive drag."
                 : "Detailed: per-band ratio bars. Click for Simple — one tilt slider per axis."}
               style={modeChipStyle}
             >
-              {valueRatioMode === "simple" ? "Simple" : "Detailed"}
+              {ratioMode === "simple" ? "Simple" : "Detailed"}
             </div>
             <div
-              onClick={(e) => { e.stopPropagation(); resetValueRatio(); }}
-              title="Reset all source ratios to neutral (tilt 0, bands 5, weights neutral)."
+              onClick={(e) => { e.stopPropagation(); resetRatios(); }}
+              title="Reset all source ratios (Value / Hue / Chroma) to neutral."
               style={resetButtonStyle}
             >
               ✕
@@ -1056,43 +1158,22 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           </>
         )}
       </div>
-      {valueRatioOpen && (
+      {ratioOpen && (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {valueRatioMode === "simple" ? (
-            <div
-              style={passesRowStyle}
-              onDoubleClick={() => { if (hasSnaps) setValueTilt(0); }}
-            >
-              <span style={passesLabelStyle}>VALUE</span>
-              <input
-                type="range"
-                min={-100}
-                max={100}
-                step={5}
-                value={Math.round(valueTilt * 100)}
-                onChange={(e) => setValueTilt(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
-                disabled={!hasSnaps}
-                style={passesSliderStyle}
-                title="VALUE tilt — shifts the SOURCE's tonal balance before the match. NEGATIVE favors shadows (the source reads as having more dark mass); POSITIVE favors highlights. The target's value distribution follows. Switch the section to Detailed for per-band control."
-              />
-              <span style={passesValueStyle}>{valueTilt > 0 ? "+" : ""}{Math.round(valueTilt * 100)}%</span>
-            </div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <span style={passesLabelStyle}>VALUE</span>
-              <RatioBar
-                swatches={valueBarSwatches}
-                multipliers={valueWeights}
-                setMultipliers={setValueWeights}
-                adaptive={valueAdaptive}
-                setAdaptive={setValueAdaptive}
-                count={valueBandCount}
-                countOptions={[3, 5, 7]}
-                setCount={onValueBandCountChange}
-                disabled={!hasSnaps}
-                title="Source VALUE ratio — drag to reweight how much tonal mass the source carries in each lightness band (dark → light). The target's value distribution follows via the CDF match. Use the count chips to re-bin, ↔ for adaptive drag, double-click to reset."
-              />
-            </div>
+          {renderRatioAxis(
+            "VALUE", valueAxis, setValueAxis, valueBarSwatches,
+            "VALUE tilt — shifts the SOURCE's tonal balance before the match. NEGATIVE favors shadows (the source reads as having more dark mass); POSITIVE favors highlights. The target's value distribution follows. Switch the section to Detailed for per-band control.",
+            "Source VALUE ratio — drag to reweight how much tonal mass the source carries in each lightness band (dark → light). The target's value distribution follows via the CDF match. Use the count chips to re-bin, ↔ for adaptive drag, double-click to reset.",
+          )}
+          {renderRatioAxis(
+            "HUE", hueAxis, setHueAxis, hueBarSwatches,
+            "HUE tilt — shifts the SOURCE's hue balance across its hue range before the match. The target's hue distribution follows. No effect if the source/target lack chromatic pixels. Switch to Detailed for per-hue-band control.",
+            "Source HUE ratio — drag to reweight how much of each source hue band the match draws from. Segments are colored by the source's actual mean hue in that band. The target's hue distribution follows. Count chips re-bin, ↔ for adaptive drag, double-click to reset.",
+          )}
+          {renderRatioAxis(
+            "CHROMA", chromaAxis, setChromaAxis, chromaBarSwatches,
+            "CHROMA tilt — shifts the SOURCE's muted↔vivid balance before the match. NEGATIVE favors muted (low-chroma) mass; POSITIVE favors vivid. The target's chroma distribution follows. Switch to Detailed for per-band control.",
+            "Source CHROMA ratio — drag to reweight how much muted vs vivid mass the source presents (low → high chroma, left → right). The target's chroma distribution follows the edited shape. Count chips re-bin, ↔ for adaptive drag, double-click to reset.",
           )}
         </div>
       )}

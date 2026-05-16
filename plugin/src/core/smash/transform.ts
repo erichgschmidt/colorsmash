@@ -5,7 +5,7 @@
 
 import { fitHistogramCurves } from '../histogramMatch';
 import type { ChannelCurves } from '../histogramMatch';
-import type { ImagePairProfile, SmashControls, SmashAudit, PixelFeatures, Vec3 } from './types';
+import type { ImagePairProfile, SmashControls, SmashAudit, PixelFeatures, Vec3, AxisRatio } from './types';
 import { createAudit, withTraitContribution, withBandUsed, finalize } from './audit';
 import { acesGamutCompress } from './gamut';
 import { perceptualLuma } from '../perceptual/luma';
@@ -137,12 +137,19 @@ export interface SmashEngineOutput {
    *  axis, and taking the median. Approximate but cheap (~27 samples is
    *  enough to anchor the median for typical natural images). */
   readonly estimatedOutputMedianWarmth: number;
-  /** Phase 6 — natural per-band weights of the SOURCE's L histogram, binned
-   *  into `colorization.valueRatio.bandCount` equal-width bands (default 5
-   *  when no valueRatio control is set). Normalized to sum 1. The UI reads
-   *  this to draw the Value source-ratio bar's segment widths at their
-   *  unedited proportions. */
+  /** Phase 6 — natural per-band weights of the SOURCE's histogram for each
+   *  source-ratio axis (Value / Hue / Chroma), binned into that axis's
+   *  `bandCount` equal-width bands (default 5 when no control is set).
+   *  Normalized to sum 1. The UI reads these to draw each ratio bar's
+   *  segment widths at their unedited proportions. The `*BandColors` arrays
+   *  are the mean source RGB of each band — the bar's segment fill colors,
+   *  so a segment genuinely shows the source content it represents. */
   readonly valueRatioNaturalWeights: Float32Array;
+  readonly valueRatioBandColors: readonly Vec3[];
+  readonly hueRatioNaturalWeights: Float32Array;
+  readonly hueRatioBandColors: readonly Vec3[];
+  readonly chromaRatioNaturalWeights: Float32Array;
+  readonly chromaRatioBandColors: readonly Vec3[];
   /** Phase 5 — per-L-bucket chroma + hue CDFs for the conditionalCdf
    *  mechanic. Built once per snap change. Null when no features were
    *  provided (degenerate input). Null entries inside it are sparse
@@ -194,6 +201,14 @@ export interface SmashCdfs {
    *  bar without re-deriving features. Empty on degenerate input. */
   readonly srcLumaSorted: Float32Array;
   readonly tgtLumaSorted: Float32Array;
+  /** Phase 6 — source / target hue angles, chroma-filtered (same filter as
+   *  the hue CDF) and ascending. For the Hue source-ratio bar. */
+  readonly srcHueSorted: Float32Array;
+  readonly tgtHueSorted: Float32Array;
+  /** Phase 6 — source / target chroma values, ascending. For the Chroma
+   *  source-ratio bar. */
+  readonly srcChromaSorted: Float32Array;
+  readonly tgtChromaSorted: Float32Array;
 }
 
 /** Build the L/C/h CDF LUTs from a source/target feature pair. Pure work,
@@ -220,6 +235,8 @@ export function buildSmashCdfs(
       clusterOrderByL: new Int32Array(0), sortedClusterLs: new Float32Array(0),
       conditionalCdf: null,
       srcLumaSorted: new Float32Array(0), tgtLumaSorted: new Float32Array(0),
+      srcHueSorted: new Float32Array(0), tgtHueSorted: new Float32Array(0),
+      srcChromaSorted: new Float32Array(0), tgtChromaSorted: new Float32Array(0),
     };
   }
   const srcLuma = new Float32Array(sourceFeatures.length);
@@ -333,10 +350,13 @@ export function buildSmashCdfs(
   const conditionalCdf = buildConditionalCdf(
     sourceFeatures, targetFeatures, VIABILITY_THRESHOLD, HUE_FILTER_CHROMA);
 
-  // Phase 6 — sorted L arrays, kept for the Value source-ratio bar's
-  // per-drag lumaCdf rebuild (reweight + buildCdfMatchLut, ~1-3ms).
+  // Phase 6 — sorted axis arrays, kept for the source-ratio bars' per-drag
+  // CDF rebuilds (reweight + buildCdfMatchLut, ~1-3ms each). Hue uses the
+  // chroma-filtered arrays (same population the hue CDF was built from).
   const srcLumaSorted = srcLuma.slice().sort();
   const tgtLumaSorted = tgtLuma.slice().sort();
+  const srcHueSorted = Float32Array.from(srcHueArr).sort();
+  const tgtHueSorted = Float32Array.from(tgtHueArr).sort();
 
   return {
     lumaCdf, chromaCdf, hueCdf, hueByLumaLut,
@@ -345,6 +365,8 @@ export function buildSmashCdfs(
     clusterOrderByL, sortedClusterLs,
     conditionalCdf,
     srcLumaSorted, tgtLumaSorted,
+    srcHueSorted, tgtHueSorted,
+    srcChromaSorted, tgtChromaSorted,
   };
 }
 
@@ -444,6 +466,93 @@ function featuresToRgba(features: readonly PixelFeatures[]): Uint8Array | null {
 // (lerp helper removed in Phase 2b — output is reconstructed in OkLCh
 // rather than RGB-mixed, so the only lerps are inline component deltas.)
 
+/**
+ * Phase 6 — mean source RGB per band, for a source-ratio bar's segment
+ * fill colors. Bins `features` into `bandCount` equal-width bands over
+ * [lMin, lMax] by `axisOf`, optionally filtered, and averages each band's
+ * RGB. Empty bands fall back to a neutral gray ramp so the bar still draws.
+ */
+function computeBandColors(
+  features: readonly PixelFeatures[],
+  axisOf: (f: PixelFeatures) => number,
+  filter: ((f: PixelFeatures) => boolean) | null,
+  lMin: number,
+  lMax: number,
+  bandCount: number,
+): Vec3[] {
+  const sumR = new Float64Array(bandCount);
+  const sumG = new Float64Array(bandCount);
+  const sumB = new Float64Array(bandCount);
+  const cnt = new Int32Array(bandCount);
+  const range = lMax - lMin;
+  if (range > 0) {
+    for (const f of features) {
+      if (filter && !filter(f)) continue;
+      const b = Math.min(bandCount - 1, Math.max(0,
+        Math.floor(((axisOf(f) - lMin) / range) * bandCount)));
+      sumR[b] += f.rgb[0];
+      sumG[b] += f.rgb[1];
+      sumB[b] += f.rgb[2];
+      cnt[b]++;
+    }
+  }
+  const out: Vec3[] = new Array(bandCount);
+  for (let b = 0; b < bandCount; b++) {
+    if (cnt[b] > 0) {
+      out[b] = [sumR[b] / cnt[b], sumG[b] / cnt[b], sumB[b] / cnt[b]];
+    } else {
+      const g = Math.round(((b + 0.5) / bandCount) * 255);
+      out[b] = [g, g, g];
+    }
+  }
+  return out;
+}
+
+/** Resolved state for one source-ratio axis: the (possibly reweighted) CDF
+ *  plus the bar's natural per-band weights and segment colors. */
+interface ResolvedAxisRatio {
+  readonly cdf: CdfMatchLut | null;
+  readonly naturalWeights: Float32Array;
+  readonly bandColors: Vec3[];
+}
+
+/**
+ * Phase 6 — resolve one source-ratio axis. Always computes the natural
+ * per-band weights + colors (for the UI); rebuilds the axis CDF from the
+ * reweighted source only when the ratio is present, non-neutral, and the
+ * data is viable — otherwise the base CDF passes through byte-for-byte.
+ */
+function resolveAxisRatio(
+  ratio: AxisRatio | undefined,
+  srcSorted: Float32Array,
+  tgtSorted: Float32Array,
+  baseCdf: CdfMatchLut | null,
+  features: readonly PixelFeatures[],
+  axisOf: (f: PixelFeatures) => number,
+  filter: ((f: PixelFeatures) => boolean) | null,
+): ResolvedAxisRatio {
+  const bandCount =
+    ratio && Number.isInteger(ratio.bandCount) && ratio.bandCount >= 2
+      ? ratio.bandCount
+      : 5;
+  const naturalWeights = naturalBandWeights(srcSorted, bandCount);
+  const lMin = srcSorted.length > 0 ? srcSorted[0] : 0;
+  const lMax = srcSorted.length > 0 ? srcSorted[srcSorted.length - 1] : 1;
+  const bandColors = computeBandColors(features, axisOf, filter, lMin, lMax, bandCount);
+  let cdf = baseCdf;
+  if (
+    ratio &&
+    baseCdf &&
+    srcSorted.length > 0 &&
+    tgtSorted.length > 0 &&
+    !isNeutralRatio(ratio.multipliers, bandCount)
+  ) {
+    const reweighted = reweightSourceByBands(srcSorted, bandCount, ratio.multipliers);
+    cdf = buildCdfMatchLut(reweighted, tgtSorted);
+  }
+  return { cdf, naturalWeights, bandColors };
+}
+
 // ────────── public API ──────────
 
 /**
@@ -530,33 +639,32 @@ export function smash(
   // it once per snap change and cache the result.
   const cdfs = precomputedCdfs ?? buildSmashCdfs(sourceFeatures, targetFeatures, profile.source.clusters);
 
-  // Phase 6 — Value source ratio. Reweight the SOURCE's L histogram by the
-  // user's per-band multipliers BEFORE the CDF match, so the target's tonal
-  // distribution follows the edited source shape. bandCount defaults to 5
-  // (the bar's default) so valueRatioNaturalWeights is always populated for
-  // the UI even when the user hasn't touched the bar. The lumaCdf rebuild
-  // only runs when the ratio is non-neutral — neutral is byte-exact.
-  const valueRatio = c.colorization?.valueRatio;
-  const valueRatioBandCount =
-    valueRatio && Number.isInteger(valueRatio.bandCount) && valueRatio.bandCount >= 2
-      ? valueRatio.bandCount
-      : 5;
-  const valueRatioNaturalWeights =
-    naturalBandWeights(cdfs.srcLumaSorted, valueRatioBandCount);
-  let lumaCdf = cdfs.lumaCdf;
-  if (
-    valueRatio &&
-    cdfs.srcLumaSorted.length > 0 &&
-    cdfs.tgtLumaSorted.length > 0 &&
-    !isNeutralRatio(valueRatio.multipliers, valueRatioBandCount)
-  ) {
-    const reweighted = reweightSourceByBands(
-      cdfs.srcLumaSorted, valueRatioBandCount, valueRatio.multipliers);
-    lumaCdf = buildCdfMatchLut(reweighted, cdfs.tgtLumaSorted);
-  }
+  // Phase 6 — source ratios. For Value / Hue / Chroma the user reweights the
+  // SOURCE's histogram for that axis BEFORE the CDF match, so the target's
+  // distribution follows the edited source shape. Each axis's CDF is rebuilt
+  // only when its ratio is non-neutral — neutral is byte-exact. The natural
+  // per-band weights + mean band colors are always computed so the UI can
+  // draw the bars even before the user touches them.
+  const valueAxis = resolveAxisRatio(
+    c.colorization?.valueRatio, cdfs.srcLumaSorted, cdfs.tgtLumaSorted,
+    cdfs.lumaCdf, sourceFeatures, (f) => f.luma, null);
+  const hueAxis = resolveAxisRatio(
+    c.colorization?.hueRatio, cdfs.srcHueSorted, cdfs.tgtHueSorted,
+    cdfs.hueCdf, sourceFeatures, (f) => f.hueAngle,
+    (f) => f.chroma >= HUE_FILTER_CHROMA);
+  const chromaAxis = resolveAxisRatio(
+    c.colorization?.chromaRatio, cdfs.srcChromaSorted, cdfs.tgtChromaSorted,
+    cdfs.chromaCdf, sourceFeatures, (f) => f.chroma, null);
 
-  const chromaCdf = cdfs.chromaCdf;
-  const hueCdf = cdfs.hueCdf;
+  let lumaCdf = valueAxis.cdf;
+  const chromaCdf = chromaAxis.cdf;
+  const hueCdf = hueAxis.cdf;
+  const valueRatioNaturalWeights = valueAxis.naturalWeights;
+  const valueRatioBandColors = valueAxis.bandColors;
+  const hueRatioNaturalWeights = hueAxis.naturalWeights;
+  const hueRatioBandColors = hueAxis.bandColors;
+  const chromaRatioNaturalWeights = chromaAxis.naturalWeights;
+  const chromaRatioBandColors = chromaAxis.bandColors;
   const hueByLumaLut = cdfs.hueByLumaLut;
   const targetMedianChroma = cdfs.targetMedianChroma;
   const sourceMedianChroma = cdfs.sourceMedianChroma;
@@ -678,7 +786,9 @@ export function smash(
     clusterOrderByL, sortedClusterLs, zoneBoundaries,
     adjustedClusterWeights,
     estimatedOutputMedianWarmth: 0, // placeholder; sampling ignores this field
-    valueRatioNaturalWeights,
+    valueRatioNaturalWeights, valueRatioBandColors,
+    hueRatioNaturalWeights, hueRatioBandColors,
+    chromaRatioNaturalWeights, chromaRatioBandColors,
     conditionalCdf,
   };
   const WARM_A = 0.82;
@@ -706,7 +816,9 @@ export function smash(
     clusterOrderByL, sortedClusterLs, zoneBoundaries,
     adjustedClusterWeights,
     estimatedOutputMedianWarmth,
-    valueRatioNaturalWeights,
+    valueRatioNaturalWeights, valueRatioBandColors,
+    hueRatioNaturalWeights, hueRatioBandColors,
+    chromaRatioNaturalWeights, chromaRatioBandColors,
     conditionalCdf,
   };
 }

@@ -84,17 +84,25 @@ export interface SmashPersisted {
    *  Limits the temperature shift to a slice of the L range
    *  (-1 = shadows only, +1 = highlights only). */
   temperatureLBias?: number;
-  /** v1.21 Phase 6 — SOURCE RATIOS Value axis. `valueRatioMode` picks the
-   *  Simple (tilt slider) vs Detailed (per-band bar) view. `valueTilt`
-   *  -1..+1 is the Simple-mode tilt. `valueBandCount` + `valueWeights`
-   *  are the Detailed-mode band count and per-band multipliers (length
-   *  must match valueBandCount or it falls back to neutral on load).
-   *  `valueAdaptive` is the Detailed-mode drag style. */
-  valueRatioMode?: "simple" | "detailed";
-  valueTilt?: number;
-  valueBandCount?: number;
-  valueWeights?: number[];
-  valueAdaptive?: boolean;
+  /** v1.21 Phase 6 — SOURCE RATIOS. `ratioMode` picks the Simple (tilt
+   *  slider) vs Detailed (per-band bar) view for the whole section; the
+   *  three axes each persist their own tilt + band count + weights +
+   *  adaptive flag. */
+  ratioMode?: "simple" | "detailed";
+  valueAxis?: SmashPersistedAxis;
+  hueAxis?: SmashPersistedAxis;
+  chromaAxis?: SmashPersistedAxis;
+}
+
+/** One source-ratio axis's persisted state. `tilt` -1..+1 is the Simple-mode
+ *  tilt; `bandCount` + `weights` are the Detailed-mode band count and
+ *  per-band multipliers (weights length must match bandCount on load or it
+ *  falls back to neutral); `adaptive` is the Detailed-mode drag style. */
+export interface SmashPersistedAxis {
+  tilt?: number;
+  bandCount?: number;
+  weights?: number[];
+  adaptive?: boolean;
 }
 
 async function getDataFolder(): Promise<any | null> {

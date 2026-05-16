@@ -889,9 +889,11 @@ So SOURCE MIX and ZONE RATIO compose: the bar sets the per-cluster ratio, ZONE R
 
 **LUT bakability.** Yes — every input is the pixel's own `Cin`/`hin`/`Lsm` or frozen engine state. ~4 extra `lookupCdfMatch` per pixel when engaged; zero at the `0` default (guard short-circuits).
 
-### 8.6 — `valueRatio`: SOURCE RATIOS, Value axis (Phase 6)
+### 8.6 — SOURCE RATIOS: Value / Hue / Chroma axes (Phase 6)
 
-**Shipped (first axis).** A new family — *source-axis ratio bars* — lets the user reshape the **source's** histogram along one dimension; the target then follows via the existing CDF match. This is the pre-shaping-anchors roadmap item (§7) realized as the ratio-bar UX. The **Value (L)** axis ships first; Hue and Saturation follow the same pattern.
+**Shipped — all three axes.** A new family — *source-axis ratio bars* — lets the user reshape the **source's** histogram along one dimension; the target then follows via the existing CDF match. This is the pre-shaping-anchors roadmap item (§7) realized as the ratio-bar UX. **Value (L)** shipped first, then **Hue** and **Chroma** as identical clones of the same `axisRatio` mechanic.
+
+**Hue + Chroma.** `colorization.hueRatio` reweights the source's chroma-filtered hue-angle histogram → rebuilds `hueCdf` (no effect when the pair lacks chromatic pixels for a hue CDF). `colorization.chromaRatio` reweights the source's chroma histogram → rebuilds `chromaCdf`. Both go through the shared `resolveAxisRatio` helper, exactly like Value. Each axis's `smash()` output also carries `*RatioBandColors` — the **mean source RGB per band** — so a ratio bar's segments genuinely show the source content they represent (the hue bar is colored by real source hues, not a synthetic rainbow). The UI's SOURCE RATIOS section now renders three rows (VALUE / HUE / CHROMA), each Simple-tilt or Detailed-bar per the section's shared mode chip.
 
 **Why it composes for free.** The engine already builds `lumaCdf` from the source's L distribution and rank-maps the target onto it. A source value ratio is therefore *just a reweighting of the source L histogram before the CDF is built* — no transform-side change at all. `applyTransformOnePass` is untouched; the whole mechanic lives in `smash()`'s CDF assembly.
 
@@ -914,10 +916,9 @@ The toggle is **non-destructive**: the Simple `tilt` and the Detailed `{bandCoun
 
 Remaining forward work from v1.1 §5:
 
-- **Source Hue + Saturation ratios** (Phase 6 cont.). Same `axisRatio` pattern as Value, on the hue and chroma/saturation histograms.
 - **Stochastic per-L-band sampling** (Toggle 2). Per-pixel random sample from source's bucket distribution. NOT LUT-bakable (same input → different output requires per-pixel state) but works as a panel-preview-only mode the user can rasterize.
 - **Sliced optimal transport** (Toggle 4). Math-heavy, gives the strongest distribution preservation; benchmark before implementing.
 - **Per-chroma / per-saturation temperature modulators** (Phase 4.5t). Companions to the shipped `temperatureLBias` per-L modulator — see `temperature-modulators-design.md`.
 - **Target-side ratios.** Source ratios shipped first; a target-output-shaping variant may follow if the source-only model proves limiting.
 
-The order is roughly: Phase 5 conditional CDF (shipped) → Phase 6 source Value ratio (shipped) → Phase 6 Hue + Saturation ratios → Phase 4.5t temperature C/S modulators → Phase 7 stochastic preview mode → Phase 8 sliced OT.
+The order is roughly: Phase 5 conditional CDF (shipped) → Phase 6 source Value / Hue / Chroma ratios (shipped) → Phase 4.5t temperature C/S modulators → Phase 7 stochastic preview mode → Phase 8 sliced OT.

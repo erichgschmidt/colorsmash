@@ -372,8 +372,19 @@ export interface ColorizationOptions {
    *  are all strict no-ops — the engine reuses the natural lumaCdf
    *  byte-for-byte, so existing presets and bakes are unchanged.
    *
-   *  First of the planned source-ratio axes (Hue / Saturation to follow). */
+   *  First of the planned source-ratio axes (Hue / Chroma to follow). */
   readonly valueRatio?: AxisRatio;
+  /** Phase 6 — Hue source ratio. Same mechanic as `valueRatio` on the
+   *  source's hue-angle histogram (chroma-filtered, the same population the
+   *  hue CDF is built from). Reweights `hueCdf` before the match. Absent /
+   *  all-1 / length-mismatch are strict no-ops. No effect when the source
+   *  or target lacks enough chromatic pixels for a hue CDF. */
+  readonly hueRatio?: AxisRatio;
+  /** Phase 6 — Chroma source ratio. Same mechanic as `valueRatio` on the
+   *  source's chroma histogram. Reweights `chromaCdf` before the match —
+   *  shifts how much muted vs vivid mass the source presents. Absent /
+   *  all-1 / length-mismatch are strict no-ops. */
+  readonly chromaRatio?: AxisRatio;
   // Future toggles (Phase 5+) added here:
   //   readonly stochasticPerL?: boolean;
   //   readonly slicedOt?: boolean;
