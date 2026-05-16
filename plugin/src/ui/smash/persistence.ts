@@ -53,6 +53,10 @@ export interface SmashPersisted {
    *  1 = full lerp to source's frequency-weighted joint cluster mean.
    *  Smooth, banding-free alternative to posterize. */
   distribution?: number;
+  /** v1.21 Phase 5 — conditional CDF strength [0, 1]. 0 = off (default,
+   *  global chroma/hue CDFs). 1 = chroma + hue matched against per-L-bucket
+   *  source distributions, restoring within-L color spread. */
+  conditionalCdf?: number;
   /** v1.21 Phase 4.5j — zone routing trio. clusterCount is the number of
    *  source palette zones (integer in [3, 32], default 5). zoneInfluence
    *  is how strongly the zone path overrides default Hue-by-L (default 0).

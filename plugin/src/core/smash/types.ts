@@ -333,9 +333,24 @@ export interface ColorizationOptions {
    *  forward work; this one ships the L-axis modulator first because
    *  shadows/highlights/mids is the most-asked-for split. */
   readonly temperatureLBias?: number;
+  /** Phase 5 — Conditional CDF P(color | L). Amount in [0, 1] controlling
+   *  how far chroma + hue are matched against PER-L-BUCKET source
+   *  distributions instead of the global chroma / hue CDFs.
+   *    0.0 (default): global CDFs only — byte-identical to the Phase 4 path.
+   *    0.5: 50/50 blend between the global CDF result and the bucket-
+   *         conditional result.
+   *    1.0: fully bucket-conditional — a target pixel's chroma + hue are
+   *         rank-mapped against the source pixels that share its (smashed)
+   *         L band, restoring within-L color spread the global CDF averages
+   *         away.
+   *  Buckets too sparse to be statistically meaningful fall back to the
+   *  global CDF automatically; output is interpolated between adjacent L
+   *  buckets so there is no banding at bucket edges. Affects the chroma
+   *  magnitude path unconditionally and the CDF-fallback hue branch — when
+   *  Hue-by-L is on it still owns hue direction. */
+  readonly conditionalCdf?: number;
   // Future toggles (Phase 5+) added here:
   //   readonly stochasticPerL?: boolean;
-  //   readonly conditionalCdf?: boolean;
   //   readonly slicedOt?: boolean;
 }
 

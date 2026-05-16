@@ -873,13 +873,29 @@ So SOURCE MIX and ZONE RATIO compose: the bar sets the per-cluster ratio, ZONE R
 
 **LUT bakability.** Yes — `adjustedClusterWeights` is frozen engine state, identical to the `zoneRatio` path. Zero per-pixel cost beyond what `distribution` already pays.
 
+### 8.5a — `conditionalCdf`: Conditional CDF P(color | L) (Phase 5)
+
+**Shipped.** The "Conditional CDF" mechanic from v1.1 §5 (Toggle 3) — the next item on the §8.5 roadmap.
+
+**Problem.** The Phase 3-4 engine matches L / C / h *independently*: the global chroma and hue CDFs rank-map every target pixel onto the *whole* source's distribution. That discards the joint structure that makes a source legible — "dark pixels are blue, bright pixels are orange." Hue-by-L (§8.4f) recovers the *mean* color per L band, but a single averaged `(a,b)` per bucket can't express within-L spread: a source whose mid-tones are half red, half teal collapses every target mid-tone to one muddy purple.
+
+**Mechanic.** A new module `core/smash/conditionalCdf.ts` slices source pixels into **12 equal-width L buckets** over the source's observed L range. Each bucket holds a 64-bin chroma sub-CDF and a 64-bin hue sub-CDF (`buildCdfMatchLut`, the existing type). At apply time a target pixel's chroma + hue are rank-mapped against the buckets straddling its *smashed* lightness `Lsm`, linearly interpolated between the two so there is no banding at bucket edges (hue uses the engine's circular shortest-arc blend). `buildConditionalCdf` is called once inside `buildSmashCdfs` and cached on `SmashCdfs` / `SmashEngineOutput` (~7 KB).
+
+**Control.** New `colorization.conditionalCdf ∈ [0, 1]`, default `0`. `0` = global CDFs only, byte-identical to Phase 4. `>0` lerps the global chroma/hue result toward the bucket-conditional result. Rendered as the ENGINE **CONDITIONAL** slider, directly below DISTRIBUTION.
+
+**Sparse fallback.** A bucket whose source *or* target slice has fewer than `VIABILITY_THRESHOLD` (16) samples gets a `null` sub-CDF; apply-time falls back to the global CDF for that bucket. Extreme-L buckets are routinely sparse and degrade smoothly. A fully degenerate snap yields `conditionalCdf: null` and the apply path short-circuits to the byte-exact global result.
+
+**Composition.** Conditional CDF substitutes for the global chroma/hue *lookups*, sitting at the same pipeline position. It governs the chroma magnitude path unconditionally; for hue it only touches the **CDF-fallback branch** — when Hue-by-L is on it still owns hue direction, so the two compose (source-driven color story + faithful within-L chroma spread). `liftNeutrals` / `proportionMatch` consume the improved `cdfMag` unchanged; `distribution` / `posterize` / zone routing run downstream and are orthogonal.
+
+**LUT bakability.** Yes — every input is the pixel's own `Cin`/`hin`/`Lsm` or frozen engine state. ~4 extra `lookupCdfMatch` per pixel when engaged; zero at the `0` default (guard short-circuits).
+
 ### 8.5 What's still on the roadmap (Phase 5+)
 
-The four colorization mechanics in v1.1 §5 remain forward work:
+Remaining forward work from v1.1 §5:
 
 - **Stochastic per-L-band sampling** (Toggle 2). Per-pixel random sample from source's bucket distribution. NOT LUT-bakable (same input → different output requires per-pixel state) but works as a panel-preview-only mode the user can rasterize.
-- **Conditional CDF P(color | L)** (Toggle 3). Per-L bucket chroma distribution match, not just bucket mean. Adds within-L diversity in a LUT-bakable way.
 - **Sliced optimal transport** (Toggle 4). Math-heavy, gives the strongest distribution preservation; benchmark before implementing.
 - **Pre-shaping anchors** (§7). User-defined 1D LUTs per dimension applied before the CDF match. Composes with everything above.
+- **Per-chroma / per-saturation temperature modulators** (Phase 4.5t). Companions to the shipped `temperatureLBias` per-L modulator — see `temperature-modulators-design.md`.
 
-The order is roughly: Phase 4.5d `paletteSnap` (shipping now) → Phase 5 conditional CDF (next likely) → Phase 6 anchors → Phase 7 stochastic preview mode → Phase 8 sliced OT.
+The order is roughly: Phase 5 conditional CDF (shipped) → Phase 4.5t temperature C/S modulators → Phase 6 anchors → Phase 7 stochastic preview mode → Phase 8 sliced OT.

@@ -81,6 +81,7 @@ const INLINE_DEFAULTS = {
   proportionMatch: 1,
   posterize: 0,
   distribution: 0,
+  conditionalCdf: 0,
   clusterCount: 5,
   zoneInfluence: 0,
   detailRichness: 1,
@@ -124,6 +125,10 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   // joint Oklab space, frequency-weighted by cluster population. 0 = off,
   // 1 = full lerp to weighted cluster mean. Smooth alternative to posterize.
   const [distribution, setDistribution] = useState<number>(0);
+  // Phase 5 — Conditional CDF: 0 = global chroma/hue CDFs only (default),
+  // 1 = chroma + hue matched against per-L-bucket source distributions.
+  // Restores within-L color spread the global CDF averages away.
+  const [conditionalCdf, setConditionalCdf] = useState<number>(0);
   // Phase 4.5j — Zone routing trio:
   //   clusterCount: number of source clusters (3..32). Re-extracts SourceDNA
   //                 when changed since clusters are computed during extraction.
@@ -225,6 +230,10 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       if (typeof persisted?.distribution === "number" && Number.isFinite(persisted.distribution)) {
         setDistribution(Math.max(0, Math.min(1, persisted.distribution)));
       }
+      // v1.21 Phase 5 — restore Conditional CDF (clamped to [0, 1]).
+      if (typeof persisted?.conditionalCdf === "number" && Number.isFinite(persisted.conditionalCdf)) {
+        setConditionalCdf(Math.max(0, Math.min(1, persisted.conditionalCdf)));
+      }
       // v1.21 Phase 4.5j — restore zone routing trio (clusterCount int 3..32,
       // zoneInfluence + detailRichness floats [0, 1]).
       if (typeof persisted?.clusterCount === "number" && Number.isFinite(persisted.clusterCount)) {
@@ -266,10 +275,11 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     if (!loadedRef.current) return;
     saverRef.current?.({
       amount, traits, colorization, passes, proportionMatch, posterize, distribution,
+      conditionalCdf,
       clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity,
       zoneEdgeSoftness, zoneEdgeShift, temperatureLBias,
     });
-  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution, clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias]);
+  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias]);
 
   // ── Heavy: features + DNA + profile + CDF LUTs. Depends on SNAPS ONLY,
   // so slider drags don't re-run extractFeatures (~100K pixels per call)
@@ -312,7 +322,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       traits,
       // proportionMatch lives on colorization in the engine schema, so merge
       // it in here rather than carrying it around as a separate field.
-      colorization: { ...colorization, proportionMatch, posterize, distribution, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias },
+      colorization: { ...colorization, proportionMatch, posterize, distribution, conditionalCdf, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias },
       passes,
     };
     const engine = smash(
@@ -323,7 +333,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       snapDerived.cdfs,
     );
     return { sourceDNA: snapDerived.sourceDNA, engine };
-  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias]);
+  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias]);
 
   // Propagate engine changes to the parent via useEffect, NOT inside the
   // useMemo body above. Calling setState on the parent during a child's
@@ -353,6 +363,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     setProportionMatch(INLINE_DEFAULTS.proportionMatch);
     setPosterize(INLINE_DEFAULTS.posterize);
     setDistribution(INLINE_DEFAULTS.distribution);
+    setConditionalCdf(INLINE_DEFAULTS.conditionalCdf);
     setClusterCount(INLINE_DEFAULTS.clusterCount);
     setZoneInfluence(INLINE_DEFAULTS.zoneInfluence);
     setDetailRichness(INLINE_DEFAULTS.detailRichness);
@@ -503,14 +514,14 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           slider to its default. Per-slider reset is double-click on a row. */}
       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
         <div style={{ ...traitsHeaderStyle, flex: 1, cursor: "default" }}
-          title="ENGINE controls: PASSES, PROPORTION, POSTERIZE, DISTRIBUTION, ZONES, INFLUENCE, DETAIL, EDGE SOFTNESS/SHIFT, ZONE RATIO, TEMPERATURE, SENSITIVITY, TARGET L. Double-click any slider to reset just that one; click the ✕ to reset them all."
+          title="ENGINE controls: PASSES, PROPORTION, POSTERIZE, DISTRIBUTION, CONDITIONAL, ZONES, INFLUENCE, DETAIL, EDGE SOFTNESS/SHIFT, ZONE RATIO, SOURCE MIX, TEMPERATURE, SENSITIVITY, TARGET L. Double-click any slider to reset just that one; click the ✕ to reset them all."
         >
           <span style={{ width: 10, display: "inline-block" }} />
           <span>ENGINE</span>
         </div>
         <div
           onClick={() => { if (hasSnaps) resetAllInline(); }}
-          title="Reset all ENGINE sliders to their defaults (PASSES 1.0×, PROPORTION 100%, POSTERIZE/DISTRIBUTION 0%, ZONES 5, INFLUENCE 0%, DETAIL 100%, EDGE SOFTNESS/SHIFT 0, ZONE RATIO 0, TEMPERATURE 0, SENSITIVITY 50%, TARGET L 0)."
+          title="Reset all ENGINE sliders to their defaults (PASSES 1.0×, PROPORTION 100%, POSTERIZE/DISTRIBUTION/CONDITIONAL 0%, ZONES 5, INFLUENCE 0%, DETAIL 100%, EDGE SOFTNESS/SHIFT 0, ZONE RATIO 0, SOURCE MIX neutral, TEMPERATURE 0, SENSITIVITY 50%, TARGET L 0)."
           style={resetButtonStyle}
         >
           ✕
@@ -624,6 +635,32 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           title="Smooth-blend the output toward source's joint color distribution. For each pixel, all source clusters contribute weighted by (gaussian proximity in Oklab) × (cluster population). Result emphasizes source's high-frequency modes WITHOUT the banding of Posterize. Different from per-dim CDFs (which treat L, C, h independently); Distribution respects the joint distribution where source's pixels actually co-occur. 0% = off, 100% = full lerp to weighted cluster mean."
         />
         <span style={passesValueStyle}>{Math.round(distribution * 100)}%</span>
+      </div>
+
+      {/* Phase 5 — Conditional CDF P(color | L). Matches each pixel's chroma
+          and hue against the source pixels that share its lightness band,
+          instead of the whole-source global chroma/hue CDF. Restores
+          within-L color spread the global CDF averages away. 0% = off
+          (global CDFs only, byte-identical to before). 100% = fully
+          bucket-conditional. Sparse L buckets fall back to the global CDF;
+          output is interpolated between buckets so there's no banding. */}
+      <div
+        style={passesRowStyle}
+        onDoubleClick={() => { if (hasSnaps) setConditionalCdf(INLINE_DEFAULTS.conditionalCdf); }}
+      >
+        <span style={passesLabelStyle}>CONDITIONAL</span>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={5}
+          value={Math.round(conditionalCdf * 100)}
+          onChange={(e) => setConditionalCdf(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
+          disabled={!hasSnaps}
+          style={passesSliderStyle}
+          title="Conditional CDF P(color | L). Matches a pixel's chroma + hue against only the source pixels that share its lightness band — not the whole source. Restores within-L color SPREAD the global CDF averages away (e.g. a source whose mid-tones are half red, half teal stops collapsing every target mid-tone to muddy purple). 0% = off (global CDFs, identical to before). 100% = fully per-L-bucket. Sparse L buckets fall back to the global CDF automatically; output is interpolated between buckets so there's no banding. When Hue-by-L is on it still owns hue direction; CONDITIONAL then governs chroma magnitude."
+        />
+        <span style={passesValueStyle}>{Math.round(conditionalCdf * 100)}%</span>
       </div>
 
       {/* Phase 4.5j — Zone routing trio. ZONES sets how many source palette

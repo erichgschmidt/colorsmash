@@ -12,6 +12,7 @@ import { perceptualLuma } from '../perceptual/luma';
 import { srgbByteToOklab, oklabToSrgbByte } from '../perceptual/oklab';
 import { buildCdfMatchLut, lookupCdfMatch, type CdfMatchLut } from './cdfMatch';
 import { buildHueByLumaLut, lookupHueByLuma, type HueByLumaLut } from './hueByLuma';
+import { buildConditionalCdf, type ConditionalCdf } from './conditionalCdf';
 
 // ────────── constants ──────────
 
@@ -135,6 +136,11 @@ export interface SmashEngineOutput {
    *  axis, and taking the median. Approximate but cheap (~27 samples is
    *  enough to anchor the median for typical natural images). */
   readonly estimatedOutputMedianWarmth: number;
+  /** Phase 5 — per-L-bucket chroma + hue CDFs for the conditionalCdf
+   *  mechanic. Built once per snap change. Null when no features were
+   *  provided (degenerate input). Null entries inside it are sparse
+   *  buckets that fall back to the global chromaCdf / hueCdf. */
+  readonly conditionalCdf: ConditionalCdf | null;
 }
 
 /** Chroma below this is too low to give a stable hue angle (atan2 noise
@@ -173,6 +179,9 @@ export interface SmashCdfs {
   readonly clusterOrderByL: Int32Array;
   /** Phase 4.5l — sorted centroid Ls (ascending). */
   readonly sortedClusterLs: Float32Array;
+  /** Phase 5 — per-L-bucket chroma + hue CDFs for the conditionalCdf
+   *  mechanic. Null on degenerate (empty-feature) input. */
+  readonly conditionalCdf: ConditionalCdf | null;
 }
 
 /** Build the L/C/h CDF LUTs from a source/target feature pair. Pure work,
@@ -197,6 +206,7 @@ export function buildSmashCdfs(
       hueByLumaLut: null, targetMedianChroma: 0, sourceMedianChroma: 0,
       clusterSubLuts: [], clusterLs: new Float32Array(0), clusterRgbs: [],
       clusterOrderByL: new Int32Array(0), sortedClusterLs: new Float32Array(0),
+      conditionalCdf: null,
     };
   }
   const srcLuma = new Float32Array(sourceFeatures.length);
@@ -304,11 +314,18 @@ export function buildSmashCdfs(
     sortedClusterLs = new Float32Array(0);
   }
 
+  // Phase 5 — per-L-bucket chroma + hue CDFs. Built from the full feature
+  // pair (not the cluster subsets) using the same viability + hue-filter
+  // thresholds as the global CDFs above.
+  const conditionalCdf = buildConditionalCdf(
+    sourceFeatures, targetFeatures, VIABILITY_THRESHOLD, HUE_FILTER_CHROMA);
+
   return {
     lumaCdf, chromaCdf, hueCdf, hueByLumaLut,
     targetMedianChroma, sourceMedianChroma,
     clusterSubLuts, clusterLs, clusterRgbs,
     clusterOrderByL, sortedClusterLs,
+    conditionalCdf,
   };
 }
 
@@ -374,6 +391,10 @@ export const DEFAULT_SMASH_CONTROLS: SmashControls = {
     // Phase 4.5r: temperatureLBias defaults to 0 — uniform across all
     // L values (matches Phase 4.5p behavior).
     temperatureLBias: 0,
+    // Phase 5: conditionalCdf defaults to 0 — global chroma / hue CDFs
+    // only, byte-identical to the Phase 4 path. Users dial it up to
+    // match chroma + hue against per-L-bucket source distributions.
+    conditionalCdf: 0,
   },
   // Phase 4.5c: passes = 1 by default (one transform per pixel). Users can
   // dial up to 2 or 3 to bake the compounded "multi-pass" look into the LUT.
@@ -500,6 +521,7 @@ export function smash(
   const clusterRgbs = cdfs.clusterRgbs;
   const clusterOrderByL = cdfs.clusterOrderByL;
   const sortedClusterLs = cdfs.sortedClusterLs;
+  const conditionalCdf = cdfs.conditionalCdf;
 
   // Phase 4.5l — Compute shifted zone boundaries from sorted cluster Ls
   // + zoneEdgeShift. K-1 boundaries between adjacent sorted clusters,
@@ -612,6 +634,7 @@ export function smash(
     clusterOrderByL, sortedClusterLs, zoneBoundaries,
     adjustedClusterWeights,
     estimatedOutputMedianWarmth: 0, // placeholder; sampling ignores this field
+    conditionalCdf,
   };
   const WARM_A = 0.82;
   const WARM_B = 0.57;
@@ -638,6 +661,7 @@ export function smash(
     clusterOrderByL, sortedClusterLs, zoneBoundaries,
     adjustedClusterWeights,
     estimatedOutputMedianWarmth,
+    conditionalCdf,
   };
 }
 
@@ -702,6 +726,60 @@ export function applyTransform(
   }
 
   return [cr, cg, cb];
+}
+
+/**
+ * Phase 5 — conditional chroma lookup. Maps `Lsm` to a fractional L-bucket
+ * coordinate, looks the chroma sub-CDF up in the two straddling buckets, and
+ * linearly blends the results so output is continuous across bucket edges.
+ * Sparse buckets (null sub-CDF) fall back to `globalMag`, so a partially or
+ * fully sparse ConditionalCdf degrades smoothly to the global-CDF value.
+ */
+function condChromaLookup(
+  cc: ConditionalCdf,
+  Lsm: number,
+  Cin: number,
+  globalMag: number,
+): number {
+  if (cc.lMax <= cc.lMin || cc.buckets < 2) return globalMag;
+  const clampedL = Math.max(cc.lMin, Math.min(cc.lMax, Lsm));
+  const t = ((clampedL - cc.lMin) / (cc.lMax - cc.lMin)) * (cc.buckets - 1);
+  const k0 = Math.floor(t);
+  const k1 = Math.min(k0 + 1, cc.buckets - 1);
+  const frac = t - k0;
+  const lut0 = cc.chroma[k0];
+  const lut1 = cc.chroma[k1];
+  const v0 = lut0 ? Math.max(0, lookupCdfMatch(lut0, Cin)) : globalMag;
+  const v1 = lut1 ? Math.max(0, lookupCdfMatch(lut1, Cin)) : globalMag;
+  return v0 + (v1 - v0) * frac;
+}
+
+/**
+ * Phase 5 — conditional hue lookup. Same bucket interpolation as
+ * `condChromaLookup`, but the inter-bucket blend uses the engine's circular
+ * shortest-arc convention so two buckets straddling the ±π wrap blend
+ * correctly. Sparse buckets fall back to `globalHue`.
+ */
+function condHueLookup(
+  cc: ConditionalCdf,
+  Lsm: number,
+  hin: number,
+  globalHue: number,
+): number {
+  if (cc.lMax <= cc.lMin || cc.buckets < 2) return globalHue;
+  const clampedL = Math.max(cc.lMin, Math.min(cc.lMax, Lsm));
+  const t = ((clampedL - cc.lMin) / (cc.lMax - cc.lMin)) * (cc.buckets - 1);
+  const k0 = Math.floor(t);
+  const k1 = Math.min(k0 + 1, cc.buckets - 1);
+  const frac = t - k0;
+  const lut0 = cc.hue[k0];
+  const lut1 = cc.hue[k1];
+  const h0 = lut0 ? lookupCdfMatch(lut0, hin) : globalHue;
+  const h1 = lut1 ? lookupCdfMatch(lut1, hin) : globalHue;
+  let dh = h1 - h0;
+  if (dh > Math.PI) dh -= 2 * Math.PI;
+  if (dh < -Math.PI) dh += 2 * Math.PI;
+  return h0 + dh * frac;
 }
 
 /**
@@ -900,7 +978,22 @@ function applyTransformOnePass(
   // neutralness=1 at Cin=0 (full lift), neutralness=0 at Cin>=0.15 (no
   // lift — vivid inputs are left to the CDF as designed).
   const liftNeutralsActive = controls.colorization?.liftNeutrals !== false;
-  const cdfMag = out.chromaCdf ? Math.max(0, lookupCdfMatch(out.chromaCdf, Cin)) : CsmBand;
+  // Phase 5 — Conditional CDF amount. 0 = global CDFs only (default, byte-
+  // identical to the Phase 4 path); >0 lerps the global chroma + hue result
+  // toward the per-L-bucket conditional result. Reused by the hue branch
+  // below.
+  const rawConditional = controls.colorization?.conditionalCdf;
+  const conditionalAmt =
+    typeof rawConditional === "number" && Number.isFinite(rawConditional)
+      ? Math.max(0, Math.min(1, rawConditional))
+      : 0;
+  const cdfMagGlobal = out.chromaCdf ? Math.max(0, lookupCdfMatch(out.chromaCdf, Cin)) : CsmBand;
+  const cdfMag =
+    conditionalAmt > 0 && out.conditionalCdf
+      ? cdfMagGlobal
+        + (condChromaLookup(out.conditionalCdf, Lsm, Cin, cdfMagGlobal) - cdfMagGlobal)
+          * conditionalAmt
+      : cdfMagGlobal;
   const liftNeutralness = 1 - Math.min(1, Cin / 0.15);
   const liftAmount = liftNeutralsActive
     ? liftNeutralness * Math.max(0, liftFloor - cdfMag)
@@ -913,9 +1006,21 @@ function applyTransformOnePass(
   if (hueByLumaActive && srcLutMag > 1e-6) {
     hsm = Math.atan2(bSrcLut, aSrcLut);
   } else {
-    hsm = (out.hueCdf && Cin >= HUE_FILTER_CHROMA)
+    const hGlobal = (out.hueCdf && Cin >= HUE_FILTER_CHROMA)
       ? lookupCdfMatch(out.hueCdf, hin)
       : hsmBand;
+    // Phase 5 — blend toward the per-L-bucket conditional hue. Gated on
+    // Cin >= HUE_FILTER_CHROMA (same stability gate as the global hue CDF
+    // above) so near-neutral pixels keep the band fallback unchanged.
+    if (conditionalAmt > 0 && out.conditionalCdf && Cin >= HUE_FILTER_CHROMA) {
+      const condH = condHueLookup(out.conditionalCdf, Lsm, hin, hGlobal);
+      let dh = condH - hGlobal;
+      if (dh > Math.PI) dh -= 2 * Math.PI;
+      if (dh < -Math.PI) dh += 2 * Math.PI;
+      hsm = hGlobal + dh * conditionalAmt;
+    } else {
+      hsm = hGlobal;
+    }
   }
 
   // Phase 4.5d — paletteSnap override. Replaces the averaged hsm above with

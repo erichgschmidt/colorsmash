@@ -1676,3 +1676,161 @@ describe('applyTransform() zoneRatio (Phase 4.5k)', () => {
     }
   });
 });
+
+// ────────── 13. conditionalCdf (Phase 5) ──────────
+
+describe('applyTransform() conditionalCdf (Phase 5)', () => {
+  /** 32×32 source with a strong L→chroma gradient: dark pixels are neutral
+   *  grey, bright pixels are vivid orange. Gives the conditional CDF clear
+   *  per-L structure to diverge from the global CDF. */
+  function lChromaGradientBuffer32(): Uint8Array {
+    const total = 32 * 32;
+    const buf = new Uint8Array(total * 4);
+    for (let i = 0; i < total; i++) {
+      const t = i / (total - 1);
+      buf[i * 4]     = Math.round(40 + t * 215);
+      buf[i * 4 + 1] = Math.round(40 + t * 100);
+      buf[i * 4 + 2] = Math.round(40 + t * 5);
+      buf[i * 4 + 3] = 255;
+    }
+    return buf;
+  }
+
+  it('buildSmashCdfs / smash populate a 12-bucket conditionalCdf for a normal pair', () => {
+    const srcRgba = lChromaGradientBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const eng = smash(srcFeatures, tgtFeatures, profile, DEFAULT_SMASH_CONTROLS);
+    expect(eng.conditionalCdf).not.toBeNull();
+    expect(eng.conditionalCdf!.buckets).toBe(12);
+    expect(eng.conditionalCdf!.chroma.length).toBe(12);
+    expect(eng.conditionalCdf!.hue.length).toBe(12);
+  });
+
+  it('identity at default — conditionalCdf:0 is byte-identical to the field omitted', () => {
+    const srcRgba = lChromaGradientBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const withZero: SmashControls = {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, conditionalCdf: 0 },
+    };
+    const omitted = { ...DEFAULT_SMASH_CONTROLS.colorization };
+    delete omitted.conditionalCdf;
+    const withOmitted: SmashControls = { ...DEFAULT_SMASH_CONTROLS, colorization: omitted };
+
+    const engZero = smash(srcFeatures, tgtFeatures, profile, withZero);
+    const engOmit = smash(srcFeatures, tgtFeatures, profile, withOmitted);
+
+    for (let v = 0; v <= 255; v += 17) {
+      const a = applyTransform(engZero, v, v, v);
+      const b = applyTransform(engOmit, v, v, v);
+      expect(a[0]).toBe(b[0]);
+      expect(a[1]).toBe(b[1]);
+      expect(a[2]).toBe(b[2]);
+    }
+  });
+
+  it('engaged ≠ identity — conditionalCdf:1 diverges from conditionalCdf:0', () => {
+    const srcRgba = lChromaGradientBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const engOff = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, conditionalCdf: 0 },
+    });
+    const engOn = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, conditionalCdf: 1 },
+    });
+
+    let anyDifference = false;
+    for (let v = 16; v <= 240 && !anyDifference; v += 16) {
+      const a = applyTransform(engOff, v, v, v);
+      const b = applyTransform(engOn, v, v, v);
+      if (a[0] !== b[0] || a[1] !== b[1] || a[2] !== b[2]) anyDifference = true;
+    }
+    expect(anyDifference).toBe(true);
+  });
+
+  it('engaged still diverges with Hue-by-L OFF (conditional CDF touches the hue branch too)', () => {
+    const srcRgba = lChromaGradientBuffer32();
+    const tgtRgba = warmOrangeBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const engOff = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, hueByLuma: false, conditionalCdf: 0 },
+    });
+    const engOn = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, hueByLuma: false, conditionalCdf: 1 },
+    });
+
+    // Probe CHROMATIC inputs — the hue branch is gated on Cin >= HUE_FILTER_CHROMA,
+    // so gray probes would never exercise the conditional-hue path.
+    const probes: ReadonlyArray<readonly [number, number, number]> = [
+      [200, 90, 40], [60, 130, 200], [180, 60, 170],
+      [90, 190, 70], [220, 200, 50], [130, 110, 90],
+    ];
+    let anyDifference = false;
+    for (const [pr, pg, pb] of probes) {
+      const a = applyTransform(engOff, pr, pg, pb);
+      const b = applyTransform(engOn, pr, pg, pb);
+      if (a[0] !== b[0] || a[1] !== b[1] || a[2] !== b[2]) { anyDifference = true; break; }
+    }
+    expect(anyDifference).toBe(true);
+  });
+
+  it('produces finite, in-gamut output at conditionalCdf:1 (sparse buckets degrade gracefully)', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = coolBlueBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const eng = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, conditionalCdf: 1 },
+    });
+    for (let v = 0; v <= 255; v += 15) {
+      const out = applyTransform(eng, v, v, v);
+      for (const ch of out) {
+        expect(Number.isInteger(ch)).toBe(true);
+        expect(ch).toBeGreaterThanOrEqual(0);
+        expect(ch).toBeLessThanOrEqual(255);
+      }
+    }
+  });
+
+  it('degenerate snap (empty features → conditionalCdf null) → no throw, finite output', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+
+    // Empty feature arrays → buildSmashCdfs returns conditionalCdf: null.
+    const eng = smash([], [], profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, conditionalCdf: 1 },
+    });
+    expect(eng.conditionalCdf).toBeNull();
+    expect(() => applyTransform(eng, 128, 128, 128)).not.toThrow();
+    const out = applyTransform(eng, 128, 128, 128);
+    for (const ch of out) {
+      expect(Number.isFinite(ch)).toBe(true);
+      expect(ch).toBeGreaterThanOrEqual(0);
+      expect(ch).toBeLessThanOrEqual(255);
+    }
+  });
+});
