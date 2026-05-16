@@ -930,9 +930,26 @@ The toggle is **non-destructive**: the Simple `tilt` and the Detailed `{bandCoun
 
 ### 8.5 What's still on the roadmap
 
-Remaining forward work from v1.1 §5:
+### 8.8 — `stochastic`: Stochastic per-L-band sampling (Phase 7)
 
-- **Stochastic per-L-band sampling** (Toggle 2). Per-pixel random sample from source's bucket distribution. NOT LUT-bakable (same input → different output requires per-pixel state) — a panel-preview-only mode the user rasterizes. Designed in `stochastic-preview-design.md`; the one remaining roadmap mechanic.
+**Shipped (preview-only).** The last of the four v1.1 §5 colorization mechanics. Conditional CDF (§8.5a) recovered within-L colour *spread* deterministically — but CDF matching is still a monotone map: every target pixel at the same `(Lsm, Cin, hin)` gets *exactly* the same output, so a flat region recolours dead flat and the source's natural per-pixel **grain** is averaged away. Stochastic sampling restores it: instead of the CDF rank-map, draw a *random* `(a,b)` sample from the matching source L-band's actual distribution.
+
+**The honest catch — not LUT-bakable.** Same input → different output breaks the `f(R,G,B)` purity a 3D LUT requires. So stochastic is a **preview-only** mechanic. It is wired without compromising the LUT path:
+
+- New `core/smash/stochasticBands.ts`: `buildStochasticBands` reservoir-samples (Algorithm R) up to 256 `(a,b)` pairs per L bucket (~24 KB), built next to `conditionalCdf` in `buildSmashCdfs`. `sampleBandColor` draws one pair, routed by smashed L with stochastic bucket interpolation. `hash2u(x,y,seed)` gives a spatially-stable, reproducible per-pixel uniform — the grain is frozen in place, no shimmer on re-render.
+- `applyTransformOnePass` / `applyTransform` gained an **optional `u` parameter**. The LUT bake (`bakeSmashLut`) and `Test Bake` pass no `u` → the stochastic branch is inert → the bake is **byte-identical**. Only the new `bakeTargetStochastic` (lut.ts) passes `u = hash2u(x,y,seed)` per pixel.
+- New `colorization.stochastic { amount, seeded, seed }`. `amount` `[0,1]` blends the drawn `(C,h)` toward the deterministic result; `0` (default) is a strict no-op.
+
+**UI.** ENGINE > **STOCHASTIC** slider below SLICED OT. When engaged it shows a `PREVIEW ONLY` caption, **Test Bake** renders the grain (`bakeTargetStochastic`) into the panel, and **Export .cube** is disabled with an explanatory tooltip (random per-pixel output has no `f(R,G,B)` to serialize).
+
+**Deferred.** A dedicated full-resolution `applySmashStochastic` pixel-layer rasterize path (vs the current Color Lookup adjustment-layer Apply) — the grainy result is visible via Test Bake; a one-shot rasterizing Apply is forward work.
+
+### 8.5 What's still on the roadmap
+
+The four v1.1 §5 colorization mechanics are all shipped (Phases 5–8). Remaining forward work:
+
 - **Target-side ratios.** Source ratios shipped first; a target-output-shaping variant may follow if the source-only model proves limiting.
+- **Stochastic Apply path** — `applySmashStochastic`, a full-res rasterize-to-pixel-layer Apply for the stochastic mode (§8.8 deferred item).
+- **Engine quality pass** — see `smash-engine-audit.md` for accumulated tech debt (persistence consistency, dead audit/cluster code, hot-path micro-optimizations).
 
-The order is roughly: Phase 5 conditional CDF (shipped) → Phase 6 source Value / Hue / Chroma ratios (shipped) → Phase 4.5t temperature C/S modulators (shipped) → Phase 8 sliced OT (shipped) → Phase 7 stochastic preview mode.
+Phases 5 → 6 → 4.5t → 8 → 7 all shipped. The core mechanic roadmap is complete.

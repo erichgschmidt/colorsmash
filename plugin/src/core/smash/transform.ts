@@ -15,6 +15,7 @@ import { buildHueByLumaLut, lookupHueByLuma, type HueByLumaLut } from './hueByLu
 import { buildConditionalCdf, type ConditionalCdf } from './conditionalCdf';
 import { naturalBandWeights, reweightSourceByBands, isNeutralRatio } from './axisRatio';
 import { buildSlicedOtField, lookupSlicedOt, type SlicedOtField } from './slicedOt';
+import { buildStochasticBands, sampleBandColor, type StochasticBands } from './stochasticBands';
 
 // ────────── constants ──────────
 
@@ -170,6 +171,10 @@ export interface SmashEngineOutput {
    *  slicedOt control is 0 (default) the apply path short-circuits and
    *  never reads this. */
   readonly slicedOt: SlicedOtField | null;
+  /** Phase 7 — per-L-bucket (a,b) sample reservoir for stochastic preview
+   *  sampling. Always built; only consulted when a per-pixel uniform is
+   *  supplied to applyTransform AND stochastic.amount > 0 (preview-only). */
+  readonly stochasticBands: StochasticBands;
 }
 
 /** Chroma below this is too low to give a stable hue angle (atan2 noise
@@ -214,6 +219,9 @@ export interface SmashCdfs {
   /** Phase 8 — baked sliced-OT joint-distribution displacement field. Null
    *  on degenerate (empty-feature) input. */
   readonly slicedOt: SlicedOtField | null;
+  /** Phase 7 — per-L-bucket (a,b) sample reservoir for stochastic preview
+   *  sampling. */
+  readonly stochasticBands: StochasticBands;
   /** Phase 6 — source / target Oklab L values, ascending. Kept so smash()
    *  can cheaply rebuild a reweighted lumaCdf for the Value source-ratio
    *  bar without re-deriving features. Empty on degenerate input. */
@@ -253,6 +261,7 @@ export function buildSmashCdfs(
       clusterOrderByL: new Int32Array(0), sortedClusterLs: new Float32Array(0),
       conditionalCdf: null,
       slicedOt: null,
+      stochasticBands: buildStochasticBands([]),
       srcLumaSorted: new Float32Array(0), tgtLumaSorted: new Float32Array(0),
       srcHueSorted: new Float32Array(0), tgtHueSorted: new Float32Array(0),
       srcChromaSorted: new Float32Array(0), tgtChromaSorted: new Float32Array(0),
@@ -376,6 +385,10 @@ export function buildSmashCdfs(
     sourceFeatures.map((f) => f.oklab),
     targetFeatures.map((f) => f.oklab));
 
+  // Phase 7 — per-L-bucket (a,b) sample reservoir for stochastic preview
+  // sampling. One extra O(N) pass; ~24 KB on the snapshot.
+  const stochasticBands = buildStochasticBands(sourceFeatures);
+
   // Phase 6 — sorted axis arrays, kept for the source-ratio bars' per-drag
   // CDF rebuilds (reweight + buildCdfMatchLut, ~1-3ms each). Hue uses the
   // chroma-filtered arrays (same population the hue CDF was built from).
@@ -391,6 +404,7 @@ export function buildSmashCdfs(
     clusterOrderByL, sortedClusterLs,
     conditionalCdf,
     slicedOt,
+    stochasticBands,
     srcLumaSorted, tgtLumaSorted,
     srcHueSorted, tgtHueSorted,
     srcChromaSorted, tgtChromaSorted,
@@ -467,9 +481,11 @@ export const DEFAULT_SMASH_CONTROLS: SmashControls = {
     // only, byte-identical to the Phase 4 path. Users dial it up to
     // match chroma + hue against per-L-bucket source distributions.
     conditionalCdf: 0,
-    // Phase 8: slicedOt defaults to 0 — no joint-distribution transport,
-    // byte-identical to the Phase 7 path.
+    // Phase 8: slicedOt defaults to 0 — no joint-distribution transport.
     slicedOt: 0,
+    // Phase 7: stochastic amount 0 — deterministic CDF rank-map, the
+    // LUT-bakable path. Users dial it up (preview-only) to restore grain.
+    stochastic: { amount: 0, seeded: true, seed: 0xc01015 },
   },
   // Phase 4.5c: passes = 1 by default (one transform per pixel). Users can
   // dial up to 2 or 3 to bake the compounded "multi-pass" look into the LUT.
@@ -720,6 +736,7 @@ export function smash(
   const sortedClusterLs = cdfs.sortedClusterLs;
   const conditionalCdf = cdfs.conditionalCdf;
   const slicedOt = cdfs.slicedOt;
+  const stochasticBands = cdfs.stochasticBands;
 
   // Phase 4.5l — Compute shifted zone boundaries from sorted cluster Ls
   // + zoneEdgeShift. K-1 boundaries between adjacent sorted clusters,
@@ -844,6 +861,7 @@ export function smash(
     chromaRatioNaturalWeights, chromaRatioBandColors,
     conditionalCdf,
     slicedOt,
+    stochasticBands,
   };
   const WARM_A = 0.82;
   const WARM_B = 0.57;
@@ -876,6 +894,7 @@ export function smash(
     chromaRatioNaturalWeights, chromaRatioBandColors,
     conditionalCdf,
     slicedOt,
+    stochasticBands,
   };
 }
 
@@ -907,7 +926,15 @@ export function applyTransform(
   r: number,
   g: number,
   b: number,
+  u?: number,
 ): Vec3 {
+  // Phase 7 — `u` is an optional per-pixel uniform [0,1) for the stochastic
+  // preview path. Omitted by the LUT bake (`bakeSmashLut`) and `Test Bake`,
+  // so those stay byte-identical. When supplied, each pass gets a
+  // golden-ratio-decorrelated uniform so multi-pass grain doesn't amplify a
+  // single draw.
+  const passU = (i: number): number | undefined =>
+    u === undefined ? undefined : (u + i * 0.6180339887) % 1;
   const rawPasses = out.controls.passes ?? 1;
   // Clamp to [1, 4] — engine ceiling. UI exposes 1.0–3.0 by default, but
   // direct callers (tests, future scripts) can push to 4.
@@ -922,7 +949,7 @@ export function applyTransform(
   let cg = g;
   let cb = b;
   for (let i = 0; i < N_floor; i++) {
-    const [nr, ng, nb] = applyTransformOnePass(out, cr, cg, cb);
+    const [nr, ng, nb] = applyTransformOnePass(out, cr, cg, cb, passU(i));
     cr = nr; cg = ng; cb = nb;
   }
 
@@ -931,7 +958,7 @@ export function applyTransform(
   // engine clamp ceiling (passesFloat == 4) where there's no headroom
   // for another pass.
   if (frac > 0 && N_floor < 4) {
-    const [nr, ng, nb] = applyTransformOnePass(out, cr, cg, cb);
+    const [nr, ng, nb] = applyTransformOnePass(out, cr, cg, cb, passU(N_floor));
     return [
       Math.max(0, Math.min(255, Math.round(cr + (nr - cr) * frac))),
       Math.max(0, Math.min(255, Math.round(cg + (ng - cg) * frac))),
@@ -1009,6 +1036,7 @@ function applyTransformOnePass(
   r: number,
   g: number,
   b: number,
+  u?: number,
 ): Vec3 {
   const { bandTransforms, controls } = out;
 
@@ -1107,6 +1135,30 @@ function applyTransformOnePass(
   // the L dimension — target's L distribution always exists).
   const Lsm = out.lumaCdf ? lookupCdfMatch(out.lumaCdf, Lin) : LsmBand;
 
+  // Phase 7 — Stochastic per-L-band sampling. When a per-pixel uniform `u`
+  // is supplied (preview-only paths) and stochastic.amount > 0, draw one
+  // random source (a,b) sample from the smashed-L bucket. Its chroma
+  // magnitude + hue blend toward the deterministic cdfMag / hsm by `amount`
+  // below. The LUT bake passes no `u`, so this stays inert there and the
+  // bake is byte-identical.
+  const rawStochAmount = controls.colorization?.stochastic?.amount;
+  const stochAmount =
+    typeof u === "number" && Number.isFinite(u)
+      && typeof rawStochAmount === "number" && Number.isFinite(rawStochAmount)
+      ? Math.max(0, Math.min(1, rawStochAmount))
+      : 0;
+  let stochDrawC = 0;
+  let stochDrawH = 0;
+  let stochValid = false;
+  if (stochAmount > 0) {
+    const drawn = sampleBandColor(out.stochasticBands, Lsm, u as number);
+    if (drawn) {
+      stochDrawC = Math.sqrt(drawn.a * drawn.a + drawn.b * drawn.b);
+      stochDrawH = Math.atan2(drawn.b, drawn.a);
+      stochValid = true;
+    }
+  }
+
   // Phase 4 + 4.5 — chroma always comes from per-dim CDF (rank-maps target
   // chroma onto source's distribution, which produces vivid output for vivid
   // sources). The hue dimension splits:
@@ -1202,12 +1254,14 @@ function applyTransformOnePass(
       ? Math.max(0, Math.min(1, rawConditional))
       : 0;
   const cdfMagGlobal = out.chromaCdf ? Math.max(0, lookupCdfMatch(out.chromaCdf, Cin)) : CsmBand;
-  const cdfMag =
+  let cdfMag =
     conditionalAmt > 0 && out.conditionalCdf
       ? cdfMagGlobal
         + (condChromaLookup(out.conditionalCdf, Lsm, Cin, cdfMagGlobal) - cdfMagGlobal)
           * conditionalAmt
       : cdfMagGlobal;
+  // Phase 7 — blend the chroma magnitude toward the stochastic draw.
+  if (stochValid) cdfMag = cdfMag + (stochDrawC - cdfMag) * stochAmount;
   const liftNeutralness = 1 - Math.min(1, Cin / 0.15);
   const liftAmount = liftNeutralsActive
     ? liftNeutralness * Math.max(0, liftFloor - cdfMag)
@@ -1235,6 +1289,16 @@ function applyTransformOnePass(
     } else {
       hsm = hGlobal;
     }
+  }
+
+  // Phase 7 — blend the hue toward the stochastic draw's hue (shortest arc).
+  // Runs after Hue-by-L / the CDF branch so the drawn sample's own hue wins
+  // for the pixel, scaled by `amount`.
+  if (stochValid) {
+    let dhStoch = stochDrawH - hsm;
+    if (dhStoch > Math.PI) dhStoch -= 2 * Math.PI;
+    if (dhStoch < -Math.PI) dhStoch += 2 * Math.PI;
+    hsm = hsm + dhStoch * stochAmount;
   }
 
   // Phase 4.5d — paletteSnap override. Replaces the averaged hsm above with

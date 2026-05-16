@@ -437,9 +437,27 @@ export interface ColorizationOptions {
    *  shifts how much muted vs vivid mass the source presents. Absent /
    *  all-1 / length-mismatch are strict no-ops. */
   readonly chromaRatio?: AxisRatio;
-  // Future toggles (Phase 5+) added here:
-  //   readonly stochasticPerL?: boolean;
-  //   readonly slicedOt?: boolean;
+  /** Phase 7 — Stochastic per-L-band sampling. PREVIEW-ONLY: when active the
+   *  transform draws a random source sample per pixel, which breaks the
+   *  f(R,G,B) purity a 3D LUT requires — so `.cube` export is disabled while
+   *  `amount > 0`. Absent / `amount: 0` is a strict no-op: the LUT path is
+   *  byte-identical to Phase 8. See StochasticOptions. */
+  readonly stochastic?: StochasticOptions;
+}
+
+/** Phase 7 — stochastic per-L-band sampling control. */
+export interface StochasticOptions {
+  /** Blend toward the random draw, [0, 1]. 0 = deterministic (CDF rank-map,
+   *  default, LUT-bakable). 1 = raw per-pixel source sample. Intermediate
+   *  lerps the drawn (C, h) toward the deterministic target. */
+  readonly amount: number;
+  /** When true (default) the per-pixel uniform is hash(x, y, seed) —
+   *  spatially stable, reproducible grain that doesn't shimmer on re-render.
+   *  Always hashed in v1; the field is kept for forward use. */
+  readonly seeded?: boolean;
+  /** Integer seed for the hashed scheme. Changing it re-shuffles the grain
+   *  field. Persisted so a look recreates exactly. */
+  readonly seed?: number;
 }
 
 export interface SmashControls {

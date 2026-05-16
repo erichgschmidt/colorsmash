@@ -31,6 +31,7 @@ import {
   buildSmashCdfs,
   bakeSmashLut,
   bakeTargetPerPixel,
+  bakeTargetStochastic,
   serializeSmashCube,
   DEFAULT_SMASH_CONTROLS,
   type SmashEngineOutput,
@@ -84,6 +85,7 @@ const INLINE_DEFAULTS = {
   distribution: 0,
   conditionalCdf: 0,
   slicedOt: 0,
+  stochasticAmount: 0,
   clusterCount: 5,
   zoneInfluence: 0,
   detailRichness: 1,
@@ -205,6 +207,11 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   // Phase 8 — Sliced OT: 0 = off (default), 1 = full joint-3D-distribution
   // transport of the output color toward the source. Baked at smash() time.
   const [slicedOt, setSlicedOt] = useState<number>(0);
+  // Phase 7 — Stochastic: 0 = off (default, deterministic + LUT-bakable).
+  // >0 draws a random source sample per pixel — PREVIEW-ONLY (can't bake a
+  // .cube). The seed makes the grain reproducible / spatially stable.
+  const [stochasticAmount, setStochasticAmount] = useState<number>(0);
+  const [stochasticSeed, setStochasticSeed] = useState<number>(0xc01015);
   // Phase 4.5j — Zone routing trio:
   //   clusterCount: number of source clusters (3..32). Re-extracts SourceDNA
   //                 when changed since clusters are computed during extraction.
@@ -330,6 +337,16 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       if (typeof persisted?.slicedOt === "number" && Number.isFinite(persisted.slicedOt)) {
         setSlicedOt(Math.max(0, Math.min(1, persisted.slicedOt)));
       }
+      // v1.21 Phase 7 — restore Stochastic amount + seed.
+      if (persisted?.stochastic && typeof persisted.stochastic === "object") {
+        const st = persisted.stochastic;
+        if (typeof st.amount === "number" && Number.isFinite(st.amount)) {
+          setStochasticAmount(Math.max(0, Math.min(1, st.amount)));
+        }
+        if (typeof st.seed === "number" && Number.isFinite(st.seed)) {
+          setStochasticSeed(st.seed | 0);
+        }
+      }
       // v1.21 Phase 4.5j — restore zone routing trio (clusterCount int 3..32,
       // zoneInfluence + detailRichness floats [0, 1]).
       if (typeof persisted?.clusterCount === "number" && Number.isFinite(persisted.clusterCount)) {
@@ -408,6 +425,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     saverRef.current?.({
       amount, traits, colorization, passes, proportionMatch, posterize, distribution,
       conditionalCdf, slicedOt,
+      stochastic: { amount: stochasticAmount, seeded: true, seed: stochasticSeed },
       clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity,
       zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias,
       ratioMode,
@@ -415,7 +433,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       hueAxis: { tilt: hueAxis.tilt, bandCount: hueAxis.bandCount, weights: hueAxis.weights, adaptive: hueAxis.adaptive },
       chromaAxis: { tilt: chromaAxis.tilt, bandCount: chromaAxis.bandCount, weights: chromaAxis.weights, adaptive: chromaAxis.adaptive },
     });
-  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, slicedOt, clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias, ratioMode, valueAxis, hueAxis, chromaAxis]);
+  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, slicedOt, stochasticAmount, stochasticSeed, clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias, ratioMode, valueAxis, hueAxis, chromaAxis]);
 
   // ── Heavy: features + DNA + profile + CDF LUTs. Depends on SNAPS ONLY,
   // so slider drags don't re-run extractFeatures (~100K pixels per call)
@@ -465,7 +483,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       traits,
       // proportionMatch lives on colorization in the engine schema, so merge
       // it in here rather than carrying it around as a separate field.
-      colorization: { ...colorization, proportionMatch, posterize, distribution, conditionalCdf, slicedOt, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias, valueRatio, hueRatio, chromaRatio },
+      colorization: { ...colorization, proportionMatch, posterize, distribution, conditionalCdf, slicedOt, stochastic: { amount: stochasticAmount, seeded: true, seed: stochasticSeed }, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias, valueRatio, hueRatio, chromaRatio },
       passes,
     };
     const engine = smash(
@@ -476,7 +494,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       snapDerived.cdfs,
     );
     return { sourceDNA: snapDerived.sourceDNA, engine };
-  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, slicedOt, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias, ratioMode, valueAxis, hueAxis, chromaAxis]);
+  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, slicedOt, stochasticAmount, stochasticSeed, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias, ratioMode, valueAxis, hueAxis, chromaAxis]);
 
   // Propagate engine changes to the parent via useEffect, NOT inside the
   // useMemo body above. Calling setState on the parent during a child's
@@ -507,6 +525,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     setDistribution(INLINE_DEFAULTS.distribution);
     setConditionalCdf(INLINE_DEFAULTS.conditionalCdf);
     setSlicedOt(INLINE_DEFAULTS.slicedOt);
+    setStochasticAmount(INLINE_DEFAULTS.stochasticAmount);
   };
   const resetZonesGroup = () => {
     setClusterCount(INLINE_DEFAULTS.clusterCount);
@@ -706,18 +725,20 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   // the preview to the live LUT path automatically.
   const onTestBakeClick = () => {
     if (!pipeline || !targetSnap || !onTestBake) return;
-    setExportStatus("baking test image…");
+    // Phase 7 — when STOCHASTIC is engaged, Test Bake renders the per-pixel
+    // stochastic output (the grain) instead of the deterministic ground
+    // truth, since the live LUT preview can't show stochastic.
+    const stochastic = stochasticAmount > 0;
+    setExportStatus(stochastic ? "baking stochastic image…" : "baking test image…");
     try {
       const t0 = typeof performance !== "undefined" ? performance.now() : Date.now();
-      const baked = bakeTargetPerPixel(
-        pipeline.engine,
-        targetSnap.data,
-        targetSnap.width,
-        targetSnap.height,
-      );
+      const baked = stochastic
+        ? bakeTargetStochastic(pipeline.engine, targetSnap.data, targetSnap.width, targetSnap.height)
+        : bakeTargetPerPixel(pipeline.engine, targetSnap.data, targetSnap.width, targetSnap.height);
       const t1 = typeof performance !== "undefined" ? performance.now() : Date.now();
       onTestBake(baked, targetSnap.width, targetSnap.height);
-      setExportStatus(`test bake shown (${Math.round(t1 - t0)} ms — touch any control to revert)`);
+      setExportStatus(
+        `${stochastic ? "stochastic" : "test"} bake shown (${Math.round(t1 - t0)} ms — touch any control to revert)`);
     } catch (err: any) {
       setExportStatus(`test bake error: ${err?.message ?? err}`);
     }
@@ -725,6 +746,12 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
 
   const onExportCube = async () => {
     if (!pipeline) return;
+    // Phase 7 — STOCHASTIC has no fixed f(R,G,B), so there is no .cube to
+    // bake. Guard the export with a clear message.
+    if (stochasticAmount > 0) {
+      setExportStatus("can't export .cube in Stochastic mode — set STOCHASTIC to 0, or use Test Bake to see the grain.");
+      return;
+    }
     setExportStatus("baking…");
     try {
       const lut = bakeSmashLut(pipeline.engine, 33);
@@ -774,8 +801,8 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           reset is double-click on a row. */}
       {renderGroupHeader(
         "ENGINE", engineOpen, setEngineOpen, resetEngineGroup,
-        "Show the ENGINE sliders — core distribution matching: PASSES, PROPORTION, POSTERIZE, DISTRIBUTION, CONDITIONAL, SLICED OT.",
-        "Reset the ENGINE group to defaults (PASSES 1.0×, PROPORTION 100%, POSTERIZE/DISTRIBUTION/CONDITIONAL/SLICED OT 0%).",
+        "Show the ENGINE sliders — core distribution matching: PASSES, PROPORTION, POSTERIZE, DISTRIBUTION, CONDITIONAL, SLICED OT, STOCHASTIC.",
+        "Reset the ENGINE group to defaults (PASSES 1.0×, PROPORTION 100%, POSTERIZE/DISTRIBUTION/CONDITIONAL/SLICED OT/STOCHASTIC 0%).",
       )}
       {engineOpen && (
        <>
@@ -938,6 +965,36 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
         />
         <span style={passesValueStyle}>{Math.round(slicedOt * 100)}%</span>
       </div>
+
+      {/* Phase 7 — STOCHASTIC. Draws a random source sample per pixel,
+          restoring the source's natural grain that deterministic CDF
+          matching averages away. PREVIEW-ONLY: it breaks f(R,G,B) purity so
+          it can't bake to a .cube — click Test Bake to see the grain in the
+          panel; the live preview + Export stay deterministic. */}
+      <div
+        style={passesRowStyle}
+        onDoubleClick={() => { if (hasSnaps) setStochasticAmount(INLINE_DEFAULTS.stochasticAmount); }}
+      >
+        <span style={passesLabelStyle}>STOCHASTIC</span>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={5}
+          value={Math.round(stochasticAmount * 100)}
+          onChange={(e) => setStochasticAmount(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
+          disabled={!hasSnaps}
+          style={passesSliderStyle}
+          title="Stochastic per-L-band sampling — restores per-pixel GRAIN. CONDITIONAL recovers within-tone color spread deterministically; STOCHASTIC goes further and draws a RANDOM source sample for each pixel, so a flat target region picks up the source's natural scatter instead of one averaged color. 0% = off (deterministic). 100% = raw per-pixel draw. PREVIEW-ONLY: random-per-pixel output can't be a fixed f(R,G,B), so it can't bake to a .cube — the live LUT preview and Export .cube stay deterministic; click TEST BAKE to render the grain into the panel. The grain is hash-seeded so it's stable and reproducible (no shimmer on re-render)."
+        />
+        <span style={passesValueStyle}>{Math.round(stochasticAmount * 100)}%</span>
+      </div>
+      {stochasticAmount > 0 && (
+        <div style={stochasticNoteStyle}>
+          PREVIEW ONLY — random per-pixel grain can't bake to a .cube. Click
+          Test Bake to render it; Apply / Export use the deterministic transform.
+        </div>
+      )}
       </>
       )}
 
@@ -1421,9 +1478,11 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
             Test Bake
           </div>
           <div
-            style={pipeline ? actionButtonStyle : actionButtonDisabledStyle}
+            style={(pipeline && stochasticAmount === 0) ? actionButtonStyle : actionButtonDisabledStyle}
             onClick={onExportCube}
-            title="Bake the current Smash transform to a portable .cube LUT."
+            title={stochasticAmount > 0
+              ? "Export disabled in Stochastic mode — random per-pixel grain has no fixed f(R,G,B) to bake into a .cube. Set STOCHASTIC to 0 to re-enable, or use Test Bake to render the grain."
+              : "Bake the current Smash transform to a portable .cube LUT."}
           >
             Export .cube
           </div>
@@ -1474,6 +1533,13 @@ const modeChipStyle: React.CSSProperties = {
   border: "1px solid #1a1a1a", borderRadius: 2,
   fontSize: 9, fontWeight: 600, lineHeight: 1,
   cursor: "pointer", userSelect: "none", flexShrink: 0,
+};
+
+// Phase 7 — "preview only" caption shown under the STOCHASTIC slider when
+// it's engaged. Amber so it reads as a heads-up, not an error.
+const stochasticNoteStyle: React.CSSProperties = {
+  fontSize: 9, lineHeight: 1.35, color: "#d9a441",
+  marginTop: -2, paddingLeft: 2,
 };
 
 const placeholderStyle: React.CSSProperties = {

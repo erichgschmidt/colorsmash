@@ -2285,3 +2285,94 @@ describe('smash() slicedOt (Phase 8)', () => {
     }
   });
 });
+
+// ────────── 18. stochastic per-L-band sampling (Phase 7) ──────────
+
+describe('applyTransform() stochastic (Phase 7)', () => {
+  it('builds a stochasticBands reservoir for a normal feature pair', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const eng = smash(srcFeatures, tgtFeatures, profile, DEFAULT_SMASH_CONTROLS);
+    let total = 0;
+    for (let i = 0; i < eng.stochasticBands.counts.length; i++) {
+      total += eng.stochasticBands.counts[i];
+    }
+    expect(total).toBeGreaterThan(0);
+  });
+
+  it('no-op — passing a per-pixel u with stochastic amount 0 is byte-identical', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    // Default controls → stochastic.amount = 0.
+    const eng = smash(srcFeatures, tgtFeatures, profile, DEFAULT_SMASH_CONTROLS);
+    for (let v = 0; v <= 255; v += 17) {
+      const noU = applyTransform(eng, v, v, v);
+      const withU = applyTransform(eng, v, v, v, 0.37);
+      expect(noU[0]).toBe(withU[0]);
+      expect(noU[1]).toBe(withU[1]);
+      expect(noU[2]).toBe(withU[2]);
+    }
+  });
+
+  it('the LUT bake path (no u) is byte-identical whether stochastic is 0 or 1', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const engOff = smash(srcFeatures, tgtFeatures, profile, DEFAULT_SMASH_CONTROLS);
+    const engOn = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        stochastic: { amount: 1, seeded: true, seed: 123 },
+      },
+    });
+    // No `u` argument → the LUT path → stochastic never engages.
+    for (let v = 0; v <= 255; v += 17) {
+      const a = applyTransform(engOff, v, v, v);
+      const b = applyTransform(engOn, v, v, v);
+      expect(a[0]).toBe(b[0]);
+      expect(a[1]).toBe(b[1]);
+      expect(a[2]).toBe(b[2]);
+    }
+  });
+
+  it('amount 1 + u: different u → different output (variety); same (rgb,u) → identical (determinism)', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const eng = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        stochastic: { amount: 1, seeded: true, seed: 1 },
+      },
+    });
+    // Determinism: identical (rgb, u) → identical output.
+    const d1 = applyTransform(eng, 130, 130, 130, 0.2);
+    const d2 = applyTransform(eng, 130, 130, 130, 0.2);
+    expect(d1).toEqual(d2);
+    // Variety: across a set of u's, at least one pair differs.
+    let anyDifference = false;
+    const us = [0.05, 0.25, 0.5, 0.75, 0.95];
+    for (let i = 1; i < us.length && !anyDifference; i++) {
+      const a = applyTransform(eng, 130, 130, 130, us[0]);
+      const b = applyTransform(eng, 130, 130, 130, us[i]);
+      if (a[0] !== b[0] || a[1] !== b[1] || a[2] !== b[2]) anyDifference = true;
+    }
+    expect(anyDifference).toBe(true);
+  });
+});

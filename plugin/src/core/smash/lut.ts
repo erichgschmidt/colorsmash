@@ -11,6 +11,7 @@
 
 import { applyTransform } from './transform';
 import type { SmashEngineOutput } from './transform';
+import { hash2u } from './stochasticBands';
 
 // ────────── types ──────────
 
@@ -113,6 +114,54 @@ export function bakeTargetPerPixel(
       continue;
     }
     const [r, g, b] = applyTransform(engine, rgba[o], rgba[o + 1], rgba[o + 2]);
+    out[o]     = r;
+    out[o + 1] = g;
+    out[o + 2] = b;
+    out[o + 3] = a;
+  }
+  return out;
+}
+
+/**
+ * Phase 7 — per-pixel STOCHASTIC bake. Like bakeTargetPerPixel, but every
+ * opaque pixel gets a per-pixel uniform `u = hash(x, y, seed)` threaded into
+ * applyTransform, so the output carries the source's within-L grain instead
+ * of the deterministic CDF rank-map. This is NOT a LUT — same RGB at
+ * different coordinates produces different output — so there is no f(R,G,B)
+ * to serialize to a .cube. `seed` (from the engine's stochastic control)
+ * makes the grain reproducible and spatially stable.
+ *
+ * Cost: O(width × height) applyTransform calls — same order as
+ * bakeTargetPerPixel. Use for the preview-tier render, not per slider frame.
+ */
+export function bakeTargetStochastic(
+  engine: SmashEngineOutput,
+  rgba: Uint8Array,
+  width: number,
+  height: number,
+): Uint8Array {
+  const total = width * height;
+  if (rgba.length < total * 4) {
+    throw new Error(
+      `bakeTargetStochastic: rgba length ${rgba.length} smaller than ${total * 4} (width=${width}, height=${height}).`,
+    );
+  }
+  const seed = engine.controls.colorization?.stochastic?.seed ?? 0xc01015;
+  const out = new Uint8Array(total * 4);
+  for (let i = 0; i < total; i++) {
+    const o = i * 4;
+    const a = rgba[o + 3];
+    if (a < 128) {
+      out[o]     = rgba[o];
+      out[o + 1] = rgba[o + 1];
+      out[o + 2] = rgba[o + 2];
+      out[o + 3] = a;
+      continue;
+    }
+    const x = i % width;
+    const y = (i / width) | 0;
+    const u = hash2u(x, y, seed);
+    const [r, g, b] = applyTransform(engine, rgba[o], rgba[o + 1], rgba[o + 2], u);
     out[o]     = r;
     out[o + 1] = g;
     out[o + 2] = b;

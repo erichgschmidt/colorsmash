@@ -61,6 +61,10 @@ export interface SmashPersisted {
    *  (default). 1 = full joint-3D-distribution transport of the output
    *  color toward the source. */
   slicedOt?: number;
+  /** v1.21 Phase 7 — stochastic per-L-band sampling (preview-only). `amount`
+   *  [0,1] blends toward the random per-pixel draw; `seed` makes the grain
+   *  reproducible. */
+  stochastic?: { amount?: number; seeded?: boolean; seed?: number };
   /** v1.21 Phase 4.5j — zone routing trio. clusterCount is the number of
    *  source palette zones (integer in [3, 32], default 5). zoneInfluence
    *  is how strongly the zone path overrides default Hue-by-L (default 0).
