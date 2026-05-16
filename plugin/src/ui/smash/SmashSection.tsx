@@ -166,6 +166,17 @@ function buildAxisSwatches(
   });
 }
 
+// Keys for the panel's collapsible sections — used by the single-open
+// accordion state (`openSection`).
+type SmashSectionKey =
+  | "engine"
+  | "zones"
+  | "temperature"
+  | "traits"
+  | "ratios"
+  | "colorization"
+  | "audit";
+
 // ────────── component ──────────
 
 export function SmashSection(props: SmashSectionProps): JSX.Element {
@@ -173,20 +184,22 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
 
   const [amount, setAmount] = useState<number>(SMASH_PRESET_AMOUNTS.strong);
   const [traits, setTraits] = useState<TraitAmounts>(DEFAULT_TRAIT_AMOUNTS);
-  const [traitsOpen, setTraitsOpen] = useState<boolean>(false);
   const [colorization, setColorization] = useState<ColorizationToggleState>(DEFAULT_COLORIZATION_TOGGLES);
-  const [colorizationOpen, setColorizationOpen] = useState<boolean>(false);
-  // SMASH AUDIT disclosure — closed by default; the panel is a diagnostic
-  // surface, not part of the primary editing loop. User opens it on
-  // demand to inspect trait contributions, band fallbacks, etc.
-  const [auditOpen, setAuditOpen] = useState<boolean>(false);
-  // ENGINE inline-slider stack — split into three collapsible groups, all
-  // collapsed by default so the panel opens compact. ENGINE = core
-  // distribution matching; ZONES = cluster routing + weighting; TEMPERATURE
-  // = warm/cool. User expands the group they want.
-  const [engineOpen, setEngineOpen] = useState<boolean>(false);
-  const [zonesOpen, setZonesOpen] = useState<boolean>(false);
-  const [tempOpen, setTempOpen] = useState<boolean>(false);
+  // Collapsible sections behave as an ACCORDION: at most one open at a time,
+  // so expanding one section collapses whatever was open and the panel never
+  // grows unboundedly tall. `openSection` is the single source of truth;
+  // null = everything collapsed (the default). Each header derives its own
+  // `*Open` flag from it (below) so the render code reads naturally.
+  const [openSection, setOpenSection] = useState<SmashSectionKey | null>(null);
+  const toggleSection = (k: SmashSectionKey) =>
+    setOpenSection((cur) => (cur === k ? null : k));
+  const engineOpen = openSection === "engine";
+  const zonesOpen = openSection === "zones";
+  const tempOpen = openSection === "temperature";
+  const traitsOpen = openSection === "traits";
+  const ratioOpen = openSection === "ratios";
+  const colorizationOpen = openSection === "colorization";
+  const auditOpen = openSection === "audit";
   // Phase 4.5c — Passes: how many times applyTransform iterates per pixel
   // during the LUT bake. 1 = default (single transform). 2-3 emulates the
   // "stale-preview multi-pass" look the user accidentally discovered when
@@ -270,7 +283,6 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   // tilt and the {bandCount, weights} are kept so the flip is non-
   // destructive. `weights` is source-independent (a band is just an
   // axis-range slice), so it only resets when that axis's band count changes.
-  const [ratioOpen, setRatioOpen] = useState<boolean>(false);
   const [ratioMode, setRatioMode] = useState<"simple" | "detailed">("simple");
   const [valueAxis, setValueAxis] = useState<AxisRatioUI>(NEUTRAL_AXIS);
   const [hueAxis, setHueAxis] = useState<AxisRatioUI>(NEUTRAL_AXIS);
@@ -561,11 +573,12 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   };
 
   // Shared collapsible group-header (chevron + label + ✕ reset shown when
-  // open) — used by the three ENGINE sub-sections.
+  // open) — used by the three ENGINE sub-sections. `onToggle` runs the
+  // accordion toggle so opening this group collapses any other open section.
   const renderGroupHeader = (
     label: string,
     isOpen: boolean,
-    setOpen: React.Dispatch<React.SetStateAction<boolean>>,
+    onToggle: () => void,
     onReset: () => void,
     openTip: string,
     resetTip: string,
@@ -573,7 +586,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
       <div
         style={{ ...traitsHeaderStyle, flex: 1 }}
-        onClick={() => setOpen((o) => !o)}
+        onClick={onToggle}
         title={isOpen ? `Hide the ${label} sliders` : openTip}
       >
         <span style={{ width: 10, display: "inline-block", textAlign: "center" }}>
@@ -825,7 +838,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           default. Chevron toggles; the ✕ resets just this group. Per-slider
           reset is double-click on a row. */}
       {renderGroupHeader(
-        "ENGINE", engineOpen, setEngineOpen, resetEngineGroup,
+        "ENGINE", engineOpen, () => toggleSection("engine"), resetEngineGroup,
         "Show the ENGINE sliders — core distribution matching: PASSES, PROPORTION, POSTERIZE, DISTRIBUTION, CONDITIONAL, SLICED OT, STOCHASTIC.",
         "Reset the ENGINE group to defaults (PASSES 1.0×, PROPORTION 100%, POSTERIZE/DISTRIBUTION/CONDITIONAL/SLICED OT/STOCHASTIC 0%).",
       )}
@@ -1028,7 +1041,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           ZONE RATIO / INFLUENCE / DETAIL / EDGE * drive the zone-routing
           path. */}
       {renderGroupHeader(
-        "ZONES", zonesOpen, setZonesOpen, resetZonesGroup,
+        "ZONES", zonesOpen, () => toggleSection("zones"), resetZonesGroup,
         "Show the ZONES sliders — cluster routing + weighting: ZONES, SOURCE MIX, INFLUENCE, DETAIL, EDGE SOFTNESS/SHIFT, ZONE RATIO.",
         "Reset the ZONES group to defaults (ZONES 5, SOURCE MIX neutral, INFLUENCE 0%, DETAIL 100%, EDGE SOFTNESS/SHIFT 0, ZONE RATIO 0).",
       )}
@@ -1199,7 +1212,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           SENSITIVITY drive the shift; TARGET L/C/S restrict it to a slice of
           the lightness / chroma / saturation range. */}
       {renderGroupHeader(
-        "TEMPERATURE", tempOpen, setTempOpen, resetTempGroup,
+        "TEMPERATURE", tempOpen, () => toggleSection("temperature"), resetTempGroup,
         "Show the TEMPERATURE sliders — image-relative warm/cool grading: TEMPERATURE, SENSITIVITY, TARGET L, TARGET C, TARGET S.",
         "Reset the TEMPERATURE group to defaults (TEMPERATURE 0, SENSITIVITY 50%, TARGET L/C/S 0).",
       )}
@@ -1334,7 +1347,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
         <div
           style={{ ...traitsHeaderStyle, flex: 1 }}
-          onClick={() => setTraitsOpen((o) => !o)}
+          onClick={() => toggleSection("traits")}
           title={traitsOpen ? "Hide trait sliders" : "Show trait sliders"}
         >
           <span style={{ width: 10, display: "inline-block", textAlign: "center" }}>
@@ -1371,7 +1384,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
         <div
           style={{ ...traitsHeaderStyle, flex: 1 }}
-          onClick={() => setRatioOpen((o) => !o)}
+          onClick={() => toggleSection("ratios")}
           title={ratioOpen
             ? "Hide source ratios"
             : "Show source ratios — reshape the source's tonal/color distribution; the target matches it via the CDF"}
@@ -1433,7 +1446,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
         <div
           style={{ ...traitsHeaderStyle, flex: 1 }}
-          onClick={() => setColorizationOpen((o) => !o)}
+          onClick={() => toggleSection("colorization")}
           title={colorizationOpen ? "Hide colorization toggles" : "Show colorization toggles (cross-dimensional mechanics for grayscale targets)"}
         >
           <span style={{ width: 10, display: "inline-block", textAlign: "center" }}>
@@ -1466,7 +1479,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
         <>
           <div
             style={traitsHeaderStyle}
-            onClick={() => setAuditOpen((o) => !o)}
+            onClick={() => toggleSection("audit")}
             title={auditOpen
               ? "Hide the audit panel"
               : "Show the audit panel: per-trait contribution bars, which bands had viable samples, which clusters were anchored/locked, gamut clip status, and engine build time (~50–200ms typical). Diagnostic-only — doesn't affect output."}
