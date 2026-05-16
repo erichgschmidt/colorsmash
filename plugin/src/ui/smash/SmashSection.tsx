@@ -526,7 +526,6 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     const se = sectionEnabled;
     // ENGINE group — distribution-matching mechanics.
     const fxPasses = se.engine ? passes : 1;
-    const fxProportionMatch = se.engine ? proportionMatch : 1;
     const fxPosterize = se.engine ? posterize : 0;
     const fxDistribution = se.engine ? distribution : 0;
     const fxConditionalCdf = se.engine ? conditionalCdf : 0;
@@ -542,10 +541,12 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     const fxTemperature = se.temperature ? temperature : 0;
     // TRAITS — default amounts (the standard, no custom trait tweak).
     const fxTraits = se.traits ? traits : DEFAULT_TRAIT_AMOUNTS;
-    // COLORIZATION — all cross-dimensional toggles off (inert).
+    // COLORIZATION — all cross-dimensional toggles off (inert). PROPORTION
+    // is a sub-control of Lift Neutrals, so it's gated by this section too.
     const fxColorization = se.colorization
       ? colorization
       : { hueByLuma: false, liftNeutrals: false, paletteSnap: false };
+    const fxProportionMatch = se.colorization ? proportionMatch : 1;
     // SOURCE RATIOS — neutral axes (all-1 multipliers) when disabled.
     // Always sent (even at neutral) so the engine echoes back each axis's
     // natural weights + band colors for the bars.
@@ -595,7 +596,6 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   // slider reset is double-click on the row.
   const resetEngineGroup = () => {
     setPasses(INLINE_DEFAULTS.passes);
-    setProportionMatch(INLINE_DEFAULTS.proportionMatch);
     setPosterize(INLINE_DEFAULTS.posterize);
     setDistribution(INLINE_DEFAULTS.distribution);
     setConditionalCdf(INLINE_DEFAULTS.conditionalCdf);
@@ -913,8 +913,8 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           reset is double-click on a row. */}
       {renderGroupHeader(
         "ENGINE", "engine", resetEngineGroup,
-        "Show the ENGINE sliders — core distribution matching: PASSES, PROPORTION, POSTERIZE, DISTRIBUTION, CONDITIONAL, SLICED OT, STOCHASTIC.",
-        "Reset the ENGINE group to defaults (PASSES 1.0×, PROPORTION 100%, POSTERIZE/DISTRIBUTION/CONDITIONAL/SLICED OT/STOCHASTIC 0%).",
+        "Show the ENGINE sliders — core distribution matching: PASSES, POSTERIZE, DISTRIBUTION, CONDITIONAL, SLICED OT, STOCHASTIC.",
+        "Reset the ENGINE group to defaults (PASSES 1.0×, POSTERIZE/DISTRIBUTION/CONDITIONAL/SLICED OT/STOCHASTIC 0%).",
       )}
       {engineOpen && (
        <>
@@ -944,34 +944,6 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           title="Drag for fine control over how many times the transform compounds per pixel. 1.0× = single pass (default). 1.5× lands halfway between single and double apply. Past 2× is usually over the top."
         />
         <span style={passesValueStyle}>{passes.toFixed(2)}×</span>
-      </div>
-
-      {/* Phase 4.5g — Proportion match. Same inline-slider vocabulary as
-          PASSES. 100% (tight, default) makes the lift floor track source's
-          per-L chroma magnitude — the output's color/neutral RATIO mirrors
-          source's structure (dark stays dark, chromatic stays chromatic).
-          0% (loose) uses source's GLOBAL median for every L — every near-
-          neutral pixel gets the same lift regardless of where it sits in
-          the source's L→C structure (more uniform "everything colorizes"
-          look). Has no effect when liftNeutrals is OFF (no lift to
-          compute). */}
-      <div
-        style={passesRowStyle}
-        onDoubleClick={() => { if (hasSnaps) setProportionMatch(INLINE_DEFAULTS.proportionMatch); }}
-      >
-        <span style={passesLabelStyle}>PROPORTION</span>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          step={5}
-          value={Math.round(proportionMatch * 100)}
-          onChange={(e) => setProportionMatch(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
-          disabled={!hasSnaps}
-          style={passesSliderStyle}
-          title="How tightly the output's color/neutral ratio matches the source's. 100% (tight, default): lift floor uses source's chroma at the target's smashed L — dark areas of source come through dark, bright/chromatic areas come through chromatic. 0% (loose): lift floor uses source's GLOBAL median chroma — uniform colorization across L, ignoring source's structure. Affects only when Lift Neutrals is on."
-        />
-        <span style={passesValueStyle}>{Math.round(proportionMatch * 100)}%</span>
       </div>
 
       {/* Phase 4.5h — Posterize. Lerps the final RGB toward the nearest
@@ -1536,8 +1508,9 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
             onClick={(e) => {
               e.stopPropagation();
               setColorization(DEFAULT_COLORIZATION_TOGGLES);
+              setProportionMatch(INLINE_DEFAULTS.proportionMatch);
             }}
-            title="Reset colorization toggles to defaults (Hue-by-L ON, Lift Neutrals ON, Palette Snap OFF)."
+            title="Reset colorization to defaults (Hue-by-L ON, Lift Neutrals ON, Palette Snap OFF, Proportion 100%)."
             style={resetButtonStyle}
           >
             ✕
@@ -1545,11 +1518,35 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
         )}
       </div>
       {colorizationOpen && (
-        <ColorizationToggles
-          state={colorization}
-          onChange={setColorization}
-          disabled={!hasSnaps}
-        />
+        <>
+          <ColorizationToggles
+            state={colorization}
+            onChange={setColorization}
+            disabled={!hasSnaps}
+          />
+          {/* PROPORTION — a SUB-PARAMETER of Lift Neutrals: it shapes the
+              lift floor, so it only does anything while Lift Neutrals is on.
+              Indented under the toggles and dimmed when Lift Neutrals is off
+              so the dependency reads at a glance. */}
+          <div
+            style={{ ...passesRowStyle, paddingLeft: 16, opacity: colorization.liftNeutrals ? 1 : 0.4 }}
+            onDoubleClick={() => { if (hasSnaps) setProportionMatch(INLINE_DEFAULTS.proportionMatch); }}
+          >
+            <span style={passesLabelStyle}>↳ PROPORTION</span>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={5}
+              value={Math.round(proportionMatch * 100)}
+              onChange={(e) => setProportionMatch(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
+              disabled={!hasSnaps}
+              style={passesSliderStyle}
+              title="Sub-control of LIFT NEUTRALS — shapes its lift floor; no effect when Lift Neutrals is off. 100% (tight, default): the floor uses source's chroma at the target's smashed L — dark source areas come through dark, chromatic areas chromatic. 0% (loose): the floor uses source's GLOBAL median chroma — uniform colorization across L, ignoring source's L→C structure."
+            />
+            <span style={passesValueStyle}>{Math.round(proportionMatch * 100)}%</span>
+          </div>
+        </>
       )}
 
       {hasSnaps && pipeline && (
