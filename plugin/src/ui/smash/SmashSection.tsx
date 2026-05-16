@@ -69,6 +69,28 @@ interface EnginePipeline {
   engine: SmashEngineOutput;
 }
 
+// ────────── inline-slider defaults ──────────
+
+// Default value for each inline ENGINE slider. Used by the per-slider
+// double-click reset and the section-level ✕ reset-all. Kept in sync with
+// the engine's DEFAULT_SMASH_CONTROLS (and clusterCount, which is a
+// UI-level knob not in SmashControls).
+const INLINE_DEFAULTS = {
+  passes: 1,
+  proportionMatch: 1,
+  posterize: 0,
+  distribution: 0,
+  clusterCount: 5,
+  zoneInfluence: 0,
+  detailRichness: 1,
+  zoneEdgeSoftness: 0,
+  zoneEdgeShift: 0,
+  zoneRatio: 0,
+  temperature: 0,
+  temperatureSensitivity: 0.5,
+  temperatureLBias: 0,
+} as const;
+
 // ────────── component ──────────
 
 export function SmashSection(props: SmashSectionProps): JSX.Element {
@@ -305,6 +327,25 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   const preset = detectPreset(amount);
   const onPresetChange = (next: SmashPreset) => setAmount(SMASH_PRESET_AMOUNTS[next]);
 
+  // Reset every inline ENGINE slider to its default in one click (the ✕
+  // on the ENGINE section header). Per-slider reset is via double-click
+  // on an individual row (wired inline on each row below).
+  const resetAllInline = () => {
+    setPasses(INLINE_DEFAULTS.passes);
+    setProportionMatch(INLINE_DEFAULTS.proportionMatch);
+    setPosterize(INLINE_DEFAULTS.posterize);
+    setDistribution(INLINE_DEFAULTS.distribution);
+    setClusterCount(INLINE_DEFAULTS.clusterCount);
+    setZoneInfluence(INLINE_DEFAULTS.zoneInfluence);
+    setDetailRichness(INLINE_DEFAULTS.detailRichness);
+    setZoneEdgeSoftness(INLINE_DEFAULTS.zoneEdgeSoftness);
+    setZoneEdgeShift(INLINE_DEFAULTS.zoneEdgeShift);
+    setZoneRatio(INLINE_DEFAULTS.zoneRatio);
+    setTemperature(INLINE_DEFAULTS.temperature);
+    setTemperatureSensitivity(INLINE_DEFAULTS.temperatureSensitivity);
+    setTemperatureLBias(INLINE_DEFAULTS.temperatureLBias);
+  };
+
   // Track Smash LUT layer ids we've created. Default Apply replaces the most
   // recent one in place; "+" fork mode creates a new one and auto-hides the
   // prior. Stored in a ref (not state) because we want it to persist across
@@ -436,14 +477,37 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
         disabled={!hasSnaps}
       />
 
+      {/* ENGINE section header — label + ✕ reset-all. Not a disclosure
+          (the inline sliders stay visible); the ✕ resets every inline
+          slider to its default. Per-slider reset is double-click on a row. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        <div style={{ ...traitsHeaderStyle, flex: 1, cursor: "default" }}
+          title="ENGINE controls: PASSES, PROPORTION, POSTERIZE, DISTRIBUTION, ZONES, INFLUENCE, DETAIL, EDGE SOFTNESS/SHIFT, ZONE RATIO, TEMPERATURE, SENSITIVITY, TARGET L. Double-click any slider to reset just that one; click the ✕ to reset them all."
+        >
+          <span style={{ width: 10, display: "inline-block" }} />
+          <span>ENGINE</span>
+        </div>
+        <div
+          onClick={() => { if (hasSnaps) resetAllInline(); }}
+          title="Reset all ENGINE sliders to their defaults (PASSES 1.0×, PROPORTION 100%, POSTERIZE/DISTRIBUTION 0%, ZONES 5, INFLUENCE 0%, DETAIL 100%, EDGE SOFTNESS/SHIFT 0, ZONE RATIO 0, TEMPERATURE 0, SENSITIVITY 50%, TARGET L 0)."
+          style={resetButtonStyle}
+        >
+          ✕
+        </div>
+      </div>
+
       {/* Passes slider (Phase 4.5c, refined to continuous in 4.5e). Inline
           because it's a small, primary intensity knob. 1.0× = one transform
           per pixel (current default). Fractional values lerp between
           consecutive integer-pass results — 1.5× is halfway between
           single-apply and double-apply behavior. Range capped at 3.0× in
           the UI because anything past ~2× is usually visibly over-the-top;
-          the engine clamp ceiling is 4 for direct callers. */}
-      <div style={passesRowStyle}>
+          the engine clamp ceiling is 4 for direct callers. Double-click the
+          row to reset to default. */}
+      <div
+        style={passesRowStyle}
+        onDoubleClick={() => { if (hasSnaps) setPasses(INLINE_DEFAULTS.passes); }}
+      >
         <span style={passesLabelStyle}>PASSES</span>
         <input
           type="range"
@@ -468,7 +532,10 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           the source's L→C structure (more uniform "everything colorizes"
           look). Has no effect when liftNeutrals is OFF (no lift to
           compute). */}
-      <div style={passesRowStyle}>
+      <div
+        style={passesRowStyle}
+        onDoubleClick={() => { if (hasSnaps) setProportionMatch(INLINE_DEFAULTS.proportionMatch); }}
+      >
         <span style={passesLabelStyle}>PROPORTION</span>
         <input
           type="range"
@@ -492,7 +559,10 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           coloration using only the source's actual palette colors.
           Different from paletteSnap (which only re-aims hue direction):
           posterize replaces the entire pixel L+a+b. */}
-      <div style={passesRowStyle}>
+      <div
+        style={passesRowStyle}
+        onDoubleClick={() => { if (hasSnaps) setPosterize(INLINE_DEFAULTS.posterize); }}
+      >
         <span style={passesLabelStyle}>POSTERIZE</span>
         <input
           type="range"
@@ -516,7 +586,10 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           source's high-density modes (unlike per-dim CDFs which treat L,
           C, h independently). This is the "color smash with structure"
           knob the user asked for. */}
-      <div style={passesRowStyle}>
+      <div
+        style={passesRowStyle}
+        onDoubleClick={() => { if (hasSnaps) setDistribution(INLINE_DEFAULTS.distribution); }}
+      >
         <span style={passesLabelStyle}>DISTRIBUTION</span>
         <input
           type="range"
@@ -538,7 +611,10 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           DETAIL sets, within the zone path, how much intra-cluster L→(a,b)
           variation is preserved (0 = cluster's centroid, 1 = cluster's own
           sub-LUT). */}
-      <div style={passesRowStyle}>
+      <div
+        style={passesRowStyle}
+        onDoubleClick={() => { if (hasSnaps) setClusterCount(INLINE_DEFAULTS.clusterCount); }}
+      >
         <span style={passesLabelStyle}>ZONES</span>
         <input
           type="range"
@@ -554,7 +630,10 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
         <span style={passesValueStyle}>{clusterCount}</span>
       </div>
 
-      <div style={passesRowStyle}>
+      <div
+        style={passesRowStyle}
+        onDoubleClick={() => { if (hasSnaps) setZoneInfluence(INLINE_DEFAULTS.zoneInfluence); }}
+      >
         <span style={passesLabelStyle}>INFLUENCE</span>
         <input
           type="range"
@@ -570,7 +649,10 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
         <span style={passesValueStyle}>{Math.round(zoneInfluence * 100)}%</span>
       </div>
 
-      <div style={passesRowStyle}>
+      <div
+        style={passesRowStyle}
+        onDoubleClick={() => { if (hasSnaps) setDetailRichness(INLINE_DEFAULTS.detailRichness); }}
+      >
         <span style={passesLabelStyle}>DETAIL</span>
         <input
           type="range"
@@ -589,7 +671,10 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       {/* Phase 4.5l — EDGE SOFTNESS. Controls hardness of boundaries
           between source clusters during zone routing. 0% = argmin pick
           (4.5j default, byte-exact bake). 100% = wide gaussian blur. */}
-      <div style={passesRowStyle}>
+      <div
+        style={passesRowStyle}
+        onDoubleClick={() => { if (hasSnaps) setZoneEdgeSoftness(INLINE_DEFAULTS.zoneEdgeSoftness); }}
+      >
         <span style={passesLabelStyle}>EDGE SOFTNESS</span>
         <input
           type="range"
@@ -609,7 +694,10 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           target L axis. Negative = boundaries down (shadows squeezed),
           positive = boundaries up (highlights squeezed). 0% = boundaries
           at natural sorted-cluster midpoints. */}
-      <div style={passesRowStyle}>
+      <div
+        style={passesRowStyle}
+        onDoubleClick={() => { if (hasSnaps) setZoneEdgeShift(INLINE_DEFAULTS.zoneEdgeShift); }}
+      >
         <span style={passesLabelStyle}>EDGE SHIFT</span>
         <input
           type="range"
@@ -629,7 +717,10 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           distribution. Affects every mechanic that reads cluster.weight
           (today: Distribution). Slider stores -100..+100 ints for UI
           tidiness; we map to a -1..+1 float when passing to the engine. */}
-      <div style={passesRowStyle}>
+      <div
+        style={passesRowStyle}
+        onDoubleClick={() => { if (hasSnaps) setZoneRatio(INLINE_DEFAULTS.zoneRatio); }}
+      >
         <span style={passesLabelStyle}>ZONE RATIO</span>
         <input
           type="range"
@@ -652,7 +743,10 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           pixels are untouched. Works on uniformly-warm or uniformly-
           cool images because "warm"/"cool" is judged relative to the
           image's own median, not the absolute Oklab axis. */}
-      <div style={passesRowStyle}>
+      <div
+        style={passesRowStyle}
+        onDoubleClick={() => { if (hasSnaps) setTemperature(INLINE_DEFAULTS.temperature); }}
+      >
         <span style={passesLabelStyle}>TEMPERATURE</span>
         <input
           type="range"
@@ -674,7 +768,10 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           (linear) = no sensitivity adjustment. 100% (sharp) = even
           pixels just past the median get strong boost → distinct
           warm/cool zones. */}
-      <div style={passesRowStyle}>
+      <div
+        style={passesRowStyle}
+        onDoubleClick={() => { if (hasSnaps) setTemperatureSensitivity(INLINE_DEFAULTS.temperatureSensitivity); }}
+      >
         <span style={passesLabelStyle}>SENSITIVITY</span>
         <input
           type="range"
@@ -693,7 +790,10 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       {/* Phase 4.5r — Temperature L Bias. Restricts the temperature shift
           to a slice of the L range. 0% = uniform (current behavior).
           Negative = focus shift on shadows; positive = focus on highlights. */}
-      <div style={passesRowStyle}>
+      <div
+        style={passesRowStyle}
+        onDoubleClick={() => { if (hasSnaps) setTemperatureLBias(INLINE_DEFAULTS.temperatureLBias); }}
+      >
         <span style={passesLabelStyle}>TARGET L</span>
         <input
           type="range"
@@ -749,16 +849,31 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       {/* Phase 4.5+ — colorization toggles. Auto-detect grayscale targets and
           engage cross-dimensional inference when active toggles say so. The
           engine ignores the toggles for colorful targets (per-dimension CDF
-          handles those correctly). Disclosure pattern matches TRAITS above. */}
-      <div
-        style={traitsHeaderStyle}
-        onClick={() => setColorizationOpen((o) => !o)}
-        title={colorizationOpen ? "Hide colorization toggles" : "Show colorization toggles (cross-dimensional mechanics for grayscale targets)"}
-      >
-        <span style={{ width: 10, display: "inline-block", textAlign: "center" }}>
-          {colorizationOpen ? "▾" : "▸"}
-        </span>
-        <span>COLORIZATION</span>
+          handles those correctly). Disclosure pattern matches TRAITS above,
+          with a ✕ reset shown when open. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        <div
+          style={{ ...traitsHeaderStyle, flex: 1 }}
+          onClick={() => setColorizationOpen((o) => !o)}
+          title={colorizationOpen ? "Hide colorization toggles" : "Show colorization toggles (cross-dimensional mechanics for grayscale targets)"}
+        >
+          <span style={{ width: 10, display: "inline-block", textAlign: "center" }}>
+            {colorizationOpen ? "▾" : "▸"}
+          </span>
+          <span>COLORIZATION</span>
+        </div>
+        {colorizationOpen && (
+          <div
+            onClick={(e) => {
+              e.stopPropagation();
+              setColorization(DEFAULT_COLORIZATION_TOGGLES);
+            }}
+            title="Reset colorization toggles to defaults (Hue-by-L ON, Lift Neutrals ON, Palette Snap OFF)."
+            style={resetButtonStyle}
+          >
+            ✕
+          </div>
+        )}
       </div>
       {colorizationOpen && (
         <ColorizationToggles
