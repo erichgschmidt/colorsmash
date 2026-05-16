@@ -2205,3 +2205,83 @@ describe('applyTransform() temperature C/S bias (Phase 4.5t)', () => {
     }
   });
 });
+
+// ────────── 17. sliced OT (Phase 8) ──────────
+
+describe('smash() slicedOt (Phase 8)', () => {
+  it('builds a non-null slicedOt field for a normal feature pair', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = coolBlueBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const eng = smash(srcFeatures, tgtFeatures, profile, DEFAULT_SMASH_CONTROLS);
+    expect(eng.slicedOt).not.toBeNull();
+    expect(eng.slicedOt!.size).toBe(16);
+  });
+
+  it('neutral (slicedOt:0) is byte-identical to the field omitted', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = coolBlueBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const engOmit = smash(srcFeatures, tgtFeatures, profile, DEFAULT_SMASH_CONTROLS);
+    const engZero = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, slicedOt: 0 },
+    });
+    for (let v = 0; v <= 255; v += 17) {
+      const a = applyTransform(engOmit, v, v, v);
+      const b = applyTransform(engZero, v, v, v);
+      expect(a[0]).toBe(b[0]);
+      expect(a[1]).toBe(b[1]);
+      expect(a[2]).toBe(b[2]);
+    }
+  });
+
+  it('engaged slicedOt:1 diverges from slicedOt:0', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = coolBlueBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const engOff = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, slicedOt: 0 },
+    });
+    const engOn = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, slicedOt: 1 },
+    });
+    let anyDifference = false;
+    for (let v = 0; v <= 255 && !anyDifference; v += 8) {
+      const a = applyTransform(engOff, v, v, v);
+      const b = applyTransform(engOn, v, v, v);
+      if (a[0] !== b[0] || a[1] !== b[1] || a[2] !== b[2]) anyDifference = true;
+    }
+    expect(anyDifference).toBe(true);
+  });
+
+  it('degenerate snap (empty features) → slicedOt null, no throw, finite output', () => {
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+
+    const eng = smash([], [], profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, slicedOt: 1 },
+    });
+    expect(eng.slicedOt).toBeNull();
+    expect(() => applyTransform(eng, 128, 128, 128)).not.toThrow();
+    const out = applyTransform(eng, 128, 128, 128);
+    for (const ch of out) {
+      expect(Number.isFinite(ch)).toBe(true);
+      expect(ch).toBeGreaterThanOrEqual(0);
+      expect(ch).toBeLessThanOrEqual(255);
+    }
+  });
+});

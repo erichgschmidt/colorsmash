@@ -401,6 +401,18 @@ export interface ColorizationOptions {
    *  magnitude path unconditionally and the CDF-fallback hue branch — when
    *  Hue-by-L is on it still owns hue direction. */
   readonly conditionalCdf?: number;
+  /** Phase 8 — Sliced optimal transport. Blends the engine's output colour
+   *  toward its sliced-OT-transported position — the strongest joint-3D
+   *  distribution match, capturing Oklab correlations the per-axis and
+   *  conditional CDFs miss. Range [0, 1]:
+   *    0.0 (default): off — byte-identical to the pre-Phase-8 path.
+   *    0.5: half-way toward the full joint-distribution transport.
+   *    1.0: full sliced-OT displacement.
+   *  Computed at smash() time as a baked 16³ Oklab displacement grid;
+   *  apply-time is one trilinear lookup-and-add. Composes with (stacks on
+   *  top of) every other mechanic. Absent / non-finite / ≤ 0 are strict
+   *  no-ops, so existing presets and .cube bakes are unchanged. */
+  readonly slicedOt?: number;
   /** Phase 6 — Value source ratio. Reweights the SOURCE's L (lightness)
    *  histogram by per-band multipliers before the CDF match runs, so the
    *  target's tonal distribution follows the user-edited source shape —

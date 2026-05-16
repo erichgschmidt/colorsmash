@@ -918,12 +918,21 @@ The toggle is **non-destructive**: the Simple `tilt` and the Detailed `{bandCoun
 
 **LUT bakability.** Yes — the reweighted `lumaCdf` is frozen engine state; `applyTransform` consumes it exactly as before. Zero per-pixel cost change.
 
+### 8.7 — `slicedOt`: Sliced Optimal Transport (Phase 8)
+
+**Shipped.** The strongest joint-distribution matcher in the engine. The per-axis CDFs match L/C/h *marginals* independently; Phase 5 `conditionalCdf` adds one L-conditional slice; **sliced OT matches the full joint 3D Oklab distribution** — capturing correlations (e.g. "as a rises, b falls") that don't factor through any single axis.
+
+**How it stays LUT-bakable.** Sliced OT moves a *point cloud* (project both clouds onto a random direction, 1D-sort-match, displace, repeat). By itself that's a sample permutation, not a function — but each moved sample carries a displacement `field[i] = T_final[i] − T0[i]` attached to a known input Oklab position `T0[i]`, i.e. a scattered colour→colour map. New module `core/smash/slicedOt.ts`: `buildSlicedOtField` runs sliced OT on subsampled Oklab clouds (`SUBSAMPLE_N = 4000`, up to 128 slices with an early-exit convergence check) inside `buildSmashCdfs`, trilinear-splats the converged field into a **16³ Oklab grid** (flood-filled so there are no holes), and stores it on `SmashEngineOutput.slicedOt`. `applyTransformOnePass` does one `lookupSlicedOt` trilinear lookup-and-add — fully pure, bakes through `bakeSmashLut` unchanged.
+
+**Lookup keying.** The displacement field is defined over the *target/input* colour space, so the apply path looks it up at the pixel's **input** Oklab `(Lin, aIn, bIn)` and adds the interpolated displacement onto the post-gate `(Lout, aOut, bOut)` — the joint-structure correction stacks additively on top of whatever the CDF/gate pipeline produced. (This refines the design doc's "look up at post-gate colour" — keying at the input is coherent with how the field was built.)
+
+**Control.** New `colorization.slicedOt ∈ [0, 1]`, default `0` (strict no-op — absent/≤0 short-circuits, existing presets/bakes byte-identical). ENGINE **SLICED OT** slider below CONDITIONAL. It *stacks* with the per-axis + conditional CDFs rather than replacing them — dial both for progressively stronger matching. Cost: ~35–55 ms once per snap change (snap-cached like `buildConditionalCdf`); zero per slider drag.
+
 ### 8.5 What's still on the roadmap
 
 Remaining forward work from v1.1 §5:
 
-- **Stochastic per-L-band sampling** (Toggle 2). Per-pixel random sample from source's bucket distribution. NOT LUT-bakable (same input → different output requires per-pixel state) but works as a panel-preview-only mode the user can rasterize.
-- **Sliced optimal transport** (Toggle 4). Math-heavy, gives the strongest distribution preservation; benchmark before implementing.
+- **Stochastic per-L-band sampling** (Toggle 2). Per-pixel random sample from source's bucket distribution. NOT LUT-bakable (same input → different output requires per-pixel state) — a panel-preview-only mode the user rasterizes. Designed in `stochastic-preview-design.md`; the one remaining roadmap mechanic.
 - **Target-side ratios.** Source ratios shipped first; a target-output-shaping variant may follow if the source-only model proves limiting.
 
-The order is roughly: Phase 5 conditional CDF (shipped) → Phase 6 source Value / Hue / Chroma ratios (shipped) → Phase 4.5t temperature C/S modulators (shipped) → Phase 7 stochastic preview mode → Phase 8 sliced OT.
+The order is roughly: Phase 5 conditional CDF (shipped) → Phase 6 source Value / Hue / Chroma ratios (shipped) → Phase 4.5t temperature C/S modulators (shipped) → Phase 8 sliced OT (shipped) → Phase 7 stochastic preview mode.

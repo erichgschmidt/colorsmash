@@ -14,6 +14,7 @@ import { buildCdfMatchLut, lookupCdfMatch, type CdfMatchLut } from './cdfMatch';
 import { buildHueByLumaLut, lookupHueByLuma, type HueByLumaLut } from './hueByLuma';
 import { buildConditionalCdf, type ConditionalCdf } from './conditionalCdf';
 import { naturalBandWeights, reweightSourceByBands, isNeutralRatio } from './axisRatio';
+import { buildSlicedOtField, lookupSlicedOt, type SlicedOtField } from './slicedOt';
 
 // ────────── constants ──────────
 
@@ -164,6 +165,11 @@ export interface SmashEngineOutput {
    *  provided (degenerate input). Null entries inside it are sparse
    *  buckets that fall back to the global chromaCdf / hueCdf. */
   readonly conditionalCdf: ConditionalCdf | null;
+  /** Phase 8 — baked sliced-OT joint-distribution displacement field over a
+   *  16³ Oklab grid. Null on degenerate (empty-feature) input. When the
+   *  slicedOt control is 0 (default) the apply path short-circuits and
+   *  never reads this. */
+  readonly slicedOt: SlicedOtField | null;
 }
 
 /** Chroma below this is too low to give a stable hue angle (atan2 noise
@@ -205,6 +211,9 @@ export interface SmashCdfs {
   /** Phase 5 — per-L-bucket chroma + hue CDFs for the conditionalCdf
    *  mechanic. Null on degenerate (empty-feature) input. */
   readonly conditionalCdf: ConditionalCdf | null;
+  /** Phase 8 — baked sliced-OT joint-distribution displacement field. Null
+   *  on degenerate (empty-feature) input. */
+  readonly slicedOt: SlicedOtField | null;
   /** Phase 6 — source / target Oklab L values, ascending. Kept so smash()
    *  can cheaply rebuild a reweighted lumaCdf for the Value source-ratio
    *  bar without re-deriving features. Empty on degenerate input. */
@@ -243,6 +252,7 @@ export function buildSmashCdfs(
       clusterSubLuts: [], clusterLs: new Float32Array(0), clusterRgbs: [],
       clusterOrderByL: new Int32Array(0), sortedClusterLs: new Float32Array(0),
       conditionalCdf: null,
+      slicedOt: null,
       srcLumaSorted: new Float32Array(0), tgtLumaSorted: new Float32Array(0),
       srcHueSorted: new Float32Array(0), tgtHueSorted: new Float32Array(0),
       srcChromaSorted: new Float32Array(0), tgtChromaSorted: new Float32Array(0),
@@ -359,6 +369,13 @@ export function buildSmashCdfs(
   const conditionalCdf = buildConditionalCdf(
     sourceFeatures, targetFeatures, VIABILITY_THRESHOLD, HUE_FILTER_CHROMA);
 
+  // Phase 8 — baked sliced-OT joint-distribution displacement field. Runs
+  // sliced OT on subsampled Oklab clouds and splats the result into a 16³
+  // grid. Snap-cached here (not per slider drag); ~35-55ms with early-exit.
+  const slicedOt = buildSlicedOtField(
+    sourceFeatures.map((f) => f.oklab),
+    targetFeatures.map((f) => f.oklab));
+
   // Phase 6 — sorted axis arrays, kept for the source-ratio bars' per-drag
   // CDF rebuilds (reweight + buildCdfMatchLut, ~1-3ms each). Hue uses the
   // chroma-filtered arrays (same population the hue CDF was built from).
@@ -373,6 +390,7 @@ export function buildSmashCdfs(
     clusterSubLuts, clusterLs, clusterRgbs,
     clusterOrderByL, sortedClusterLs,
     conditionalCdf,
+    slicedOt,
     srcLumaSorted, tgtLumaSorted,
     srcHueSorted, tgtHueSorted,
     srcChromaSorted, tgtChromaSorted,
@@ -449,6 +467,9 @@ export const DEFAULT_SMASH_CONTROLS: SmashControls = {
     // only, byte-identical to the Phase 4 path. Users dial it up to
     // match chroma + hue against per-L-bucket source distributions.
     conditionalCdf: 0,
+    // Phase 8: slicedOt defaults to 0 — no joint-distribution transport,
+    // byte-identical to the Phase 7 path.
+    slicedOt: 0,
   },
   // Phase 4.5c: passes = 1 by default (one transform per pixel). Users can
   // dial up to 2 or 3 to bake the compounded "multi-pass" look into the LUT.
@@ -698,6 +719,7 @@ export function smash(
   const clusterOrderByL = cdfs.clusterOrderByL;
   const sortedClusterLs = cdfs.sortedClusterLs;
   const conditionalCdf = cdfs.conditionalCdf;
+  const slicedOt = cdfs.slicedOt;
 
   // Phase 4.5l — Compute shifted zone boundaries from sorted cluster Ls
   // + zoneEdgeShift. K-1 boundaries between adjacent sorted clusters,
@@ -821,6 +843,7 @@ export function smash(
     hueRatioNaturalWeights, hueRatioBandColors,
     chromaRatioNaturalWeights, chromaRatioBandColors,
     conditionalCdf,
+    slicedOt,
   };
   const WARM_A = 0.82;
   const WARM_B = 0.57;
@@ -852,6 +875,7 @@ export function smash(
     hueRatioNaturalWeights, hueRatioBandColors,
     chromaRatioNaturalWeights, chromaRatioBandColors,
     conditionalCdf,
+    slicedOt,
   };
 }
 
@@ -1389,7 +1413,7 @@ function applyTransformOnePass(
   const satGate    = masterGate * gateClampPos(traits.saturation);
 
   // Apply perceptual deltas.
-  const Lout = Lin + (Lsm - Lin) * valueGate;
+  let Lout = Lin + (Lsm - Lin) * valueGate;
   // Circular hue lerp via shortest-arc Δh.
   let dh = hsm - hin;
   if (dh > Math.PI) dh -= 2 * Math.PI;
@@ -1541,6 +1565,24 @@ function applyTransformOnePass(
       aOut += delta * WARM_A;
       bOut += delta * WARM_B;
     }
+  }
+
+  // Phase 8 — Sliced OT. Add the baked joint-distribution displacement to
+  // the post-gate Oklab colour. The displacement field is keyed over the
+  // TARGET (input) colour space, so we look it up at the pixel's INPUT
+  // Oklab (Lin, aIn, bIn) — its identity in that space — and add the
+  // interpolated displacement on top of the smashed result. 0 = off
+  // (default, byte-identical to Phase 7); the guard short-circuits then.
+  const rawSlicedOt = controls.colorization?.slicedOt;
+  const slicedOtAmt =
+    typeof rawSlicedOt === "number" && Number.isFinite(rawSlicedOt)
+      ? Math.max(0, Math.min(1, rawSlicedOt))
+      : 0;
+  if (slicedOtAmt > 0 && out.slicedOt) {
+    const [dL, da, db] = lookupSlicedOt(out.slicedOt, Lin, aIn, bIn);
+    Lout += dL * slicedOtAmt;
+    aOut += da * slicedOtAmt;
+    bOut += db * slicedOtAmt;
   }
 
   // Convert to bytes.

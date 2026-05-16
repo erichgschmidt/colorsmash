@@ -83,6 +83,7 @@ const INLINE_DEFAULTS = {
   posterize: 0,
   distribution: 0,
   conditionalCdf: 0,
+  slicedOt: 0,
   clusterCount: 5,
   zoneInfluence: 0,
   detailRichness: 1,
@@ -197,6 +198,9 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   // 1 = chroma + hue matched against per-L-bucket source distributions.
   // Restores within-L color spread the global CDF averages away.
   const [conditionalCdf, setConditionalCdf] = useState<number>(0);
+  // Phase 8 — Sliced OT: 0 = off (default), 1 = full joint-3D-distribution
+  // transport of the output color toward the source. Baked at smash() time.
+  const [slicedOt, setSlicedOt] = useState<number>(0);
   // Phase 4.5j — Zone routing trio:
   //   clusterCount: number of source clusters (3..32). Re-extracts SourceDNA
   //                 when changed since clusters are computed during extraction.
@@ -318,6 +322,10 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       if (typeof persisted?.conditionalCdf === "number" && Number.isFinite(persisted.conditionalCdf)) {
         setConditionalCdf(Math.max(0, Math.min(1, persisted.conditionalCdf)));
       }
+      // v1.21 Phase 8 — restore Sliced OT (clamped to [0, 1]).
+      if (typeof persisted?.slicedOt === "number" && Number.isFinite(persisted.slicedOt)) {
+        setSlicedOt(Math.max(0, Math.min(1, persisted.slicedOt)));
+      }
       // v1.21 Phase 4.5j — restore zone routing trio (clusterCount int 3..32,
       // zoneInfluence + detailRichness floats [0, 1]).
       if (typeof persisted?.clusterCount === "number" && Number.isFinite(persisted.clusterCount)) {
@@ -395,7 +403,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     if (!loadedRef.current) return;
     saverRef.current?.({
       amount, traits, colorization, passes, proportionMatch, posterize, distribution,
-      conditionalCdf,
+      conditionalCdf, slicedOt,
       clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity,
       zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias,
       ratioMode,
@@ -403,7 +411,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       hueAxis: { tilt: hueAxis.tilt, bandCount: hueAxis.bandCount, weights: hueAxis.weights, adaptive: hueAxis.adaptive },
       chromaAxis: { tilt: chromaAxis.tilt, bandCount: chromaAxis.bandCount, weights: chromaAxis.weights, adaptive: chromaAxis.adaptive },
     });
-  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias, ratioMode, valueAxis, hueAxis, chromaAxis]);
+  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, slicedOt, clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias, ratioMode, valueAxis, hueAxis, chromaAxis]);
 
   // ── Heavy: features + DNA + profile + CDF LUTs. Depends on SNAPS ONLY,
   // so slider drags don't re-run extractFeatures (~100K pixels per call)
@@ -453,7 +461,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       traits,
       // proportionMatch lives on colorization in the engine schema, so merge
       // it in here rather than carrying it around as a separate field.
-      colorization: { ...colorization, proportionMatch, posterize, distribution, conditionalCdf, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias, valueRatio, hueRatio, chromaRatio },
+      colorization: { ...colorization, proportionMatch, posterize, distribution, conditionalCdf, slicedOt, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias, valueRatio, hueRatio, chromaRatio },
       passes,
     };
     const engine = smash(
@@ -464,7 +472,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
       snapDerived.cdfs,
     );
     return { sourceDNA: snapDerived.sourceDNA, engine };
-  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias, ratioMode, valueAxis, hueAxis, chromaAxis]);
+  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, slicedOt, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias, ratioMode, valueAxis, hueAxis, chromaAxis]);
 
   // Propagate engine changes to the parent via useEffect, NOT inside the
   // useMemo body above. Calling setState on the parent during a child's
@@ -495,6 +503,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     setPosterize(INLINE_DEFAULTS.posterize);
     setDistribution(INLINE_DEFAULTS.distribution);
     setConditionalCdf(INLINE_DEFAULTS.conditionalCdf);
+    setSlicedOt(INLINE_DEFAULTS.slicedOt);
     setClusterCount(INLINE_DEFAULTS.clusterCount);
     setZoneInfluence(INLINE_DEFAULTS.zoneInfluence);
     setDetailRichness(INLINE_DEFAULTS.detailRichness);
@@ -728,7 +737,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           onClick={() => setEngineOpen((o) => !o)}
           title={engineOpen
             ? "Hide the ENGINE sliders"
-            : "Show the ENGINE sliders: PASSES, PROPORTION, POSTERIZE, DISTRIBUTION, CONDITIONAL, ZONES, INFLUENCE, DETAIL, EDGE SOFTNESS/SHIFT, ZONE RATIO, SOURCE MIX, TEMPERATURE, SENSITIVITY, TARGET L/C/S."}
+            : "Show the ENGINE sliders: PASSES, PROPORTION, POSTERIZE, DISTRIBUTION, CONDITIONAL, SLICED OT, ZONES, INFLUENCE, DETAIL, EDGE SOFTNESS/SHIFT, ZONE RATIO, SOURCE MIX, TEMPERATURE, SENSITIVITY, TARGET L/C/S."}
         >
           <span style={{ width: 10, display: "inline-block", textAlign: "center" }}>
             {engineOpen ? "▾" : "▸"}
@@ -738,7 +747,7 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
         {engineOpen && (
           <div
             onClick={(e) => { e.stopPropagation(); if (hasSnaps) resetAllInline(); }}
-            title="Reset all ENGINE sliders to their defaults (PASSES 1.0×, PROPORTION 100%, POSTERIZE/DISTRIBUTION/CONDITIONAL 0%, ZONES 5, INFLUENCE 0%, DETAIL 100%, EDGE SOFTNESS/SHIFT 0, ZONE RATIO 0, SOURCE MIX neutral, TEMPERATURE 0, SENSITIVITY 50%, TARGET L/C/S 0)."
+            title="Reset all ENGINE sliders to their defaults (PASSES 1.0×, PROPORTION 100%, POSTERIZE/DISTRIBUTION/CONDITIONAL/SLICED OT 0%, ZONES 5, INFLUENCE 0%, DETAIL 100%, EDGE SOFTNESS/SHIFT 0, ZONE RATIO 0, SOURCE MIX neutral, TEMPERATURE 0, SENSITIVITY 50%, TARGET L/C/S 0)."
             style={resetButtonStyle}
           >
             ✕
@@ -881,6 +890,30 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
           title="Conditional CDF P(color | L). Matches a pixel's chroma + hue against only the source pixels that share its lightness band — not the whole source. Restores within-L color SPREAD the global CDF averages away (e.g. a source whose mid-tones are half red, half teal stops collapsing every target mid-tone to muddy purple). 0% = off (global CDFs, identical to before). 100% = fully per-L-bucket. Sparse L buckets fall back to the global CDF automatically; output is interpolated between buckets so there's no banding. When Hue-by-L is on it still owns hue direction; CONDITIONAL then governs chroma magnitude."
         />
         <span style={passesValueStyle}>{Math.round(conditionalCdf * 100)}%</span>
+      </div>
+
+      {/* Phase 8 — Sliced OT. Blends the output color toward its sliced-
+          optimal-transport position — the strongest joint-3D distribution
+          match, capturing Oklab correlations the per-axis + CONDITIONAL CDFs
+          miss. 0% = off. Computed at smash() time as a baked displacement
+          grid; stacks on top of every other mechanic. */}
+      <div
+        style={passesRowStyle}
+        onDoubleClick={() => { if (hasSnaps) setSlicedOt(INLINE_DEFAULTS.slicedOt); }}
+      >
+        <span style={passesLabelStyle}>SLICED OT</span>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={5}
+          value={Math.round(slicedOt * 100)}
+          onChange={(e) => setSlicedOt(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
+          disabled={!hasSnaps}
+          style={passesSliderStyle}
+          title="Sliced Optimal Transport — the strongest joint-distribution match. The per-axis CDFs and CONDITIONAL match L/C/h independently (or L-conditionally); SLICED OT matches the FULL 3D Oklab color distribution, capturing correlations they miss (e.g. 'as a increases, b decreases'). 0% = off. 100% = full transport of the output color toward the source's joint distribution. Stacks on top of CONDITIONAL and the per-axis CDFs — dial both for progressively stronger matching. Computed once per source/target change (~35-55ms); free per slider drag."
+        />
+        <span style={passesValueStyle}>{Math.round(slicedOt * 100)}%</span>
       </div>
 
       {/* Phase 4.5j — Zone routing trio. ZONES sets how many source palette

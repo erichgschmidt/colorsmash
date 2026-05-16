@@ -57,6 +57,10 @@ export interface SmashPersisted {
    *  global chroma/hue CDFs). 1 = chroma + hue matched against per-L-bucket
    *  source distributions, restoring within-L color spread. */
   conditionalCdf?: number;
+  /** v1.21 Phase 8 — sliced optimal transport strength [0, 1]. 0 = off
+   *  (default). 1 = full joint-3D-distribution transport of the output
+   *  color toward the source. */
+  slicedOt?: number;
   /** v1.21 Phase 4.5j — zone routing trio. clusterCount is the number of
    *  source palette zones (integer in [3, 32], default 5). zoneInfluence
    *  is how strongly the zone path overrides default Hue-by-L (default 0).
