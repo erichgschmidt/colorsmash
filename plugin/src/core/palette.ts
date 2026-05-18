@@ -16,7 +16,7 @@ function linearToSrgb(c: number): number {
   const x = c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(Math.max(0, c), 1 / 2.4) - 0.055;
   return Math.max(0, Math.min(255, Math.round(x * 255)));
 }
-function rgbToLab(r: number, g: number, b: number): [number, number, number] {
+export function rgbToLab(r: number, g: number, b: number): [number, number, number] {
   const R = srgbToLinear(r), G = srgbToLinear(g), B = srgbToLinear(b);
   const X = R * 0.4124564 + G * 0.3575761 + B * 0.1804375;
   const Y = R * 0.2126729 + G * 0.7151522 + B * 0.0721750;
