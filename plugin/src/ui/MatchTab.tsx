@@ -41,7 +41,7 @@ import { serializeRecipes, parseRecipes, mergeImportedRecipes } from "../app/rec
 import { buildStarterRecipes } from "../app/starterRecipes";
 import { ModeToggle, type SmashMode } from "./smash/ModeToggle";
 import { SmashSection } from "./smash/SmashSection";
-import { bakeSmashLut, type SmashEngineOutput, type SmashLut } from "../core/smash";
+import { bakeEngineLut, type SmashEngine, type EngineLut } from "../core/smash/engine";
 import { rgbaToPngDataUrl } from "./encodePng";
 
 const STARTER_PACK_VERSION = 1;
@@ -1054,7 +1054,7 @@ export function MatchTab() {
   // engine output flows back here so we can drive the matched preview through
   // the same MatchedPreview handle the Match path uses.
   const [smashMode, setSmashMode] = useState<SmashMode>("match");
-  const [smashEngine, setSmashEngine] = useState<SmashEngineOutput | null>(null);
+  const [smashEngine, setSmashEngine] = useState<SmashEngine | null>(null);
 
   // v1.21 — small source-preview thumbnail rendered in the SOURCE island's
   // thumbnail slot when in Smash mode (replaces the Match-only PresetStrip +
@@ -1268,18 +1268,22 @@ export function MatchTab() {
     }
   };
 
-  // v1.21 — Smash-mode preview drive. Bakes a 17³ LUT once per engine change
-  // (4913 applyTransform calls, ~25-50ms), then trilinear-interpolates per
-  // TARGET pixel — same convention Match mode uses: the matched preview shows
-  // the TARGET image with the transform applied, not the source. (Bug fix
-  // v1.21.x: previous version mistakenly fed srcSnap into the lookup.)
+  // v1.21 — Smash-mode preview drive. Bakes a 33³ LUT once per engine change
+  // (~36K applyTransform calls), then trilinear-interpolates per TARGET pixel
+  // — same convention Match mode uses: the matched preview shows the TARGET
+  // image with the transform applied, not the source. (Bug fix v1.21.x:
+  // previous version mistakenly fed srcSnap into the lookup.)
+  //
+  // The preview LUT is 33³ to MATCH the Apply path's 33³ export grid — a 17³
+  // preview quantized chroma coarsely enough that the in-panel preview looked
+  // muted next to the Apply'd Color Lookup layer; 33³ closes that gap.
   //
   // "Before" = unmodified target pixels; "after" = LUT-applied target pixels.
   // Click/hold the Before/After badge on MatchedPreview to toggle.
-  const smashPreviewLut = useMemo<SmashLut | null>(() => {
+  const smashPreviewLut = useMemo<EngineLut | null>(() => {
     if (!__SMASH_ENABLED__) return null;
     if (!smashEngine) return null;
-    return bakeSmashLut(smashEngine, 17);
+    return bakeEngineLut(smashEngine, 33);
   }, [smashEngine]);
 
   useEffect(() => {

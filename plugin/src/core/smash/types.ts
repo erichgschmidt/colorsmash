@@ -254,48 +254,57 @@ export interface ColorizationOptions {
    *  index-by-index and falls back to 1.0 for any missing/invalid entry,
    *  so a stale-length array degrades gracefully rather than throwing. */
   readonly clusterMultipliers?: readonly number[];
-  /** Phase 4.5m/n/o/p — Temperature. IMAGE-RELATIVE contrast stretch in
-   *  the warm/cool direction. The image's own estimated output-warmth
-   *  median is the neutral center; pixels' "warmness" is measured
-   *  relative to that center, not relative to Oklab's absolute warm axis.
+  /** Phase 4.5u — Temperature: SELECT → DESATURATE → TINT. Bipolar
+   *  warm/cool grading built as a tonal SELECTION the user then treats.
    *
-   *  This solves the "if the image is mostly warm, cranking warm does
-   *  nothing" problem: even an all-warm image has pixels that are
-   *  less-warm-than-median (image-relatively cool) and more-warm-than-
-   *  median (image-relatively warm). Temperature operates on those
-   *  relative distinctions.
+   *  TEMPERATURE itself is the selection control:
+   *    sign      — which tonal side is selected. NEGATIVE selects the
+   *                image's COOL pixels; POSITIVE selects the WARM pixels.
+   *                Warmth is measured image-relatively against the engine's
+   *                `estimatedOutputMedianWarmth`, so the control works on
+   *                uniformly-warm or uniformly-cool images.
+   *    magnitude — selection BREADTH. Near 0 only the most extreme pixels
+   *                on that side are selected (a thin histogram sliver); at
+   *                ±1 the whole side is selected.
    *
-   *  Range [-1, +1]:
-   *    -1.0: pull image-relative-warm pixels DOWN toward the median
-   *          (warms compress; cools untouched)
-   *     0.0 (default): no change
-   *    +1.0: push image-relative-warm pixels UP away from the median
-   *          (warms stretch; cools untouched)
+   *  Range [-1, +1], default 0 (no selection → strict no-op). Selected
+   *  pixels are then DESATURATED (`temperatureIntensity`) and optionally
+   *  TINTED toward a user hue (`temperatureTint` + cool/warm tint hue).
+   *  `temperatureFalloff` softens the selection edge; TARGET L/C/S bias the
+   *  per-pixel treatment weight. When both intensity and tint are 0 the
+   *  mechanic is a no-op regardless of TEMPERATURE.
    *
-   *  Negative t mirrors: pulls image-relative-cool pixels UP toward
-   *  median (cools compress; warms untouched) — wait, that's wrong.
-   *  Actually: negative t pushes image-relative-COOL pixels DOWN (more
-   *  cool); image-relative-WARM pixels untouched. Symmetric.
-   *
-   *  Same-polarity pixels are always untouched. Pixels straddling the
-   *  median get continuously-varying treatment via the sensitivity
-   *  exponent. */
+   *  Replaces the pre-4.5u "migrate warmth toward the median" mechanic,
+   *  which shifted along a fixed warm axis and snapped cooled pixels into
+   *  Oklab green. The new model never rotates hue on its own — desaturation
+   *  pulls straight toward neutral; any hue change is exactly the user's
+   *  tint. */
   readonly temperature?: number;
-  /** Phase 4.5p — Temperature Sensitivity. Controls how sharp the
-   *  warm/cool split is around the image's median warmth. Applied as
-   *  a power exponent on |relativeWarmth|:
-   *
-   *    sensitivity ∈ [0, 1]
-   *    exp = 3^(1 − 2·sensitivity)
-   *    relWarmth_adj = sign(relWarmth) × |relWarmth|^exp
-   *
-   *  Range [0, 1]:
-   *    0.0: exp = 3 — very SOFT split; pixels near median get little
-   *         change, the effect is concentrated on extreme outliers
-   *    0.5 (default): exp = 1 — linear, no sensitivity adjustment
-   *    1.0: exp = 1/3 — very SHARP split; even pixels slightly past
-   *         median get strong boost, producing distinct warm/cool zones */
-  readonly temperatureSensitivity?: number;
+  /** Phase 4.5u — Temperature Intensity. How strongly the selected pixels
+   *  are desaturated toward neutral. Range [0, 1], default 0:
+   *    0 = no desaturation; 1 = selected pixels collapse to fully neutral
+   *  (before any tint re-injects chroma). */
+  readonly temperatureIntensity?: number;
+  /** Phase 4.5u — Temperature Falloff. Soft-edge width of the tonal
+   *  selection. Range [0, 1], default 0.3:
+   *    0 = hard step (a pixel is fully in or fully out of the selection);
+   *    1 = wide smooth transition across the selection threshold. */
+  readonly temperatureFalloff?: number;
+  /** Phase 4.5u — Temperature Tint. How much chroma is re-injected at the
+   *  tint hue after desaturation. Range [0, 1], default 0:
+   *    0 = pure desaturation (selected pixels just lose color);
+   *    1 = selected pixels are pushed toward the tint hue, gaining color
+   *        variation instead of going gray. */
+  readonly temperatureTint?: number;
+  /** Phase 4.5u — Cool tint hue, in DEGREES (Oklab hue angle, 0..360).
+   *  The hue the selection is tinted toward when TEMPERATURE is negative
+   *  (cool side selected). Default 250 (blue). */
+  readonly temperatureCoolTintHue?: number;
+  /** Phase 4.5u — Warm tint hue, in DEGREES (Oklab hue angle, 0..360).
+   *  The hue the selection is tinted toward when TEMPERATURE is positive
+   *  (warm side selected). Default 70 (amber). Independent of the cool
+   *  tint so warm and cool grading can pull opposite directions. */
+  readonly temperatureWarmTintHue?: number;
   /** Phase 4.5l — Zone Edge Softness. How sharp the boundaries between
    *  source clusters are during zone routing. 0 = hard pick (argmin —
    *  matches Phase 4.5j behavior). 1 = wide gaussian blur across

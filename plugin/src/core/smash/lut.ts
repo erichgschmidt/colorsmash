@@ -28,8 +28,10 @@ export interface SmashLut {
    * (Matches .cube file format index order.)
    */
   readonly values: Float32Array;
-  /** Reference to the SmashEngineOutput that produced this LUT. */
-  readonly source: SmashEngineOutput;
+  /** Reference to the SmashEngineOutput that produced this LUT. Optional —
+   *  the v2 engine's bakeEngineLut result carries only `{ size, values }`,
+   *  and serializeSmashCube never reads this field. */
+  readonly source?: SmashEngineOutput;
 }
 
 // ────────── bake ──────────
@@ -186,7 +188,10 @@ export function bakeTargetStochastic(
  *   <r> <g> <b>           (one line per grid point, N³ lines)
  *   ...
  */
-export function serializeSmashCube(lut: SmashLut, title = 'ColorSmash'): string {
+export function serializeSmashCube(
+  lut: { size: number; values: Float32Array },
+  title = 'ColorSmash',
+): string {
   const { size, values } = lut;
   const lines: string[] = [
     `TITLE "${title}"`,

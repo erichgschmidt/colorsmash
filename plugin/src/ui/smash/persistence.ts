@@ -3,123 +3,38 @@
 // wipe any Pro fields we tried to piggyback. Same pattern as ui/persistence.ts
 // (plugin data folder, debounced write) but scoped to the Smash mode.
 //
+// v2 — the Smash redesign. State is the four per-aspect band-transfer controls
+// (Value / Hue / Saturation / Chroma). The ratio bands themselves are absolute
+// distributions tied to the current images, so they're re-seeded from the
+// extracted histograms each session — only each aspect's slice count, borrow
+// amount, softness, and drag mode are persisted.
+//
 // Stored at:  <pluginData>/color-smash-smash.json
 
 const FILE_NAME = "color-smash-smash.json";
 
-export interface SmashPersisted {
-  /** Global Smash Amount, 0..1. */
+/** One aspect's persisted control state. `binCount` is the number of slices;
+ *  `amount` is the borrow/smash strength [0,1]; `softness` [0,1] smooths the
+ *  band transitions; `rankBy` is the cross-feed axis ("auto"/"value"/"hue"/
+ *  "saturation"/"chroma"); `adaptive` is the drag mode. Every field optional
+ *  so older / partial save files load cleanly. The bands themselves are not
+ *  persisted — they're re-seeded from the image histograms each session. */
+export interface PersistedAspect {
+  binCount?: number;
   amount?: number;
-  /** Doc id of the last picked source layer. Reset to null when doc changes. */
-  sourceDocId?: number | null;
-  /** Layer id within sourceDocId. */
-  sourceLayerId?: number | null;
-  /** Doc id of the last picked target layer. */
-  targetDocId?: number | null;
-  /** Layer id within targetDocId. */
-  targetLayerId?: number | null;
-  /** v1.21 Phase 2 — six trait amounts in [0, 1]. Stored as a partial
-   *  Record so older save files without traits still load cleanly; missing
-   *  keys fall back to DEFAULT_TRAIT_AMOUNTS on read. */
-  traits?: {
-    value?: number;
-    hue?: number;
-    saturation?: number;
-    chroma?: number;
-    neutral?: number;
-    accent?: number;
-  };
-  /** v1.21 Phase 4.5+ — cross-dimensional colorization toggle state. Partial
-   *  so older save files without it fall back to DEFAULT_COLORIZATION_TOGGLES
-   *  on read. */
-  colorization?: {
-    hueByLuma?: boolean;
-    liftNeutrals?: boolean;
-    paletteSnap?: boolean;
-    // Future toggles slot in here as Phase 5+ ships them.
-  };
-  /** v1.21 Phase 4.5c — how many times applyTransform iterates per pixel
-   *  during the LUT bake. Clamped to [1, 4] on load. Default 1. */
-  passes?: number;
-  /** v1.21 Phase 4.5g — proportion match strength [0, 1]. 1 = tight (per-L
-   *  lift floor, mirrors source's structure). 0 = loose (global median lift,
-   *  uniform colorization). Default 1. */
-  proportionMatch?: number;
-  /** v1.21 Phase 4.5h — posterize strength [0, 1]. 0 = off (default,
-   *  smooth output). 1 = full snap to nearest source cluster's RGB,
-   *  producing posterized L-band coloration. */
-  posterize?: number;
-  /** v1.21 Phase 4.5i — distribution strength [0, 1]. 0 = off (default).
-   *  1 = full lerp to source's frequency-weighted joint cluster mean.
-   *  Smooth, banding-free alternative to posterize. */
-  distribution?: number;
-  /** v1.21 Phase 5 — conditional CDF strength [0, 1]. 0 = off (default,
-   *  global chroma/hue CDFs). 1 = chroma + hue matched against per-L-bucket
-   *  source distributions, restoring within-L color spread. */
-  conditionalCdf?: number;
-  /** v1.21 Phase 8 — sliced optimal transport strength [0, 1]. 0 = off
-   *  (default). 1 = full joint-3D-distribution transport of the output
-   *  color toward the source. */
-  slicedOt?: number;
-  /** v1.21 Phase 7 — stochastic per-L-band sampling (preview-only). `amount`
-   *  [0,1] blends toward the random per-pixel draw; `seed` makes the grain
-   *  reproducible. */
-  stochastic?: { amount?: number; seeded?: boolean; seed?: number };
-  /** v1.21 Phase 7.x — SOURCE MIX bar drag mode: true = adaptive (↔),
-   *  false = handle drag. */
-  sourceMixAdaptive?: boolean;
-  /** v1.21 Phase 4.5j — zone routing trio. clusterCount is the number of
-   *  source palette zones (integer in [3, 32], default 5). zoneInfluence
-   *  is how strongly the zone path overrides default Hue-by-L (default 0).
-   *  detailRichness is how much intra-cluster variation is preserved when
-   *  the zone path is active (default 1). */
-  clusterCount?: number;
-  zoneInfluence?: number;
-  detailRichness?: number;
-  /** v1.21 Phase 4.5k — zone ratio. -1..+1, default 0 (natural).
-   *  Modulates source cluster weights via power exponent. */
-  zoneRatio?: number;
-  /** v1.21 Phase 4.5m → 4.5p — temperature. -1..+1, default 0.
-   *  Image-relative contrast stretch around the image's warmth median. */
-  temperature?: number;
-  /** v1.21 Phase 4.5p — temperature sensitivity. 0..1, default 0.5.
-   *  Soft (0) vs sharp (1) split around the image's warmth median. */
-  temperatureSensitivity?: number;
-  /** v1.21 Phase 4.5l — zone edge softness. 0..1, default 0.
-   *  Hard pick (0, byte-exact 4.5j) → soft gaussian blend (1). */
-  zoneEdgeSoftness?: number;
-  /** v1.21 Phase 4.5l — zone edge shift. -1..+1, default 0.
-   *  Slides K-1 boundary midpoints along target L axis. */
-  zoneEdgeShift?: number;
-  /** v1.21 Phase 4.5r — temperature L bias. -1..+1, default 0.
-   *  Limits the temperature shift to a slice of the L range
-   *  (-1 = shadows only, +1 = highlights only). */
-  temperatureLBias?: number;
-  /** v1.21 Phase 4.5t — temperature C / S bias. Each -1..+1, default 0.
-   *  Limit the temperature shift to a slice of the chroma (C) or
-   *  saturation (S) range (-1 = muted/desaturated only, +1 = vivid/
-   *  saturated only). */
-  temperatureCBias?: number;
-  temperatureSBias?: number;
-  /** v1.21 Phase 6 — SOURCE RATIOS. `ratioMode` picks the Simple (tilt
-   *  slider) vs Detailed (per-band bar) view for the whole section; the
-   *  three axes each persist their own tilt + band count + weights +
-   *  adaptive flag. */
-  ratioMode?: "simple" | "detailed";
-  valueAxis?: SmashPersistedAxis;
-  hueAxis?: SmashPersistedAxis;
-  chromaAxis?: SmashPersistedAxis;
+  softness?: number;
+  rankBy?: string;
+  adaptive?: boolean;
 }
 
-/** One source-ratio axis's persisted state. `tilt` -1..+1 is the Simple-mode
- *  tilt; `bandCount` + `weights` are the Detailed-mode band count and
- *  per-band multipliers (weights length must match bandCount on load or it
- *  falls back to neutral); `adaptive` is the Detailed-mode drag style. */
-export interface SmashPersistedAxis {
-  tilt?: number;
-  bandCount?: number;
-  weights?: number[];
-  adaptive?: boolean;
+/** Persisted Pro Smash state (v2 — per-aspect band transfer). */
+export interface SmashPersisted {
+  aspects?: {
+    value?: PersistedAspect;
+    hue?: PersistedAspect;
+    saturation?: PersistedAspect;
+    chroma?: PersistedAspect;
+  };
 }
 
 async function getDataFolder(): Promise<any | null> {

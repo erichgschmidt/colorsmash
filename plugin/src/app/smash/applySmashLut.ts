@@ -13,7 +13,8 @@
 
 import { action, app, executeAsModal } from "../../services/photoshop";
 import { assembleIccDeviceLink } from "../iccGen";
-import { bakeSmashLut, serializeSmashCube, type SmashEngineOutput } from "../../core/smash";
+import { serializeSmashCube } from "../../core/smash";
+import { bakeEngineLut, type SmashEngine } from "../../core/smash/engine";
 
 const APPLY_LAYER_NAME = "Smash LUT";
 const SMASH_GRID = 33;
@@ -111,11 +112,11 @@ function findLayerById(layers: any[], id: number): any | null {
  * "+" fork mode to auto-hide prior Smash variations).
  */
 export async function applySmashLut(
-  engine: SmashEngineOutput,
+  engine: SmashEngine,
   options: ApplySmashLutOptions = {},
 ): Promise<ApplySmashLutResult> {
   try {
-    const lut = bakeSmashLut(engine, SMASH_GRID);
+    const lut = bakeEngineLut(engine, SMASH_GRID);
     const cubeText = serializeSmashCube(lut, APPLY_LAYER_NAME);
     const cubeB64 = bytesToB64(asciiStringToBytes(cubeText));
     // Build the ICC DeviceLink profile that PS actually renders from. Routes

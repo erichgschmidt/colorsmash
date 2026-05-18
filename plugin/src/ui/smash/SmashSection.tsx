@@ -1,44 +1,46 @@
-// SmashSection — slim Smash mode fragment that lives inside MatchTab.
-// Receives source/target RGBA snaps as props (no layer pickers, no
-// useLayerPreview) and owns only the engine pipeline, amount state,
-// persistence, and the controls/audit/apply/export action row.
-// The parent drives the matched preview via the onEngineChange callback.
+// SmashSection — the Pro "Smash" mode body, redesigned around per-aspect
+// band transfer.
+//
+// The transform is broken into four ASPECTS — Value, Hue, Saturation,
+// Chroma. Each aspect is one AspectRow: the source image's distribution
+// along that axis (an editable ratio band), the target's distribution
+// (another editable ratio band), and a "borrow amount" — how far the
+// target's pixels are rank-transferred onto the source's distribution.
+//
+// SmashSection owns the four-aspect control state, the engine pipeline,
+// persistence, and the Apply / Test Bake / Export action row. The parent
+// (MatchTab) supplies the source/target RGBA snaps as props and drives the
+// live matched preview from the engine handed back via onEngineChange.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { SourceDNAStrip } from "./SourceDNAStrip";
+import { AspectRow } from "./AspectRow";
 import {
-  SmashControlsBar,
-  type SmashPreset,
-  SMASH_PRESET_AMOUNTS,
-  detectPreset,
-} from "./SmashControlsBar";
-import { SmashAuditPanel } from "./SmashAuditPanel";
-import { TraitSliders, DEFAULT_TRAIT_AMOUNTS } from "./TraitSliders";
-import {
-  ColorizationToggles,
-  DEFAULT_COLORIZATION_TOGGLES,
-  type ColorizationToggleState,
-} from "./ColorizationToggles";
-import { RatioBar, type RatioBarSwatch } from "./RatioBar";
-import type { TraitAmounts, AxisRatio } from "../../core/smash/types";
-import {
-  extractFeatures,
-  extractSourceDNA,
-  extractTargetStructure,
-  pairDNA,
-  smash,
-  buildSmashCdfs,
-  bakeSmashLut,
-  bakeTargetPerPixel,
-  bakeTargetStochastic,
-  serializeSmashCube,
-  DEFAULT_SMASH_CONTROLS,
-  type SmashEngineOutput,
-  type SourceDNA,
-} from "../../core/smash";
-import { loadSmashSettings, makeSmashSaver, type SmashPersisted, type SmashPersistedAxis } from "./persistence";
+  ASPECT_KEYS,
+  BIN_COUNT_OPTIONS,
+  DEFAULT_BIN_COUNT,
+  RANK_BY_OPTIONS,
+  neutralSmashControls,
+  initControls,
+  setAspectRank,
+  pickRankAxis,
+  coerceRankAxis,
+  resampleHist,
+  extractAspectHistograms,
+  buildSmashEngine,
+  applySmash,
+  bakeEngineLut,
+  type SmashEngine,
+  type SmashControls,
+  type AspectControl,
+  type AspectKey,
+  type AspectHistogramSet,
+  type RankBy,
+  type RgbTriplet,
+} from "../../core/smash/engine";
+import { serializeSmashCube } from "../../core/smash";
 import { applySmashLut } from "../../app/smash/applySmashLut";
 import { applySmashTestBake } from "../../app/smash/applySmashTestBake";
+import { loadSmashSettings, makeSmashSaver, type SmashPersisted } from "./persistence";
 
 // ────────── public types ──────────
 
@@ -50,741 +52,379 @@ export interface SmashSectionLayerSnap {
 
 export interface SmashSectionProps {
   /** Source layer RGBA from the parent's useLayerPreview. Null when nothing
-   *  picked or snap pending. */
+   *  is picked or the snap is pending. */
   sourceSnap: SmashSectionLayerSnap | null;
-  /** Target layer RGBA. Null when nothing picked. */
+  /** Target layer RGBA. Null when nothing is picked. */
   targetSnap: SmashSectionLayerSnap | null;
-  /** Fired whenever the engine rebuilds (slider drag, snap arrival). The
-   *  parent uses this to drive the matched preview. Receives null when the
-   *  engine has no valid output (no snaps yet). */
-  onEngineChange?: (engine: SmashEngineOutput | null) => void;
-  /** Fired when the user clicks Test Bake. The parent should display the
-   *  pixels in the matched preview tile so the user can A/B against the
-   *  current LUT-based preview (which the parent will restore on the next
-   *  engine change). Receives a Uint8Array of RGBA bytes plus dimensions. */
+  /** Fires whenever the engine rebuilds — the parent bakes the live preview
+   *  LUT from it. Null when source/target aren't both ready. */
+  onEngineChange?: (engine: SmashEngine | null) => void;
+  /** Test Bake feeds the engine's per-pixel ground truth into the panel
+   *  preview tile (full-res layer is written separately to the document). */
   onTestBake?: (pixels: Uint8Array, width: number, height: number) => void;
-  /** Target document + layer ids. Used by Test Bake to read the target at
-   *  FULL resolution and write the ground-truth bake as a layer aligned to
-   *  the target. Null when nothing is picked. */
+  /** Active target document / layer ids — used to write a full-res,
+   *  target-aligned Test Bake layer. */
   targetDocId?: number | null;
   targetLayerId?: number | null;
 }
 
-// ────────── internal pipeline type ──────────
+// ────────── aspect labels ──────────
 
-interface EnginePipeline {
-  sourceDNA: SourceDNA;
-  engine: SmashEngineOutput;
+const ASPECT_LABEL: Record<AspectKey, string> = {
+  value: "Value",
+  hue: "Hue",
+  saturation: "Saturation",
+  chroma: "Chroma",
+};
+
+/**
+ * "Auto" — pick a sensible novice-friendly configuration that matches the
+ * target to the source. Detects whether the target is near-grayscale (a
+ * colorization job) and adapts:
+ *   • Hue + Chroma — full borrow (the core of a colour match).
+ *   • Saturation — left at 0; it overlaps Chroma, so Chroma drives colourfulness.
+ *   • Value — light borrow on a grayscale target (keep the photo's tones),
+ *     fuller borrow on a colour target.
+ *   • Softness 25% everywhere so transitions aren't harsh.
+ * Bands are reset to the images' natural distributions; Rank-by stays Auto.
+ */
+function autoConfigure(histograms: AspectHistogramSet): SmashControls {
+  const base = initControls(histograms);
+  const tc = histograms.chroma.target;
+  let total = 0;
+  let low = 0;
+  const lowBins = Math.max(1, Math.round(tc.length * 0.12));
+  for (let i = 0; i < tc.length; i++) {
+    total += tc[i];
+    if (i < lowBins) low += tc[i];
+  }
+  const grayscaleTarget = total < 1e-6 || low / total > 0.9;
+  const valueAmount = grayscaleTarget ? 0.3 : 0.7;
+  for (const key of ASPECT_KEYS) {
+    const amount = key === "value" ? valueAmount : key === "saturation" ? 0 : 1;
+    base[key] = { ...base[key], amount, softness: 0.25 };
+  }
+  return base;
 }
 
-// ────────── inline-slider defaults ──────────
-
-// Default value for each inline ENGINE slider. Used by the per-slider
-// double-click reset and the section-level ✕ reset-all. Kept in sync with
-// the engine's DEFAULT_SMASH_CONTROLS (and clusterCount, which is a
-// UI-level knob not in SmashControls).
-const INLINE_DEFAULTS = {
-  passes: 1,
-  proportionMatch: 1,
-  posterize: 0,
-  distribution: 0,
-  conditionalCdf: 0,
-  slicedOt: 0,
-  stochasticAmount: 0,
-  clusterCount: 5,
-  zoneInfluence: 0,
-  detailRichness: 1,
-  zoneEdgeSoftness: 0,
-  zoneEdgeShift: 0,
-  zoneRatio: 0,
-  temperature: 0,
-  temperatureSensitivity: 0.5,
-  temperatureLBias: 0,
-  temperatureCBias: 0,
-  temperatureSBias: 0,
-} as const;
-
-// ────────── source-ratio helpers (Phase 6) ──────────
-
-// Simple-mode tilt uses a fixed 5-band ramp. Detailed mode lets the user
-// pick the band count via the bar's count toggle.
-const SIMPLE_BANDS = 5;
-
-// Per-axis UI state. `tilt` drives Simple mode; `bandCount` / `weights` /
-// `adaptive` drive Detailed mode. Both are kept so the section's Simple ⇄
-// Detailed toggle is non-destructive.
-interface AxisRatioUI {
-  readonly tilt: number;       // Simple-mode tilt, -1..+1
-  readonly bandCount: number;  // Detailed-mode band count
-  readonly weights: number[];  // Detailed-mode per-band multipliers
-  readonly adaptive: boolean;  // Detailed-mode drag style
-}
-
-const NEUTRAL_AXIS: AxisRatioUI = { tilt: 0, bandCount: 5, weights: [1, 1, 1, 1, 1], adaptive: false };
-
-// Convert the Simple-mode tilt (-1..+1) into per-band multipliers: a linear
-// ramp pivoting on the mid band. tilt > 0 boosts the high bands and
-// suppresses the low bands; tilt < 0 does the reverse. tilt 0 → all-1
-// (neutral, a strict no-op in the engine).
-function simpleTiltMultipliers(tilt: number): number[] {
-  return Array.from({ length: SIMPLE_BANDS }, (_, b) => {
-    const centerNorm = (b + 0.5) / SIMPLE_BANDS; // 0.1 .. 0.9
-    return Math.max(0, 1 + tilt * (centerNorm - 0.5) * 2);
-  });
-}
-
-// Resolve an axis's UI state into the engine's AxisRatio control for the
-// active section mode.
-function resolveAxisControl(mode: "simple" | "detailed", axis: AxisRatioUI): AxisRatio {
-  return mode === "simple"
-    ? { bandCount: SIMPLE_BANDS, multipliers: simpleTiltMultipliers(axis.tilt) }
-    : { bandCount: axis.bandCount, multipliers: axis.weights };
-}
-
-// Build a ratio bar's segments from the engine's echoed natural per-band
-// weights + mean band colors. Falls back to a gray ramp before the first
-// engine run.
-function buildAxisSwatches(
-  natural: Float32Array | undefined,
-  colors: readonly (readonly [number, number, number])[] | undefined,
-  fallbackCount: number,
-): RatioBarSwatch[] {
-  const n = natural && natural.length > 0 ? natural.length : fallbackCount;
-  return Array.from({ length: n }, (_, b) => {
-    let rgb: readonly [number, number, number];
-    if (colors && colors[b]) {
-      rgb = [
-        Math.round(colors[b][0]),
-        Math.round(colors[b][1]),
-        Math.round(colors[b][2]),
-      ] as const;
-    } else {
-      const g = Math.round(255 * ((b + 0.5) / n));
-      rgb = [g, g, g] as const;
+/**
+ * Per-bin colours for a CROSS-FED target band. The band's slices are rank
+ * slots along the cross axis; this paints each slot with the SOURCE colour
+ * its pixels will actually adopt (the source aspect's colour at that rank),
+ * so the band reads congruently with the source instead of as a flat,
+ * unrelated axis ramp (a grey value ramp sitting in the Hue panel, etc.).
+ */
+function rankColors(
+  srcHist: Float32Array,
+  srcColors: readonly RgbTriplet[],
+): RgbTriplet[] {
+  const n = srcHist.length;
+  let total = 0;
+  for (let i = 0; i < n; i++) total += Math.max(0, srcHist[i]);
+  const out: RgbTriplet[] = [];
+  for (let i = 0; i < n; i++) {
+    const r = (i + 0.5) / n; // this slot's rank
+    let acc = 0;
+    let b = 0;
+    for (; b < n - 1; b++) {
+      acc += Math.max(0, srcHist[b]) / (total || 1);
+      if (acc >= r) break;
     }
-    return { rgb, weight: natural ? natural[b] : 1 / n };
-  });
+    out.push(srcColors[b] ?? [128, 128, 128]);
+  }
+  return out;
 }
 
-// Keys for the panel's collapsible sections — used by the single-open
-// accordion state (`openSection`).
-type SmashSectionKey =
-  | "engine"
-  | "zones"
-  | "temperature"
-  | "traits"
-  | "ratios"
-  | "colorization"
-  | "audit";
+// ────────── persistence helpers ──────────
 
-// Sections that gate an engine mechanic — each gets an enable/disable
-// toggle. SMASH AUDIT is diagnostic-only (no mechanics) and excluded.
-type ToggleableSectionKey = Exclude<SmashSectionKey, "audit">;
+// Bands are absolute, image-specific distributions — they're re-seeded from
+// the extracted histograms each session, so only the count / amount /
+// softness / drag-mode are persisted.
+function serializeControls(
+  c: SmashControls,
+  adaptive: Record<AspectKey, boolean>,
+): NonNullable<SmashPersisted["aspects"]> {
+  const out = {} as NonNullable<SmashPersisted["aspects"]>;
+  for (const key of ASPECT_KEYS) {
+    out[key] = {
+      binCount: c[key].binCount,
+      amount: c[key].amount,
+      softness: c[key].softness,
+      rankBy: c[key].rankBy,
+      adaptive: adaptive[key],
+    };
+  }
+  return out;
+}
 
-// Enable/disable toggle box on a section header. Filled blue ✓ = enabled
-// (the section's controls affect the output); hollow = disabled (forced to
-// no-op).
-const enableToggleStyle = (on: boolean): React.CSSProperties => ({
-  width: 13, height: 13, flexShrink: 0, boxSizing: "border-box",
-  borderRadius: 2, cursor: "pointer", userSelect: "none",
-  border: `1px solid ${on ? "#6ab7ff" : "#666"}`,
-  background: on ? "#6ab7ff" : "transparent",
-  color: "#0f1620", fontSize: 9, fontWeight: 700, lineHeight: 1,
-  display: "inline-flex", alignItems: "center", justifyContent: "center",
-});
+function restoreControls(
+  prev: SmashControls,
+  aspects: NonNullable<SmashPersisted["aspects"]>,
+): SmashControls {
+  const out: SmashControls = { ...prev };
+  for (const key of ASPECT_KEYS) {
+    const p = aspects[key];
+    if (!p) continue;
+    const binCount =
+      typeof p.binCount === "number" && BIN_COUNT_OPTIONS.includes(p.binCount)
+        ? p.binCount
+        : prev[key].binCount;
+    const amount =
+      typeof p.amount === "number" && Number.isFinite(p.amount)
+        ? Math.max(0, Math.min(1, p.amount))
+        : prev[key].amount;
+    const softness =
+      typeof p.softness === "number" && Number.isFinite(p.softness)
+        ? Math.max(0, Math.min(1, p.softness))
+        : prev[key].softness;
+    const rankBy =
+      typeof p.rankBy === "string" ? coerceRankAxis(p.rankBy) : prev[key].rankBy;
+    out[key] = { ...prev[key], binCount, amount, softness, rankBy };
+  }
+  return out;
+}
+
+function restoreAdaptive(
+  prev: Record<AspectKey, boolean>,
+  aspects: NonNullable<SmashPersisted["aspects"]>,
+): Record<AspectKey, boolean> {
+  const out = { ...prev };
+  for (const key of ASPECT_KEYS) {
+    const p = aspects[key];
+    if (p && typeof p.adaptive === "boolean") out[key] = p.adaptive;
+  }
+  return out;
+}
+
+/** Run the engine over every opaque pixel of a snap — the panel preview tile
+ *  for Test Bake. (The full-res, document-aligned layer is written by
+ *  applySmashTestBake.) */
+function bakePanelTile(engine: SmashEngine, snap: SmashSectionLayerSnap): Uint8Array {
+  const { data, width, height } = snap;
+  const out = new Uint8Array(width * height * 4);
+  const px = width * height;
+  for (let i = 0; i < px; i++) {
+    const o = i * 4;
+    const a = data[o + 3];
+    if (a < 128) {
+      out[o] = data[o]; out[o + 1] = data[o + 1]; out[o + 2] = data[o + 2]; out[o + 3] = a;
+      continue;
+    }
+    const [r, g, b] = applySmash(engine, data[o], data[o + 1], data[o + 2]);
+    out[o] = r; out[o + 1] = g; out[o + 2] = b; out[o + 3] = a;
+  }
+  return out;
+}
 
 // ────────── component ──────────
 
 export function SmashSection(props: SmashSectionProps): JSX.Element {
   const { sourceSnap, targetSnap, onEngineChange, onTestBake, targetDocId, targetLayerId } = props;
 
-  const [amount, setAmount] = useState<number>(SMASH_PRESET_AMOUNTS.strong);
-  const [traits, setTraits] = useState<TraitAmounts>(DEFAULT_TRAIT_AMOUNTS);
-  const [colorization, setColorization] = useState<ColorizationToggleState>(DEFAULT_COLORIZATION_TOGGLES);
-  // Collapsible sections behave as an ACCORDION: at most one open at a time,
-  // so expanding one section collapses whatever was open and the panel never
-  // grows unboundedly tall. `openSection` is the single source of truth;
-  // null = everything collapsed (the default). Each header derives its own
-  // `*Open` flag from it (below) so the render code reads naturally.
-  const [openSection, setOpenSection] = useState<SmashSectionKey | null>(null);
-  const toggleSection = (k: SmashSectionKey) =>
-    setOpenSection((cur) => (cur === k ? null : k));
-  // Per-section enable/disable — a QA aid. A disabled section's controls are
-  // forced to their inert (no-op) values when the engine is built, so each
-  // mechanic can be tested in isolation. Default: all enabled. Session-only
-  // (not persisted) so a reload never leaves a section silently off.
-  const [sectionEnabled, setSectionEnabled] = useState<Record<ToggleableSectionKey, boolean>>({
-    engine: true, zones: true, temperature: true, traits: true, ratios: true, colorization: true,
+  // Aspects start fully engaged (borrow 100%) so opening Smash does something
+  // immediately — the user dials each one DOWN as desired.
+  const [controls, setControls] = useState<SmashControls>(() => {
+    const c = neutralSmashControls();
+    for (const k of ASPECT_KEYS) c[k] = { ...c[k], amount: 1 };
+    return c;
   });
-  const engineOpen = openSection === "engine";
-  const zonesOpen = openSection === "zones";
-  const tempOpen = openSection === "temperature";
-  const traitsOpen = openSection === "traits";
-  const ratioOpen = openSection === "ratios";
-  const colorizationOpen = openSection === "colorization";
-  const auditOpen = openSection === "audit";
-  // Phase 4.5c — Passes: how many times applyTransform iterates per pixel
-  // during the LUT bake. 1 = default (single transform). 2-3 emulates the
-  // "stale-preview multi-pass" look the user accidentally discovered when
-  // the panel snap captured a post-LUT version of the target layer. 4 is
-  // the engine clamp ceiling.
-  const [passes, setPasses] = useState<number>(1);
-  // Phase 4.5g — Proportion match: 1.0 = tight (per-L lift, mirrors source's
-  // color/neutral structure), 0.0 = loose (global median lift, uniform
-  // colorization). Slider lerps between the two regimes.
-  const [proportionMatch, setProportionMatch] = useState<number>(1.0);
-  // Phase 4.5h — Posterize: 0 = off (engine's smooth output), 1 = full snap
-  // (each output pixel is the nearest source CLUSTER's RGB by L distance).
-  // Produces bold L-banded posterized output at high values.
-  const [posterize, setPosterize] = useState<number>(0);
-  // Phase 4.5i — Distribution: soft Gaussian-weighted cluster blend in
-  // joint Oklab space, frequency-weighted by cluster population. 0 = off,
-  // 1 = full lerp to weighted cluster mean. Smooth alternative to posterize.
-  const [distribution, setDistribution] = useState<number>(0);
-  // Phase 5 — Conditional CDF: 0 = global chroma/hue CDFs only (default),
-  // 1 = chroma + hue matched against per-L-bucket source distributions.
-  // Restores within-L color spread the global CDF averages away.
-  const [conditionalCdf, setConditionalCdf] = useState<number>(0);
-  // Phase 8 — Sliced OT: 0 = off (default), 1 = full joint-3D-distribution
-  // transport of the output color toward the source. Baked at smash() time.
-  const [slicedOt, setSlicedOt] = useState<number>(0);
-  // Phase 7 — Stochastic: 0 = off (default, deterministic + LUT-bakable).
-  // >0 draws a random source sample per pixel — PREVIEW-ONLY (can't bake a
-  // .cube). The seed makes the grain reproducible / spatially stable.
-  const [stochasticAmount, setStochasticAmount] = useState<number>(0);
-  const [stochasticSeed, setStochasticSeed] = useState<number>(0xc01015);
-  // Phase 4.5j — Zone routing trio:
-  //   clusterCount: number of source clusters (3..32). Re-extracts SourceDNA
-  //                 when changed since clusters are computed during extraction.
-  //   zoneInfluence: how strongly the zone path replaces the default
-  //                  Hue-by-L for routed pixels.
-  //   detailRichness: within the zone path, how much intra-cluster
-  //                   variation is preserved (centroid vs sub-LUT).
-  const [clusterCount, setClusterCount] = useState<number>(5);
-  const [zoneInfluence, setZoneInfluence] = useState<number>(0);
-  const [detailRichness, setDetailRichness] = useState<number>(1);
-  // Phase 4.5l — target-side zone routing controls:
-  //   zoneEdgeSoftness: 0..1, default 0 (hard pick). 1 = wide gaussian
-  //     blur across neighbouring clusters.
-  //   zoneEdgeShift:    -1..+1, default 0 (boundaries at natural midpoints).
-  //     -1 = boundaries pulled toward L=0 (shadow zones squeezed);
-  //     +1 = pushed toward L=1 (highlight zones squeezed).
-  const [zoneEdgeSoftness, setZoneEdgeSoftness] = useState<number>(0);
-  const [zoneEdgeShift, setZoneEdgeShift] = useState<number>(0);
-  // Phase 4.5k — zoneRatio modulates cluster weight distribution.
-  // Range -1..+1, default 0 (natural). −1 flattens; +1 amplifies dominance.
-  // Stored in state as -100..+100 (slider int) for UI; converted to float
-  // before passing to the engine.
-  const [zoneRatio, setZoneRatio] = useState<number>(0);
-  // Phase 4.5m → 4.5p — temperature: IMAGE-RELATIVE contrast stretch
-  // around the image's own warmth median. Range -1..+1, default 0.
-  const [temperature, setTemperature] = useState<number>(0);
-  // Phase 4.5p — temperature sensitivity. 0..1, default 0.5 (linear).
-  // 0 = soft split near median, 1 = sharp distinct warm/cool zones.
-  const [temperatureSensitivity, setTemperatureSensitivity] = useState<number>(0.5);
-  // Phase 4.5r — temperature L bias. -1..+1, default 0 (uniform).
-  // -1 = full bias to shadows, +1 = full bias to highlights.
-  const [temperatureLBias, setTemperatureLBias] = useState<number>(0);
-  // Phase 4.5t — temperature C / S bias. -1..+1, default 0 (uniform).
-  // Restrict the temperature shift to a chroma (C) or saturation (S) slice:
-  // -1 = muted/desaturated pixels only, +1 = vivid/saturated pixels only.
-  const [temperatureCBias, setTemperatureCBias] = useState<number>(0);
-  const [temperatureSBias, setTemperatureSBias] = useState<number>(0);
-  // Phase 4.5s — per-cluster source-mix multipliers (the Color Match ratio
-  // bar ported to Smash). Length tracks the source cluster count; reset to
-  // all-1 whenever the source / cluster count changes (effect below). Not
-  // persisted — multipliers are tied to a specific source image's clusters,
-  // so carrying them across sources would mis-apply (same as PaletteStrip).
-  const [clusterMultipliers, setClusterMultipliers] = useState<number[]>([]);
-  // Phase 7.x — SOURCE MIX drag mode: false = handle drag (redistribute
-  // between neighbours), true = adaptive (grow/shrink one cluster, others
-  // rebalance). Mirrors the SOURCE RATIOS bars' ↔ toggle.
-  const [sourceMixAdaptive, setSourceMixAdaptive] = useState<boolean>(false);
-  // Phase 6 — SOURCE RATIOS: Value / Hue / Chroma axes. Simple mode = one
-  // tilt slider per axis; Detailed mode = a per-band ratio bar (count toggle
-  // + adaptive drag). The Simple ⇄ Detailed chip flips all axes; both the
-  // tilt and the {bandCount, weights} are kept so the flip is non-
-  // destructive. `weights` is source-independent (a band is just an
-  // axis-range slice), so it only resets when that axis's band count changes.
-  const [ratioMode, setRatioMode] = useState<"simple" | "detailed">("simple");
-  const [valueAxis, setValueAxis] = useState<AxisRatioUI>(NEUTRAL_AXIS);
-  const [hueAxis, setHueAxis] = useState<AxisRatioUI>(NEUTRAL_AXIS);
-  const [chromaAxis, setChromaAxis] = useState<AxisRatioUI>(NEUTRAL_AXIS);
+  // Per-aspect adaptive-drag mode for the ratio bands. UI-only (it doesn't
+  // affect the transform), so it's kept beside the engine controls rather
+  // than inside them — but it IS persisted.
+  const [adaptive, setAdaptive] = useState<Record<AspectKey, boolean>>(() => ({
+    value: false, hue: false, saturation: false, chroma: false,
+  }));
+  // Accordion: at most one aspect's body open at a time. Its header (label +
+  // borrow slider) stays visible whether open or closed.
+  const [openAspect, setOpenAspect] = useState<AspectKey | null>("value");
   const [exportStatus, setExportStatus] = useState<string>("");
-  const loadedRef = useRef<boolean>(false);
 
-  // Debounced saver — created once per component lifetime.
-  const saverRef = useRef<((s: SmashPersisted) => void) | null>(null);
-  if (!saverRef.current) saverRef.current = makeSmashSaver(500);
+  const loadedRef = useRef(false);
+  const saverRef = useRef<ReturnType<typeof makeSmashSaver> | null>(null);
+  // Smash LUT layer ids we've created. Default Apply replaces the most recent
+  // in place; "+" forks a new one and auto-hides the prior.
+  const smashLayerIdsRef = useRef<number[]>([]);
 
-  // Mount: restore persisted amount + trait amounts. Layer ids are managed
-  // by the parent. Missing trait keys fall back to DEFAULT_TRAIT_AMOUNTS so
-  // older save files load cleanly.
+  // ── persistence: load once ──
   useEffect(() => {
+    saverRef.current = makeSmashSaver(500);
     let cancelled = false;
     (async () => {
       const persisted = await loadSmashSettings();
-      if (cancelled) return;
-      if (typeof persisted?.amount === "number" && Number.isFinite(persisted.amount)) {
-        setAmount(Math.max(0, Math.min(1, persisted.amount)));
+      if (!cancelled && persisted?.aspects) {
+        setControls((prev) => restoreControls(prev, persisted.aspects!));
+        setAdaptive((prev) => restoreAdaptive(prev, persisted.aspects!));
       }
-      if (persisted?.traits && typeof persisted.traits === "object") {
-        const t = persisted.traits;
-        // Trait values can be in [0, 2] — values past 1 are oversample / crank
-        // territory (extrapolate past literal CDF match). Hue stays in [0, 1]
-        // because circular wrap-overshoot looks broken visually.
-        const clampGate = (v: unknown, max: number): number | null =>
-          typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.min(max, v)) : null;
-        setTraits((prev) => ({
-          value:      clampGate(t.value, 2)      ?? prev.value,
-          hue:        clampGate(t.hue, 1)        ?? prev.hue,
-          saturation: clampGate(t.saturation, 2) ?? prev.saturation,
-          chroma:     clampGate(t.chroma, 2)     ?? prev.chroma,
-          neutral:    clampGate(t.neutral, 1)    ?? prev.neutral,
-          accent:     clampGate(t.accent, 1)     ?? prev.accent,
-        }));
-      }
-      // v1.21 Phase 4.5 — restore colorization toggle state. Older save
-      // files missing individual keys fall back to DEFAULT_COLORIZATION_TOGGLES.
-      if (persisted?.colorization && typeof persisted.colorization === "object") {
-        const cz = persisted.colorization;
-        setColorization((prev) => ({
-          ...prev,
-          ...(typeof cz.hueByLuma === "boolean" ? { hueByLuma: cz.hueByLuma } : {}),
-          ...(typeof cz.liftNeutrals === "boolean" ? { liftNeutrals: cz.liftNeutrals } : {}),
-          ...(typeof cz.paletteSnap === "boolean" ? { paletteSnap: cz.paletteSnap } : {}),
-        }));
-      }
-      // v1.21 Phase 4.5c — restore Passes (clamped to [1, 4], fractional OK).
-      // Older save files written when passes was integer-only still load fine
-      // since integer values are valid floats too.
-      if (typeof persisted?.passes === "number" && Number.isFinite(persisted.passes)) {
-        setPasses(Math.max(1, Math.min(4, persisted.passes)));
-      }
-      // v1.21 Phase 4.5g — restore Proportion match (clamped to [0, 1]).
-      if (typeof persisted?.proportionMatch === "number" && Number.isFinite(persisted.proportionMatch)) {
-        setProportionMatch(Math.max(0, Math.min(1, persisted.proportionMatch)));
-      }
-      // v1.21 Phase 4.5h — restore Posterize (clamped to [0, 1]).
-      if (typeof persisted?.posterize === "number" && Number.isFinite(persisted.posterize)) {
-        setPosterize(Math.max(0, Math.min(1, persisted.posterize)));
-      }
-      // v1.21 Phase 4.5i — restore Distribution (clamped to [0, 1]).
-      if (typeof persisted?.distribution === "number" && Number.isFinite(persisted.distribution)) {
-        setDistribution(Math.max(0, Math.min(1, persisted.distribution)));
-      }
-      // v1.21 Phase 5 — restore Conditional CDF (clamped to [0, 1]).
-      if (typeof persisted?.conditionalCdf === "number" && Number.isFinite(persisted.conditionalCdf)) {
-        setConditionalCdf(Math.max(0, Math.min(1, persisted.conditionalCdf)));
-      }
-      // v1.21 Phase 8 — restore Sliced OT (clamped to [0, 1]).
-      if (typeof persisted?.slicedOt === "number" && Number.isFinite(persisted.slicedOt)) {
-        setSlicedOt(Math.max(0, Math.min(1, persisted.slicedOt)));
-      }
-      // v1.21 Phase 7.x — restore the SOURCE MIX drag mode.
-      if (typeof persisted?.sourceMixAdaptive === "boolean") {
-        setSourceMixAdaptive(persisted.sourceMixAdaptive);
-      }
-      // v1.21 Phase 7 — restore Stochastic amount + seed.
-      if (persisted?.stochastic && typeof persisted.stochastic === "object") {
-        const st = persisted.stochastic;
-        if (typeof st.amount === "number" && Number.isFinite(st.amount)) {
-          setStochasticAmount(Math.max(0, Math.min(1, st.amount)));
-        }
-        if (typeof st.seed === "number" && Number.isFinite(st.seed)) {
-          setStochasticSeed(st.seed | 0);
-        }
-      }
-      // v1.21 Phase 4.5j — restore zone routing trio (clusterCount int 3..32,
-      // zoneInfluence + detailRichness floats [0, 1]).
-      if (typeof persisted?.clusterCount === "number" && Number.isFinite(persisted.clusterCount)) {
-        setClusterCount(Math.max(3, Math.min(32, Math.round(persisted.clusterCount))));
-      }
-      if (typeof persisted?.zoneInfluence === "number" && Number.isFinite(persisted.zoneInfluence)) {
-        setZoneInfluence(Math.max(0, Math.min(1, persisted.zoneInfluence)));
-      }
-      if (typeof persisted?.detailRichness === "number" && Number.isFinite(persisted.detailRichness)) {
-        setDetailRichness(Math.max(0, Math.min(1, persisted.detailRichness)));
-      }
-      if (typeof persisted?.zoneEdgeSoftness === "number" && Number.isFinite(persisted.zoneEdgeSoftness)) {
-        setZoneEdgeSoftness(Math.max(0, Math.min(1, persisted.zoneEdgeSoftness)));
-      }
-      if (typeof persisted?.zoneEdgeShift === "number" && Number.isFinite(persisted.zoneEdgeShift)) {
-        setZoneEdgeShift(Math.max(-1, Math.min(1, persisted.zoneEdgeShift)));
-      }
-      if (typeof persisted?.zoneRatio === "number" && Number.isFinite(persisted.zoneRatio)) {
-        setZoneRatio(Math.max(-1, Math.min(1, persisted.zoneRatio)));
-      }
-      if (typeof persisted?.temperature === "number" && Number.isFinite(persisted.temperature)) {
-        setTemperature(Math.max(-2, Math.min(2, persisted.temperature)));
-      }
-      if (typeof persisted?.temperatureSensitivity === "number" && Number.isFinite(persisted.temperatureSensitivity)) {
-        setTemperatureSensitivity(Math.max(0, Math.min(2, persisted.temperatureSensitivity)));
-      }
-      if (typeof persisted?.temperatureLBias === "number" && Number.isFinite(persisted.temperatureLBias)) {
-        setTemperatureLBias(Math.max(-1, Math.min(1, persisted.temperatureLBias)));
-      }
-      // v1.21 Phase 4.5t — restore temperature C / S bias (clamped [-1, 1]).
-      if (typeof persisted?.temperatureCBias === "number" && Number.isFinite(persisted.temperatureCBias)) {
-        setTemperatureCBias(Math.max(-1, Math.min(1, persisted.temperatureCBias)));
-      }
-      if (typeof persisted?.temperatureSBias === "number" && Number.isFinite(persisted.temperatureSBias)) {
-        setTemperatureSBias(Math.max(-1, Math.min(1, persisted.temperatureSBias)));
-      }
-      // v1.21 Phase 6 — restore SOURCE RATIOS state (section mode + 3 axes).
-      if (persisted?.ratioMode === "simple" || persisted?.ratioMode === "detailed") {
-        setRatioMode(persisted.ratioMode);
-      }
-      const restoreAxis = (
-        p: SmashPersistedAxis | undefined,
-        setAxis: React.Dispatch<React.SetStateAction<AxisRatioUI>>,
-      ): void => {
-        if (!p || typeof p !== "object") return;
-        setAxis((prev) => {
-          let { tilt, bandCount, weights, adaptive } = prev;
-          if (typeof p.tilt === "number" && Number.isFinite(p.tilt)) {
-            tilt = Math.max(-1, Math.min(1, p.tilt));
-          }
-          if (typeof p.adaptive === "boolean") adaptive = p.adaptive;
-          if (typeof p.bandCount === "number" && Number.isInteger(p.bandCount)
-              && p.bandCount >= 2 && p.bandCount <= 12) {
-            bandCount = p.bandCount;
-            weights = (Array.isArray(p.weights) && p.weights.length === p.bandCount
-              && p.weights.every((x) => typeof x === "number" && Number.isFinite(x) && x >= 0))
-              ? p.weights.slice()
-              : Array(p.bandCount).fill(1);
-          }
-          return { tilt, bandCount, weights, adaptive };
-        });
-      };
-      restoreAxis(persisted?.valueAxis, setValueAxis);
-      restoreAxis(persisted?.hueAxis, setHueAxis);
-      restoreAxis(persisted?.chromaAxis, setChromaAxis);
       loadedRef.current = true;
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // Save amount + traits + colorization + passes + proportionMatch +
-  // posterize + distribution + zone trio on change (debounced 500ms).
-  // Skip until initial load resolved.
+  // ── persistence: save on change (debounced) ──
   useEffect(() => {
     if (!loadedRef.current) return;
-    saverRef.current?.({
-      amount, traits, colorization, passes, proportionMatch, posterize, distribution,
-      conditionalCdf, slicedOt,
-      stochastic: { amount: stochasticAmount, seeded: true, seed: stochasticSeed },
-      clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity,
-      zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias,
-      sourceMixAdaptive,
-      ratioMode,
-      valueAxis: { tilt: valueAxis.tilt, bandCount: valueAxis.bandCount, weights: valueAxis.weights, adaptive: valueAxis.adaptive },
-      hueAxis: { tilt: hueAxis.tilt, bandCount: hueAxis.bandCount, weights: hueAxis.weights, adaptive: hueAxis.adaptive },
-      chromaAxis: { tilt: chromaAxis.tilt, bandCount: chromaAxis.bandCount, weights: chromaAxis.weights, adaptive: chromaAxis.adaptive },
-    });
-  }, [amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, slicedOt, stochasticAmount, stochasticSeed, clusterCount, zoneInfluence, detailRichness, zoneRatio, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias, sourceMixAdaptive, ratioMode, valueAxis, hueAxis, chromaAxis]);
+    saverRef.current?.({ aspects: serializeControls(controls, adaptive) });
+  }, [controls, adaptive]);
 
-  // ── Heavy: features + DNA + profile + CDF LUTs. Depends on SNAPS ONLY,
-  // so slider drags don't re-run extractFeatures (~100K pixels per call)
-  // four times AND don't rebuild the L/C/h CDFs each tick. The CDFs alone
-  // were 200-400ms per slider tick before this; now they're computed ONCE
-  // per snap change and reused on every drag.
-  const snapDerived = useMemo(() => {
-    if (!sourceSnap || !targetSnap) return null;
-    // clusterCount drives source/target DNA k-means; cdfs uses the resulting
-    // clusters to build per-cluster sub-LUTs for the zone-routing path.
-    const sourceDNA = extractSourceDNA(sourceSnap.data, sourceSnap.width, sourceSnap.height, { clusterCount });
-    const targetStructure = extractTargetStructure(targetSnap.data, targetSnap.width, targetSnap.height, { clusterCount });
-    const profile = pairDNA(sourceDNA, targetStructure);
-    const sourceFeatures = extractFeatures(sourceSnap.data, sourceSnap.width, sourceSnap.height, 4);
-    const targetFeatures = extractFeatures(targetSnap.data, targetSnap.width, targetSnap.height, 4);
-    const cdfs = buildSmashCdfs(sourceFeatures, targetFeatures, sourceDNA.clusters);
-    return { sourceDNA, targetStructure, profile, sourceFeatures, targetFeatures, cdfs };
-  }, [sourceSnap, targetSnap, clusterCount]);
+  const hasSnaps = sourceSnap !== null && targetSnap !== null;
 
-  // Phase 4.5s — reset the source-mix multipliers to neutral (all-1) whenever
-  // snapDerived changes. snapDerived only recomputes when source/target snaps
-  // or clusterCount change — never on a slider/bar drag — so this resets the
-  // bar exactly when the underlying cluster set changes and leaves user drags
-  // untouched in between. Mirrors PaletteStrip's "reset on every source
-  // change" behavior.
-  useEffect(() => {
-    if (!snapDerived) { setClusterMultipliers([]); return; }
-    setClusterMultipliers(snapDerived.sourceDNA.clusters.map(() => 1));
-  }, [snapDerived]);
-
-  // ── Lighter: smash() invocation. Per slider tick — uses cached features
-  // + profile + CDFs from above. The expensive build is now a no-op; smash()
-  // just records the audit and returns the engine output. Sub-millisecond
-  // per drag (vs. ~1s before this refactor).
-  const pipeline = useMemo<EnginePipeline | null>(() => {
-    if (!snapDerived) return null;
-    // Per-section enable/disable. A disabled section's controls are forced to
-    // their inert (no-op) values here, before the engine is built — so each
-    // mechanic group can be tested in isolation. The accordion/section keys
-    // map onto these gates.
-    const se = sectionEnabled;
-    // ENGINE group — distribution-matching mechanics.
-    const fxPasses = se.engine ? passes : 1;
-    const fxPosterize = se.engine ? posterize : 0;
-    const fxDistribution = se.engine ? distribution : 0;
-    const fxConditionalCdf = se.engine ? conditionalCdf : 0;
-    const fxSlicedOt = se.engine ? slicedOt : 0;
-    // ZONES group — cluster routing + weighting.
-    const fxZoneInfluence = se.zones ? zoneInfluence : 0;
-    const fxDetailRichness = se.zones ? detailRichness : 1;
-    const fxZoneEdgeSoftness = se.zones ? zoneEdgeSoftness : 0;
-    const fxZoneEdgeShift = se.zones ? zoneEdgeShift : 0;
-    const fxZoneRatio = se.zones ? zoneRatio : 0;
-    const fxClusterMultipliers = se.zones ? clusterMultipliers : clusterMultipliers.map(() => 1);
-    // TEMPERATURE group — temperature 0 makes sensitivity / L/C/S bias moot.
-    const fxTemperature = se.temperature ? temperature : 0;
-    // TRAITS — default amounts (the standard, no custom trait tweak).
-    const fxTraits = se.traits ? traits : DEFAULT_TRAIT_AMOUNTS;
-    // COLORIZATION — all cross-dimensional toggles off (inert). PROPORTION
-    // is a sub-control of Lift Neutrals, so it's gated by this section too.
-    const fxColorization = se.colorization
-      ? colorization
-      : { hueByLuma: false, liftNeutrals: false, paletteSnap: false };
-    const fxProportionMatch = se.colorization ? proportionMatch : 1;
-    // SOURCE RATIOS — neutral axes (all-1 multipliers) when disabled.
-    // Always sent (even at neutral) so the engine echoes back each axis's
-    // natural weights + band colors for the bars.
-    const valueRatio: AxisRatio = resolveAxisControl(ratioMode, se.ratios ? valueAxis : NEUTRAL_AXIS);
-    const hueRatio: AxisRatio = resolveAxisControl(ratioMode, se.ratios ? hueAxis : NEUTRAL_AXIS);
-    const chromaRatio: AxisRatio = resolveAxisControl(ratioMode, se.ratios ? chromaAxis : NEUTRAL_AXIS);
-    const controls = {
-      ...DEFAULT_SMASH_CONTROLS,
-      global: amount,
-      traits: fxTraits,
-      // proportionMatch lives on colorization in the engine schema, so merge
-      // it in here rather than carrying it around as a separate field.
-      colorization: { ...fxColorization, proportionMatch: fxProportionMatch, posterize: fxPosterize, distribution: fxDistribution, conditionalCdf: fxConditionalCdf, slicedOt: fxSlicedOt, stochastic: { amount: stochasticAmount, seeded: true, seed: stochasticSeed }, zoneInfluence: fxZoneInfluence, detailRichness: fxDetailRichness, zoneRatio: fxZoneRatio, clusterMultipliers: fxClusterMultipliers, temperature: fxTemperature, temperatureSensitivity, zoneEdgeSoftness: fxZoneEdgeSoftness, zoneEdgeShift: fxZoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias, valueRatio, hueRatio, chromaRatio },
-      passes: fxPasses,
-    };
-    const engine = smash(
-      snapDerived.sourceFeatures,
-      snapDerived.targetFeatures,
-      snapDerived.profile,
-      controls,
-      snapDerived.cdfs,
-    );
-    return { sourceDNA: snapDerived.sourceDNA, engine };
-  }, [snapDerived, amount, traits, colorization, passes, proportionMatch, posterize, distribution, conditionalCdf, slicedOt, stochasticAmount, stochasticSeed, zoneInfluence, detailRichness, zoneRatio, clusterMultipliers, temperature, temperatureSensitivity, zoneEdgeSoftness, zoneEdgeShift, temperatureLBias, temperatureCBias, temperatureSBias, ratioMode, valueAxis, hueAxis, chromaAxis, sectionEnabled]);
-
-  // Propagate engine changes to the parent via useEffect, NOT inside the
-  // useMemo body above. Calling setState on the parent during a child's
-  // render is an anti-pattern: React 18 either drops the update or defers
-  // it, and on subsequent renders the memo returns its cached value
-  // without re-firing the side effect — so a colorization toggle that
-  // changed the memo never reached `smashEngine` upstream. Symptom: the
-  // preview hung on the previous toggle state until a refresh changed the
-  // snap ref and forced an unrelated re-render. This effect runs after
-  // commit and fires every time the pipeline reference changes.
-  useEffect(() => {
-    onEngineChange?.(pipeline?.engine ?? null);
-    // onEngineChange is intentionally excluded — it's a stable setState
-    // ref from useState in the parent and would be a closure-cycle hazard
-    // if treated as a dep.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pipeline]);
-
-  const preset = detectPreset(amount);
-  const onPresetChange = (next: SmashPreset) => setAmount(SMASH_PRESET_AMOUNTS[next]);
-
-  // Per-group ✕ resets — each ENGINE sub-section header has its own. Per-
-  // slider reset is double-click on the row.
-  const resetEngineGroup = () => {
-    setPasses(INLINE_DEFAULTS.passes);
-    setPosterize(INLINE_DEFAULTS.posterize);
-    setDistribution(INLINE_DEFAULTS.distribution);
-    setConditionalCdf(INLINE_DEFAULTS.conditionalCdf);
-    setSlicedOt(INLINE_DEFAULTS.slicedOt);
-    setStochasticAmount(INLINE_DEFAULTS.stochasticAmount);
-  };
-  const resetZonesGroup = () => {
-    setClusterCount(INLINE_DEFAULTS.clusterCount);
-    setZoneInfluence(INLINE_DEFAULTS.zoneInfluence);
-    setDetailRichness(INLINE_DEFAULTS.detailRichness);
-    setZoneEdgeSoftness(INLINE_DEFAULTS.zoneEdgeSoftness);
-    setZoneEdgeShift(INLINE_DEFAULTS.zoneEdgeShift);
-    setZoneRatio(INLINE_DEFAULTS.zoneRatio);
-    // Source-mix multipliers back to neutral (all-1), keeping the current
-    // length so the bar stays in sync with the cluster count.
-    setClusterMultipliers((prev) => prev.map(() => 1));
-  };
-  const resetTempGroup = () => {
-    setTemperature(INLINE_DEFAULTS.temperature);
-    setTemperatureSensitivity(INLINE_DEFAULTS.temperatureSensitivity);
-    setTemperatureLBias(INLINE_DEFAULTS.temperatureLBias);
-    setTemperatureCBias(INLINE_DEFAULTS.temperatureCBias);
-    setTemperatureSBias(INLINE_DEFAULTS.temperatureSBias);
-  };
-
-  // Small enable/disable toggle box for a section header. Click stops
-  // propagation so it doesn't also expand/collapse the accordion.
-  const renderEnableToggle = (key: ToggleableSectionKey): JSX.Element => {
-    const on = sectionEnabled[key];
-    return (
-      <div
-        onClick={(e) => {
-          e.stopPropagation();
-          setSectionEnabled((s) => ({ ...s, [key]: !s[key] }));
-        }}
-        title={on
-          ? "Section ENABLED — its controls affect the output. Click to disable it (its mechanics drop to no-op, so you can test the other sections in isolation)."
-          : "Section DISABLED — its controls are bypassed (forced to no-op). Click to re-enable."}
-        style={enableToggleStyle(on)}
-      >
-        {on ? "✓" : ""}
-      </div>
-    );
-  };
-
-  // Shared collapsible group-header: enable toggle + chevron + label + ✕
-  // reset (shown when open) — used by the three ENGINE sub-sections.
-  // Clicking the label runs the accordion toggle so opening this group
-  // collapses any other open section. A disabled section's label dims.
-  const renderGroupHeader = (
-    label: string,
-    sectionKey: ToggleableSectionKey,
-    onReset: () => void,
-    openTip: string,
-    resetTip: string,
-  ): JSX.Element => {
-    const isOpen = openSection === sectionKey;
-    const enabled = sectionEnabled[sectionKey];
-    return (
-      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-        {renderEnableToggle(sectionKey)}
-        <div
-          style={{ ...traitsHeaderStyle, flex: 1, opacity: enabled ? 1 : 0.45 }}
-          onClick={() => toggleSection(sectionKey)}
-          title={isOpen ? `Hide the ${label} sliders` : openTip}
-        >
-          <span style={{ width: 10, display: "inline-block", textAlign: "center" }}>
-            {isOpen ? "▾" : "▸"}
-          </span>
-          <span>{label}</span>
-        </div>
-        {isOpen && (
-          <div
-            onClick={(e) => { e.stopPropagation(); if (hasSnaps) onReset(); }}
-            title={resetTip}
-            style={resetButtonStyle}
-          >
-            ✕
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // Reset the whole SOURCE RATIOS section to neutral (the ✕ on its header).
-  const resetRatios = () => {
-    setValueAxis(NEUTRAL_AXIS);
-    setHueAxis(NEUTRAL_AXIS);
-    setChromaAxis(NEUTRAL_AXIS);
-  };
-
-  // Ratio-bar segments per axis, built from the engine's echoed natural
-  // per-band weights + mean band colors. Falls back to a gray ramp before
-  // the first engine run.
-  const valueBarSwatches = useMemo(
-    () => buildAxisSwatches(
-      pipeline?.engine.valueRatioNaturalWeights,
-      pipeline?.engine.valueRatioBandColors,
-      valueAxis.bandCount),
-    [pipeline, valueAxis.bandCount]);
-  const hueBarSwatches = useMemo(
-    () => buildAxisSwatches(
-      pipeline?.engine.hueRatioNaturalWeights,
-      pipeline?.engine.hueRatioBandColors,
-      hueAxis.bandCount),
-    [pipeline, hueAxis.bandCount]);
-  const chromaBarSwatches = useMemo(
-    () => buildAxisSwatches(
-      pipeline?.engine.chromaRatioNaturalWeights,
-      pipeline?.engine.chromaRatioBandColors,
-      chromaAxis.bandCount),
-    [pipeline, chromaAxis.bandCount]);
-
-  // Render one SOURCE RATIOS axis row — a tilt slider in Simple mode, a
-  // RatioBar in Detailed mode. `setAxis` is the axis's state setter.
-  const renderRatioAxis = (
-    label: string,
-    axis: AxisRatioUI,
-    setAxis: React.Dispatch<React.SetStateAction<AxisRatioUI>>,
-    swatches: RatioBarSwatch[],
-    simpleTip: string,
-    detailedTip: string,
-  ): JSX.Element => (
-    ratioMode === "simple" ? (
-      <div
-        style={passesRowStyle}
-        onDoubleClick={() => { if (hasSnaps) setAxis((s) => ({ ...s, tilt: 0 })); }}
-      >
-        <span style={passesLabelStyle}>{label}</span>
-        <input
-          type="range"
-          min={-100}
-          max={100}
-          step={5}
-          value={Math.round(axis.tilt * 100)}
-          onChange={(e) => setAxis((s) => ({ ...s, tilt: parseInt((e.target as HTMLInputElement).value, 10) / 100 }))}
-          disabled={!hasSnaps}
-          style={passesSliderStyle}
-          title={simpleTip}
-        />
-        <span style={passesValueStyle}>{axis.tilt > 0 ? "+" : ""}{Math.round(axis.tilt * 100)}%</span>
-      </div>
-    ) : (
-      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        <span style={passesLabelStyle}>{label}</span>
-        <RatioBar
-          swatches={swatches}
-          multipliers={axis.weights}
-          setMultipliers={(w) => setAxis((s) => ({ ...s, weights: w }))}
-          adaptive={axis.adaptive}
-          setAdaptive={(a) => setAxis((s) => ({ ...s, adaptive: a }))}
-          count={axis.bandCount}
-          countOptions={[3, 5, 7]}
-          setCount={(n) => setAxis((s) => ({ ...s, bandCount: n, weights: Array(n).fill(1) }))}
-          disabled={!hasSnaps}
-          title={detailedTip}
-        />
-      </div>
-    )
+  // Per-aspect slice counts. A new object only when a count actually changes,
+  // so band/amount drags don't perturb the histogram memo below.
+  const binCounts = useMemo(
+    () => ({
+      value: controls.value.binCount,
+      hue: controls.hue.binCount,
+      saturation: controls.saturation.binCount,
+      chroma: controls.chroma.binCount,
+    }),
+    [
+      controls.value.binCount,
+      controls.hue.binCount,
+      controls.saturation.binCount,
+      controls.chroma.binCount,
+    ],
   );
 
-  // Track Smash LUT layer ids we've created. Default Apply replaces the most
-  // recent one in place; "+" fork mode creates a new one and auto-hides the
-  // prior. Stored in a ref (not state) because we want it to persist across
-  // re-renders without triggering them.
-  const smashLayerIdsRef = useRef<number[]>([]);
+  // ── heavy: per-aspect histograms. Re-extracts only when the snaps or a
+  // slice count change — a band/amount drag never re-extracts (one pass over
+  // ~100K pixels). ──
+  const histograms = useMemo<AspectHistogramSet | null>(() => {
+    if (!sourceSnap || !targetSnap) return null;
+    return extractAspectHistograms(
+      { data: sourceSnap.data, width: sourceSnap.width, height: sourceSnap.height },
+      { data: targetSnap.data, width: targetSnap.width, height: targetSnap.height },
+      binCounts,
+      1,
+    );
+  }, [sourceSnap, targetSnap, binCounts]);
+
+  // New images → re-pick each aspect's smart rank axis (its own axis, or
+  // Value when that channel is flat — grayscale colorization). Keyed on the
+  // snaps only, so changing a slice count keeps a manually-chosen Rank-by.
+  // Declared before the band re-seed below so its rankBy lands first.
+  useEffect(() => {
+    if (!histograms) return;
+    setControls((c) => {
+      const next = { ...c } as SmashControls;
+      for (const key of ASPECT_KEYS) {
+        next[key] = setAspectRank(c[key], pickRankAxis(histograms, key), histograms);
+      }
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceSnap, targetSnap]);
+
+  // Re-seed the ratio bands from the extracted histograms whenever the snaps
+  // or a slice count change. Bands are absolute distributions tied to the
+  // current images, so a snap / count change must reset them; band edits
+  // (which never touch the histograms) survive in between.
+  useEffect(() => {
+    if (!histograms) return;
+    setControls((prev) => {
+      const next = { ...prev } as SmashControls;
+      for (const key of ASPECT_KEYS) {
+        // The target band is binned along the aspect's (concrete) rank axis —
+        // re-seed it from that axis's target histogram.
+        const rankAxis = prev[key].rankBy;
+        const n = histograms[key].source.length;
+        next[key] = {
+          ...prev[key],
+          binCount: n,
+          sourceBand: Array.from(histograms[key].source),
+          targetBand: resampleHist(histograms[rankAxis].target, n),
+        };
+      }
+      return next;
+    });
+  }, [histograms]);
+
+  // ── light: build the runnable engine. Cheap — just rebuilds the per-aspect
+  // CDFs from the edited bands. Runs every control tick. ──
+  const engine = useMemo<SmashEngine | null>(() => {
+    if (!histograms) return null;
+    return buildSmashEngine(histograms, controls);
+  }, [histograms, controls]);
+
+  // Propagate the engine to the parent AFTER commit. Debounced ~90ms: the
+  // engine rebuild itself is cheap, but the parent bakes a 33³ preview LUT
+  // (~36K transforms) off it — doing that every slider tick janks the drag.
+  // Debouncing means the preview catches up shortly after you pause, while
+  // the drag stays smooth. Apply / Export read the engine directly, undelayed.
+  useEffect(() => {
+    const t = setTimeout(() => onEngineChange?.(engine), 90);
+    return () => clearTimeout(t);
+    // onEngineChange is a stable setState ref; excluding it avoids a cycle.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine]);
+
+  const updateAspect = (key: AspectKey, patch: Partial<AspectControl>): void => {
+    setControls((c) => ({ ...c, [key]: { ...c[key], ...patch } }));
+  };
+
+  // Changing Rank-by re-seeds that aspect's (own) target band along the new
+  // axis. "Auto" resolves to a concrete axis on the spot (own, or Value when
+  // the channel is flat) so the band, the dropdown, and the engine all agree.
+  const changeRankBy = (key: AspectKey, rb: RankBy): void => {
+    if (!histograms) return;
+    const axis: AspectKey = rb === "auto" ? pickRankAxis(histograms, key) : rb;
+    setControls((c) => ({ ...c, [key]: setAspectRank(c[key], axis, histograms) }));
+  };
+
+  // Reset one aspect to defaults: borrow 100%, softness 0, default slice
+  // count, handle-drag mode, smart rank axis, bands back to natural.
+  const defaultAspect = (key: AspectKey): AspectControl => {
+    const rankBy = histograms ? pickRankAxis(histograms, key) : key;
+    return {
+      binCount: DEFAULT_BIN_COUNT,
+      sourceBand: histograms ? Array.from(histograms[key].source) : [],
+      targetBand: histograms ? Array.from(histograms[rankBy].target) : [],
+      amount: 1,
+      softness: 0,
+      rankBy,
+    };
+  };
+  const resetAspect = (key: AspectKey): void => {
+    setControls((c) => ({ ...c, [key]: defaultAspect(key) }));
+    setAdaptive((a) => ({ ...a, [key]: false }));
+  };
+  const resetAllAspects = (): void => {
+    setControls(() => ({
+      value: defaultAspect("value"),
+      hue: defaultAspect("hue"),
+      saturation: defaultAspect("saturation"),
+      chroma: defaultAspect("chroma"),
+    }));
+    setAdaptive({ value: false, hue: false, saturation: false, chroma: false });
+  };
+
+  // Auto-configure all aspects to a sensible match of the source.
+  const autoConfigureAll = (): void => {
+    if (!histograms) return;
+    setControls(autoConfigure(histograms));
+    setAdaptive({ value: false, hue: false, saturation: false, chroma: false });
+  };
+
+  // ── actions ──
 
   const onApply = async () => {
-    if (!pipeline) return;
+    if (!engine) return;
     setExportStatus("applying…");
     try {
-      // Default Apply: replace the most-recently-created Smash LUT in place.
-      const replaceId = smashLayerIdsRef.current.length > 0
-        ? smashLayerIdsRef.current[smashLayerIdsRef.current.length - 1]
-        : null;
-      const result = await applySmashLut(pipeline.engine, { replaceLayerId: replaceId });
+      const replaceId =
+        smashLayerIdsRef.current.length > 0
+          ? smashLayerIdsRef.current[smashLayerIdsRef.current.length - 1]
+          : null;
+      const result = await applySmashLut(engine, { replaceLayerId: replaceId });
       if (result.ok) {
-        // Track the layer id (whether it's the same as before for replace
-        // path, or a fresh one when the prior was deleted).
         if (typeof result.layerId === "number") {
-          // Replace the most-recent entry rather than appending — there's
-          // still only one active Smash LUT layer in the doc.
           const next = smashLayerIdsRef.current.slice();
           if (next.length > 0) next[next.length - 1] = result.layerId;
           else next.push(result.layerId);
           smashLayerIdsRef.current = next;
         }
-        const verb = result.replacedInPlace ? "replaced" : "applied";
-        setExportStatus(`${verb}: ${result.layerName ?? "Smash LUT"}`);
+        setExportStatus(`${result.replacedInPlace ? "replaced" : "applied"}: ${result.layerName ?? "Smash LUT"}`);
       } else {
         setExportStatus(`apply error: ${result.error ?? "unknown"}`);
       }
@@ -793,17 +433,14 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     }
   };
 
-  // "+" fork mode — create a fresh Smash LUT alongside the prior one, and
-  // hide the prior so the doc isn't cluttered with concurrent overlays. The
-  // user can toggle the prior's visibility in PS's Layers panel to A/B.
   const onApplyFork = async () => {
-    if (!pipeline) return;
+    if (!engine) return;
     setExportStatus("forking…");
     try {
       const priorIds = smashLayerIdsRef.current.slice();
-      const result = await applySmashLut(pipeline.engine, {
-        replaceLayerId: null,         // force create-new path
-        hidePriorIds: priorIds,        // auto-hide previous Smash variations
+      const result = await applySmashLut(engine, {
+        replaceLayerId: null,
+        hidePriorIds: priorIds,
       });
       if (result.ok) {
         if (typeof result.layerId === "number") {
@@ -818,33 +455,20 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     }
   };
 
-  // Test Bake — diagnostic: render the engine's per-pixel ground-truth output
-  // (no 3D LUT, no trilinear interpolation, no grid quantization). It writes
-  // the result as a real "Smash Test Bake" PIXEL LAYER in the document so the
-  // user can A/B it on-canvas against an Apply'd "Smash LUT" Color Lookup
-  // layer — a definitive engine-intent vs LUT-path comparison. It also still
-  // pushes the bake into the panel preview tile. The layer is at preview-tier
-  // resolution (the snapshot the engine ran on).
   const onTestBakeClick = async () => {
-    if (!pipeline || !targetSnap) return;
-    // Phase 7 — when STOCHASTIC is engaged, Test Bake renders the per-pixel
-    // stochastic output (the grain) instead of the deterministic ground
-    // truth, since the live LUT preview can't show stochastic.
-    const stochastic = stochasticAmount > 0;
+    if (!engine || !targetSnap) return;
     setExportStatus("baking test image…");
     try {
       // Instant preview-tier feedback into the panel tile.
-      const snapBake = stochastic
-        ? bakeTargetStochastic(pipeline.engine, targetSnap.data, targetSnap.width, targetSnap.height)
-        : bakeTargetPerPixel(pipeline.engine, targetSnap.data, targetSnap.width, targetSnap.height);
-      onTestBake?.(snapBake, targetSnap.width, targetSnap.height);
+      onTestBake?.(bakePanelTile(engine, targetSnap), targetSnap.width, targetSnap.height);
       // Full-res, target-aligned ground-truth layer for on-canvas A/B.
       if (typeof targetDocId === "number" && typeof targetLayerId === "number") {
         setExportStatus("baking test image… (full-res layer)");
-        const result = await applySmashTestBake(pipeline.engine, targetDocId, targetLayerId);
+        const result = await applySmashTestBake(engine, targetDocId, targetLayerId);
         if (result.ok) {
           setExportStatus(
-            `test bake layer added: "${result.layerName}" (${result.width}×${result.height}, aligned to target — engine ground truth, no LUT)`);
+            `test bake layer added: "${result.layerName}" (${result.width}×${result.height}, engine ground truth)`,
+          );
         } else {
           setExportStatus(`test bake error: ${result.error ?? "unknown"}`);
         }
@@ -857,18 +481,11 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
   };
 
   const onExportCube = async () => {
-    if (!pipeline) return;
-    // Phase 7 — STOCHASTIC has no fixed f(R,G,B), so there is no .cube to
-    // bake. Guard the export with a clear message.
-    if (stochasticAmount > 0) {
-      setExportStatus("can't export .cube in Stochastic mode — set STOCHASTIC to 0, or use Test Bake to see the grain.");
-      return;
-    }
+    if (!engine) return;
     setExportStatus("baking…");
     try {
-      const lut = bakeSmashLut(pipeline.engine, 33);
+      const lut = bakeEngineLut(engine, 33);
       const cubeText = serializeSmashCube(lut, "ColorSmash");
-      // Lazy-load UXP storage so the test environment never touches it.
       const uxp = await import("uxp");
       const fs = (uxp as any).default?.storage?.localFileSystem
         ?? (uxp as any).storage?.localFileSystem;
@@ -882,725 +499,104 @@ export function SmashSection(props: SmashSectionProps): JSX.Element {
     }
   };
 
-  const hasSnaps = sourceSnap !== null && targetSnap !== null;
+  // ── render ──
 
   return (
     <div style={containerStyle}>
       {!hasSnaps && (
-        <div style={placeholderStyle}>
-          Pick a source and target layer to run Smash.
-        </div>
+        <div style={placeholderStyle}>Pick a source and target layer to run Smash.</div>
       )}
 
-      {hasSnaps && pipeline && (
+      {hasSnaps && histograms && (
         <>
-          <div style={sectionLabelStyle}>SOURCE DNA</div>
-          <SourceDNAStrip bands={pipeline.sourceDNA.bands} height={36} />
-        </>
-      )}
-
-      <SmashControlsBar
-        amount={amount}
-        preset={preset}
-        onAmountChange={setAmount}
-        onPresetChange={onPresetChange}
-        disabled={!hasSnaps}
-      />
-
-      {/* ENGINE group — core distribution matching. One of three collapsible
-          ENGINE sub-sections (ENGINE / ZONES / TEMPERATURE), all collapsed by
-          default. Chevron toggles; the ✕ resets just this group. Per-slider
-          reset is double-click on a row. */}
-      {renderGroupHeader(
-        "ENGINE", "engine", resetEngineGroup,
-        "Show the ENGINE sliders — core distribution matching: PASSES, POSTERIZE, DISTRIBUTION, CONDITIONAL, SLICED OT, STOCHASTIC.",
-        "Reset the ENGINE group to defaults (PASSES 1.0×, POSTERIZE/DISTRIBUTION/CONDITIONAL/SLICED OT/STOCHASTIC 0%).",
-      )}
-      {engineOpen && (
-       <>
-
-      {/* Passes slider (Phase 4.5c, refined to continuous in 4.5e). Inline
-          because it's a small, primary intensity knob. 1.0× = one transform
-          per pixel (current default). Fractional values lerp between
-          consecutive integer-pass results — 1.5× is halfway between
-          single-apply and double-apply behavior. Range capped at 3.0× in
-          the UI because anything past ~2× is usually visibly over-the-top;
-          the engine clamp ceiling is 4 for direct callers. Double-click the
-          row to reset to default. */}
-      <div
-        style={passesRowStyle}
-        onDoubleClick={() => { if (hasSnaps) setPasses(INLINE_DEFAULTS.passes); }}
-      >
-        <span style={passesLabelStyle}>PASSES</span>
-        <input
-          type="range"
-          min={100}
-          max={300}
-          step={5}
-          value={Math.round(passes * 100)}
-          onChange={(e) => setPasses(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
-          disabled={!hasSnaps}
-          style={passesSliderStyle}
-          title="Drag for fine control over how many times the transform compounds per pixel. 1.0× = single pass (default). 1.5× lands halfway between single and double apply. Past 2× is usually over the top."
-        />
-        <span style={passesValueStyle}>{passes.toFixed(2)}×</span>
-      </div>
-
-      {/* Phase 4.5h — Posterize. Lerps the final RGB toward the nearest
-          source CLUSTER's full RGB (matched by L distance — dark target
-          pixels → dark cluster, highlights → bright cluster, etc.). 0% =
-          off (default, smooth engine output). 100% = full snap (output
-          IS the cluster's RGB), producing bold L-banded posterized
-          coloration using only the source's actual palette colors.
-          Different from paletteSnap (which only re-aims hue direction):
-          posterize replaces the entire pixel L+a+b. */}
-      <div
-        style={passesRowStyle}
-        onDoubleClick={() => { if (hasSnaps) setPosterize(INLINE_DEFAULTS.posterize); }}
-      >
-        <span style={passesLabelStyle}>POSTERIZE</span>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          step={5}
-          value={Math.round(posterize * 100)}
-          onChange={(e) => setPosterize(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
-          disabled={!hasSnaps}
-          style={passesSliderStyle}
-          title="Snap output pixels to the nearest source CLUSTER's full color (RGB, not just hue) — matched by L distance. 0% = off (smooth output). 100% = full snap, hard posterize into N source-derived bands. Different from Palette Snap (which only re-aims hue direction); Posterize replaces the entire pixel color."
-        />
-        <span style={passesValueStyle}>{Math.round(posterize * 100)}%</span>
-      </div>
-
-      {/* Phase 4.5i — Distribution. Soft Gaussian-weighted blend across
-          ALL source clusters in joint Oklab (L+a+b) space. Each cluster's
-          contribution is weighted by both gaussian proximity to the input
-          pixel AND the cluster's population (frequency in source). Result
-          is smooth (no banding, unlike posterize) but naturally emphasizes
-          source's high-density modes (unlike per-dim CDFs which treat L,
-          C, h independently). This is the "color smash with structure"
-          knob the user asked for. */}
-      <div
-        style={passesRowStyle}
-        onDoubleClick={() => { if (hasSnaps) setDistribution(INLINE_DEFAULTS.distribution); }}
-      >
-        <span style={passesLabelStyle}>DISTRIBUTION</span>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          step={5}
-          value={Math.round(distribution * 100)}
-          onChange={(e) => setDistribution(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
-          disabled={!hasSnaps}
-          style={passesSliderStyle}
-          title="Smooth-blend the output toward source's joint color distribution. For each pixel, all source clusters contribute weighted by (gaussian proximity in Oklab) × (cluster population). Result emphasizes source's high-frequency modes WITHOUT the banding of Posterize. Different from per-dim CDFs (which treat L, C, h independently); Distribution respects the joint distribution where source's pixels actually co-occur. 0% = off, 100% = full lerp to weighted cluster mean."
-        />
-        <span style={passesValueStyle}>{Math.round(distribution * 100)}%</span>
-      </div>
-
-      {/* Phase 5 — Conditional CDF P(color | L). Matches each pixel's chroma
-          and hue against the source pixels that share its lightness band,
-          instead of the whole-source global chroma/hue CDF. Restores
-          within-L color spread the global CDF averages away. 0% = off
-          (global CDFs only, byte-identical to before). 100% = fully
-          bucket-conditional. Sparse L buckets fall back to the global CDF;
-          output is interpolated between buckets so there's no banding. */}
-      <div
-        style={passesRowStyle}
-        onDoubleClick={() => { if (hasSnaps) setConditionalCdf(INLINE_DEFAULTS.conditionalCdf); }}
-      >
-        <span style={passesLabelStyle}>CONDITIONAL</span>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          step={5}
-          value={Math.round(conditionalCdf * 100)}
-          onChange={(e) => setConditionalCdf(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
-          disabled={!hasSnaps}
-          style={passesSliderStyle}
-          title="Conditional CDF P(color | L). Matches a pixel's chroma + hue against only the source pixels that share its lightness band — not the whole source. Restores within-L color SPREAD the global CDF averages away (e.g. a source whose mid-tones are half red, half teal stops collapsing every target mid-tone to muddy purple). 0% = off (global CDFs, identical to before). 100% = fully per-L-bucket. Sparse L buckets fall back to the global CDF automatically; output is interpolated between buckets so there's no banding. When Hue-by-L is on it still owns hue direction; CONDITIONAL then governs chroma magnitude."
-        />
-        <span style={passesValueStyle}>{Math.round(conditionalCdf * 100)}%</span>
-      </div>
-
-      {/* Phase 8 — Sliced OT. Blends the output color toward its sliced-
-          optimal-transport position — the strongest joint-3D distribution
-          match, capturing Oklab correlations the per-axis + CONDITIONAL CDFs
-          miss. 0% = off. Computed at smash() time as a baked displacement
-          grid; stacks on top of every other mechanic. */}
-      <div
-        style={passesRowStyle}
-        onDoubleClick={() => { if (hasSnaps) setSlicedOt(INLINE_DEFAULTS.slicedOt); }}
-      >
-        <span style={passesLabelStyle}>SLICED OT</span>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          step={5}
-          value={Math.round(slicedOt * 100)}
-          onChange={(e) => setSlicedOt(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
-          disabled={!hasSnaps}
-          style={passesSliderStyle}
-          title="Sliced Optimal Transport — the strongest joint-distribution match. The per-axis CDFs and CONDITIONAL match L/C/h independently (or L-conditionally); SLICED OT matches the FULL 3D Oklab color distribution, capturing correlations they miss (e.g. 'as a increases, b decreases'). 0% = off. 100% = full transport of the output color toward the source's joint distribution. Stacks on top of CONDITIONAL and the per-axis CDFs — dial both for progressively stronger matching. Computed once per source/target change (~35-55ms); free per slider drag."
-        />
-        <span style={passesValueStyle}>{Math.round(slicedOt * 100)}%</span>
-      </div>
-
-      {/* Phase 7 — STOCHASTIC. Draws a random source sample per pixel,
-          restoring the source's natural grain that deterministic CDF
-          matching averages away. PREVIEW-ONLY: it breaks f(R,G,B) purity so
-          it can't bake to a .cube — click Test Bake to see the grain in the
-          panel; the live preview + Export stay deterministic. */}
-      <div
-        style={passesRowStyle}
-        onDoubleClick={() => { if (hasSnaps) setStochasticAmount(INLINE_DEFAULTS.stochasticAmount); }}
-      >
-        <span style={passesLabelStyle}>STOCHASTIC</span>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          step={5}
-          value={Math.round(stochasticAmount * 100)}
-          onChange={(e) => setStochasticAmount(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
-          disabled={!hasSnaps}
-          style={passesSliderStyle}
-          title="Stochastic per-L-band sampling — restores per-pixel GRAIN. CONDITIONAL recovers within-tone color spread deterministically; STOCHASTIC goes further and draws a RANDOM source sample for each pixel, so a flat target region picks up the source's natural scatter instead of one averaged color. 0% = off (deterministic). 100% = raw per-pixel draw. PREVIEW-ONLY: random-per-pixel output can't be a fixed f(R,G,B), so it can't bake to a .cube — the live LUT preview and Export .cube stay deterministic; click TEST BAKE to render the grain into the panel. The grain is hash-seeded so it's stable and reproducible (no shimmer on re-render)."
-        />
-        <span style={passesValueStyle}>{Math.round(stochasticAmount * 100)}%</span>
-      </div>
-      {stochasticAmount > 0 && (
-        <div style={stochasticNoteStyle}>
-          PREVIEW ONLY — random per-pixel grain can't bake to a .cube. Click
-          Test Bake to render it; Apply / Export use the deterministic transform.
-        </div>
-      )}
-      </>
-      )}
-
-      {/* ZONES group — cluster routing + weighting. ZONES sets the source
-          cluster count and segments the SOURCE MIX bar directly below it;
-          ZONE RATIO / INFLUENCE / DETAIL / EDGE * drive the zone-routing
-          path. */}
-      {renderGroupHeader(
-        "ZONES", "zones", resetZonesGroup,
-        "Show the ZONES sliders — cluster routing + weighting: ZONES, SOURCE MIX, INFLUENCE, DETAIL, EDGE SOFTNESS/SHIFT, ZONE RATIO.",
-        "Reset the ZONES group to defaults (ZONES 5, SOURCE MIX neutral, INFLUENCE 0%, DETAIL 100%, EDGE SOFTNESS/SHIFT 0, ZONE RATIO 0).",
-      )}
-      {zonesOpen && (
-       <>
-
-      {/* Phase 4.5j — ZONES sets how many source palette buckets exist
-          (re-extracts DNA on change — slight pause) and how many segments
-          the SOURCE MIX bar below splits into. INFLUENCE sets how strongly
-          the per-cluster path overrides default Hue-by-L; DETAIL sets how
-          much intra-cluster L→(a,b) variation the zone path preserves. */}
-      <div
-        style={passesRowStyle}
-        onDoubleClick={() => { if (hasSnaps) setClusterCount(INLINE_DEFAULTS.clusterCount); }}
-      >
-        <span style={passesLabelStyle}>ZONES</span>
-        <input
-          type="range"
-          min={3}
-          max={32}
-          step={1}
-          value={clusterCount}
-          onChange={(e) => setClusterCount(parseInt((e.target as HTMLInputElement).value, 10))}
-          disabled={!hasSnaps}
-          style={passesSliderStyle}
-          title="Number of source palette zones (clusters) used by the zone-routing path. 3 = very coarse (Subtle / Balanced / Vivid groupings); 32 = fine-grained (smooth transitions). Changing this re-extracts the source DNA (~50ms pause). Default 5."
-        />
-        <span style={passesValueStyle}>{clusterCount}</span>
-      </div>
-
-      {/* Phase 4.5s — SOURCE MIX. The Color Match ratio bar ported to Smash:
-          reweight how prominent each source cluster is in the smashed
-          output. Feeds the engine's adjustedClusterWeights (consumed by
-          DISTRIBUTION). Segmented by the ZONES count directly above;
-          multipliers reset to neutral whenever the source / ZONES change.
-          Phase 7.x — migrated to the generic RatioBar, gaining the ↔
-          adaptive drag mode (grow/shrink one cluster, others rebalance
-          proportionally), matching the SOURCE RATIOS bars. No count toggle —
-          the ZONES slider owns the cluster count. */}
-      <div style={sourceMixWrapStyle}>
-        <span
-          style={passesLabelStyle}
-          title="SOURCE MIX — reweight how prominent each source cluster is in the smashed output. Apply the ratio FROM the source and control it ON the target. Feeds the DISTRIBUTION mechanic (dial DISTRIBUTION up to hear the re-mixed weighting). Segmented by the ZONES count directly above. ↔ toggles adaptive drag (grow/shrink one cluster, others rebalance) vs handle drag (redistribute between neighbours). Double-click the bar to reset all to neutral."
-        >
-          SOURCE MIX
-        </span>
-        <RatioBar
-          swatches={pipeline ? pipeline.sourceDNA.clusters : []}
-          multipliers={clusterMultipliers}
-          setMultipliers={setClusterMultipliers}
-          adaptive={sourceMixAdaptive}
-          setAdaptive={setSourceMixAdaptive}
-          disabled={!hasSnaps}
-          title="Source cluster mix — drag to reweight how prominent each source cluster is in the smashed output. ↔ switches between adaptive and handle drag. Double-click to reset to neutral."
-        />
-      </div>
-
-      <div
-        style={passesRowStyle}
-        onDoubleClick={() => { if (hasSnaps) setZoneInfluence(INLINE_DEFAULTS.zoneInfluence); }}
-      >
-        <span style={passesLabelStyle}>INFLUENCE</span>
-        <input
-          type="range"
-          min={0}
-          max={200}
-          step={5}
-          value={Math.round(zoneInfluence * 100)}
-          onChange={(e) => setZoneInfluence(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
-          disabled={!hasSnaps}
-          style={passesSliderStyle}
-          title="How strongly the zone-routed path overrides the default Hue-by-L for each pixel. 0% = off. 100% = each pixel's hue and chroma magnitude come entirely from its source cluster's contribution. 100–200% = OVERDRIVE: hue over-rotates past the zone's hue and Csm overshoots past the zone's chroma magnitude, exaggerating the cluster's character. Use DETAIL to control how much intra-cluster variation comes through."
-        />
-        <span style={passesValueStyle}>{Math.round(zoneInfluence * 100)}%</span>
-      </div>
-
-      <div
-        style={passesRowStyle}
-        onDoubleClick={() => { if (hasSnaps) setDetailRichness(INLINE_DEFAULTS.detailRichness); }}
-      >
-        <span style={passesLabelStyle}>DETAIL</span>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          step={5}
-          value={Math.round(detailRichness * 100)}
-          onChange={(e) => setDetailRichness(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
-          disabled={!hasSnaps}
-          style={passesSliderStyle}
-          title="Inside the zone path, how much intra-cluster L→(a,b) variation is preserved. 0% = cluster's CENTROID (flat color within zone). 100% = cluster's own Hue-by-L sub-LUT (preserves the source's value→color variation within each zone). Only takes effect when INFLUENCE > 0."
-        />
-        <span style={passesValueStyle}>{Math.round(detailRichness * 100)}%</span>
-      </div>
-
-      {/* Phase 4.5l — EDGE SOFTNESS. Controls hardness of boundaries
-          between source clusters during zone routing. 0% = argmin pick
-          (4.5j default, byte-exact bake). 100% = wide gaussian blur. */}
-      <div
-        style={passesRowStyle}
-        onDoubleClick={() => { if (hasSnaps) setZoneEdgeSoftness(INLINE_DEFAULTS.zoneEdgeSoftness); }}
-      >
-        <span style={passesLabelStyle}>EDGE SOFTNESS</span>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          step={5}
-          value={Math.round(zoneEdgeSoftness * 100)}
-          onChange={(e) => setZoneEdgeSoftness(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
-          disabled={!hasSnaps}
-          style={passesSliderStyle}
-          title="How sharp the boundaries between zones are. 0% = HARD edges (each target L picks exactly one source cluster, the 4.5j default). 100% = SOFT edges (target L blends contributions from neighbouring clusters via gaussian falloff). Only takes effect when INFLUENCE > 0."
-        />
-        <span style={passesValueStyle}>{Math.round(zoneEdgeSoftness * 100)}%</span>
-      </div>
-
-      {/* Phase 4.5l — EDGE SHIFT. Slides K-1 boundary midpoints along the
-          target L axis. Negative = boundaries down (shadows squeezed),
-          positive = boundaries up (highlights squeezed). 0% = boundaries
-          at natural sorted-cluster midpoints. */}
-      <div
-        style={passesRowStyle}
-        onDoubleClick={() => { if (hasSnaps) setZoneEdgeShift(INLINE_DEFAULTS.zoneEdgeShift); }}
-      >
-        <span style={passesLabelStyle}>EDGE SHIFT</span>
-        <input
-          type="range"
-          min={-100}
-          max={100}
-          step={5}
-          value={Math.round(zoneEdgeShift * 100)}
-          onChange={(e) => setZoneEdgeShift(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
-          disabled={!hasSnaps}
-          style={passesSliderStyle}
-          title="Slide the zone boundaries along the target L axis. 0% = NATURAL (boundaries at source-cluster midpoints — 4.5j default). NEGATIVE = squeeze shadow zones (boundaries move toward L=0; mid/highlight zones expand to cover more of target L). POSITIVE = squeeze highlight zones. Captures the 'MOVE those edges to COMPRESS' intent — pulling a boundary from L=0.5 to L=0.25 automatically compresses target's [0, 0.5] range into the shadow band. Only takes effect when INFLUENCE > 0."
-        />
-        <span style={passesValueStyle}>{zoneEdgeShift >= 0 ? "+" : ""}{Math.round(zoneEdgeShift * 100)}%</span>
-      </div>
-
-      {/* Phase 4.5k — Zone Ratio. Modulates the source clusters' weight
-          distribution. Affects every mechanic that reads cluster.weight
-          (today: Distribution). Slider stores -100..+100 ints for UI
-          tidiness; we map to a -1..+1 float when passing to the engine. */}
-      <div
-        style={passesRowStyle}
-        onDoubleClick={() => { if (hasSnaps) setZoneRatio(INLINE_DEFAULTS.zoneRatio); }}
-      >
-        <span style={passesLabelStyle}>ZONE RATIO</span>
-        <input
-          type="range"
-          min={-100}
-          max={100}
-          step={5}
-          value={Math.round(zoneRatio * 100)}
-          onChange={(e) => setZoneRatio(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
-          disabled={!hasSnaps}
-          style={passesSliderStyle}
-          title="Modulates source's cluster weights. 0% (default) = natural distribution. NEGATIVE = flatten (minority colors get more equal voice in the Distribution blend). POSITIVE = amplify dominance (high-population clusters dominate even more). Affects mechanics that read cluster.weight (currently DISTRIBUTION)."
-        />
-        <span style={passesValueStyle}>{zoneRatio >= 0 ? "+" : ""}{Math.round(zoneRatio * 100)}%</span>
-      </div>
-
-      </>
-      )}
-
-      {/* TEMPERATURE group — image-relative warm/cool grading. TEMPERATURE +
-          SENSITIVITY drive the shift; TARGET L/C/S restrict it to a slice of
-          the lightness / chroma / saturation range. */}
-      {renderGroupHeader(
-        "TEMPERATURE", "temperature", resetTempGroup,
-        "Show the TEMPERATURE sliders — image-relative warm/cool grading: TEMPERATURE, SENSITIVITY, TARGET L, TARGET C, TARGET S.",
-        "Reset the TEMPERATURE group to defaults (TEMPERATURE 0, SENSITIVITY 50%, TARGET L/C/S 0).",
-      )}
-      {tempOpen && (
-       <>
-
-      {/* Phase 4.5m → 4.5p — Temperature, IMAGE-RELATIVE. Centered on
-          the image's own estimated output-warmth median. Slider pushes
-          image-relatively-warm pixels further warm (positive) or
-          image-relatively-cool pixels further cool (negative). Same-side
-          pixels are untouched. Works on uniformly-warm or uniformly-
-          cool images because "warm"/"cool" is judged relative to the
-          image's own median, not the absolute Oklab axis. */}
-      <div
-        style={passesRowStyle}
-        onDoubleClick={() => { if (hasSnaps) setTemperature(INLINE_DEFAULTS.temperature); }}
-      >
-        <span style={passesLabelStyle}>TEMPERATURE</span>
-        <input
-          type="range"
-          min={-200}
-          max={200}
-          step={5}
-          value={Math.round(temperature * 100)}
-          onChange={(e) => setTemperature(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
-          disabled={!hasSnaps}
-          style={passesSliderStyle}
-          title="IMAGE-RELATIVE warm/cool contrast stretch around the image's own warmth median. 0% = no shift. ±100% = opposite-polarity pixels reach the median (gradient compressed but stays on same side of absolute zero). ±100–200% = OVERDRIVE: pixels push PAST the median into opposite-color territory. POSITIVE warms image-cool pixels (image-warms untouched). NEGATIVE cools image-warm pixels (image-cools untouched). Use SENSITIVITY below to sharpen or soften the median split."
-        />
-        <span style={passesValueStyle}>{temperature >= 0 ? "+" : ""}{Math.round(temperature * 100)}%</span>
-      </div>
-
-      {/* Phase 4.5p — Temperature Sensitivity. Power exponent on the
-          relative-warmth signal. 0% (soft) = pixels near the median
-          barely move; effect concentrates on extreme outliers. 50%
-          (linear) = no sensitivity adjustment. 100% (sharp) = even
-          pixels just past the median get strong boost → distinct
-          warm/cool zones. */}
-      <div
-        style={passesRowStyle}
-        onDoubleClick={() => { if (hasSnaps) setTemperatureSensitivity(INLINE_DEFAULTS.temperatureSensitivity); }}
-      >
-        <span style={passesLabelStyle}>SENSITIVITY</span>
-        <input
-          type="range"
-          min={0}
-          max={200}
-          step={5}
-          value={Math.round(temperatureSensitivity * 100)}
-          onChange={(e) => setTemperatureSensitivity(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
-          disabled={!hasSnaps}
-          style={passesSliderStyle}
-          title="How sharp the warm/cool split is around the image's median warmth. 0% = SOFT (near-median pixels barely move). 50% (default) = linear. 100% = SHARP (every pixel past median gets full boost → distinct zones). 100–200% = OVERDRIVE: even pixels right at the median migrate hard, combined with TEMPERATURE overdrive lets you push way past the median for extreme effects. Only effective when TEMPERATURE ≠ 0."
-        />
-        <span style={passesValueStyle}>{Math.round(temperatureSensitivity * 100)}%</span>
-      </div>
-
-      {/* Phase 4.5r — Temperature L Bias. Restricts the temperature shift
-          to a slice of the L range. 0% = uniform (current behavior).
-          Negative = focus shift on shadows; positive = focus on highlights. */}
-      <div
-        style={passesRowStyle}
-        onDoubleClick={() => { if (hasSnaps) setTemperatureLBias(INLINE_DEFAULTS.temperatureLBias); }}
-      >
-        <span style={passesLabelStyle}>TARGET L</span>
-        <input
-          type="range"
-          min={-100}
-          max={100}
-          step={5}
-          value={Math.round(temperatureLBias * 100)}
-          onChange={(e) => setTemperatureLBias(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
-          disabled={!hasSnaps}
-          style={passesSliderStyle}
-          title="Restricts the TEMPERATURE shift to a slice of the L range. 0% (default) = UNIFORM — all L gets the shift. NEGATIVE = focus on SHADOWS — only low-L pixels migrate; highlights are untouched. POSITIVE = focus on HIGHLIGHTS — only high-L pixels migrate; shadows are untouched. ±100% = full bias (the opposite side is fully spared). Linear ramp between the two endpoints. Only effective when TEMPERATURE ≠ 0."
-        />
-        <span style={passesValueStyle}>{temperatureLBias >= 0 ? "+" : ""}{Math.round(temperatureLBias * 100)}%</span>
-      </div>
-
-      {/* Phase 4.5t — Temperature C Bias. Restricts the temperature shift to
-          a slice of the CHROMA range. 0% = uniform. Negative = muted/neutral
-          pixels only; positive = vivid pixels only. Composes with TARGET L. */}
-      <div
-        style={passesRowStyle}
-        onDoubleClick={() => { if (hasSnaps) setTemperatureCBias(INLINE_DEFAULTS.temperatureCBias); }}
-      >
-        <span style={passesLabelStyle}>TARGET C</span>
-        <input
-          type="range"
-          min={-100}
-          max={100}
-          step={5}
-          value={Math.round(temperatureCBias * 100)}
-          onChange={(e) => setTemperatureCBias(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
-          disabled={!hasSnaps}
-          style={passesSliderStyle}
-          title="Restricts the TEMPERATURE shift to a slice of the CHROMA range. 0% (default) = UNIFORM — every chroma level gets the shift. NEGATIVE = focus on MUTED/NEUTRAL pixels — only low-chroma pixels migrate; vivid pixels are untouched. POSITIVE = focus on VIVID pixels — only high-chroma pixels migrate; neutrals are untouched. Chroma is measured relative to this target image's own 95th-percentile chroma. ±100% = full bias. Composes with TARGET L and TARGET S — set all three to sculpt an exact (lightness, chroma, saturation) region. Only effective when TEMPERATURE ≠ 0."
-        />
-        <span style={passesValueStyle}>{temperatureCBias >= 0 ? "+" : ""}{Math.round(temperatureCBias * 100)}%</span>
-      </div>
-
-      {/* Phase 4.5t — Temperature S Bias. Restricts the temperature shift to
-          a slice of the SATURATION range (S = C/L — colorfulness relative to
-          lightness). 0% = uniform. Negative = desaturated only; positive =
-          punchy/saturated only. */}
-      <div
-        style={passesRowStyle}
-        onDoubleClick={() => { if (hasSnaps) setTemperatureSBias(INLINE_DEFAULTS.temperatureSBias); }}
-      >
-        <span style={passesLabelStyle}>TARGET S</span>
-        <input
-          type="range"
-          min={-100}
-          max={100}
-          step={5}
-          value={Math.round(temperatureSBias * 100)}
-          onChange={(e) => setTemperatureSBias(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
-          disabled={!hasSnaps}
-          style={passesSliderStyle}
-          title="Restricts the TEMPERATURE shift to a slice of the SATURATION range (S = colorfulness relative to lightness — a dark rich color is high-saturation even at moderate chroma). 0% (default) = UNIFORM. NEGATIVE = focus on DESATURATED pixels — only low-saturation pixels migrate. POSITIVE = focus on PUNCHY/SATURATED pixels — only high-saturation pixels migrate. Saturation is measured relative to this target image's own 95th-percentile saturation. Composes with TARGET L and TARGET C. Only effective when TEMPERATURE ≠ 0."
-        />
-        <span style={passesValueStyle}>{temperatureSBias >= 0 ? "+" : ""}{Math.round(temperatureSBias * 100)}%</span>
-      </div>
-      </>
-      )}
-
-      {/* Traits disclosure. Closed by default so the primary surface stays
-          the one-big-knob + preset row. Opens to reveal six trait sliders
-          (Value, Hue, Saturation, Chroma, Neutral, Accent). Phase 2a:
-          Value + Neutral differentially affect the output; the others are
-          recorded in the audit but no-op in applyTransform until Phase 2b. */}
-      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-        {renderEnableToggle("traits")}
-        <div
-          style={{ ...traitsHeaderStyle, flex: 1, opacity: sectionEnabled.traits ? 1 : 0.45 }}
-          onClick={() => toggleSection("traits")}
-          title={traitsOpen ? "Hide trait sliders" : "Show trait sliders"}
-        >
-          <span style={{ width: 10, display: "inline-block", textAlign: "center" }}>
-            {traitsOpen ? "▾" : "▸"}
-          </span>
-          <span>TRAITS</span>
-        </div>
-        {traitsOpen && (
-          <div
-            onClick={(e) => {
-              e.stopPropagation();
-              setTraits(DEFAULT_TRAIT_AMOUNTS);
-            }}
-            title="Reset all trait sliders to defaults (value/hue/sat/chroma = 100%, neutral = 50%, accent = 0%)."
-            style={resetButtonStyle}
-          >
-            ✕
-          </div>
-        )}
-      </div>
-      {traitsOpen && (
-        <TraitSliders
-          amounts={traits}
-          onAmountsChange={setTraits}
-          disabled={!hasSnaps}
-        />
-      )}
-
-      {/* Phase 6 — SOURCE RATIOS. Reshape the source's per-axis histogram;
-          the target follows via the CDF match. Value / Hue / Chroma axes.
-          Simple mode = one tilt slider per axis; Detailed mode = a per-band
-          ratio bar with count toggle + adaptive drag. The Simple/Detailed
-          chip flips all axes; both states are kept so it's non-destructive. */}
-      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-        {renderEnableToggle("ratios")}
-        <div
-          style={{ ...traitsHeaderStyle, flex: 1, opacity: sectionEnabled.ratios ? 1 : 0.45 }}
-          onClick={() => toggleSection("ratios")}
-          title={ratioOpen
-            ? "Hide source ratios"
-            : "Show source ratios — reshape the source's tonal/color distribution; the target matches it via the CDF"}
-        >
-          <span style={{ width: 10, display: "inline-block", textAlign: "center" }}>
-            {ratioOpen ? "▾" : "▸"}
-          </span>
-          <span>SOURCE RATIOS</span>
-        </div>
-        {ratioOpen && (
-          <>
-            <div
-              onClick={(e) => {
-                e.stopPropagation();
-                setRatioMode((m) => (m === "simple" ? "detailed" : "simple"));
-              }}
-              title={ratioMode === "simple"
-                ? "Simple: one tilt slider per axis. Click for Detailed — per-band ratio bars with count toggle + adaptive drag."
-                : "Detailed: per-band ratio bars. Click for Simple — one tilt slider per axis."}
-              style={modeChipStyle}
-            >
-              {ratioMode === "simple" ? "Simple" : "Detailed"}
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ ...sectionLabelStyle, flex: 1 }}>
+              ASPECTS — borrow the source's distribution, per axis
             </div>
             <div
-              onClick={(e) => { e.stopPropagation(); resetRatios(); }}
-              title="Reset all source ratios (Value / Hue / Chroma) to neutral."
-              style={resetButtonStyle}
+              style={autoChipStyle}
+              onClick={autoConfigureAll}
+              title="Auto — pick a sensible match of the source: full Hue + Chroma borrow, a light Value borrow (keeps the target's tones on a grayscale image), and gentle softness. A good novice starting point to then fine-tune."
             >
-              ✕
+              ✦ Auto
             </div>
-          </>
-        )}
-      </div>
-      {ratioOpen && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {renderRatioAxis(
-            "VALUE", valueAxis, setValueAxis, valueBarSwatches,
-            "VALUE tilt — shifts the SOURCE's tonal balance before the match. NEGATIVE favors shadows (the source reads as having more dark mass); POSITIVE favors highlights. The target's value distribution follows. Switch the section to Detailed for per-band control.",
-            "Source VALUE ratio — drag to reweight how much tonal mass the source carries in each lightness band (dark → light). The target's value distribution follows via the CDF match. Use the count chips to re-bin, ↔ for adaptive drag, double-click to reset.",
-          )}
-          {renderRatioAxis(
-            "HUE", hueAxis, setHueAxis, hueBarSwatches,
-            "HUE tilt — shifts the SOURCE's hue balance across its hue range before the match. The target's hue distribution follows. No effect if the source/target lack chromatic pixels. Switch to Detailed for per-hue-band control.",
-            "Source HUE ratio — drag to reweight how much of each source hue band the match draws from. Segments are colored by the source's actual mean hue in that band. The target's hue distribution follows. Count chips re-bin, ↔ for adaptive drag, double-click to reset.",
-          )}
-          {renderRatioAxis(
-            "CHROMA", chromaAxis, setChromaAxis, chromaBarSwatches,
-            "CHROMA tilt — shifts the SOURCE's muted↔vivid balance before the match. NEGATIVE favors muted (low-chroma) mass; POSITIVE favors vivid. The target's chroma distribution follows. Switch to Detailed for per-band control.",
-            "Source CHROMA ratio — drag to reweight how much muted vs vivid mass the source presents (low → high chroma, left → right). The target's chroma distribution follows the edited shape. Count chips re-bin, ↔ for adaptive drag, double-click to reset.",
-          )}
-        </div>
-      )}
-
-      {/* Phase 4.5+ — colorization toggles. Auto-detect grayscale targets and
-          engage cross-dimensional inference when active toggles say so. The
-          engine ignores the toggles for colorful targets (per-dimension CDF
-          handles those correctly). Disclosure pattern matches TRAITS above,
-          with a ✕ reset shown when open. */}
-      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-        {renderEnableToggle("colorization")}
-        <div
-          style={{ ...traitsHeaderStyle, flex: 1, opacity: sectionEnabled.colorization ? 1 : 0.45 }}
-          onClick={() => toggleSection("colorization")}
-          title={colorizationOpen ? "Hide colorization toggles" : "Show colorization toggles (cross-dimensional mechanics for grayscale targets)"}
-        >
-          <span style={{ width: 10, display: "inline-block", textAlign: "center" }}>
-            {colorizationOpen ? "▾" : "▸"}
-          </span>
-          <span>COLORIZATION</span>
-        </div>
-        {colorizationOpen && (
-          <div
-            onClick={(e) => {
-              e.stopPropagation();
-              setColorization(DEFAULT_COLORIZATION_TOGGLES);
-              setProportionMatch(INLINE_DEFAULTS.proportionMatch);
-            }}
-            title="Reset colorization to defaults (Hue-by-L ON, Lift Neutrals ON, Palette Snap OFF, Proportion 100%)."
-            style={resetButtonStyle}
-          >
-            ✕
+            <div
+              style={resetAllChipStyle}
+              onClick={resetAllAspects}
+              title="Reset all four aspects to defaults — borrow 100%, softness 0, 16 slices, bands back to the images' own distributions."
+            >
+              ↺ Reset all
+            </div>
           </div>
-        )}
-      </div>
-      {colorizationOpen && (
-        <>
-          <ColorizationToggles
-            state={colorization}
-            onChange={setColorization}
-            disabled={!hasSnaps}
-          />
-          {/* PROPORTION — a SUB-PARAMETER of Lift Neutrals: it shapes the
-              lift floor, so it only does anything while Lift Neutrals is on.
-              Indented under the toggles and dimmed when Lift Neutrals is off
-              so the dependency reads at a glance. */}
-          <div
-            style={{ ...passesRowStyle, paddingLeft: 16, opacity: colorization.liftNeutrals ? 1 : 0.4 }}
-            onDoubleClick={() => { if (hasSnaps) setProportionMatch(INLINE_DEFAULTS.proportionMatch); }}
-          >
-            <span style={passesLabelStyle}>↳ PROPORTION</span>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              step={5}
-              value={Math.round(proportionMatch * 100)}
-              onChange={(e) => setProportionMatch(parseInt((e.target as HTMLInputElement).value, 10) / 100)}
-              disabled={!hasSnaps}
-              style={passesSliderStyle}
-              title="Sub-control of LIFT NEUTRALS — shapes its lift floor; no effect when Lift Neutrals is off. 100% (tight, default): the floor uses source's chroma at the target's smashed L — dark source areas come through dark, chromatic areas chromatic. 0% (loose): the floor uses source's GLOBAL median chroma — uniform colorization across L, ignoring source's L→C structure."
-            />
-            <span style={passesValueStyle}>{Math.round(proportionMatch * 100)}%</span>
-          </div>
-        </>
-      )}
-
-      {hasSnaps && pipeline && (
-        <>
-          <div
-            style={traitsHeaderStyle}
-            onClick={() => toggleSection("audit")}
-            title={auditOpen
-              ? "Hide the audit panel"
-              : "Show the audit panel: per-trait contribution bars, which bands had viable samples, which clusters were anchored/locked, gamut clip status, and engine build time (~50–200ms typical). Diagnostic-only — doesn't affect output."}
-          >
-            <span style={{ width: 10, display: "inline-block", textAlign: "center" }}>
-              {auditOpen ? "▾" : "▸"}
-            </span>
-            <span>SMASH AUDIT</span>
-          </div>
-          {auditOpen && (
-            <SmashAuditPanel
-              audit={pipeline.engine.audit}
-              bandCount={pipeline.engine.profile.bands.length}
-            />
-          )}
+          {ASPECT_KEYS.map((key) => {
+            // The TARGET band is binned along the (concrete) Rank-by axis.
+            const rankAxis: AspectKey = controls[key].rankBy;
+            const crossFed = rankAxis !== key;
+            return (
+              <AspectRow
+                key={key}
+                label={ASPECT_LABEL[key]}
+                expanded={openAspect === key}
+                onToggleExpand={() => setOpenAspect((o) => (o === key ? null : key))}
+                sourceSortByLuma={false}
+                sourceColors={histograms[key].sourceColors}
+                sourceWeights={controls[key].sourceBand}
+                sourceNatural={Array.from(histograms[key].source)}
+                onSourceWeightsChange={(w) => updateAspect(key, { sourceBand: w })}
+                targetSortByLuma={false}
+                targetColors={crossFed
+                  ? rankColors(histograms[key].source, histograms[key].sourceColors)
+                  : histograms[key].targetColors}
+                targetWeights={controls[key].targetBand}
+                targetNatural={resampleHist(histograms[rankAxis].target, controls[key].binCount)}
+                onTargetWeightsChange={(w) => updateAspect(key, { targetBand: w })}
+                targetAxisName={crossFed ? ASPECT_LABEL[rankAxis] : null}
+                amount={controls[key].amount}
+                onAmountChange={(a) => updateAspect(key, { amount: a })}
+                softness={controls[key].softness}
+                onSoftnessChange={(s) => updateAspect(key, { softness: s })}
+                rankBy={controls[key].rankBy}
+                rankByOptions={RANK_BY_OPTIONS}
+                onRankByChange={(rb) => changeRankBy(key, rb)}
+                binCount={controls[key].binCount}
+                binCountOptions={BIN_COUNT_OPTIONS}
+                onBinCountChange={(n) => updateAspect(key, { binCount: n })}
+                adaptive={adaptive[key]}
+                onAdaptiveChange={(v) => setAdaptive((a) => ({ ...a, [key]: v }))}
+                onReset={() => resetAspect(key)}
+              />
+            );
+          })}
         </>
       )}
 
       {hasSnaps && (
         <div style={actionRowStyle}>
           <div
-            style={pipeline ? primaryButtonStyle : primaryButtonDisabledStyle}
+            style={engine ? primaryButtonStyle : primaryButtonDisabledStyle}
             onClick={onApply}
             title="Apply the Smash transform — replaces the most recent Smash LUT layer in place. Use [+] to fork a new layer alongside."
           >
             Apply
           </div>
           <div
-            style={pipeline ? plusButtonStyle : plusButtonDisabledStyle}
+            style={engine ? plusButtonStyle : plusButtonDisabledStyle}
             onClick={onApplyFork}
             title="Fork a new Smash LUT layer alongside the previous one — auto-hides prior Smash layers so the new one shows alone. Use to compare variations."
           >
             +
           </div>
           <div
-            style={pipeline ? actionButtonStyle : actionButtonDisabledStyle}
+            style={engine ? actionButtonStyle : actionButtonDisabledStyle}
             onClick={onTestBakeClick}
-            title="Diagnostic: render the engine's per-pixel ground-truth output (no 3D LUT, no interpolation, no grid quantization) as a new 'Smash Test Bake' pixel layer in the document — and into the panel preview tile. A/B that layer against an Apply'd 'Smash LUT' Color Lookup layer to see whether the LUT path is losing fidelity vs the engine's true intent. The layer is at preview-tier resolution."
+            title="Diagnostic: render the engine's per-pixel ground-truth output (no 3D LUT, no interpolation) as a new 'Smash Test Bake' pixel layer in the document, and into the panel preview tile."
           >
             Test Bake
           </div>
           <div
-            style={(pipeline && stochasticAmount === 0) ? actionButtonStyle : actionButtonDisabledStyle}
+            style={engine ? actionButtonStyle : actionButtonDisabledStyle}
             onClick={onExportCube}
-            title={stochasticAmount > 0
-              ? "Export disabled in Stochastic mode — random per-pixel grain has no fixed f(R,G,B) to bake into a .cube. Set STOCHASTIC to 0 to re-enable, or use Test Bake to render the grain."
-              : "Bake the current Smash transform to a portable .cube LUT."}
+            title="Bake the current Smash transform to a portable .cube LUT."
           >
             Export .cube
           </div>
@@ -1617,47 +613,21 @@ const containerStyle: React.CSSProperties = {
   display: "flex", flexDirection: "column", gap: 10,
 };
 
+const resetAllChipStyle: React.CSSProperties = {
+  fontSize: 9, fontWeight: 600, color: "#999", flexShrink: 0,
+  padding: "2px 7px", borderRadius: 2, cursor: "pointer", userSelect: "none",
+  border: "1px solid #555", background: "transparent",
+};
+
+const autoChipStyle: React.CSSProperties = {
+  fontSize: 9, fontWeight: 600, color: "#0f1620", flexShrink: 0,
+  padding: "2px 8px", borderRadius: 2, cursor: "pointer", userSelect: "none",
+  border: "1px solid #1a1a1a", background: "#6ab7ff",
+};
+
 const sectionLabelStyle: React.CSSProperties = {
   fontSize: 9, fontWeight: 600, letterSpacing: 1, color: "#888",
   textTransform: "uppercase", marginTop: 2,
-};
-
-const traitsHeaderStyle: React.CSSProperties = {
-  display: "flex", alignItems: "center", gap: 4,
-  fontSize: 9, fontWeight: 600, letterSpacing: 1, color: "#888",
-  textTransform: "uppercase", marginTop: 2,
-  cursor: "pointer", userSelect: "none",
-};
-
-// Coral ✕ reset, matching the shipped PaletteStrip reset glyph (#ff5050).
-// Same width/height as the action buttons on the right cluster so it lines
-// up visually with the rest of the panel's "destructive action" affordances.
-const resetButtonStyle: React.CSSProperties = {
-  display: "inline-flex", alignItems: "center", justifyContent: "center",
-  width: 17, height: 17,
-  background: "#ff5050", color: "#fff",
-  border: "1px solid #1a1a1a", borderRadius: 2,
-  fontSize: 10, fontWeight: 700, lineHeight: 1,
-  cursor: "pointer", userSelect: "none",
-  flexShrink: 0,
-};
-
-// Simple/Detailed mode chip on the SOURCE RATIOS header — neutral pill,
-// distinct from the coral ✕ reset so it doesn't read as destructive.
-const modeChipStyle: React.CSSProperties = {
-  display: "inline-flex", alignItems: "center", justifyContent: "center",
-  height: 17, padding: "0 6px",
-  background: "#3a3a3a", color: "#bbb",
-  border: "1px solid #1a1a1a", borderRadius: 2,
-  fontSize: 9, fontWeight: 600, lineHeight: 1,
-  cursor: "pointer", userSelect: "none", flexShrink: 0,
-};
-
-// Phase 7 — "preview only" caption shown under the STOCHASTIC slider when
-// it's engaged. Amber so it reads as a heads-up, not an error.
-const stochasticNoteStyle: React.CSSProperties = {
-  fontSize: 9, lineHeight: 1.35, color: "#d9a441",
-  marginTop: -2, paddingLeft: 2,
 };
 
 const placeholderStyle: React.CSSProperties = {
@@ -1665,7 +635,7 @@ const placeholderStyle: React.CSSProperties = {
 };
 
 const actionRowStyle: React.CSSProperties = {
-  display: "flex", alignItems: "center", gap: 8, marginTop: 4,
+  display: "flex", alignItems: "center", gap: 8, marginTop: 4, flexWrap: "wrap",
 };
 
 const actionButtonStyle: React.CSSProperties = {
@@ -1675,8 +645,7 @@ const actionButtonStyle: React.CSSProperties = {
 };
 
 const actionButtonDisabledStyle: React.CSSProperties = {
-  ...actionButtonStyle,
-  opacity: 0.4, cursor: "default",
+  ...actionButtonStyle, opacity: 0.4, cursor: "default",
 };
 
 const primaryButtonStyle: React.CSSProperties = {
@@ -1686,8 +655,7 @@ const primaryButtonStyle: React.CSSProperties = {
 };
 
 const primaryButtonDisabledStyle: React.CSSProperties = {
-  ...primaryButtonStyle,
-  opacity: 0.4, cursor: "default",
+  ...primaryButtonStyle, opacity: 0.4, cursor: "default",
 };
 
 const plusButtonStyle: React.CSSProperties = {
@@ -1698,39 +666,9 @@ const plusButtonStyle: React.CSSProperties = {
 };
 
 const plusButtonDisabledStyle: React.CSSProperties = {
-  ...plusButtonStyle,
-  opacity: 0.4, cursor: "default",
+  ...plusButtonStyle, opacity: 0.4, cursor: "default",
 };
 
 const statusStyle: React.CSSProperties = {
-  fontSize: 9, color: "#888", minWidth: 56, textAlign: "right",
-};
-
-// Passes slider — small inline row with a label, native range slider, and
-// numeric readout. Slider min/max in 0.01 units (100..300 → 1.00×..3.00×)
-// because <input type="range"> wants integer values for clean step behavior.
-const passesRowStyle: React.CSSProperties = {
-  display: "flex", alignItems: "center", gap: 8,
-  marginTop: -2, // tuck under the controls bar
-};
-
-const passesLabelStyle: React.CSSProperties = {
-  fontSize: 9, fontWeight: 600, letterSpacing: 1, color: "#888",
-  textTransform: "uppercase",
-};
-
-const passesSliderStyle: React.CSSProperties = {
-  flex: 1, height: 14,
-};
-
-const passesValueStyle: React.CSSProperties = {
-  fontSize: 10, color: "#aaa", fontVariantNumeric: "tabular-nums",
-  minWidth: 38, textAlign: "right",
-};
-
-// SOURCE MIX wrapper — a label stacked above the full-width cluster ratio
-// bar. Column layout (unlike the slider rows) so the bar gets the panel's
-// full horizontal width for its draggable segments.
-const sourceMixWrapStyle: React.CSSProperties = {
-  display: "flex", flexDirection: "column", gap: 4, marginTop: -2,
+  fontSize: 9, color: "#888", flex: 1, textAlign: "right", minWidth: 80,
 };

@@ -11,7 +11,7 @@
 // in-panel preview tile runs at preview-tier res; this layer is full-res.)
 
 import { app, action, executeAsModal, readLayerPixels } from "../../services/photoshop";
-import { bakeTargetPerPixel, bakeTargetStochastic, type SmashEngineOutput } from "../../core/smash";
+import { applySmash, type SmashEngine } from "../../core/smash/engine";
 
 const TEST_BAKE_LAYER_NAME = "Smash Test Bake";
 
@@ -36,11 +36,49 @@ function findLayerById(layers: any[], id: number): any | null {
 }
 
 /**
+ * Run applySmash on every opaque pixel of an RGBA buffer, with NO 3D LUT in
+ * the path (no grid quantization, no interpolation). Returns a fresh RGBA
+ * Uint8Array; transparent / near-transparent pixels pass through unchanged.
+ */
+function bakeTargetPerPixel(
+  engine: SmashEngine,
+  rgba: Uint8Array,
+  width: number,
+  height: number,
+): Uint8Array {
+  const total = width * height;
+  if (rgba.length < total * 4) {
+    throw new Error(
+      `bakeTargetPerPixel: rgba length ${rgba.length} smaller than ${total * 4} (width=${width}, height=${height}).`,
+    );
+  }
+  const out = new Uint8Array(total * 4);
+  for (let i = 0; i < total; i++) {
+    const o = i * 4;
+    const a = rgba[o + 3];
+    if (a < 128) {
+      // Transparent / near-transparent — leave the pixel through unchanged.
+      out[o] = rgba[o];
+      out[o + 1] = rgba[o + 1];
+      out[o + 2] = rgba[o + 2];
+      out[o + 3] = a;
+      continue;
+    }
+    const [r, g, b] = applySmash(engine, rgba[o], rgba[o + 1], rgba[o + 2]);
+    out[o] = r;
+    out[o + 1] = g;
+    out[o + 2] = b;
+    out[o + 3] = a;
+  }
+  return out;
+}
+
+/**
  * Render the engine's per-pixel ground truth for the target layer at full
  * resolution and write it as a new pixel layer aligned to the target.
  */
 export async function applySmashTestBake(
-  engine: SmashEngineOutput,
+  engine: SmashEngine,
   docId: number,
   layerId: number,
 ): Promise<ApplySmashTestBakeResult> {
@@ -66,18 +104,14 @@ export async function applySmashTestBake(
       return { ok: false, error: "Target layer not found (it may have been deleted)." };
     }
 
-    // Honor the engine's stochastic setting for the bake variant.
-    const stochastic = (engine.controls.colorization?.stochastic?.amount ?? 0) > 0;
-
     return await executeAsModal("Color Smash test bake", async () => {
       // Full-res read of the (clean) target layer's own pixels.
       const buf = await readLayerPixels(layer, undefined, docId);
       const { data, width, height, bounds } = buf;
 
       // Per-pixel engine bake — no LUT, no interpolation, no quantization.
-      const baked = stochastic
-        ? bakeTargetStochastic(engine, data, width, height)
-        : bakeTargetPerPixel(engine, data, width, height);
+      // The v2 engine has a single deterministic path (no stochastic mode).
+      const baked = bakeTargetPerPixel(engine, data, width, height);
 
       // Create an empty pixel layer (becomes the active layer).
       const makeResult = await action.batchPlay([{

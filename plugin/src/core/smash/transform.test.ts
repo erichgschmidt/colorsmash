@@ -1253,7 +1253,10 @@ describe('applyTransform() zoneRatio (Phase 4.5k)', () => {
     const sample = (t: number, r: number, g: number, b: number) => {
       const ctrl: SmashControls = {
         ...DEFAULT_SMASH_CONTROLS,
-        colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, temperature: t },
+        colorization: {
+          ...DEFAULT_SMASH_CONTROLS.colorization,
+          temperature: t, temperatureIntensity: 1,
+        },
       };
       return applyTransform(smash(srcFeatures, tgtFeatures, profile, ctrl), r, g, b);
     };
@@ -1279,53 +1282,116 @@ describe('applyTransform() zoneRatio (Phase 4.5k)', () => {
     expect(warmTotal + coolTotal).toBeGreaterThan(0);
   });
 
-  it('temperature lerps to NEUTRAL, never to mirror — warm pixel + t=-1 desaturates without crossing into green/blue (Phase 4.5o)', () => {
-    // Warm source so engine output is warm. With t=-1 the new math lerps
-    // toward 0 (neutral), so the warm-axis projection should land near
-    // zero but NOT cross to negative (which the prior 4.5n math did —
-    // sign-flipping to literal cool color).
+  it('temperature desaturates the selected side toward neutral without rotating hue (Phase 4.5u)', () => {
+    // Warm source so the engine output is warm. Selecting the WARM side
+    // (t = +1) with full INTENSITY and no TINT must DESATURATE those
+    // pixels — the warm-axis projection (R−B) moves toward 0 but never
+    // crosses sign. The old "migrate toward median" math snapped cooled
+    // pixels into literal green; the select→desaturate model cannot.
     const srcRgba = warmOrangeBuffer32();
     const tgtRgba = gradientBuffer32();
     const { profile } = buildProfile(srcRgba, tgtRgba);
     const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
     const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
 
-    const baseline: SmashControls = { ...DEFAULT_SMASH_CONTROLS };
-    const ctrlCool: SmashControls = {
+    const eng0 = smash(srcFeatures, tgtFeatures, profile, { ...DEFAULT_SMASH_CONTROLS });
+    const engT = smash(srcFeatures, tgtFeatures, profile, {
       ...DEFAULT_SMASH_CONTROLS,
-      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, temperature: -1 },
-    };
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        temperature: 1, temperatureIntensity: 1, temperatureTint: 0,
+      },
+    });
 
-    const eng0 = smash(srcFeatures, tgtFeatures, profile, baseline);
-    const engT = smash(srcFeatures, tgtFeatures, profile, ctrlCool);
-
-    // For multiple gray inputs, the baseline engine outputs warm color.
-    // R−B is a quick warmth proxy (positive = warm). After t=-1, the
-    // output's R−B should:
-    //   • be CLOSER to 0 than baseline (toward neutral)
-    //   • NOT cross to negative (which would mean literal cool tint)
+    // R−B is a quick warmth proxy (positive = warm). After desaturating
+    // the warm side it should shrink toward 0 and never flip to cool.
     let allOK = true;
     for (const v of [80, 130, 180]) {
       const [r0, , b0] = applyTransform(eng0, v, v, v);
       const [rT, , bT] = applyTransform(engT, v, v, v);
 
       const baselineWarmth = r0 - b0;       // expected positive (warm source)
-      const cooledWarmth = rT - bT;
+      const treatedWarmth = rT - bT;
 
-      if (baselineWarmth <= 0) continue;     // skip if baseline isn't warm
+      if (baselineWarmth <= 0) continue;     // only check warm pixels
 
-      // Should approach neutral (smaller magnitude)…
-      if (Math.abs(cooledWarmth) > Math.abs(baselineWarmth)) {
+      // Desaturation can only shrink the warm projection, never grow it…
+      if (Math.abs(treatedWarmth) > Math.abs(baselineWarmth) + 1) {
         allOK = false;
         break;
       }
-      // …and not cross past 0 into the cool side.
-      if (cooledWarmth < -3) { // small tolerance for rounding
+      // …and never flip it to the cool side.
+      if (treatedWarmth < -3) { // small tolerance for rounding
         allOK = false;
         break;
       }
     }
     expect(allOK).toBe(true);
+  });
+
+  it('temperature with selection but no treatment (intensity 0, tint 0) is a strict no-op (Phase 4.5u)', () => {
+    // TEMPERATURE alone selects a tonal side but applies nothing — the
+    // mechanic must be byte-identical to temperature 0 until INTENSITY or
+    // TINT engages. Guards the LUT/.cube byte-identity guarantee.
+    const srcRgba = warmOrangeBuffer32();
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const engOff = smash(srcFeatures, tgtFeatures, profile, { ...DEFAULT_SMASH_CONTROLS });
+    const engSelectOnly = smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        temperature: 1, temperatureIntensity: 0, temperatureTint: 0,
+      },
+    });
+    for (let v = 0; v <= 255; v += 15) {
+      expect(applyTransform(engSelectOnly, v, v, v)).toEqual(applyTransform(engOff, v, v, v));
+    }
+  });
+
+  it('temperature falloff changes the selection edge — soft vs hard differ (Phase 4.5u)', () => {
+    // A bimodal source so the colorized grayscale-target output spans a
+    // real warmth range; at a moderate TEMPERATURE the selection threshold
+    // sits mid-range, so FALLOFF (soft-edge width) must move pixels in the
+    // transition band. Regression guard: before warmth was normalized
+    // against the OUTPUT spread, a grayscale target floored the scale to a
+    // tiny constant → every pixel saturated to sel=1 → FALLOFF was inert.
+    const total = 32 * 32;
+    const srcRgba = new Uint8Array(total * 4);
+    for (let i = 0; i < total; i++) {
+      const v = i / (total - 1);
+      if (v < 0.5) {
+        srcRgba[i * 4] = 40; srcRgba[i * 4 + 1] = 60; srcRgba[i * 4 + 2] = 110;  // cool
+      } else {
+        srcRgba[i * 4] = 220; srcRgba[i * 4 + 1] = 130; srcRgba[i * 4 + 2] = 30; // warm
+      }
+      srcRgba[i * 4 + 3] = 255;
+    }
+    const tgtRgba = gradientBuffer32();
+    const { profile } = buildProfile(srcRgba, tgtRgba);
+    const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
+    const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
+
+    const make = (falloff: number) => smash(srcFeatures, tgtFeatures, profile, {
+      ...DEFAULT_SMASH_CONTROLS,
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        temperature: 0.5, temperatureIntensity: 1, temperatureFalloff: falloff,
+      },
+    });
+    const engHard = make(0);
+    const engSoft = make(1);
+
+    let anyDifference = false;
+    for (let v = 0; v <= 255 && !anyDifference; v += 8) {
+      const a = applyTransform(engHard, v, v, v);
+      const b = applyTransform(engSoft, v, v, v);
+      if (a[0] !== b[0] || a[1] !== b[1] || a[2] !== b[2]) anyDifference = true;
+    }
+    expect(anyDifference).toBe(true);
   });
 
   it('zoneInfluence > 1 (overdrive) produces output that diverges further from default than zoneInfluence = 1', () => {
@@ -1405,16 +1471,20 @@ describe('applyTransform() zoneRatio (Phase 4.5k)', () => {
     const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
     const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
 
-    // Engage temperature so the modulator path actually runs.
+    // Engage temperature + intensity so the modulator path actually runs.
     const baseCtrl: SmashControls = {
       ...DEFAULT_SMASH_CONTROLS,
-      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, temperature: 1 },
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        temperature: 1, temperatureIntensity: 1,
+      },
     };
     const explicitZero: SmashControls = {
       ...DEFAULT_SMASH_CONTROLS,
       colorization: {
         ...DEFAULT_SMASH_CONTROLS.colorization,
         temperature: 1,
+        temperatureIntensity: 1,
         temperatureLBias: 0,
       },
     };
@@ -1433,12 +1503,13 @@ describe('applyTransform() zoneRatio (Phase 4.5k)', () => {
     const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
     const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
 
-    // Engage temperature so there's a delta to bias.
+    // Engage temperature + intensity so there's a treatment to bias.
     const makeCtrl = (lBias: number): SmashControls => ({
       ...DEFAULT_SMASH_CONTROLS,
       colorization: {
         ...DEFAULT_SMASH_CONTROLS.colorization,
         temperature: 1,
+        temperatureIntensity: 1,
         temperatureLBias: lBias,
       },
     });
@@ -2117,13 +2188,17 @@ describe('applyTransform() temperature C/S bias (Phase 4.5t)', () => {
 
     const engOmit = smash(srcFeatures, tgtFeatures, profile, {
       ...DEFAULT_SMASH_CONTROLS,
-      colorization: { ...DEFAULT_SMASH_CONTROLS.colorization, temperature: 1 },
+      colorization: {
+        ...DEFAULT_SMASH_CONTROLS.colorization,
+        temperature: 1, temperatureIntensity: 1,
+      },
     });
     const engZero = smash(srcFeatures, tgtFeatures, profile, {
       ...DEFAULT_SMASH_CONTROLS,
       colorization: {
         ...DEFAULT_SMASH_CONTROLS.colorization,
-        temperature: 1, temperatureCBias: 0, temperatureSBias: 0,
+        temperature: 1, temperatureIntensity: 1,
+        temperatureCBias: 0, temperatureSBias: 0,
       },
     });
     for (let v = 0; v <= 255; v += 17) {
@@ -2142,7 +2217,7 @@ describe('applyTransform() temperature C/S bias (Phase 4.5t)', () => {
     const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
     const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
 
-    const base = { ...DEFAULT_SMASH_CONTROLS.colorization, temperature: 1.5, temperatureSensitivity: 1 };
+    const base = { ...DEFAULT_SMASH_CONTROLS.colorization, temperature: 1, temperatureIntensity: 1 };
     const engNeutral = smash(srcFeatures, tgtFeatures, profile, {
       ...DEFAULT_SMASH_CONTROLS, colorization: { ...base, temperatureCBias: 0 },
     });
@@ -2165,7 +2240,7 @@ describe('applyTransform() temperature C/S bias (Phase 4.5t)', () => {
     const srcFeatures = extractFeatures(srcRgba, 32, 32, 1);
     const tgtFeatures = extractFeatures(tgtRgba, 32, 32, 1);
 
-    const base = { ...DEFAULT_SMASH_CONTROLS.colorization, temperature: 1.5, temperatureSensitivity: 1 };
+    const base = { ...DEFAULT_SMASH_CONTROLS.colorization, temperature: 1, temperatureIntensity: 1 };
     const engNeutral = smash(srcFeatures, tgtFeatures, profile, {
       ...DEFAULT_SMASH_CONTROLS, colorization: { ...base, temperatureSBias: 0 },
     });
@@ -2192,7 +2267,8 @@ describe('applyTransform() temperature C/S bias (Phase 4.5t)', () => {
       ...DEFAULT_SMASH_CONTROLS,
       colorization: {
         ...DEFAULT_SMASH_CONTROLS.colorization,
-        temperature: 1, temperatureCBias: 1, temperatureSBias: -1,
+        temperature: 1, temperatureIntensity: 1,
+        temperatureCBias: 1, temperatureSBias: -1,
       },
     });
     for (let v = 0; v <= 255; v += 15) {

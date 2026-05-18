@@ -139,6 +139,17 @@ export interface SmashEngineOutput {
    *  axis, and taking the median. Approximate but cheap (~27 samples is
    *  enough to anchor the median for typical natural images). */
   readonly estimatedOutputMedianWarmth: number;
+  /** Phase 4.5u — characteristic spread of the engine's OUTPUT warmth,
+   *  computed from the same 4×4×4 sampling grid as the median: half the
+   *  p10..p90 range of the sampled warmth values, floored away from 0.
+   *  The temperature mechanic normalizes each pixel's warmth distance from
+   *  the median against this so the tonal SELECTION threshold + FALLOFF
+   *  behave consistently — crucially on grayscale targets, where the output
+   *  is chromatic (from colorization) but the target's own input chroma is
+   *  ~0. Normalizing against target chroma there floored to a tiny constant,
+   *  which made every selected pixel saturate to sel=1 and rendered both the
+   *  TEMPERATURE breadth and FALLOFF inert. */
+  readonly estimatedOutputWarmthSpread: number;
   /** Phase 4.5t — 95th-percentile INPUT chroma of the target image, in Oklab
    *  C units. Normalization anchor for `temperatureCBias`'s weight ramp: a
    *  pixel at this chroma maps to cNorm = 1. p95 (not max) so specular/noise
@@ -417,6 +428,11 @@ export function buildSmashCdfs(
  * Default SmashControls for Phase 1: global full-strength match over 3 value
  * bands, no per-trait slider adjustments, no outlier guard.
  */
+/** Phase 4.5u — default tint hues for the Temperature mechanic, in DEGREES
+ *  (Oklab hue angle). Cool side defaults to blue, warm side to amber. */
+export const DEFAULT_COOL_TINT_HUE = 250;
+export const DEFAULT_WARM_TINT_HUE = 70;
+
 export const DEFAULT_SMASH_CONTROLS: SmashControls = {
   global: 1,
   traits: {
@@ -460,11 +476,17 @@ export const DEFAULT_SMASH_CONTROLS: SmashControls = {
     // Phase 4.5k: zoneRatio defaults to 0 — natural cluster weights
     // preserved as the source extracted them.
     zoneRatio: 0,
-    // Phase 4.5m: temperature defaults to 0 — no warm/cool shift.
+    // Phase 4.5u: temperature defaults to 0 — no tonal selection, the
+    // whole select→desaturate→tint mechanic is a strict no-op.
     temperature: 0,
-    // Phase 4.5p: temperatureSensitivity defaults to 0.5 — linear
-    // exponent (no sharpening or softening of the median split).
-    temperatureSensitivity: 0.5,
+    // Phase 4.5u: intensity / tint default to 0 (no desaturation, no
+    // tint); falloff 0.3 gives a gently-soft selection edge; cool / warm
+    // tint hues default to blue (250°) and amber (70°).
+    temperatureIntensity: 0,
+    temperatureFalloff: 0.3,
+    temperatureTint: 0,
+    temperatureCoolTintHue: DEFAULT_COOL_TINT_HUE,
+    temperatureWarmTintHue: DEFAULT_WARM_TINT_HUE,
     // Phase 4.5l: target-side zone routing controls. Both default to 0
     // — boundaries at natural cluster midpoints with hard pick (matches
     // Phase 4.5j behavior byte-for-byte).
@@ -855,6 +877,7 @@ export function smash(
     clusterOrderByL, sortedClusterLs, zoneBoundaries,
     adjustedClusterWeights,
     estimatedOutputMedianWarmth: 0, // placeholder; sampling ignores this field
+    estimatedOutputWarmthSpread: 0, // placeholder; sampling ignores this field
     targetChromaP95, targetSaturationP95,
     valueRatioNaturalWeights, valueRatioBandColors,
     hueRatioNaturalWeights, hueRatioBandColors,
@@ -879,6 +902,13 @@ export function smash(
   warmthSamples.sort((x, y) => x - y);
   const estimatedOutputMedianWarmth =
     warmthSamples[Math.floor(warmthSamples.length / 2)] ?? 0;
+  // Phase 4.5u — characteristic warmth spread: half the p10..p90 range of
+  // the sampled output warmth. Floored away from 0 so a flat output can't
+  // make the temperature mechanic divide by ~0. This is the scale the
+  // temperature SELECTION threshold normalizes against.
+  const warmthP10 = warmthSamples[Math.floor(warmthSamples.length * 0.1)] ?? 0;
+  const warmthP90 = warmthSamples[Math.floor(warmthSamples.length * 0.9)] ?? 0;
+  const estimatedOutputWarmthSpread = Math.max((warmthP90 - warmthP10) / 2, 0.005);
 
   return {
     profile, controls: c, bandTransforms, audit,
@@ -888,6 +918,7 @@ export function smash(
     clusterOrderByL, sortedClusterLs, zoneBoundaries,
     adjustedClusterWeights,
     estimatedOutputMedianWarmth,
+    estimatedOutputWarmthSpread,
     targetChromaP95, targetSaturationP95,
     valueRatioNaturalWeights, valueRatioBandColors,
     hueRatioNaturalWeights, hueRatioBandColors,
@@ -1499,135 +1530,134 @@ function applyTransformOnePass(
   let aOut = Cout * Math.cos(hout);
   let bOut = Cout * Math.sin(hout);
 
-  // Phase 4.5p — Temperature, IMAGE-RELATIVE. The image's own estimated
-  // output-warmth median (`out.estimatedOutputMedianWarmth`) is the
-  // neutral center; "warm" and "cool" are decided relative to that
-  // center, not relative to Oklab's absolute warm axis. This is what
-  // makes the slider work on uniformly-warm or uniformly-cool images:
-  // an all-warm image still has pixels that are LESS warm than the
-  // median (image-relatively cool) and MORE warm than the median
-  // (image-relatively warm), and the slider acts on that distinction.
+  // Phase 4.5u — Temperature: SELECT -> DESATURATE -> TINT.
   //
-  // Algorithm:
-  //   warmth = aOut · WARM_A + bOut · WARM_B
-  //   relW   = warmth − medianW
-  //   exp    = 3^(1 − 2·sensitivity)              # sensitivity ∈ [0, 1]
-  //   relW_s = sign(relW) · |relW|^exp            # sharpened by exponent
+  // TEMPERATURE is a tonal SELECTION, not a colour push. Each output pixel
+  // gets a warmth scalar (its projection onto Oklab's warm axis), measured
+  // image-relatively against the engine's estimated output-warmth median.
+  // The slider's SIGN picks which side is selected (negative -> the image's
+  // cool pixels, positive -> the warm pixels); its MAGNITUDE is the
+  // selection breadth (a thin sliver of the most-extreme pixels near 0, the
+  // whole side at +/-1). FALLOFF softens the selection edge. Selected
+  // pixels are then DESATURATED toward neutral by INTENSITY and optionally
+  // TINTED toward a user-set hue by TINT. TARGET L/C/S bias the per-pixel
+  // treatment weight.
   //
-  //   if t > 0 ∧ relW_s > 0:                      # warm slider, image-warm pixel
-  //     warmth' = warmth + t · relW_s · GAIN      # push further warm (contrast stretch)
-  //   if t < 0 ∧ relW_s < 0:                      # cool slider, image-cool pixel
-  //     warmth' = warmth + (−|t|) · |relW_s| · GAIN  # push further cool
-  //   else: warmth' = warmth                      # untouched (same-side preserved)
-  //
-  // Same-polarity-as-slider pixels move further from the median in the
-  // slider's direction; opposite-polarity pixels stay put. The result is
-  // a CONTRAST STRETCH along the warm/cool axis, anchored at the image's
-  // own center — distinct warm/cool zones emerge relative to the image's
-  // own balance rather than to an absolute reference.
+  // This replaces the pre-4.5u "migrate warmth toward the median" mechanic,
+  // which shifted along the fixed warm vector and so snapped every cooled
+  // pixel into Oklab green. The new model never rotates hue on its own:
+  // desaturation pulls straight toward neutral, and any hue change is
+  // exactly the tint the user dialled in.
   const rawTemperature = controls.colorization?.temperature;
   const temperature =
     typeof rawTemperature === 'number' && Number.isFinite(rawTemperature)
-      ? Math.max(-2, Math.min(2, rawTemperature))
+      ? Math.max(-1, Math.min(1, rawTemperature))
       : 0;
-  if (temperature !== 0) {
+  const rawTempIntensity = controls.colorization?.temperatureIntensity;
+  const tempIntensity =
+    typeof rawTempIntensity === 'number' && Number.isFinite(rawTempIntensity)
+      ? Math.max(0, Math.min(1, rawTempIntensity))
+      : 0;
+  const rawTempTint = controls.colorization?.temperatureTint;
+  const tempTint =
+    typeof rawTempTint === 'number' && Number.isFinite(rawTempTint)
+      ? Math.max(0, Math.min(1, rawTempTint))
+      : 0;
+  // No selection (temperature 0) or no treatment (intensity + tint both 0)
+  // -> strict no-op, byte-identical to the pre-temperature output.
+  if (temperature !== 0 && (tempIntensity > 0 || tempTint > 0)) {
     const WARM_A = 0.82;
     const WARM_B = 0.57;
     const warmth = aOut * WARM_A + bOut * WARM_B;
-    const medianW = out.estimatedOutputMedianWarmth;
-    const relW = warmth - medianW;
-    // Sensitivity controls migration SPEED (how quickly a pixel reaches
-    // the median given its distance). High sensitivity = pixels just past
-    // median migrate as if they were far (distinct zones emerge fast).
-    // Low sensitivity = only far-from-median pixels migrate appreciably
-    // (smooth gradient near median).
-    //
-    // Phase 4.5q: extended ranges. Temperature [-2, +2], Sensitivity
-    // [0, 2]. effective_t is now capped at 3 (was 1) — values between 1
-    // and 3 OVERDRIVE the migration: pixels push PAST the median into
-    // opposite-color territory. Below 1, the prior "no-cross" guarantee
-    // still holds. The 3 ceiling prevents arbitrary blowups; well below
-    // any visible-saturation limit since sRGB gamut clipping kicks in
-    // earlier.
-    const rawSens = controls.colorization?.temperatureSensitivity;
-    const sensitivity =
-      typeof rawSens === 'number' && Number.isFinite(rawSens)
-        ? Math.max(0, Math.min(2, rawSens))
-        : 0.5;
-    // sensitivity 0   → scale 1/3 (slow / soft)
-    // sensitivity 0.5 → scale 1   (linear, default)
-    // sensitivity 1   → scale 3   (sharp — distinct zones at default t)
-    // sensitivity 2   → scale 27  (very sharp — even tiny relW gets full push)
-    const sensScale = Math.pow(3, 2 * sensitivity - 1);
-    // Effective migration fraction. Capped at 3 — at default t and
-    // sensitivity≤1 still ≤1 (no-cross). Above 1, pixel pushes past
-    // median into opposite-color territory (explicit overdrive).
-    const effective_t = Math.min(3, Math.abs(temperature) * sensScale);
-    // Only opposite-polarity-to-slider pixels migrate (the user's
-    // intent: warm slider TARGETS image-cools and pushes them toward
-    // image-warm; cool slider TARGETS image-warms and pushes toward
-    // image-cool — both moves are toward the median).
-    const shouldShift =
-      (temperature > 0 && relW < 0) ||
-      (temperature < 0 && relW > 0);
-    if (shouldShift) {
-      // Phase 4.5r — Temperature L Bias: linear weight on the migration
-      // delta based on the pixel's output L. Lets the user restrict
-      // temperature to highlights, shadows, or anywhere in between.
+    const relW = warmth - out.estimatedOutputMedianWarmth;
+    // Normalize the warmth distance against the OUTPUT's own warmth spread
+    // — NOT the target's input chroma. A grayscale target has ~0 input
+    // chroma, so normalizing against it floored to a tiny constant: every
+    // selected pixel then saturated to sel=1, making TEMPERATURE breadth
+    // and FALLOFF inert. estimatedOutputWarmthSpread measures how warm/cool
+    // the colorized OUTPUT actually varies and is floored away from 0 in
+    // smash(), so relNorm lands roughly in [-2, 2] for the bulk of pixels.
+    const warmthScale = out.estimatedOutputWarmthSpread;
+    const relNorm = relW / warmthScale;
+    // sideSignal > 0 for pixels on the slider's selected side: positive
+    // temperature selects warm pixels (relNorm > 0), negative selects cool.
+    const sideSignal = temperature > 0 ? relNorm : -relNorm;
+    // The selection threshold rides from 1 (|t| -> 0, select nothing) down
+    // to 0 (|t| = 1, select the whole side).
+    const thr = 1 - Math.abs(temperature);
+    // FALLOFF — soft transition half-width around the threshold.
+    const rawFalloff = controls.colorization?.temperatureFalloff;
+    const falloff =
+      typeof rawFalloff === 'number' && Number.isFinite(rawFalloff)
+        ? Math.max(0, Math.min(1, rawFalloff))
+        : 0;
+    const edge = Math.max(1e-3, falloff * 0.75);
+    // Selection weight in [0,1] — smoothstep across [thr-edge, thr+edge].
+    let sel = (sideSignal - (thr - edge)) / (2 * edge);
+    sel = sel <= 0 ? 0 : sel >= 1 ? 1 : sel * sel * (3 - 2 * sel);
+    if (sel > 0) {
+      // TARGET L/C/S biases — weight the treatment by where the pixel sits
+      // on the lightness / chroma / saturation axes. Each weight is exactly
+      // 1 when its bias is 0, so all-zero biases leave `sel` untouched.
       const rawLBias = controls.colorization?.temperatureLBias;
       const lBias =
         typeof rawLBias === 'number' && Number.isFinite(rawLBias)
           ? Math.max(-1, Math.min(1, rawLBias))
           : 0;
-      let lWeight = 1;
       if (lBias !== 0) {
-        // Clamp Lout to [0, 1] for the weight curve. The post-gate Lout
-        // can exceed [0, 1] under crank/overdrive — we clamp here so the
-        // weight stays in a meaningful range without changing Lout itself.
         const L = Math.max(0, Math.min(1, Lout));
         const target = lBias > 0 ? L : 1 - L;
-        const absBias = Math.abs(lBias);
-        // lerp(1, target, |lBias|): at lBias=0 → 1 (uniform), at lBias=±1 → target
-        lWeight = 1 + absBias * (target - 1);
+        sel *= 1 + Math.abs(lBias) * (target - 1);
       }
-      // Phase 4.5t — Temperature C Bias: linear weight on the migration
-      // delta from the pixel's INPUT chroma, normalized image-relatively
-      // against the target's 95th-percentile chroma.
       const rawCBias = controls.colorization?.temperatureCBias;
       const cBias =
         typeof rawCBias === 'number' && Number.isFinite(rawCBias)
           ? Math.max(-1, Math.min(1, rawCBias))
           : 0;
-      let cWeight = 1;
       if (cBias !== 0) {
         const cNorm = Math.max(0, Math.min(1,
           Cin / Math.max(out.targetChromaP95, 1e-4)));
         const target = cBias > 0 ? cNorm : 1 - cNorm;
-        cWeight = 1 + Math.abs(cBias) * (target - 1);
+        sel *= 1 + Math.abs(cBias) * (target - 1);
       }
-
-      // Phase 4.5t — Temperature S Bias: same, on INPUT saturation (S = C/L,
-      // clamped [0,2] to match features.ts so the p95 anchor's units agree).
       const rawSBias = controls.colorization?.temperatureSBias;
       const sBias =
         typeof rawSBias === 'number' && Number.isFinite(rawSBias)
           ? Math.max(-1, Math.min(1, rawSBias))
           : 0;
-      let sWeight = 1;
       if (sBias !== 0) {
         const Sin = Math.min(2, Cin / Math.max(Lin, 1e-6));
         const sNorm = Math.max(0, Math.min(1,
           Sin / Math.max(out.targetSaturationP95, 1e-4)));
         const target = sBias > 0 ? sNorm : 1 - sNorm;
-        sWeight = 1 + Math.abs(sBias) * (target - 1);
+        sel *= 1 + Math.abs(sBias) * (target - 1);
       }
-
-      // delta moves warmth toward (and possibly past) median, scaled by all
-      // three TARGET biases. With every bias at 0 each weight is exactly 1,
-      // so delta is byte-identical to the Phase 4.5r output.
-      const delta = -relW * effective_t * lWeight * cWeight * sWeight;
-      aOut += delta * WARM_A;
-      bOut += delta * WARM_B;
+      sel = Math.max(0, Math.min(1, sel));
+    }
+    if (sel > 0) {
+      const Cpix = Math.sqrt(aOut * aOut + bOut * bOut);
+      // DESATURATE — pull chroma toward neutral by intensity x selection.
+      const keep = 1 - tempIntensity * sel;
+      aOut *= keep;
+      bOut *= keep;
+      // TINT — re-inject (and slightly boost) chroma at the user's hue.
+      // The magnitude tracks the chroma we removed plus a small absolute
+      // floor, so even near-neutral pixels pick up visible tint ("more
+      // colour variation" instead of flat grey).
+      if (tempTint > 0) {
+        const rawHueDeg = temperature > 0
+          ? controls.colorization?.temperatureWarmTintHue
+          : controls.colorization?.temperatureCoolTintHue;
+        const hueDeg =
+          typeof rawHueDeg === 'number' && Number.isFinite(rawHueDeg)
+            ? rawHueDeg
+            : (temperature > 0 ? DEFAULT_WARM_TINT_HUE : DEFAULT_COOL_TINT_HUE);
+        const hueRad = (hueDeg * Math.PI) / 180;
+        const tintScale = Cpix * tempIntensity + warmthScale * 0.35;
+        const tintMag = sel * tempTint * tintScale;
+        aOut += tintMag * Math.cos(hueRad);
+        bOut += tintMag * Math.sin(hueRad);
+      }
     }
   }
 
