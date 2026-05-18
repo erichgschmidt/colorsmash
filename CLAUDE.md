@@ -2,10 +2,21 @@
 
 ## Parallel Pro / Smash branch policy
 
-A **Pro tier** ("Smash Engine") is being developed in parallel on a worktree
-branch (currently `claude/musing-chandrasekhar-ed6125`; will be renamed to
-`feature/smash`). When working on the regular ColorSmash plugin (`master`),
-follow these rules:
+A **Pro tier** ("Smash Engine") is being developed in parallel on the
+`feature/smash-v2` branch. This is a clustering-based pivot: source and
+target images are broken into macro color "pools", each pool is analyzed
+for its sub-palette, and that hierarchical profile is transferred onto the
+target. When working on the regular ColorSmash plugin (`master`), follow
+these rules:
+
+### Retired — `feature/smash` (v1 archive, do not develop)
+
+The original Smash Engine (per-aspect band transfer, optimal transport,
+etc.) is **frozen** on `feature/smash` (pushed to `origin/feature/smash`,
+tip `9b33684`). It is kept as a **reference archive only** — the v2
+clustering approach replaces it. Do NOT develop, merge, or delete this
+branch; read from it (`git show feature/smash:<path>`) if you want to
+crib old code.
 
 ### Off-limits — never edit on master without coordinating
 
@@ -13,8 +24,8 @@ follow these rules:
 - `plugin/src/ui/smash/**` (doesn't exist on master yet; Pro-only)
 - `plugin/src/core/perceptual/**` (doesn't exist on master yet; shared but introduced by Pro)
 - `plugin/assets/reference.png`, `plugin/scripts/gen-reference-image.js`
-- The `feature/smash` / `claude/musing-chandrasekhar-ed6125` branch itself —
-  do NOT check out, reset, force-push, delete, or merge from it.
+- The `feature/smash-v2` and `feature/smash` branches themselves —
+  do NOT check out, reset, force-push, delete, or merge from them.
 
 ### Edit with care — exist on master, modified on Pro
 
