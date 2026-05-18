@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { MatchTab } from "./MatchTab";
 import { AnalysisTab } from "./AnalysisTab";
+import { SmashTab } from "./SmashTab";
 
-type Tab = "match" | "analysis";
+type Tab = "match" | "analysis" | "smash";
 
 // Tab button styling — active tab gets the PS-blue accent + lifted background
 // so it reads as the foreground tab against the #535353 panel.
@@ -29,10 +30,11 @@ export function Panel() {
       <div style={{ display: "flex", gap: 4, padding: "6px 6px 0" }}>
         <div style={tabBtnStyle(tab === "match")} onClick={() => setTab("match")}>Match</div>
         <div style={tabBtnStyle(tab === "analysis")} onClick={() => setTab("analysis")}>Analysis</div>
+        <div style={tabBtnStyle(tab === "smash")} onClick={() => setTab("smash")}>Smash</div>
       </div>
 
       <div style={{ flex: 1, overflow: "auto" }}>
-        {tab === "match" ? <MatchTab /> : <AnalysisTab />}
+        {tab === "match" ? <MatchTab /> : tab === "analysis" ? <AnalysisTab /> : <SmashTab />}
       </div>
     </div>
   );
