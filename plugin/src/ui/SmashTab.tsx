@@ -138,7 +138,8 @@ export function SmashTab() {
 
   // ── Shared segmentation controls (applied to BOTH images) ──────────
   const [poolCount, setPoolCount] = useState(6);
-  const [spatialWeight, setSpatialWeight] = useState(0.5);
+  const [edgePreservation, setEdgePreservation] = useState(0.55);
+  const [regionCleanup, setRegionCleanup] = useState(0.4);
   const [subPaletteSize, setSubPaletteSize] = useState(5);
 
   // ── Segmentation results + analyzing state ─────────────────────────
@@ -200,7 +201,7 @@ export function SmashTab() {
     const handle = setTimeout(() => {
       if (cancelled) return;
       try {
-        const opts = { poolCount, spatialWeight, subPaletteSize };
+        const opts = { poolCount, edgePreservation, regionCleanup, subPaletteSize };
         const sRes = segmentImage(source.segInput!.data, source.segInput!.width, source.segInput!.height, opts);
         const tRes = segmentImage(target.segInput!.data, target.segInput!.width, target.segInput!.height, opts);
         const corr = matchPools(sRes.pools, tRes.pools);
@@ -222,7 +223,7 @@ export function SmashTab() {
       }
     }, 16);
     return () => { cancelled = true; clearTimeout(handle); };
-  }, [source.segInput, target.segInput, poolCount, spatialWeight, subPaletteSize]);
+  }, [source.segInput, target.segInput, poolCount, edgePreservation, regionCleanup, subPaletteSize]);
 
   // ── Lookups ────────────────────────────────────────────────────────
   const sourcePoolsById = useMemo(() => {
@@ -466,11 +467,18 @@ export function SmashTab() {
             display={String(poolCount)}
           />
           <Control
-            label="Cluster sharpness"
-            title="Low = pools grouped by color only. High = pools favor compact, contiguous regions."
+            label="Edge preservation"
+            title="Higher keeps more pool boundaries — refuses to merge regions across strong color edges."
             min={0} max={1} step={0.05}
-            value={spatialWeight} onChange={setSpatialWeight}
-            display={spatialWeight.toFixed(2)}
+            value={edgePreservation} onChange={setEdgePreservation}
+            display={edgePreservation.toFixed(2)}
+          />
+          <Control
+            label="Region cleanup"
+            title="Higher absorbs more small speckled regions into their neighbours for simpler shapes."
+            min={0} max={1} step={0.05}
+            value={regionCleanup} onChange={setRegionCleanup}
+            display={regionCleanup.toFixed(2)}
           />
           <Control
             label="Sub-palette size"

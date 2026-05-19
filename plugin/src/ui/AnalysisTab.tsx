@@ -73,7 +73,8 @@ export function AnalysisTab() {
 
   // ── Segmentation controls ───────────────────────────────────────
   const [poolCount, setPoolCount] = useState(6);
-  const [spatialWeight, setSpatialWeight] = useState(0.5);
+  const [edgePreservation, setEdgePreservation] = useState(0.55);
+  const [regionCleanup, setRegionCleanup] = useState(0.4);
   const [subPaletteSize, setSubPaletteSize] = useState(5);
 
   // ── Segmentation result + analyzing state ───────────────────────
@@ -120,7 +121,7 @@ export function AnalysisTab() {
     const handle = setTimeout(() => {
       if (cancelled) return;
       try {
-        const opts = { poolCount, spatialWeight, subPaletteSize };
+        const opts = { poolCount, edgePreservation, regionCleanup, subPaletteSize };
         let r = segmentImage(segInput.data, segInput.width, segInput.height, opts, warm);
         // Re-apply drilled-down pools by id (top-level ids are warm-stable).
         for (const id of expandedIdsRef.current) {
@@ -140,7 +141,7 @@ export function AnalysisTab() {
       }
     }, 16);
     return () => { cancelled = true; clearTimeout(handle); };
-  }, [segInput, poolCount, spatialWeight, subPaletteSize]);
+  }, [segInput, poolCount, edgePreservation, regionCleanup, subPaletteSize]);
 
   // Drill a pool down into child pools (or fold it back up). Operates on the
   // current result directly so the click is snappy.
@@ -149,7 +150,7 @@ export function AnalysisTab() {
     const willExpand = !expandedIds.has(poolId);
     const next = new Set(expandedIds);
     if (willExpand) next.add(poolId); else next.delete(poolId);
-    const opts = { poolCount, spatialWeight, subPaletteSize };
+    const opts = { poolCount, edgePreservation, regionCleanup, subPaletteSize };
     const r = willExpand
       ? expandPool(result, segInput.data, poolId, opts)
       : collapsePool(result, poolId);
@@ -238,11 +239,18 @@ export function AnalysisTab() {
           display={String(poolCount)}
         />
         <Control
-          label="Cluster sharpness"
-          title="Low = pools grouped by color only. High = pools favor compact, contiguous regions."
+          label="Edge preservation"
+          title="Higher keeps more pool boundaries — refuses to merge regions across strong color edges."
           min={0} max={1} step={0.05}
-          value={spatialWeight} onChange={setSpatialWeight}
-          display={spatialWeight.toFixed(2)}
+          value={edgePreservation} onChange={setEdgePreservation}
+          display={edgePreservation.toFixed(2)}
+        />
+        <Control
+          label="Region cleanup"
+          title="Higher absorbs more small speckled regions into their neighbours for simpler shapes."
+          min={0} max={1} step={0.05}
+          value={regionCleanup} onChange={setRegionCleanup}
+          display={regionCleanup.toFixed(2)}
         />
         <Control
           label="Sub-palette size"

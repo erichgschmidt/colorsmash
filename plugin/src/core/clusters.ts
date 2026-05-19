@@ -1,8 +1,10 @@
-// Spatially-aware hierarchical color segmentation.
+// Content-following hierarchical color segmentation.
 //
-// Pass 1 (macro): 5D k-means over feature vectors [L, a, b, x', y'] groups
-// pixels that are both perceptually similar AND spatially close into macro
-// "pools" of color (e.g. "the sky", "the armor").
+// Pass 1 (macro): color-only Lab k-means quantizes the image into pool colors;
+// connected-component "islands" then give the spatial structure, and small
+// islands are merged into neighbours with edge protection (CutWise's island
+// logic). Because no spatial term is mixed into the clustering, pool
+// boundaries follow real image content instead of forming convex tiles.
 // Pass 2 (per pool): each pool's pixels are sub-clustered into a sub-palette;
 // sub-colors that are spatially diffuse within the pool are split off as a
 // separate noise component.
@@ -15,6 +17,9 @@
 // and the partition stay stable while a user drags the controls.
 
 import { rgbToLab, extractPalette } from "./palette";
+import { labelComponents, mergeSmallIslands } from "./cutwise/islands";
+import type { Cluster, MergeParams } from "./cutwise/islands";
+import { smoothLabels } from "./cutwise/smooth";
 
 // ────────── Public interface ──────────
 
@@ -60,8 +65,9 @@ export interface Pool {
 }
 
 export interface SegmentOptions {
-  poolCount: number;        // k for the macro pass, e.g. 2..12
-  spatialWeight: number;    // 0..1 — how much pixel (x,y) influences clustering
+  poolCount: number;        // k for the color quantize, e.g. 2..12
+  edgePreservation: number; // 0..1 — refuse island merges across strong color edges
+  regionCleanup: number;    // 0..1 — how aggressively small islands are absorbed
   subPaletteSize: number;   // k for each pool's sub-palette, e.g. 3..7
 }
 
@@ -81,12 +87,11 @@ const SAMPLE_STRIDE = 4;
 const MAX_ITERATIONS = 16;
 const CONVERGENCE_THRESHOLD = 0.5; // mean centroid shift below which we stop
 
-// spatialWeight → spatial scale factor. Lab L spans ~0..100; we normalize x,y
-// to 0..100 so all five feature axes share a comparable scale, then multiply
-// the spatial axes by spatialWeight·SPATIAL_MAX. At spatialWeight=1 position
-// counts SPATIAL_MAX× as heavily as one Lab axis (compact contiguous pools);
-// at 0 it contributes nothing (pure perceptual color clustering).
-const SPATIAL_MAX = 2.5;
+// Base island area (px) absorbed at zero Region cleanup — the despeckle floor.
+// Region cleanup scales the merge threshold up from here.
+const SHAPE_SIZE = 12;
+// Majority-filter passes that clean the merged label map's contours.
+const SMOOTH_PASSES = 2;
 
 // A sub-color counts as noise when it is spread almost as widely as its whole
 // parent pool (relativeSpread above the threshold) yet is only a minority
@@ -106,9 +111,8 @@ const HIGHLIGHT_MIN_L = 66;
 // ────────── Internal types ──────────
 
 interface Sample {
-  // Feature vector: scaled [L, a, b, x', y']. x',y' already include the spatial
-  // factor so the k-means distance loop stays a plain squared-Euclidean sum.
-  fl: number; fa: number; fb: number; fx: number; fy: number;
+  // Lab feature vector — color-only k-means (no spatial term).
+  fl: number; fa: number; fb: number;
 }
 
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
@@ -191,9 +195,13 @@ function maxPoolId(pools: Pool[]): number {
 
 // ────────── pass 1: segment a pixel set into pools ──────────
 
-// Core macro pass. Operates on an arbitrary list of pixel indices (the whole
-// image for segmentImage, one pool's pixels for expandPool). Coordinates stay
-// in original-image space so descriptors are comparable across levels.
+// Core segmentation pass over an arbitrary list of pixel indices (the whole
+// image for segmentImage, one pool's pixels for expandPool):
+//   1. color-only Lab k-means → a per-pixel cluster-label map
+//   2. connected-component islands on that map (CutWise)
+//   3. edge-protected merge of small islands into neighbours (CutWise)
+//   4. majority-filter smoothing (CutWise)
+//   5. build Pool[] (descriptor + sub-palette + noise) from the final labels
 // `assignment[j]` is the pool id chosen for `indices[j]`.
 function segmentPixelSet(
   rgba: Uint8Array,
@@ -209,54 +217,79 @@ function segmentPixelSet(
   if (total === 0) return { pools: [], assignment };
 
   const k = Math.max(1, Math.floor(opts.poolCount));
-  const spatialFactor = clamp01(opts.spatialWeight) * SPATIAL_MAX;
-  const xScale = width > 1 ? (100 / (width - 1)) * spatialFactor : 0;
-  const yScale = height > 1 ? (100 / (height - 1)) * spatialFactor : 0;
 
-  // ── Collect decimated samples for the fit. ──
+  // ── 1. Color-only Lab k-means. Decimated samples drive the fit. ──
   const samples: Sample[] = [];
   for (let j = 0; j < total; j += SAMPLE_STRIDE) {
-    const i = indices[j], o = i * 4;
+    const o = indices[j] * 4;
     const [L, a, b] = rgbToLab(rgba[o], rgba[o + 1], rgba[o + 2]);
-    const x = i % width, y = (i / width) | 0;
-    samples.push({ fl: L, fa: a, fb: b, fx: x * xScale, fy: y * yScale });
+    samples.push({ fl: L, fa: a, fb: b });
   }
   const n = samples.length;
   if (n === 0) return { pools: [], assignment };
   const effK = Math.min(k, n);
 
-  // ── Init centroids (warm-started from prev pools when available). ──
-  const cents = buildInitCentroids(samples, n, effK, spatialFactor, warmPools);
-
-  // ── Lloyd iterations on the sample set. ──
+  const cents = buildInitCentroids(samples, n, effK, warmPools);
   const assign = new Int32Array(n);
-  const sums = new Float64Array(effK * 5);
+  const sums = new Float64Array(effK * 3);
   const counts = new Int32Array(effK);
   for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
     for (let i = 0; i < n; i++) assign[i] = nearestCentroid(samples[i], cents, effK);
     sums.fill(0); counts.fill(0);
     for (let i = 0; i < n; i++) {
       const c = assign[i], s = samples[i];
-      sums[c * 5] += s.fl; sums[c * 5 + 1] += s.fa; sums[c * 5 + 2] += s.fb;
-      sums[c * 5 + 3] += s.fx; sums[c * 5 + 4] += s.fy;
+      sums[c * 3] += s.fl; sums[c * 3 + 1] += s.fa; sums[c * 3 + 2] += s.fb;
       counts[c]++;
     }
     let totalShift = 0;
     for (let c = 0; c < effK; c++) {
       if (counts[c] === 0) continue; // dead cluster — leave centroid in place
       let shift = 0;
-      for (let d = 0; d < 5; d++) {
-        const nv = sums[c * 5 + d] / counts[c];
-        const dv = nv - cents[c * 5 + d];
+      for (let d = 0; d < 3; d++) {
+        const nv = sums[c * 3 + d] / counts[c];
+        const dv = nv - cents[c * 3 + d];
         shift += dv * dv;
-        cents[c * 5 + d] = nv;
+        cents[c * 3 + d] = nv;
       }
       totalShift += Math.sqrt(shift);
     }
     if (totalShift / effK < CONVERGENCE_THRESHOLD) break;
   }
 
-  // ── Assign every pixel in the set; accumulate per-cluster stats + buckets. ──
+  // ── 2. Assign every pixel → a width*height cluster-label map. ──
+  const clusterLabels = new Int32Array(width * height).fill(-1);
+  const clusterCount = new Int32Array(effK);
+  const tmp: Sample = { fl: 0, fa: 0, fb: 0 };
+  for (let j = 0; j < total; j++) {
+    const o = indices[j] * 4;
+    const [L, a, b] = rgbToLab(rgba[o], rgba[o + 1], rgba[o + 2]);
+    tmp.fl = L; tmp.fa = a; tmp.fb = b;
+    const c = nearestCentroid(tmp, cents, effK);
+    clusterLabels[indices[j]] = c;
+    clusterCount[c]++;
+  }
+
+  // Cluster colors for the island-merge nearest-color test.
+  const clusters: Cluster[] = [];
+  for (let c = 0; c < effK; c++) {
+    const L = cents[c * 3], a = cents[c * 3 + 1], b = cents[c * 3 + 2];
+    clusters.push({ rgb: labToRgb(L, a, b), lab: [L, a, b], count: clusterCount[c] });
+  }
+
+  // ── 3-4. Islands → edge-protected merge → smoothing (CutWise). ──
+  const { regionOf, regions } = labelComponents(clusterLabels, width, height);
+  // Uniform priority (no focal anchors yet) → uniform merge threshold.
+  const priorityMap = new Float32Array(width * height);
+  const mergeParams: MergeParams = {
+    shapeSize: SHAPE_SIZE,
+    simplification: clamp01(opts.regionCleanup) * 100,
+    edgePreservation: clamp01(opts.edgePreservation) * 100,
+    valuePreservation: 0, // focal-zone only — engaged once anchors land
+  };
+  const merged = mergeSmallIslands(regionOf, regions, clusters, priorityMap, width, mergeParams);
+  const finalLabels = smoothLabels(merged, width, height, SMOOTH_PASSES);
+
+  // ── 5. Build pools from the final cluster-label map. ──
   const poolPixels: number[][] = [];
   for (let c = 0; c < effK; c++) poolPixels.push([]);
   const cCount = new Int32Array(effK);
@@ -270,15 +303,14 @@ function segmentPixelSet(
   const cMinY = new Int32Array(effK).fill(height);
   const cMaxY = new Int32Array(effK).fill(-1);
   let setMinX = width, setMaxX = -1, setMinY = height, setMaxY = -1;
-  const tmp: Sample = { fl: 0, fa: 0, fb: 0, fx: 0, fy: 0 };
 
   for (let j = 0; j < total; j++) {
-    const i = indices[j], o = i * 4;
+    const i = indices[j];
+    const c = finalLabels[i];
+    if (c < 0 || c >= effK) continue;
+    const o = i * 4;
     const [L, a, b] = rgbToLab(rgba[o], rgba[o + 1], rgba[o + 2]);
     const x = i % width, y = (i / width) | 0;
-    tmp.fl = L; tmp.fa = a; tmp.fb = b; tmp.fx = x * xScale; tmp.fy = y * yScale;
-    const c = nearestCentroid(tmp, cents, effK);
-    assignment[j] = c; // cluster index for now — remapped to pool id below
     poolPixels[c].push(i);
     cCount[c]++;
     cLabSum[c * 3] += L; cLabSum[c * 3 + 1] += a; cLabSum[c * 3 + 2] += b;
@@ -295,8 +327,7 @@ function segmentPixelSet(
   }
 
   // Compactness baseline: positional variance of a uniform scatter over the
-  // SEGMENTED SET's bounding box. So pool compactness reads as "localization
-  // within the region being segmented" at every recursion level.
+  // segmented set's bounding box.
   const refW = Math.max(0, setMaxX - setMinX);
   const refH = Math.max(0, setMaxY - setMinY);
   const refVar = (refW * refW + refH * refH) / 12;
@@ -308,7 +339,7 @@ function segmentPixelSet(
   const srcCluster: number[] = []; // parallel to `pools`: source cluster index
   for (let c = 0; c < effK; c++) {
     const cnt = cCount[c];
-    if (cnt === 0) continue; // dead cluster
+    if (cnt === 0) continue; // cluster fully merged away
 
     const meanL = cLabSum[c * 3] / cnt;
     const meanA = cLabSum[c * 3 + 1] / cnt;
@@ -352,7 +383,10 @@ function segmentPixelSet(
   assignIds(pools, idStart, warmPools);
   const remap = new Int32Array(effK).fill(-1);
   for (let p = 0; p < pools.length; p++) remap[srcCluster[p]] = pools[p].id;
-  for (let j = 0; j < total; j++) assignment[j] = remap[assignment[j]];
+  for (let j = 0; j < total; j++) {
+    const c = finalLabels[indices[j]];
+    assignment[j] = c >= 0 && c < effK ? remap[c] : -1;
+  }
   pools.sort((a, b) => b.descriptor.weight - a.descriptor.weight);
 
   return { pools, assignment };
@@ -451,24 +485,19 @@ function buildInitCentroids(
   samples: Sample[],
   n: number,
   effK: number,
-  spatialFactor: number,
   warmPools?: Pool[],
 ): Float32Array {
-  const cents = new Float32Array(effK * 5);
+  const cents = new Float32Array(effK * 3);
   let seeded = 0;
 
-  // Warm-start: seed from the previous pools' descriptors. Lab is reused
-  // directly; the spatial axes are reprojected for the CURRENT spatialFactor
-  // (feature x' = centroidX·100·spatialFactor), so the seed is valid even when
-  // the user changed the spatial weight. warmPools is weight-sorted, so when
-  // poolCount shrank we keep the heaviest pools.
+  // Warm-start: seed from the previous pools' mean Lab so pool identity and
+  // the partition stay stable while the user drags a control. warmPools is
+  // weight-sorted, so when poolCount shrank we keep the heaviest pools.
   if (warmPools && warmPools.length > 0) {
     const take = Math.min(effK, warmPools.length);
     for (let c = 0; c < take; c++) {
       const d = warmPools[c].descriptor;
-      cents[c * 5] = d.labL; cents[c * 5 + 1] = d.labA; cents[c * 5 + 2] = d.labB;
-      cents[c * 5 + 3] = d.centroidX * 100 * spatialFactor;
-      cents[c * 5 + 4] = d.centroidY * 100 * spatialFactor;
+      cents[c * 3] = d.labL; cents[c * 3 + 1] = d.labA; cents[c * 3 + 2] = d.labB;
     }
     seeded = take;
   }
@@ -478,7 +507,7 @@ function buildInitCentroids(
   // farthest from its nearest existing centroid. No Math.random.
   if (seeded === 0) {
     const s0 = samples[0];
-    cents[0] = s0.fl; cents[1] = s0.fa; cents[2] = s0.fb; cents[3] = s0.fx; cents[4] = s0.fy;
+    cents[0] = s0.fl; cents[1] = s0.fa; cents[2] = s0.fb;
     seeded = 1;
   }
   if (seeded < effK) {
@@ -486,7 +515,7 @@ function buildInitCentroids(
     for (let i = 0; i < n; i++) {
       let mn = Infinity;
       for (let c = 0; c < seeded; c++) {
-        const d = sqDist5(samples[i], cents, c);
+        const d = sqDist3(samples[i], cents, c);
         if (d < mn) mn = d;
       }
       nearest[i] = mn;
@@ -497,10 +526,9 @@ function buildInitCentroids(
         if (nearest[i] > bestD) { bestD = nearest[i]; bestI = i; }
       }
       const s = samples[bestI];
-      cents[c * 5] = s.fl; cents[c * 5 + 1] = s.fa; cents[c * 5 + 2] = s.fb;
-      cents[c * 5 + 3] = s.fx; cents[c * 5 + 4] = s.fy;
+      cents[c * 3] = s.fl; cents[c * 3 + 1] = s.fa; cents[c * 3 + 2] = s.fb;
       for (let i = 0; i < n; i++) {
-        const d = sqDist5(samples[i], cents, c);
+        const d = sqDist3(samples[i], cents, c);
         if (d < nearest[i]) nearest[i] = d;
       }
     }
@@ -547,19 +575,17 @@ function assignIds(pools: Pool[], idStart: number, warmPools?: Pool[]): void {
 
 // ────────── distance + color helpers ──────────
 
-function sqDist5(s: Sample, cents: Float32Array, c: number): number {
-  const dl = s.fl - cents[c * 5];
-  const da = s.fa - cents[c * 5 + 1];
-  const db = s.fb - cents[c * 5 + 2];
-  const dx = s.fx - cents[c * 5 + 3];
-  const dy = s.fy - cents[c * 5 + 4];
-  return dl * dl + da * da + db * db + dx * dx + dy * dy;
+function sqDist3(s: Sample, cents: Float32Array, c: number): number {
+  const dl = s.fl - cents[c * 3];
+  const da = s.fa - cents[c * 3 + 1];
+  const db = s.fb - cents[c * 3 + 2];
+  return dl * dl + da * da + db * db;
 }
 
 function nearestCentroid(s: Sample, cents: Float32Array, k: number): number {
   let best = 0, bestD = Infinity;
   for (let c = 0; c < k; c++) {
-    const d = sqDist5(s, cents, c);
+    const d = sqDist3(s, cents, c);
     if (d < bestD) { bestD = d; best = c; }
   }
   return best;
