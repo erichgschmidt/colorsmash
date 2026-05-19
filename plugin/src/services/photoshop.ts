@@ -504,6 +504,8 @@ export async function writePixelLayer(
   rgba: Uint8Array,
   width: number,
   height: number,
+  left = 0,
+  top = 0,
 ): Promise<void> {
   if (!imaging || !imaging.putPixels || !imaging.createImageDataFromBuffer) {
     throw new Error("Imaging API unavailable. Requires Photoshop 24.2+.");
@@ -556,8 +558,8 @@ export async function writePixelLayer(
 
     // 3. Build an ImageData from the RGBA buffer and write it into the new
     //    layer. `replace: true` overwrites the (empty) layer's pixels.
-    //    `targetBounds` at origin (0,0) places the layer at the doc's
-    //    top-left corner, full size width×height.
+    //    `targetBounds` is placed at (left, top) so the result lands directly
+    //    over the source region rather than at the document's top-left corner.
     const imageData = await imaging.createImageDataFromBuffer(rgba, {
       width,
       height,
@@ -572,7 +574,7 @@ export async function writePixelLayer(
         layerID: layerId,
         imageData,
         replace: true,
-        targetBounds: { left: 0, top: 0, right: width, bottom: height },
+        targetBounds: { left, top, right: left + width, bottom: top + height },
       });
     } finally {
       // 4. Dispose the ImageData to free its backing buffer.

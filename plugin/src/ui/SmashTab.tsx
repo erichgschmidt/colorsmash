@@ -30,6 +30,10 @@ import { transferColors, upscaleLabels } from "../core/transfer";
 const SEGMENT_MAX_EDGE = 256;
 // Panel content width budget — pool-map images scale to fit this.
 const PANEL_WIDTH = 220;
+// Brightness multiplier applied to non-hovered pools in the pool maps.
+const HOVER_DIM = 0.32;
+// Side-by-side pool maps each get half the panel width (minus the gap).
+const POOL_MAP_W = (PANEL_WIDTH - 6) / 2;
 
 type SrcMode = "layer" | "selection" | "folder";
 
@@ -148,9 +152,12 @@ export function SmashTab() {
   // clicks. `autoMatches` keeps the pristine auto result for "Reset to auto".
   const [matches, setMatches] = useState<PoolMatch[]>([]);
   const [autoMatches, setAutoMatches] = useState<PoolMatch[]>([]);
-  // Currently-selected target pool id (null = none). While set, clicking a
-  // source swatch reassigns this target's donor.
+  // Currently-selected target pool id (null = none). The selected row shows
+  // an inline source-pool picker.
   const [selectedTargetId, setSelectedTargetId] = useState<number | null>(null);
+  // Hovered pool ids — highlight the matching region in the pool maps.
+  const [hoveredTargetId, setHoveredTargetId] = useState<number | null>(null);
+  const [hoveredSourceId, setHoveredSourceId] = useState<number | null>(null);
   // Nice-to-have: tint the target pool map by each region's matched donor.
   const [donorPreview, setDonorPreview] = useState(false);
 
@@ -231,24 +238,50 @@ export function SmashTab() {
   }, [matches]);
 
   // ── Pool-map images ────────────────────────────────────────────────
+  // When a pool is hovered, every other pool is dimmed so the hovered
+  // region stands out — that's the "which area is this?" highlight.
   const sourceMapUrl = useMemo(
-    () => buildPoolMapUrl(sourceResult, p => p.descriptor),
-    [sourceResult],
+    () => buildPoolMapUrl(sourceResult, p => {
+      const d = p.descriptor;
+      return hoveredSourceId != null && p.id !== hoveredSourceId
+        ? { r: d.r * HOVER_DIM, g: d.g * HOVER_DIM, b: d.b * HOVER_DIM }
+        : { r: d.r, g: d.g, b: d.b };
+    }),
+    [sourceResult, hoveredSourceId],
   );
 
-  // Target map: either each pool's own mean color, or (donor preview) the
-  // mean color of its matched source pool.
+  // The target map tints by matched donor when "Donor preview" is on OR while
+  // a row is selected for remapping — so reassigning a donor shows up live in
+  // the target map instead of only in the row.
+  const showDonorTint = donorPreview || selectedTargetId != null;
+
+  // Target map: each pool's own mean color, or (donor tint) the mean color
+  // of its matched source pool — with the hovered pool kept bright. While the
+  // user hovers a swatch in the selected row's picker, that prospective donor
+  // is previewed on the selected pool before any click commits it.
   const targetMapUrl = useMemo(
     () => buildPoolMapUrl(targetResult, p => {
-      if (!donorPreview) return p.descriptor;
-      const match = matchByTargetId.get(p.id);
-      const donor = match ? sourcePoolsById.get(match.sourcePoolId) : undefined;
-      return donor ? donor.descriptor : p.descriptor;
+      let base = p.descriptor;
+      if (showDonorTint) {
+        const previewing = p.id === selectedTargetId && hoveredSourceId != null;
+        const donorId = previewing
+          ? hoveredSourceId
+          : matchByTargetId.get(p.id)?.sourcePoolId;
+        const donor = donorId != null ? sourcePoolsById.get(donorId) : undefined;
+        if (donor) base = donor.descriptor;
+      }
+      return hoveredTargetId != null && p.id !== hoveredTargetId
+        ? { r: base.r * HOVER_DIM, g: base.g * HOVER_DIM, b: base.b * HOVER_DIM }
+        : { r: base.r, g: base.g, b: base.b };
     }),
-    [targetResult, donorPreview, matchByTargetId, sourcePoolsById],
+    [targetResult, showDonorTint, matchByTargetId, sourcePoolsById,
+      hoveredTargetId, hoveredSourceId, selectedTargetId],
   );
 
-  const sourceDisplay = useDisplaySize(sourceResult);
+  // Half-width sizes for the side-by-side pool maps; full width is kept for
+  // the before/after preview pane below.
+  const sourceMapDisplay = useDisplaySize(sourceResult, POOL_MAP_W);
+  const targetMapDisplay = useDisplaySize(targetResult, POOL_MAP_W);
   const targetDisplay = useDisplaySize(targetResult);
 
   // ── Before/after preview ───────────────────────────────────────────
@@ -304,11 +337,10 @@ export function SmashTab() {
   }, [hasApplied, sourceResult, targetResult, target.segInput, matches, strength, relax, preserveLuminance]);
 
   // ── Remap interaction ──────────────────────────────────────────────
-  // Click a source swatch: if a target row is selected, reassign its donor.
-  const assignDonor = (sourcePoolId: number) => {
-    if (selectedTargetId == null) return;
+  // Reassign a target pool's donor (from a row's inline source-pool picker).
+  const assignDonorTo = (targetPoolId: number, sourcePoolId: number) => {
     setMatches(prev => prev.map(m =>
-      m.targetPoolId === selectedTargetId
+      m.targetPoolId === targetPoolId
         ? { ...m, sourcePoolId, score: NaN } // score no longer meaningful after a manual edit
         : m,
     ));
@@ -381,7 +413,11 @@ export function SmashTab() {
         correspondence, { strength, relax, preserveLuminance },
       );
 
-      await writePixelLayer(target.docId, "Color Smash", recolored, fullW, fullH);
+      // Place the new layer over the target layer's region, not at (0,0).
+      await writePixelLayer(
+        target.docId, "Color Smash", recolored, fullW, fullH,
+        fullBuf.bounds.left, fullBuf.bounds.top,
+      );
     } catch (e: any) {
       setOutputError(e?.message ?? String(e));
     } finally {
@@ -446,22 +482,28 @@ export function SmashTab() {
         </div>
       </Section>
 
-      {/* ── Pool maps (source + target stacked) ── */}
+      {/* ── Pool maps (source left, target right) ── */}
       <Section title="POOL MAPS">
-        <PoolMapPane
-          label="Source pools"
-          url={sourceMapUrl}
-          display={sourceDisplay}
-          analyzing={analyzing}
-          placeholder={source.snapError ?? "Pick a source layer."}
-        />
-        <PoolMapPane
-          label={donorPreview ? "Target — tinted by matched donor" : "Target pools"}
-          url={targetMapUrl}
-          display={targetDisplay}
-          analyzing={analyzing}
-          placeholder={target.snapError ?? "Pick a target layer."}
-        />
+        <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <PoolMapPane
+              label="Source"
+              url={sourceMapUrl}
+              display={sourceMapDisplay}
+              analyzing={analyzing}
+              placeholder={source.snapError ?? "Pick a source layer."}
+            />
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <PoolMapPane
+              label={showDonorTint ? "Target — donor tint" : "Target"}
+              url={targetMapUrl}
+              display={targetMapDisplay}
+              analyzing={analyzing}
+              placeholder={target.snapError ?? "Pick a target layer."}
+            />
+          </div>
+        </div>
       </Section>
 
       {segError && (
@@ -497,38 +539,10 @@ export function SmashTab() {
               </div>
             </div>
 
-            {/* Source pool strip — selectable donors */}
-            <div style={SUB_HEADER}>
-              SOURCE POOLS{selectedTargetId != null ? " — click to assign" : ""}
-            </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-              {sourcePools.map(p => {
-                const d = p.descriptor;
-                const selectedMatch = selectedTargetId != null
-                  ? matchByTargetId.get(selectedTargetId)
-                  : undefined;
-                const isCurrentDonor = selectedMatch?.sourcePoolId === p.id;
-                return (
-                  <div
-                    key={p.id}
-                    onClick={() => assignDonor(p.id)}
-                    title={`Source pool ${p.id} · rgb(${d.r}, ${d.g}, ${d.b}) · ${d.valueBand} · ${(d.weight * 100).toFixed(1)}%`
-                      + (selectedTargetId != null ? " — click to assign as donor" : "")}
-                    style={{
-                      width: 30, height: 30, borderRadius: 2,
-                      background: `rgb(${d.r}, ${d.g}, ${d.b})`,
-                      border: isCurrentDonor ? "2px solid #1473e6" : "1px solid #555",
-                      boxSizing: "border-box",
-                      cursor: selectedTargetId != null ? "pointer" : "default",
-                      opacity: selectedTargetId != null ? 1 : 0.92,
-                    }}
-                  />
-                );
-              })}
-            </div>
-
-            {/* Correspondence list — one row per TARGET pool */}
-            <div style={SUB_HEADER}>TARGET → SOURCE</div>
+            {/* Correspondence list — one row per TARGET pool. Hover a row to
+                locate its region in the target map; click to open its inline
+                source-pool picker. */}
+            <div style={SUB_HEADER}>TARGET → SOURCE — hover to locate · click to remap</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               {targetPools.map(tp => {
                 const match = matchByTargetId.get(tp.id);
@@ -541,7 +555,11 @@ export function SmashTab() {
                     donorPool={donor}
                     score={match?.score}
                     selected={selected}
+                    sourcePools={sourcePools}
                     onSelect={() => setSelectedTargetId(selected ? null : tp.id)}
+                    onAssign={sid => assignDonorTo(tp.id, sid)}
+                    onHoverTarget={setHoveredTargetId}
+                    onHoverSource={setHoveredSourceId}
                   />
                 );
               })}
@@ -700,13 +718,13 @@ function selectorProps(p: ReturnType<typeof useImagePicker>) {
   };
 }
 
-// Display size: scale a segmented image to fit the panel width, no upscaling.
-function useDisplaySize(result: SegmentResult | null): { w: number; h: number } {
+// Display size: scale a segmented image to fit a width budget, no upscaling.
+function useDisplaySize(result: SegmentResult | null, maxWidth = PANEL_WIDTH): { w: number; h: number } {
   return useMemo(() => {
     if (!result) return { w: 0, h: 0 };
-    const scale = Math.min(1, PANEL_WIDTH / result.width);
+    const scale = Math.min(1, maxWidth / result.width);
     return { w: Math.round(result.width * scale), h: Math.round(result.height * scale) };
-  }, [result]);
+  }, [result, maxWidth]);
 }
 
 // ── Collapsible section — the header chip toggles its body open/closed ──
@@ -749,8 +767,8 @@ function PoolMapPane({ label, url, display, analyzing, placeholder }: {
     <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
       <span style={{ fontSize: 9, color: "#999", letterSpacing: 0.3 }}>{label}</span>
       <div style={{
-        position: "relative", alignSelf: "center",
-        width: display.w || PANEL_WIDTH, minHeight: 60,
+        position: "relative",
+        width: "100%", minHeight: 60, boxSizing: "border-box",
         display: "flex", alignItems: "center", justifyContent: "center",
         background: "#1f1f1f", border: "1px solid #3a3a3a", borderRadius: 2,
       }}>
@@ -780,13 +798,22 @@ function PoolMapPane({ label, url, display, analyzing, placeholder }: {
   );
 }
 
-// ── One correspondence row — a target pool and its matched source donor ──
-function CorrespondenceRow({ targetPool, donorPool, score, selected, onSelect }: {
+// ── One correspondence row — a target pool, its donor, and (when selected)
+// an inline source-pool picker. Hovering the row highlights the target
+// region in the pool map; hovering a picker swatch highlights the source. ──
+function CorrespondenceRow({
+  targetPool, donorPool, score, selected, sourcePools,
+  onSelect, onAssign, onHoverTarget, onHoverSource,
+}: {
   targetPool: Pool;
   donorPool: Pool | undefined;
   score: number | undefined;
   selected: boolean;
+  sourcePools: Pool[];
   onSelect: () => void;
+  onAssign: (sourcePoolId: number) => void;
+  onHoverTarget: (id: number | null) => void;
+  onHoverSource: (id: number | null) => void;
 }) {
   const t = targetPool.descriptor;
   const targetColor = `rgb(${t.r}, ${t.g}, ${t.b})`;
@@ -796,50 +823,87 @@ function CorrespondenceRow({ targetPool, donorPool, score, selected, onSelect }:
 
   return (
     <div
-      onClick={onSelect}
-      title={selected ? "Selected — click a source pool to reassign this target's donor." : "Click to select this target pool for remapping."}
+      onMouseEnter={() => onHoverTarget(targetPool.id)}
+      onMouseLeave={() => onHoverTarget(null)}
       style={{
-        display: "flex", alignItems: "center", gap: 6,
-        padding: "4px 6px",
+        display: "flex", flexDirection: "column", gap: 4,
         background: selected ? "#22364f" : "#1f1f1f",
         border: `1px solid ${selected ? "#1473e6" : "#3a3a3a"}`,
-        borderRadius: 2, cursor: "pointer", userSelect: "none",
+        borderRadius: 2,
       }}
     >
-      {/* Target pool swatch */}
-      <div style={{
-        width: 24, height: 24, flexShrink: 0, borderRadius: 2,
-        background: targetColor, border: "1px solid #555",
-      }} title={`target pool ${targetPool.id} · ${targetColor}`} />
+      {/* Main row — click to open/close the inline picker */}
+      <div
+        onClick={onSelect}
+        title={selected ? "Click to collapse." : "Hover highlights this region in the target map. Click to pick a donor."}
+        style={{
+          display: "flex", alignItems: "center", gap: 6,
+          padding: "4px 6px", cursor: "pointer", userSelect: "none",
+        }}
+      >
+        {/* Target pool swatch */}
+        <div style={{
+          width: 24, height: 24, flexShrink: 0, borderRadius: 2,
+          background: targetColor, border: "1px solid #555",
+        }} title={`target pool ${targetPool.id} · ${targetColor}`} />
 
-      {/* Target descriptor — weight % + value band */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 1, width: 58, flexShrink: 0 }}>
-        <span style={{ fontSize: 11, fontWeight: 600 }}>{(t.weight * 100).toFixed(1)}%</span>
-        <span style={{ fontSize: 9, color: "#9a9aa8" }}>{t.valueBand}</span>
+        {/* Target descriptor — weight % + value band */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 1, width: 58, flexShrink: 0 }}>
+          <span style={{ fontSize: 11, fontWeight: 600 }}>{(t.weight * 100).toFixed(1)}%</span>
+          <span style={{ fontSize: 9, color: "#9a9aa8" }}>{t.valueBand}</span>
+        </div>
+
+        {/* Arrow */}
+        <span style={{ fontSize: 12, color: "#777", flexShrink: 0 }}>→</span>
+
+        {/* Matched source donor swatch */}
+        <div style={{
+          width: 24, height: 24, flexShrink: 0, borderRadius: 2,
+          background: donorColor, border: "1px solid #555",
+        }} title={donorPool ? `donor: source pool ${donorPool.id} · ${donorColor}` : "no donor"} />
+
+        {/* Donor label + match score */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 1, flex: 1, minWidth: 0 }}>
+          <span style={{ fontSize: 10, color: "#cccccc" }}>
+            {donorPool ? `source pool ${donorPool.id}` : "—"}
+          </span>
+          <span style={{ fontSize: 9, color: "#777" }}>
+            {score == null
+              ? ""
+              : Number.isNaN(score)
+                ? "manual"
+                : `score ${score.toFixed(2)}`}
+          </span>
+        </div>
+
+        {/* Expand affordance */}
+        <span style={{ fontSize: 9, color: "#777", flexShrink: 0 }}>{selected ? "▾" : "▸"}</span>
       </div>
 
-      {/* Arrow */}
-      <span style={{ fontSize: 12, color: "#777", flexShrink: 0 }}>→</span>
-
-      {/* Matched source donor swatch */}
-      <div style={{
-        width: 24, height: 24, flexShrink: 0, borderRadius: 2,
-        background: donorColor, border: "1px solid #555",
-      }} title={donorPool ? `donor: source pool ${donorPool.id} · ${donorColor}` : "no donor"} />
-
-      {/* Donor label + match score */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 1, flex: 1, minWidth: 0 }}>
-        <span style={{ fontSize: 10, color: "#cccccc" }}>
-          {donorPool ? `source pool ${donorPool.id}` : "—"}
-        </span>
-        <span style={{ fontSize: 9, color: "#777" }}>
-          {score == null
-            ? ""
-            : Number.isNaN(score)
-              ? "manual"
-              : `score ${score.toFixed(2)}`}
-        </span>
-      </div>
+      {/* Inline donor picker — only for the selected row */}
+      {selected && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 3, padding: "0 6px 6px" }}>
+          {sourcePools.map(sp => {
+            const sd = sp.descriptor;
+            const isDonor = donorPool?.id === sp.id;
+            return (
+              <div
+                key={sp.id}
+                onClick={e => { e.stopPropagation(); onAssign(sp.id); }}
+                onMouseEnter={() => onHoverSource(sp.id)}
+                onMouseLeave={() => onHoverSource(null)}
+                title={`source pool ${sp.id} · ${sd.valueBand} · ${(sd.weight * 100).toFixed(1)}% — click to assign as donor`}
+                style={{
+                  width: 22, height: 22, borderRadius: 2,
+                  background: `rgb(${sd.r}, ${sd.g}, ${sd.b})`,
+                  border: isDonor ? "2px solid #1473e6" : "1px solid #555",
+                  boxSizing: "border-box", cursor: "pointer",
+                }}
+              />
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
