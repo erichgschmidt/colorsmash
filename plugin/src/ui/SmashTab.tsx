@@ -23,7 +23,7 @@ import { rgbaToPngDataUrl } from "./encodePng";
 import { matchStyles } from "./MatchSliders";
 import { segmentImage, SegmentResult, Pool } from "../core/clusters";
 import { matchPools, PoolMatch, Correspondence } from "../core/match";
-import { transferColors, upscaleLabels } from "../core/transfer";
+import { transferColors, vectorizeUpscaleLabels } from "../core/transfer";
 
 // Max edge fed into segmentImage — keeps per-pixel clustering under a frame
 // budget while staying detailed enough for a recognizable pool map.
@@ -390,7 +390,7 @@ export function SmashTab() {
       const fullH = fullBuf.height;
 
       // Project the segmentation label map up to the real resolution.
-      const fullLabels = upscaleLabels(
+      const fullLabels = vectorizeUpscaleLabels(
         targetResult.labels, targetResult.width, targetResult.height,
         fullW, fullH,
       );

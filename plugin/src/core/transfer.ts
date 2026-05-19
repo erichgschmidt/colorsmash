@@ -22,6 +22,7 @@ import type { SegmentResult, Pool, SubSwatch } from "./clusters";
 import { labToRgb } from "./clusters";
 import { rgbToLab } from "./palette";
 import type { Correspondence } from "./match";
+import { vectorizeLabels } from "./cutwise/contour";
 
 export interface TransferOptions {
   strength: number; // 0..1 — blend between the original and the fully transferred result
@@ -57,28 +58,28 @@ const clamp255 = (v: number) => (v < 0 ? 0 : v > 255 ? 255 : v);
 const BLUR_RADIUS_PER_EDGE = 14 / 256;
 const BLUR_PASSES = 3;
 
-// Nearest-neighbour upscale of a pool-label map. The segmentation runs at a
-// small working resolution; to recolor an image at its real resolution the
-// label map must be projected up to that size. For each full-res pixel (x,y)
-// the matching segmentation pixel is `(floor(x·segW/fullW), floor(y·segH/fullH))`.
-export function upscaleLabels(
+// Vectorized upscale of a pool-label map. The segmentation runs at a small
+// working resolution; to recolor an image at its real resolution the label
+// map must be projected up to that size. A plain nearest-neighbour upscale
+// stamps each segmentation pixel as a hard rectangle, so pool boundaries come
+// out stair-stepped at full res. Instead this traces each pool region's
+// boundary into a polygon (via the CutWise contour module ported to
+// ColorSmash) and rasterizes those polygons at (fullW, fullH), giving clean
+// straight-faceted pool edges.
+//
+// `vectorizeLabels(labels, width, height, outWidth, outHeight, simplicity)`
+// returns an Int32Array of length outWidth*outHeight, preserving -1 for
+// transparent/unlabeled pixels. A simplicity of 0 keeps the polygon hugging
+// the pixel boundary — boundaries are de-stair-stepped without otherwise
+// reshaping the pools, so pool areas stay faithful to the segmentation.
+export function vectorizeUpscaleLabels(
   labels: Int32Array,
   segW: number,
   segH: number,
   fullW: number,
   fullH: number,
 ): Int32Array {
-  const out = new Int32Array(fullW * fullH);
-  for (let y = 0; y < fullH; y++) {
-    const sy = Math.min(segH - 1, Math.floor((y * segH) / fullH));
-    const srcRow = sy * segW;
-    const dstRow = y * fullW;
-    for (let x = 0; x < fullW; x++) {
-      const sx = Math.min(segW - 1, Math.floor((x * segW) / fullW));
-      out[dstRow + x] = labels[srcRow + sx];
-    }
-  }
-  return out;
+  return vectorizeLabels(labels, segW, segH, fullW, fullH, 0);
 }
 
 // Combined sub-color list for a pool: structured sub-palette + noise swatches.
