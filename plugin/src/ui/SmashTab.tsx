@@ -22,7 +22,8 @@ import { downsampleToMaxEdge } from "../core/downsample";
 import { rgbaToPngDataUrl } from "./encodePng";
 import { matchStyles } from "./MatchSliders";
 import { segmentImage, SegmentResult, Pool } from "../core/clusters";
-import { matchPools, PoolMatch } from "../core/match";
+import { matchPools, PoolMatch, Correspondence } from "../core/match";
+import { transferColors } from "../core/transfer";
 
 // Max edge fed into segmentImage — keeps per-pixel clustering under a frame
 // budget while staying detailed enough for a recognizable pool map.
@@ -139,6 +140,20 @@ export function SmashTab() {
   // Nice-to-have: tint the target pool map by each region's matched donor.
   const [donorPreview, setDonorPreview] = useState(false);
 
+  // ── Color transfer (in-panel preview) ─────────────────────────────
+  // Blend amount fed to transferColors — 0 = unchanged target, 1 = full donor.
+  const [strength, setStrength] = useState(1.0);
+  // The recolored-target PNG data URL, produced by "Apply Smash". null until a
+  // transfer has been run.
+  const [transferUrl, setTransferUrl] = useState<string | null>(null);
+  // Before/after toggle for the preview pane (false = before, true = after).
+  const [showAfter, setShowAfter] = useState(true);
+  // Last error from a transfer attempt, if any.
+  const [transferError, setTransferError] = useState<string | null>(null);
+  // True once the inputs feeding a transfer (strength, matches, segmentation)
+  // have changed since the last Apply — flags the preview as out of date.
+  const [transferStale, setTransferStale] = useState(false);
+
   // Segment both images whenever either input or any control changes. Work is
   // synchronous and can take a moment, so flip on "analyzing", yield a frame
   // for it to paint, then run both segmentations + the match.
@@ -213,6 +228,29 @@ export function SmashTab() {
   const sourceDisplay = useDisplaySize(sourceResult);
   const targetDisplay = useDisplaySize(targetResult);
 
+  // ── Before/after preview ───────────────────────────────────────────
+  // "Before" is the actual original target pixels — encode the target's
+  // segInput RGBA (the same downsampled buffer the transfer recolors), so
+  // before and after are pixel-aligned at identical dimensions.
+  const beforeUrl = useMemo(() => {
+    const seg = target.segInput;
+    if (!seg) return null;
+    return rgbaToPngDataUrl(seg.data, seg.width, seg.height);
+  }, [target.segInput]);
+
+  // A fresh segmentation invalidates any prior transfer result.
+  useEffect(() => {
+    setTransferUrl(null);
+    setTransferError(null);
+    setTransferStale(false);
+  }, [sourceResult, targetResult]);
+
+  // Once a transfer exists, changing the strength or hand-editing a remap
+  // makes the visible "after" image out of date — flag it until the next Apply.
+  useEffect(() => {
+    if (transferUrl) setTransferStale(true);
+  }, [strength, matches]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Remap interaction ──────────────────────────────────────────────
   // Click a source swatch: if a target row is selected, reassign its donor.
   const assignDonor = (sourcePoolId: number) => {
@@ -227,6 +265,37 @@ export function SmashTab() {
   const resetToAuto = () => {
     setMatches(autoMatches.map(m => ({ ...m })));
     setSelectedTargetId(null);
+  };
+
+  // Run the color transfer on the TARGET using the CURRENT (possibly
+  // hand-edited) correspondence and store the recolored result as a PNG URL.
+  // The Correspondence is rebuilt from the live `matches` array: a source pool
+  // is "unmatched" when no match cites it.
+  const applySmash = () => {
+    if (!sourceResult || !targetResult || !target.segInput || matches.length === 0) return;
+    try {
+      const usedSourceIds = new Set(matches.map(m => m.sourcePoolId));
+      const correspondence: Correspondence = {
+        matches: matches.map(m => ({ ...m })),
+        unmatchedSourceIds: sourceResult.pools
+          .filter(p => !usedSourceIds.has(p.id))
+          .map(p => p.id),
+      };
+      const { data, width, height } = target.segInput;
+      const recolored = transferColors(
+        data, width, height,
+        targetResult, sourceResult,
+        correspondence, { strength },
+      );
+      setTransferUrl(rgbaToPngDataUrl(recolored, width, height));
+      setTransferError(null);
+      setTransferStale(false);
+      setShowAfter(true);
+    } catch (e: any) {
+      setTransferUrl(null);
+      setTransferError(e?.message ?? String(e));
+      setTransferStale(false);
+    }
   };
 
   // Whether the current matches differ from the auto result (enables Reset).
@@ -377,6 +446,87 @@ export function SmashTab() {
                 />
               );
             })}
+          </div>
+
+          {/* ── Color transfer — in-panel before/after preview ── */}
+          <div style={SUB_HEADER}>COLOR TRANSFER</div>
+
+          <Control
+            label="Strength"
+            title="Transfer blend amount. 0 = target unchanged, 1 = full donor recolor."
+            min={0} max={1} step={0.05}
+            value={strength} onChange={setStrength}
+            display={strength.toFixed(2)}
+          />
+
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div
+              onClick={applySmash}
+              title="Recolor the target using the current correspondence and the strength above."
+              style={{
+                padding: "5px 12px", fontSize: 11, fontWeight: 600, borderRadius: 2,
+                border: "1px solid #1473e6",
+                background: "#1473e6", color: "#ffffff",
+                cursor: "pointer", userSelect: "none",
+              }}
+            >
+              Apply Smash
+            </div>
+            {transferUrl && (
+              <div
+                onClick={() => setShowAfter(s => !s)}
+                title="Swap the preview between the original target and the recolored result."
+                style={{
+                  padding: "5px 10px", fontSize: 10, borderRadius: 2,
+                  border: "1px solid #4a4a4a", background: "#3a3a3a",
+                  color: "#cccccc", cursor: "pointer", userSelect: "none",
+                }}
+              >
+                {showAfter ? "Show before" : "Show after"}
+              </div>
+            )}
+            {transferStale && (
+              <span style={{ fontSize: 9, color: "#d8c87d" }}>
+                stale — re-apply
+              </span>
+            )}
+          </div>
+
+          {transferError && (
+            <div style={{ fontSize: 10, color: "#d8867d" }}>
+              Transfer failed: {transferError}
+            </div>
+          )}
+
+          {/* Before/after preview pane — toggles between the original target
+              pixels and the recolored result. */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+            <span style={{ fontSize: 9, color: "#999", letterSpacing: 0.3 }}>
+              {transferUrl
+                ? (showAfter ? "After — recolored target" : "Before — original target")
+                : "Preview"}
+            </span>
+            <div style={{
+              position: "relative", alignSelf: "center",
+              width: targetDisplay.w || PANEL_WIDTH, minHeight: 60,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              background: "#1f1f1f", border: "1px solid #3a3a3a", borderRadius: 2,
+            }}>
+              {transferUrl ? (
+                <img
+                  src={(showAfter ? transferUrl : beforeUrl) ?? undefined}
+                  style={{
+                    width: targetDisplay.w, height: targetDisplay.h,
+                    imageRendering: "pixelated", display: "block",
+                    opacity: showAfter && transferStale ? 0.55 : 1,
+                  }}
+                />
+              ) : (
+                <div style={{ padding: 24, fontSize: 10, opacity: 0.5 }}>
+                  Click “Apply Smash” to preview the recolored target.
+                </div>
+              )}
+            </div>
           </div>
         </>
       )}

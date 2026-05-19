@@ -567,7 +567,8 @@ function nearestCentroid(s: Sample, cents: Float32Array, k: number): number {
 
 // CIE Lab (D65) → sRGB. palette.ts keeps its labToRgb private; the inverse is
 // small, so we keep a local copy rather than widen that module's surface.
-function labToRgb(L: number, a: number, b: number): [number, number, number] {
+// Exported so the transfer step can convert recolored Lab values back to RGB.
+export function labToRgb(L: number, a: number, b: number): [number, number, number] {
   const fy = (L + 16) / 116, fx = a / 500 + fy, fz = fy - b / 200;
   const finv = (t: number) => {
     const t3 = t * t * t;
