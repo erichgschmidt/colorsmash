@@ -143,16 +143,15 @@ export function SmashTab() {
   // ── Color transfer (in-panel preview) ─────────────────────────────
   // Blend amount fed to transferColors — 0 = unchanged target, 1 = full donor.
   const [strength, setStrength] = useState(1.0);
-  // The recolored-target PNG data URL, produced by "Apply Smash". null until a
-  // transfer has been run.
+  // The recolored-target PNG data URL. null until a transfer has been run.
   const [transferUrl, setTransferUrl] = useState<string | null>(null);
   // Before/after toggle for the preview pane (false = before, true = after).
   const [showAfter, setShowAfter] = useState(true);
   // Last error from a transfer attempt, if any.
   const [transferError, setTransferError] = useState<string | null>(null);
-  // True once the inputs feeding a transfer (strength, matches, segmentation)
-  // have changed since the last Apply — flags the preview as out of date.
-  const [transferStale, setTransferStale] = useState(false);
+  // Once "Apply Smash" has been pressed the preview goes live — it re-runs
+  // automatically whenever segmentation, the correspondence, or strength change.
+  const [hasApplied, setHasApplied] = useState(false);
 
   // Segment both images whenever either input or any control changes. Work is
   // synchronous and can take a moment, so flip on "analyzing", yield a frame
@@ -238,18 +237,47 @@ export function SmashTab() {
     return rgbaToPngDataUrl(seg.data, seg.width, seg.height);
   }, [target.segInput]);
 
-  // A fresh segmentation invalidates any prior transfer result.
+  // Live transfer preview. Once "Apply Smash" has been pressed (hasApplied),
+  // the recolored result is recomputed whenever the segmentation, the
+  // correspondence, or the strength changes — so every control, sub-palette
+  // size included, affects the preview without a manual re-apply. Debounced a
+  // frame so slider drags stay responsive.
   useEffect(() => {
-    setTransferUrl(null);
-    setTransferError(null);
-    setTransferStale(false);
-  }, [sourceResult, targetResult]);
-
-  // Once a transfer exists, changing the strength or hand-editing a remap
-  // makes the visible "after" image out of date — flag it until the next Apply.
-  useEffect(() => {
-    if (transferUrl) setTransferStale(true);
-  }, [strength, matches]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!hasApplied) return;
+    if (!sourceResult || !targetResult || !target.segInput || matches.length === 0) {
+      setTransferUrl(null);
+      return;
+    }
+    let cancelled = false;
+    const handle = setTimeout(() => {
+      if (cancelled) return;
+      try {
+        const usedSourceIds = new Set(matches.map(m => m.sourcePoolId));
+        const correspondence: Correspondence = {
+          matches: matches.map(m => ({ ...m })),
+          unmatchedSourceIds: sourceResult.pools
+            .filter(p => !usedSourceIds.has(p.id))
+            .map(p => p.id),
+        };
+        const { data, width, height } = target.segInput!;
+        const recolored = transferColors(
+          data, width, height,
+          targetResult, sourceResult,
+          correspondence, { strength },
+        );
+        if (!cancelled) {
+          setTransferUrl(rgbaToPngDataUrl(recolored, width, height));
+          setTransferError(null);
+        }
+      } catch (e: any) {
+        if (!cancelled) {
+          setTransferUrl(null);
+          setTransferError(e?.message ?? String(e));
+        }
+      }
+    }, 16);
+    return () => { cancelled = true; clearTimeout(handle); };
+  }, [hasApplied, sourceResult, targetResult, target.segInput, matches, strength]);
 
   // ── Remap interaction ──────────────────────────────────────────────
   // Click a source swatch: if a target row is selected, reassign its donor.
@@ -267,35 +295,12 @@ export function SmashTab() {
     setSelectedTargetId(null);
   };
 
-  // Run the color transfer on the TARGET using the CURRENT (possibly
-  // hand-edited) correspondence and store the recolored result as a PNG URL.
-  // The Correspondence is rebuilt from the live `matches` array: a source pool
-  // is "unmatched" when no match cites it.
+  // First press starts the live preview; the effect above keeps it current
+  // from then on, so every control change is reflected automatically.
   const applySmash = () => {
     if (!sourceResult || !targetResult || !target.segInput || matches.length === 0) return;
-    try {
-      const usedSourceIds = new Set(matches.map(m => m.sourcePoolId));
-      const correspondence: Correspondence = {
-        matches: matches.map(m => ({ ...m })),
-        unmatchedSourceIds: sourceResult.pools
-          .filter(p => !usedSourceIds.has(p.id))
-          .map(p => p.id),
-      };
-      const { data, width, height } = target.segInput;
-      const recolored = transferColors(
-        data, width, height,
-        targetResult, sourceResult,
-        correspondence, { strength },
-      );
-      setTransferUrl(rgbaToPngDataUrl(recolored, width, height));
-      setTransferError(null);
-      setTransferStale(false);
-      setShowAfter(true);
-    } catch (e: any) {
-      setTransferUrl(null);
-      setTransferError(e?.message ?? String(e));
-      setTransferStale(false);
-    }
+    setHasApplied(true);
+    setShowAfter(true);
   };
 
   // Whether the current matches differ from the auto result (enables Reset).
@@ -316,41 +321,41 @@ export function SmashTab() {
     <div style={{ padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={SECTION_HEADER}>SMASH — POOL CORRESPONDENCE</div>
 
-      {/* ── Source picker ── */}
-      <div style={SUB_HEADER}>SOURCE</div>
-      <SourceSelector {...selectorProps(source)} selStyle={sel} />
+      {/* ── Inputs: source + target pickers + segmentation controls ── */}
+      <Section title="INPUTS">
+        <div style={SUB_HEADER}>SOURCE</div>
+        <SourceSelector {...selectorProps(source)} selStyle={sel} />
 
-      {/* ── Target picker ── */}
-      <div style={SUB_HEADER}>TARGET</div>
-      <SourceSelector {...selectorProps(target)} selStyle={sel} />
+        <div style={SUB_HEADER}>TARGET</div>
+        <SourceSelector {...selectorProps(target)} selStyle={sel} />
 
-      {/* ── Shared segmentation controls ── */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 2 }}>
-        <Control
-          label="Pool count"
-          title="Number of color pools to segment each image into."
-          min={2} max={12} step={1}
-          value={poolCount} onChange={setPoolCount}
-          display={String(poolCount)}
-        />
-        <Control
-          label="Cluster sharpness"
-          title="Low = pools grouped by color only. High = pools favor compact, contiguous regions."
-          min={0} max={1} step={0.05}
-          value={spatialWeight} onChange={setSpatialWeight}
-          display={spatialWeight.toFixed(2)}
-        />
-        <Control
-          label="Sub-palette size"
-          title="Number of swatches sampled within each pool."
-          min={3} max={7} step={1}
-          value={subPaletteSize} onChange={setSubPaletteSize}
-          display={String(subPaletteSize)}
-        />
-      </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 2 }}>
+          <Control
+            label="Pool count"
+            title="Number of color pools to segment each image into."
+            min={2} max={12} step={1}
+            value={poolCount} onChange={setPoolCount}
+            display={String(poolCount)}
+          />
+          <Control
+            label="Cluster sharpness"
+            title="Low = pools grouped by color only. High = pools favor compact, contiguous regions."
+            min={0} max={1} step={0.05}
+            value={spatialWeight} onChange={setSpatialWeight}
+            display={spatialWeight.toFixed(2)}
+          />
+          <Control
+            label="Sub-palette size"
+            title="Number of swatches sampled within each pool."
+            min={3} max={7} step={1}
+            value={subPaletteSize} onChange={setSubPaletteSize}
+            display={String(subPaletteSize)}
+          />
+        </div>
+      </Section>
 
       {/* ── Pool maps (source + target stacked) ── */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <Section title="POOL MAPS">
         <PoolMapPane
           label="Source pools"
           url={sourceMapUrl}
@@ -365,7 +370,7 @@ export function SmashTab() {
           analyzing={analyzing}
           placeholder={target.snapError ?? "Pick a target layer."}
         />
-      </div>
+      </Section>
 
       {segError && (
         <div style={{ fontSize: 10, color: "#d8867d" }}>Segmentation failed: {segError}</div>
@@ -373,161 +378,164 @@ export function SmashTab() {
 
       {ready && (
         <>
-          {/* ── Donor-preview toggle + reset ── */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, cursor: "pointer" }}
-              title="Tint the target pool map by each region's matched source color — a preview of which donor goes where.">
-              <input type="checkbox" checked={donorPreview}
-                onChange={e => setDonorPreview(e.target.checked)}
-                style={{ cursor: "pointer", margin: 0 }} />
-              Donor preview
-            </label>
-            <div style={{ flex: 1 }} />
-            <div
-              onClick={isEdited ? resetToAuto : undefined}
-              title="Restore the automatic correspondence."
-              style={{
-                padding: "3px 8px", fontSize: 10, borderRadius: 2,
-                border: "1px solid #4a4a4a",
-                background: isEdited ? "#3a3a3a" : "#2a2a2a",
-                color: isEdited ? "#cccccc" : "#666666",
-                cursor: isEdited ? "pointer" : "default", userSelect: "none",
-              }}
-            >
-              Reset to auto
-            </div>
-          </div>
-
-          {/* ── Source pool strip — selectable donors ── */}
-          <div style={SUB_HEADER}>
-            SOURCE POOLS{selectedTargetId != null ? " — click to assign" : ""}
-          </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-            {sourcePools.map(p => {
-              const d = p.descriptor;
-              const selectedMatch = selectedTargetId != null
-                ? matchByTargetId.get(selectedTargetId)
-                : undefined;
-              const isCurrentDonor = selectedMatch?.sourcePoolId === p.id;
-              return (
-                <div
-                  key={p.id}
-                  onClick={() => assignDonor(p.id)}
-                  title={`Source pool ${p.id} · rgb(${d.r}, ${d.g}, ${d.b}) · ${d.valueBand} · ${(d.weight * 100).toFixed(1)}%`
-                    + (selectedTargetId != null ? " — click to assign as donor" : "")}
-                  style={{
-                    width: 30, height: 30, borderRadius: 2,
-                    background: `rgb(${d.r}, ${d.g}, ${d.b})`,
-                    border: isCurrentDonor ? "2px solid #1473e6" : "1px solid #555",
-                    boxSizing: "border-box",
-                    cursor: selectedTargetId != null ? "pointer" : "default",
-                    opacity: selectedTargetId != null ? 1 : 0.92,
-                  }}
-                />
-              );
-            })}
-          </div>
-
-          {/* ── Correspondence list — one row per TARGET pool ── */}
-          <div style={SUB_HEADER}>CORRESPONDENCE (target → source)</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            {targetPools.map(tp => {
-              const match = matchByTargetId.get(tp.id);
-              const donor = match ? sourcePoolsById.get(match.sourcePoolId) : undefined;
-              const selected = selectedTargetId === tp.id;
-              return (
-                <CorrespondenceRow
-                  key={tp.id}
-                  targetPool={tp}
-                  donorPool={donor}
-                  score={match?.score}
-                  selected={selected}
-                  onSelect={() => setSelectedTargetId(selected ? null : tp.id)}
-                />
-              );
-            })}
-          </div>
-
-          {/* ── Color transfer — in-panel before/after preview ── */}
-          <div style={SUB_HEADER}>COLOR TRANSFER</div>
-
-          <Control
-            label="Strength"
-            title="Transfer blend amount. 0 = target unchanged, 1 = full donor recolor."
-            min={0} max={1} step={0.05}
-            value={strength} onChange={setStrength}
-            display={strength.toFixed(2)}
-          />
-
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <div
-              onClick={applySmash}
-              title="Recolor the target using the current correspondence and the strength above."
-              style={{
-                padding: "5px 12px", fontSize: 11, fontWeight: 600, borderRadius: 2,
-                border: "1px solid #1473e6",
-                background: "#1473e6", color: "#ffffff",
-                cursor: "pointer", userSelect: "none",
-              }}
-            >
-              Apply Smash
-            </div>
-            {transferUrl && (
+          {/* ── Correspondence: donor strip + target→source list ── */}
+          <Section title="CORRESPONDENCE">
+            {/* Donor-preview toggle + reset */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, cursor: "pointer" }}
+                title="Tint the target pool map by each region's matched source color — a preview of which donor goes where.">
+                <input type="checkbox" checked={donorPreview}
+                  onChange={e => setDonorPreview(e.target.checked)}
+                  style={{ cursor: "pointer", margin: 0 }} />
+                Donor preview
+              </label>
+              <div style={{ flex: 1 }} />
               <div
-                onClick={() => setShowAfter(s => !s)}
-                title="Swap the preview between the original target and the recolored result."
+                onClick={isEdited ? resetToAuto : undefined}
+                title="Restore the automatic correspondence."
                 style={{
-                  padding: "5px 10px", fontSize: 10, borderRadius: 2,
-                  border: "1px solid #4a4a4a", background: "#3a3a3a",
-                  color: "#cccccc", cursor: "pointer", userSelect: "none",
+                  padding: "3px 8px", fontSize: 10, borderRadius: 2,
+                  border: "1px solid #4a4a4a",
+                  background: isEdited ? "#3a3a3a" : "#2a2a2a",
+                  color: isEdited ? "#cccccc" : "#666666",
+                  cursor: isEdited ? "pointer" : "default", userSelect: "none",
                 }}
               >
-                {showAfter ? "Show before" : "Show after"}
+                Reset to auto
               </div>
-            )}
-            {transferStale && (
-              <span style={{ fontSize: 9, color: "#d8c87d" }}>
-                stale — re-apply
-              </span>
-            )}
-          </div>
-
-          {transferError && (
-            <div style={{ fontSize: 10, color: "#d8867d" }}>
-              Transfer failed: {transferError}
             </div>
-          )}
 
-          {/* Before/after preview pane — toggles between the original target
-              pixels and the recolored result. */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-            <span style={{ fontSize: 9, color: "#999", letterSpacing: 0.3 }}>
-              {transferUrl
-                ? (showAfter ? "After — recolored target" : "Before — original target")
-                : "Preview"}
-            </span>
-            <div style={{
-              position: "relative", alignSelf: "center",
-              width: targetDisplay.w || PANEL_WIDTH, minHeight: 60,
-              display: "flex", alignItems: "center", justifyContent: "center",
-              background: "#1f1f1f", border: "1px solid #3a3a3a", borderRadius: 2,
-            }}>
-              {transferUrl ? (
-                <img
-                  src={(showAfter ? transferUrl : beforeUrl) ?? undefined}
+            {/* Source pool strip — selectable donors */}
+            <div style={SUB_HEADER}>
+              SOURCE POOLS{selectedTargetId != null ? " — click to assign" : ""}
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+              {sourcePools.map(p => {
+                const d = p.descriptor;
+                const selectedMatch = selectedTargetId != null
+                  ? matchByTargetId.get(selectedTargetId)
+                  : undefined;
+                const isCurrentDonor = selectedMatch?.sourcePoolId === p.id;
+                return (
+                  <div
+                    key={p.id}
+                    onClick={() => assignDonor(p.id)}
+                    title={`Source pool ${p.id} · rgb(${d.r}, ${d.g}, ${d.b}) · ${d.valueBand} · ${(d.weight * 100).toFixed(1)}%`
+                      + (selectedTargetId != null ? " — click to assign as donor" : "")}
+                    style={{
+                      width: 30, height: 30, borderRadius: 2,
+                      background: `rgb(${d.r}, ${d.g}, ${d.b})`,
+                      border: isCurrentDonor ? "2px solid #1473e6" : "1px solid #555",
+                      boxSizing: "border-box",
+                      cursor: selectedTargetId != null ? "pointer" : "default",
+                      opacity: selectedTargetId != null ? 1 : 0.92,
+                    }}
+                  />
+                );
+              })}
+            </div>
+
+            {/* Correspondence list — one row per TARGET pool */}
+            <div style={SUB_HEADER}>TARGET → SOURCE</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {targetPools.map(tp => {
+                const match = matchByTargetId.get(tp.id);
+                const donor = match ? sourcePoolsById.get(match.sourcePoolId) : undefined;
+                const selected = selectedTargetId === tp.id;
+                return (
+                  <CorrespondenceRow
+                    key={tp.id}
+                    targetPool={tp}
+                    donorPool={donor}
+                    score={match?.score}
+                    selected={selected}
+                    onSelect={() => setSelectedTargetId(selected ? null : tp.id)}
+                  />
+                );
+              })}
+            </div>
+          </Section>
+
+          {/* ── Color transfer — in-panel before/after preview ── */}
+          <Section title="COLOR TRANSFER">
+            <Control
+              label="Strength"
+              title="Transfer blend amount. 0 = target unchanged, 1 = full donor recolor."
+              min={0} max={1} step={0.05}
+              value={strength} onChange={setStrength}
+              display={strength.toFixed(2)}
+            />
+
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div
+                onClick={applySmash}
+                title="Recolor the target using the current correspondence. After the first apply the preview updates live."
+                style={{
+                  padding: "5px 12px", fontSize: 11, fontWeight: 600, borderRadius: 2,
+                  border: "1px solid #1473e6",
+                  background: "#1473e6", color: "#ffffff",
+                  cursor: "pointer", userSelect: "none",
+                }}
+              >
+                Apply Smash
+              </div>
+              {transferUrl && (
+                <div
+                  onClick={() => setShowAfter(s => !s)}
+                  title="Swap the preview between the original target and the recolored result."
                   style={{
-                    width: targetDisplay.w, height: targetDisplay.h,
-                    imageRendering: "pixelated", display: "block",
-                    opacity: showAfter && transferStale ? 0.55 : 1,
+                    padding: "5px 10px", fontSize: 10, borderRadius: 2,
+                    border: "1px solid #4a4a4a", background: "#3a3a3a",
+                    color: "#cccccc", cursor: "pointer", userSelect: "none",
                   }}
-                />
-              ) : (
-                <div style={{ padding: 24, fontSize: 10, opacity: 0.5 }}>
-                  Click “Apply Smash” to preview the recolored target.
+                >
+                  {showAfter ? "Show before" : "Show after"}
                 </div>
               )}
+              {hasApplied && (
+                <span style={{ fontSize: 9, color: "#7dd87d" }}
+                  title="Preview updates automatically as you change controls.">
+                  live
+                </span>
+              )}
             </div>
-          </div>
+
+            {transferError && (
+              <div style={{ fontSize: 10, color: "#d8867d" }}>
+                Transfer failed: {transferError}
+              </div>
+            )}
+
+            {/* Before/after preview pane — toggles between the original target
+                pixels and the recolored result. */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+              <span style={{ fontSize: 9, color: "#999", letterSpacing: 0.3 }}>
+                {transferUrl
+                  ? (showAfter ? "After — recolored target" : "Before — original target")
+                  : "Preview"}
+              </span>
+              <div style={{
+                position: "relative", alignSelf: "center",
+                width: targetDisplay.w || PANEL_WIDTH, minHeight: 60,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                background: "#1f1f1f", border: "1px solid #3a3a3a", borderRadius: 2,
+              }}>
+                {transferUrl ? (
+                  <img
+                    src={(showAfter ? transferUrl : beforeUrl) ?? undefined}
+                    style={{
+                      width: targetDisplay.w, height: targetDisplay.h,
+                      imageRendering: "pixelated", display: "block",
+                    }}
+                  />
+                ) : (
+                  <div style={{ padding: 24, fontSize: 10, opacity: 0.5 }}>
+                    Click “Apply Smash” to preview the recolored target.
+                  </div>
+                )}
+              </div>
+            </div>
+          </Section>
         </>
       )}
     </div>
@@ -569,6 +577,34 @@ function useDisplaySize(result: SegmentResult | null): { w: number; h: number } 
     const scale = Math.min(1, PANEL_WIDTH / result.width);
     return { w: Math.round(result.width * scale), h: Math.round(result.height * scale) };
   }, [result]);
+}
+
+// ── Collapsible section — the header chip toggles its body open/closed ──
+function Section({ title, children, defaultOpen = true }: {
+  title: string;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div
+        onClick={() => setOpen(o => !o)}
+        style={{
+          ...SECTION_HEADER, cursor: "pointer", userSelect: "none",
+          display: "flex", alignItems: "center", gap: 6,
+        }}
+      >
+        <span style={{ fontSize: 8 }}>{open ? "▾" : "▸"}</span>
+        {title}
+      </div>
+      {open && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {children}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ── One pool-map image pane (label + framed image + analyzing overlay) ──
