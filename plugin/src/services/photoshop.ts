@@ -471,4 +471,114 @@ export async function branchColorSmashGroup(docId: number): Promise<void> {
   } catch { /* non-fatal */ }
 }
 
+/**
+ * Write a tightly-packed RGBA pixel buffer into the document identified by
+ * `documentId` as a NEW pixel layer named `layerName`, landing at the
+ * document's top-left origin (0,0) at full size width×height.
+ *
+ * This is the WRITE counterpart to `readLayerPixels` — the plugin has only
+ * ever created adjustment layers before, so this is the first raw-pixel
+ * write path. It uses the UXP Imaging API (`createImageDataFromBuffer` +
+ * `putPixels`), which — like `readLayerPixels` — requires Photoshop 24.2+.
+ *
+ * All document mutation runs inside a single `executeAsModal` block:
+ *   1. Make the target document active (cross-doc safety — the caller may
+ *      pass a documentId that isn't the currently-active doc).
+ *   2. Create an empty pixel layer via a batchPlay "make layer" descriptor
+ *      and read back its layer id from the play result.
+ *   3. Build an ImageData from the RGBA buffer and `putPixels` it into the
+ *      new layer with `replace: true`.
+ *   4. Dispose the ImageData to free memory.
+ *
+ * CANNOT be unit-tested (no Photoshop in vitest) — verify inside Photoshop.
+ *
+ * @param documentId  Target document id (not necessarily the active doc).
+ * @param layerName   Name for the newly-created pixel layer.
+ * @param rgba        Tightly-packed RGBA bytes, length === width*height*4.
+ * @param width       Pixel width of the buffer / new layer.
+ * @param height      Pixel height of the buffer / new layer.
+ */
+export async function writePixelLayer(
+  documentId: number,
+  layerName: string,
+  rgba: Uint8Array,
+  width: number,
+  height: number,
+): Promise<void> {
+  if (!imaging || !imaging.putPixels || !imaging.createImageDataFromBuffer) {
+    throw new Error("Imaging API unavailable. Requires Photoshop 24.2+.");
+  }
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
+    throw new Error(`writePixelLayer: invalid dimensions ${width}x${height}.`);
+  }
+  const expected = width * height * 4;
+  if (rgba.length !== expected) {
+    throw new Error(
+      `writePixelLayer: rgba length ${rgba.length} does not match width*height*4 (${expected}).`,
+    );
+  }
+
+  await executeAsModal("Write Pixel Layer", async () => {
+    // 1. Target the requested document. The caller may pass a doc that isn't
+    //    currently active — make it active so the subsequent "make layer"
+    //    batchPlay (which targets the document ordinal) lands in the right
+    //    place. Verify it actually exists first.
+    const targetDoc = (app.documents ?? []).find((d: any) => d.id === documentId);
+    if (!targetDoc) {
+      throw new Error(`writePixelLayer: no open document with id ${documentId}.`);
+    }
+    if (app.activeDocument?.id !== documentId) {
+      app.activeDocument = targetDoc;
+    }
+
+    // 2. Create an empty pixel layer via a batchPlay "make layer" descriptor,
+    //    consistent with makeCurvesLayer's descriptor style. A freshly-made
+    //    layer becomes the active layer; we read its id back from the play
+    //    result (and fall back to the doc's active layer if the result
+    //    descriptor doesn't surface an id).
+    const makeResult = await action.batchPlay([{
+      _obj: "make",
+      _target: [{ _ref: "layer" }],
+      using: { _obj: "layer", name: layerName },
+      _options: { dialogOptions: "dontDisplay" },
+    }], {});
+
+    let layerId: number | undefined =
+      (makeResult?.[0]?.layerID as number | undefined)
+      ?? (makeResult?.[0]?.layerSectionStart as number | undefined);
+    if (typeof layerId !== "number") {
+      // Fallback: the just-created layer is the active layer.
+      layerId = targetDoc.activeLayers?.[0]?.id ?? targetDoc.layers?.[0]?.id;
+    }
+    if (typeof layerId !== "number") {
+      throw new Error("writePixelLayer: could not determine new layer id.");
+    }
+
+    // 3. Build an ImageData from the RGBA buffer and write it into the new
+    //    layer. `replace: true` overwrites the (empty) layer's pixels.
+    //    `targetBounds` at origin (0,0) places the layer at the doc's
+    //    top-left corner, full size width×height.
+    const imageData = await imaging.createImageDataFromBuffer(rgba, {
+      width,
+      height,
+      components: 4,
+      chunky: true,
+      colorProfile: "sRGB IEC61966-2.1",
+      colorSpace: "RGB",
+    });
+    try {
+      await imaging.putPixels({
+        documentID: documentId,
+        layerID: layerId,
+        imageData,
+        replace: true,
+        targetBounds: { left: 0, top: 0, right: width, bottom: height },
+      });
+    } finally {
+      // 4. Dispose the ImageData to free its backing buffer.
+      try { imageData.dispose?.(); } catch { /* ignore */ }
+    }
+  });
+}
+
 export { action, app };

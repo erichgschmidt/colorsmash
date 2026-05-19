@@ -49,10 +49,37 @@ const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
 const clamp255 = (v: number) => (v < 0 ? 0 : v > 255 ? 255 : v);
 
 // relax 0..1 → box-blur radius in pixels. 0 means "no blur" (handled before
-// this is consulted); 1 lands at 14 px, which after three box passes gives an
-// effective Gaussian sigma of roughly 12–16 px at the segmentation resolution.
-const MAX_BLUR_RADIUS = 14;
+// this is consulted). The radius scales with image size so the relax softness
+// looks the same at any resolution: at the 256px preference it lands at 14 px
+// (the original tuning — 256·(14/256)=14, byte-identical to the old behavior),
+// and a full-resolution image blurs by a proportionally larger amount. After
+// three box passes 14 px gives an effective Gaussian sigma of ~12–16 px.
+const BLUR_RADIUS_PER_EDGE = 14 / 256;
 const BLUR_PASSES = 3;
+
+// Nearest-neighbour upscale of a pool-label map. The segmentation runs at a
+// small working resolution; to recolor an image at its real resolution the
+// label map must be projected up to that size. For each full-res pixel (x,y)
+// the matching segmentation pixel is `(floor(x·segW/fullW), floor(y·segH/fullH))`.
+export function upscaleLabels(
+  labels: Int32Array,
+  segW: number,
+  segH: number,
+  fullW: number,
+  fullH: number,
+): Int32Array {
+  const out = new Int32Array(fullW * fullH);
+  for (let y = 0; y < fullH; y++) {
+    const sy = Math.min(segH - 1, Math.floor((y * segH) / fullH));
+    const srcRow = sy * segW;
+    const dstRow = y * fullW;
+    for (let x = 0; x < fullW; x++) {
+      const sx = Math.min(segW - 1, Math.floor((x * segW) / fullW));
+      out[dstRow + x] = labels[srcRow + sx];
+    }
+  }
+  return out;
+}
 
 // Combined sub-color list for a pool: structured sub-palette + noise swatches.
 function poolSubColors(pool: Pool): SubSwatch[] {
@@ -311,7 +338,10 @@ export function transferColors(
   // ── Phase 2: blur the delta field by `relax`. ──
   // relax 0 skips the blur entirely → byte-identical to the pre-relax behavior.
   if (relax > 0) {
-    const radius = Math.max(1, Math.round(relax * MAX_BLUR_RADIUS));
+    const radius = Math.max(
+      1,
+      Math.round(relax * Math.max(width, height) * BLUR_RADIUS_PER_EDGE),
+    );
     blurField(deltaL, opaque, width, height, radius);
     blurField(deltaA, opaque, width, height, radius);
     blurField(deltaB, opaque, width, height, radius);

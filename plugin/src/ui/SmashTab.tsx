@@ -14,7 +14,7 @@
 // before the synchronous segment work blocks the main thread.
 
 import { useEffect, useMemo, useState } from "react";
-import { app } from "../services/photoshop";
+import { app, readLayerPixels, writePixelLayer, executeAsModal } from "../services/photoshop";
 import { useLayers } from "./useLayers";
 import { useLayerPreview } from "./useLayerPreview";
 import { SourceSelector } from "./SourceSelector";
@@ -23,7 +23,7 @@ import { rgbaToPngDataUrl } from "./encodePng";
 import { matchStyles } from "./MatchSliders";
 import { segmentImage, SegmentResult, Pool } from "../core/clusters";
 import { matchPools, PoolMatch, Correspondence } from "../core/match";
-import { transferColors } from "../core/transfer";
+import { transferColors, upscaleLabels } from "../core/transfer";
 
 // Max edge fed into segmentImage — keeps per-pixel clustering under a frame
 // budget while staying detailed enough for a recognizable pool map.
@@ -32,6 +32,20 @@ const SEGMENT_MAX_EDGE = 256;
 const PANEL_WIDTH = 220;
 
 type SrcMode = "layer" | "selection" | "folder";
+
+// Recursively search the layer tree for a layer with the given id. doc.layers
+// only holds top-level items, so layers nested in groups need this walk.
+// Mirrors the same helper in useLayerPreview.ts.
+function findLayerById(layers: any[], id: number): any | null {
+  for (const l of layers) {
+    if (l.id === id) return l;
+    if (Array.isArray(l.layers)) {
+      const found = findLayerById(l.layers, id);
+      if (found) return found;
+    }
+  }
+  return null;
+}
 
 // ────────── per-image doc/layer picking ──────────
 // Encapsulates one image's doc list + active doc + layer pick + snapshot.
@@ -156,6 +170,12 @@ export function SmashTab() {
   // Once "Apply Smash" has been pressed the preview goes live — it re-runs
   // automatically whenever segmentation, the correspondence, or strength change.
   const [hasApplied, setHasApplied] = useState(false);
+
+  // ── Output to document ─────────────────────────────────────────────
+  // True while a full-resolution transfer + layer write is in flight.
+  const [outputting, setOutputting] = useState(false);
+  // Last error from an "Output to document" attempt, if any.
+  const [outputError, setOutputError] = useState<string | null>(null);
 
   // Segment both images whenever either input or any control changes. Work is
   // synchronous and can take a moment, so flip on "analyzing", yield a frame
@@ -307,6 +327,68 @@ export function SmashTab() {
     setShowAfter(true);
   };
 
+  // Run the transfer at the TARGET document's real resolution and write the
+  // recolored pixels back as a new "Color Smash" layer.
+  //
+  // The in-panel preview works at SEGMENT_MAX_EDGE; to produce a usable result
+  // we re-read the target layer at full resolution, upscale the pool-label map
+  // to match (nearest-neighbour), and re-run transferColors at that size. The
+  // pools/correspondence themselves are resolution-independent. A full-res
+  // transfer + write can take a couple of seconds — the button disables while
+  // it runs.
+  const outputToDocument = async () => {
+    if (outputting) return;
+    if (!sourceResult || !targetResult || matches.length === 0) return;
+    if (target.docId == null || target.layerId == null) return;
+
+    setOutputting(true);
+    setOutputError(null);
+    try {
+      // Read the target layer's pixels at full resolution (no downsample).
+      const fullBuf = await executeAsModal("Color Smash output", async () => {
+        const doc = (app.documents ?? []).find((d: any) => d.id === target.docId);
+        if (!doc) throw new Error("Target document not found.");
+        const layer = findLayerById(doc.layers, target.layerId!);
+        if (!layer) throw new Error(`Target layer ${target.layerId} not found.`);
+        return await readLayerPixels(layer, undefined, doc.id);
+      });
+
+      const fullW = fullBuf.width;
+      const fullH = fullBuf.height;
+
+      // Project the segmentation label map up to the real resolution.
+      const fullLabels = upscaleLabels(
+        targetResult.labels, targetResult.width, targetResult.height,
+        fullW, fullH,
+      );
+      const fullResult: SegmentResult = {
+        width: fullW, height: fullH,
+        labels: fullLabels, pools: targetResult.pools,
+      };
+
+      // Rebuild the correspondence exactly as the live-preview effect does.
+      const usedSourceIds = new Set(matches.map(m => m.sourcePoolId));
+      const correspondence: Correspondence = {
+        matches: matches.map(m => ({ ...m })),
+        unmatchedSourceIds: sourceResult.pools
+          .filter(p => !usedSourceIds.has(p.id))
+          .map(p => p.id),
+      };
+
+      const recolored = transferColors(
+        fullBuf.data, fullW, fullH,
+        fullResult, sourceResult,
+        correspondence, { strength, relax, preserveLuminance },
+      );
+
+      await writePixelLayer(target.docId, "Color Smash", recolored, fullW, fullH);
+    } catch (e: any) {
+      setOutputError(e?.message ?? String(e));
+    } finally {
+      setOutputting(false);
+    }
+  };
+
   // Whether the current matches differ from the auto result (enables Reset).
   const isEdited = useMemo(() => {
     if (matches.length !== autoMatches.length) return true;
@@ -316,6 +398,12 @@ export function SmashTab() {
 
   const sel = matchStyles.sel;
   const ready = !!sourceResult && !!targetResult;
+  // "Output to document" is available once both images are segmented, a
+  // correspondence exists, the target layer is known, and no write is running.
+  const canOutput = !outputting
+    && !!sourceResult && !!targetResult
+    && matches.length > 0
+    && target.docId != null && target.layerId != null;
 
   // Target pools sorted heaviest-first for the correspondence list.
   const targetPools = targetResult?.pools ?? [];
@@ -518,9 +606,33 @@ export function SmashTab() {
               )}
             </div>
 
+            {/* Output the smashed result back into the target document at its
+                full resolution, as a new layer. */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div
+                onClick={canOutput ? outputToDocument : undefined}
+                title="Run the transfer at the target document's full resolution and add the result as a new 'Color Smash' layer."
+                style={{
+                  padding: "5px 12px", fontSize: 11, fontWeight: 600, borderRadius: 2,
+                  border: "1px solid #4a4a4a",
+                  background: canOutput ? "#3a3a3a" : "#2a2a2a",
+                  color: canOutput ? "#cccccc" : "#666666",
+                  cursor: canOutput ? "pointer" : "default", userSelect: "none",
+                }}
+              >
+                {outputting ? "Working…" : "Output to document"}
+              </div>
+            </div>
+
             {transferError && (
               <div style={{ fontSize: 10, color: "#d8867d" }}>
                 Transfer failed: {transferError}
+              </div>
+            )}
+
+            {outputError && (
+              <div style={{ fontSize: 10, color: "#d8867d" }}>
+                Output failed: {outputError}
               </div>
             )}
 
