@@ -143,6 +143,10 @@ export function SmashTab() {
   // ── Color transfer (in-panel preview) ─────────────────────────────
   // Blend amount fed to transferColors — 0 = unchanged target, 1 = full donor.
   const [strength, setStrength] = useState(1.0);
+  // Boundary softness — 0 = hard pool edges, 1 = maximally blended recolor.
+  const [relax, setRelax] = useState(0.35);
+  // Luminance preservation — 0 = full recolor, 1 = keep target's lightness.
+  const [preserveLuminance, setPreserveLuminance] = useState(0);
   // The recolored-target PNG data URL. null until a transfer has been run.
   const [transferUrl, setTransferUrl] = useState<string | null>(null);
   // Before/after toggle for the preview pane (false = before, true = after).
@@ -263,7 +267,7 @@ export function SmashTab() {
         const recolored = transferColors(
           data, width, height,
           targetResult, sourceResult,
-          correspondence, { strength },
+          correspondence, { strength, relax, preserveLuminance },
         );
         if (!cancelled) {
           setTransferUrl(rgbaToPngDataUrl(recolored, width, height));
@@ -277,7 +281,7 @@ export function SmashTab() {
       }
     }, 16);
     return () => { cancelled = true; clearTimeout(handle); };
-  }, [hasApplied, sourceResult, targetResult, target.segInput, matches, strength]);
+  }, [hasApplied, sourceResult, targetResult, target.segInput, matches, strength, relax, preserveLuminance]);
 
   // ── Remap interaction ──────────────────────────────────────────────
   // Click a source swatch: if a target row is selected, reassign its donor.
@@ -464,6 +468,20 @@ export function SmashTab() {
               min={0} max={1} step={0.05}
               value={strength} onChange={setStrength}
               display={strength.toFixed(2)}
+            />
+            <Control
+              label="Relax"
+              title="Softens pool boundaries so the recolor blends instead of looking cutout."
+              min={0} max={1} step={0.05}
+              value={relax} onChange={setRelax}
+              display={relax.toFixed(2)}
+            />
+            <Control
+              label="Preserve detail"
+              title="Keeps the target's original lightness/form; only color is transferred."
+              min={0} max={1} step={0.05}
+              value={preserveLuminance} onChange={setPreserveLuminance}
+              display={preserveLuminance.toFixed(2)}
             />
 
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>

@@ -10,6 +10,13 @@
 // sub-colors are paired with the donor's by LIGHTNESS RANK, and each pair
 // yields a Lab delta. Per pixel we blend those deltas by inverse Lab distance
 // so there is no hard banding at sub-swatch boundaries.
+//
+// The transfer runs in three phases (see transferColors):
+//   1. Build a per-pixel Lab DELTA FIELD instead of applying deltas inline.
+//   2. Optionally BLUR that field (the `relax` control) so adjacent pools'
+//      transforms cross-fade smoothly instead of meeting at a hard seam.
+//   3. APPLY the (blurred) delta, optionally preserving the target's original
+//      lightness (the `preserveLuminance` control), then blend by `strength`.
 
 import type { SegmentResult, Pool, SubSwatch } from "./clusters";
 import { labToRgb } from "./clusters";
@@ -18,6 +25,8 @@ import type { Correspondence } from "./match";
 
 export interface TransferOptions {
   strength: number; // 0..1 — blend between the original and the fully transferred result
+  relax?: number; // 0..1 — boundary softness; blurs the delta field (default 0 = hard pool edges)
+  preserveLuminance?: number; // 0..1 — keep the target's original L; only a/b shift (default 0)
 }
 
 // A 3-component CIE Lab delta to add to a pixel's Lab value.
@@ -36,7 +45,14 @@ interface SubMapping {
   delta: LabDelta; // donor Lab − target Lab
 }
 
+const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
 const clamp255 = (v: number) => (v < 0 ? 0 : v > 255 ? 255 : v);
+
+// relax 0..1 → box-blur radius in pixels. 0 means "no blur" (handled before
+// this is consulted); 1 lands at 14 px, which after three box passes gives an
+// effective Gaussian sigma of roughly 12–16 px at the segmentation resolution.
+const MAX_BLUR_RADIUS = 14;
+const BLUR_PASSES = 3;
 
 // Combined sub-color list for a pool: structured sub-palette + noise swatches.
 function poolSubColors(pool: Pool): SubSwatch[] {
@@ -120,6 +136,96 @@ function softDelta(
   return { dL: dL / wSum, dA: dA / wSum, dB: dB / wSum };
 }
 
+// One horizontal pass of an alpha-weighted box blur.
+//
+// `src`/`dst` are width*height channel buffers; `mask` is 1 for opaque pixels
+// and 0 for transparent ones. Only opaque samples are averaged in, and the
+// running window count is itself a sum of mask values — so transparent pixels
+// neither contribute zero deltas nor pull the average toward the figure edge.
+// Transparent pixels in `dst` are left at 0. O(width*height) per pass.
+function boxBlurH(
+  src: Float32Array,
+  dst: Float32Array,
+  mask: Uint8Array,
+  width: number,
+  height: number,
+  radius: number,
+): void {
+  for (let y = 0; y < height; y++) {
+    const row = y * width;
+    let sum = 0;
+    let count = 0;
+    // Prime the window over [−radius, radius], clamping to the row edges.
+    for (let x = -radius; x <= radius; x++) {
+      const cx = x < 0 ? 0 : x >= width ? width - 1 : x;
+      const m = mask[row + cx];
+      sum += src[row + cx] * m;
+      count += m;
+    }
+    for (let x = 0; x < width; x++) {
+      dst[row + x] = count > 0 ? sum / count : 0;
+      // Slide the window: drop the leftmost sample, add the next on the right.
+      const outX = x - radius;
+      const inX = x + radius + 1;
+      const cOut = outX < 0 ? 0 : outX >= width ? width - 1 : outX;
+      const cIn = inX < 0 ? 0 : inX >= width ? width - 1 : inX;
+      const mOut = mask[row + cOut];
+      const mIn = mask[row + cIn];
+      sum += src[row + cIn] * mIn - src[row + cOut] * mOut;
+      count += mIn - mOut;
+    }
+  }
+}
+
+// One vertical pass of an alpha-weighted box blur — mirror of boxBlurH.
+function boxBlurV(
+  src: Float32Array,
+  dst: Float32Array,
+  mask: Uint8Array,
+  width: number,
+  height: number,
+  radius: number,
+): void {
+  for (let x = 0; x < width; x++) {
+    let sum = 0;
+    let count = 0;
+    for (let y = -radius; y <= radius; y++) {
+      const cy = y < 0 ? 0 : y >= height ? height - 1 : y;
+      const m = mask[cy * width + x];
+      sum += src[cy * width + x] * m;
+      count += m;
+    }
+    for (let y = 0; y < height; y++) {
+      dst[y * width + x] = count > 0 ? sum / count : 0;
+      const outY = y - radius;
+      const inY = y + radius + 1;
+      const cOut = outY < 0 ? 0 : outY >= height ? height - 1 : outY;
+      const cIn = inY < 0 ? 0 : inY >= height ? height - 1 : inY;
+      const mOut = mask[cOut * width + x];
+      const mIn = mask[cIn * width + x];
+      sum += src[cIn * width + x] * mIn - src[cOut * width + x] * mOut;
+      count += mIn - mOut;
+    }
+  }
+}
+
+// Alpha-weighted separable blur, run BLUR_PASSES times (a fast Gaussian
+// approximation). `field` is mutated in place. A scratch buffer of the same
+// length is allocated once and reused across passes.
+function blurField(
+  field: Float32Array,
+  mask: Uint8Array,
+  width: number,
+  height: number,
+  radius: number,
+): void {
+  const scratch = new Float32Array(field.length);
+  for (let p = 0; p < BLUR_PASSES; p++) {
+    boxBlurH(field, scratch, mask, width, height, radius);
+    boxBlurV(scratch, field, mask, width, height, radius);
+  }
+}
+
 // Recolor the target image. Both `targetRgba` and `targetResult.labels` are at
 // the SAME resolution (the segmentation resolution). Returns a new recolored
 // RGBA buffer of the same dimensions; alpha is preserved everywhere.
@@ -133,7 +239,9 @@ export function transferColors(
   opts: TransferOptions,
 ): Uint8Array {
   const out = targetRgba.slice();
-  const strength = opts.strength < 0 ? 0 : opts.strength > 1 ? 1 : opts.strength;
+  const strength = clamp01(opts.strength);
+  const relax = clamp01(opts.relax ?? 0);
+  const preserveLuminance = clamp01(opts.preserveLuminance ?? 0);
 
   // Index source pools by id for donor lookup.
   const sourceById = new Map<number, Pool>();
@@ -170,24 +278,63 @@ export function transferColors(
 
   const labels = targetResult.labels;
   const pxCount = width * height;
+
+  // ── Phase 1: build the per-pixel Lab delta field. ──
+  // deltaL/A/B hold the soft-weighted sub-color delta for every opaque pixel
+  // (0 for transparent pixels and pixels in pools with no donor). `opaque`
+  // doubles as the alpha-weight mask for the blur in phase 2.
+  const deltaL = new Float32Array(pxCount);
+  const deltaA = new Float32Array(pxCount);
+  const deltaB = new Float32Array(pxCount);
+  const opaque = new Uint8Array(pxCount);
+
   for (let i = 0; i < pxCount; i++) {
     const o = i * 4;
     const alpha = targetRgba[o + 3];
     const poolId = labels[i];
 
-    // Transparent pixels (label −1 or low alpha) pass through unchanged.
+    // Transparent pixels (label −1 or low alpha) get a zero delta and are
+    // excluded from the blur mask.
     if (poolId < 0 || alpha < 128) continue;
+    opaque[i] = 1;
 
     const mappings = mappingsByPool.get(poolId);
     if (!mappings || mappings.length === 0) continue; // no transfer for this pool
+
+    const [L, a, b] = rgbToLab(targetRgba[o], targetRgba[o + 1], targetRgba[o + 2]);
+    const d = softDelta(L, a, b, mappings);
+    deltaL[i] = d.dL;
+    deltaA[i] = d.dA;
+    deltaB[i] = d.dB;
+  }
+
+  // ── Phase 2: blur the delta field by `relax`. ──
+  // relax 0 skips the blur entirely → byte-identical to the pre-relax behavior.
+  if (relax > 0) {
+    const radius = Math.max(1, Math.round(relax * MAX_BLUR_RADIUS));
+    blurField(deltaL, opaque, width, height, radius);
+    blurField(deltaA, opaque, width, height, radius);
+    blurField(deltaB, opaque, width, height, radius);
+  }
+
+  // ── Phase 3: apply the (blurred) delta and blend by strength. ──
+  // preserveLuminance scales down the lightness delta only: =1 keeps the
+  // target's original L (color-only shift), =0 applies the full L delta.
+  const lScale = 1 - preserveLuminance;
+  for (let i = 0; i < pxCount; i++) {
+    if (opaque[i] === 0) continue; // transparent pixels pass through unchanged
+    const o = i * 4;
 
     const r0 = targetRgba[o];
     const g0 = targetRgba[o + 1];
     const b0 = targetRgba[o + 2];
 
     const [L, a, b] = rgbToLab(r0, g0, b0);
-    const d = softDelta(L, a, b, mappings);
-    const [tr, tg, tb] = labToRgb(L + d.dL, a + d.dA, b + d.dB);
+    const [tr, tg, tb] = labToRgb(
+      L + deltaL[i] * lScale,
+      a + deltaA[i],
+      b + deltaB[i],
+    );
 
     // Blend original → transferred by strength.
     out[o] = clamp255(Math.round(r0 + (tr - r0) * strength));

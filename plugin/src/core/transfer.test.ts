@@ -294,4 +294,124 @@ describe("transferColors", () => {
     // noise swatch the soft blend lands elsewhere). Just assert it changed.
     expect([out[0], out[1], out[2]]).not.toEqual([128, 128, 128]);
   });
+
+  it("relax: 0 is byte-identical to omitting relax", () => {
+    const width = 4;
+    const height = 4;
+    const labels = new Array(width * height).fill(0);
+    const pixels: Array<[number, number, number, number]> = [];
+    for (let i = 0; i < width * height; i++) {
+      pixels.push([180 + (i % 3) * 10, 60, 70, 255]);
+    }
+    const target = fillRgba(width, height, pixels);
+    const targetResult = makeResult(width, height, labels, [
+      makePool(0, [makeSub(180, 60, 70), makeSub(200, 60, 70)]),
+    ]);
+    const sourceResult = makeResult(1, 1, [10], [
+      makePool(10, [makeSub(40, 90, 230), makeSub(70, 110, 240)]),
+    ]);
+    const correspondence: Correspondence = {
+      matches: [{ targetPoolId: 0, sourcePoolId: 10, score: 0 }],
+      unmatchedSourceIds: [],
+    };
+
+    const omitted = transferColors(
+      target, width, height, targetResult, sourceResult, correspondence,
+      { strength: 1 },
+    );
+    const explicitZero = transferColors(
+      target, width, height, targetResult, sourceResult, correspondence,
+      { strength: 1, relax: 0, preserveLuminance: 0 },
+    );
+    expect(Array.from(explicitZero)).toEqual(Array.from(omitted));
+  });
+
+  it("relax > 0 softens a two-pool boundary", () => {
+    // Two side-by-side pool columns with very different donor deltas. The
+    // boundary runs down the middle (x = 2|3 in a 6-wide image). A pixel just
+    // inside one pool should, after relax, move toward the other pool's color.
+    const width = 6;
+    const height = 1;
+    const leftRgb: [number, number, number, number] = [200, 50, 50, 255];
+    const rightRgb: [number, number, number, number] = [200, 50, 50, 255];
+    const pixels: Array<[number, number, number, number]> = [
+      leftRgb, leftRgb, leftRgb, rightRgb, rightRgb, rightRgb,
+    ];
+    const target = fillRgba(width, height, pixels);
+    // Both pools start at the same color but get opposite donors: pool 0 → a
+    // dark donor, pool 1 → a bright donor. Hard boundary = abrupt seam at x=2/3.
+    const targetResult = makeResult(width, height, [0, 0, 0, 1, 1, 1], [
+      makePool(0, [makeSub(200, 50, 50)]),
+      makePool(1, [makeSub(200, 50, 50)]),
+    ]);
+    const sourceResult = makeResult(1, 2, [10, 11], [
+      makePool(10, [makeSub(30, 30, 30)]),
+      makePool(11, [makeSub(240, 240, 240)]),
+    ]);
+    const correspondence: Correspondence = {
+      matches: [
+        { targetPoolId: 0, sourcePoolId: 10, score: 0 },
+        { targetPoolId: 1, sourcePoolId: 11, score: 0 },
+      ],
+      unmatchedSourceIds: [],
+    };
+
+    const hard = transferColors(
+      target, width, height, targetResult, sourceResult, correspondence,
+      { strength: 1, relax: 0 },
+    );
+    const soft = transferColors(
+      target, width, height, targetResult, sourceResult, correspondence,
+      { strength: 1, relax: 0.8 },
+    );
+
+    // The last pixel of pool 0 (index 2) was driven dark by its donor. After a
+    // blur it picks up the bright pool-1 delta from across the seam, so it
+    // ends up LIGHTER than under the hard transfer.
+    expect(soft[2 * 4]).toBeGreaterThan(hard[2 * 4]);
+    // Symmetrically, the first pixel of pool 1 (index 3) was driven bright;
+    // the blur pulls it DARKER toward pool 0's delta.
+    expect(soft[3 * 4]).toBeLessThan(hard[3 * 4]);
+    // The straddling pair is now closer together than the hard seam — the
+    // abrupt jump across the boundary has shrunk.
+    const hardGap = Math.abs(hard[2 * 4] - hard[3 * 4]);
+    const softGap = Math.abs(soft[2 * 4] - soft[3 * 4]);
+    expect(softGap).toBeLessThan(hardGap);
+  });
+
+  it("preserveLuminance: 1 keeps original L while a/b still shift", () => {
+    const width = 2;
+    const height = 1;
+    // Target is a mid red; donor is a much darker, cooler blue — so without
+    // luminance preservation L would drop sharply.
+    const target = fillRgba(width, height, [
+      [200, 90, 90, 255],
+      [200, 90, 90, 255],
+    ]);
+    const targetResult = makeResult(width, height, [0, 0], [
+      makePool(0, [makeSub(200, 90, 90)]),
+    ]);
+    const sourceResult = makeResult(1, 1, [10], [
+      makePool(10, [makeSub(30, 60, 210)]),
+    ]);
+    const correspondence: Correspondence = {
+      matches: [{ targetPoolId: 0, sourcePoolId: 10, score: 0 }],
+      unmatchedSourceIds: [],
+    };
+
+    const out = transferColors(
+      target, width, height, targetResult, sourceResult, correspondence,
+      { strength: 1, preserveLuminance: 1 },
+    );
+
+    const [origL, , origB] = rgbToLab(200, 90, 90);
+    const [outL, , outB] = rgbToLab(out[0], out[1], out[2]);
+    // Lightness is preserved within a small tolerance (only rounding to 8-bit
+    // RGB and back through Lab introduces drift).
+    expect(Math.abs(outL - origL)).toBeLessThan(2);
+    // Chroma (a/b) still shifted strongly toward the cool-blue donor — the
+    // donor's b is ~100 units bluer than the target's, so b moves a lot.
+    expect(Math.abs(outB - origB)).toBeGreaterThan(20);
+    expect(outB).toBeLessThan(origB); // moved toward blue (negative b)
+  });
 });
