@@ -56,6 +56,17 @@ export interface TransferAnchor {
   // Local-target-pool id → sub-mappings to its matched local donor pool.
   // Used exactly like the global mappingsByPool inside the per-pixel loop.
   localMappingsByPool: Map<number, SubMapping[]>;
+  // Per LOCAL target pool id → strided Lab samples from the matched local
+  // DONOR pool, sorted ascending by L. Powers the anchor-aware rich path
+  // (opts.richness > 0): a pixel under this anchor's dominance projects its
+  // local lightness rank onto these samples instead of the auto donor's.
+  // Optional + absent/empty map is treated as "no rich data" → the per-pixel
+  // code falls back to the compressed sub-swatch delta.
+  localDonorLabSamples?: Map<number, LabSample[]>;
+  // Per LOCAL target pool id → strided pixel L values from that local TARGET
+  // pool, sorted ascending. Used to rank a pixel's lightness inside the
+  // local pool before projecting onto the local donor distribution above.
+  localTargetLValues?: Map<number, Float32Array>;
 }
 
 // A 3-component CIE Lab delta to add to a pixel's Lab value.
@@ -473,9 +484,10 @@ export function transferColors(
   // pool's distribution. Both maps stay empty when richness is 0 so the
   // existing path is byte-for-byte unchanged in that case.
   //
-  // Note: anchor donors do NOT participate in the rich path; the rich-Lab
-  // contribution comes from the AUTO donor only. The anchor's recolor stays in
-  // the sub-swatch delta path. Anchor-aware richness is a future extension.
+  // Anchor donors get their OWN rich-path data when analyzeAnchor populates
+  // `localDonorLabSamples` / `localTargetLValues` on each anchor; the per-pixel
+  // loop blends that anchor-local rich shift in alongside the local delta when
+  // an anchor dominates. The maps below are the AUTO path's data only.
   const donorLabSamplesByPool = new Map<number, LabSample[]>();
   const targetLValuesByPool = new Map<number, Float32Array>();
   if (richness > 0) {
@@ -581,13 +593,44 @@ export function transferColors(
         localMappings = anchor.localMappingsByPool.get(localLabel);
       }
       if (localMappings && localMappings.length > 0) {
+        // Compressed sub-swatch local delta — the baseline anchor behaviour.
         const ld = softDelta(L, a, b, localMappings);
+        let ldL = ld.dL, ldA = ld.dA, ldB = ld.dB;
+
+        // Anchor-aware richness: when richness > 0 AND this anchor carries
+        // rank-match data for the pixel's LOCAL target pool, replace the
+        // compressed local delta with one biased toward the anchor's LOCAL
+        // donor distribution. Mirrors the auto path's rich shift but rooted
+        // in the anchor's own mini-Smash rather than the global donor.
+        // Anchors without rich tables (or with an empty bucket for this
+        // local pool) silently fall back to the compressed delta.
+        if (richness > 0 && localLabel >= 0 && anchor.localTargetLValues && anchor.localDonorLabSamples) {
+          const localLs = anchor.localTargetLValues.get(localLabel);
+          const localSamples = anchor.localDonorLabSamples.get(localLabel);
+          if (localLs && localSamples && localLs.length > 0 && localSamples.length > 0) {
+            const r = rankInSorted(localLs, L);
+            const denom = Math.max(1, localLs.length - 1);
+            const srcIdx = Math.round((r / denom) * (localSamples.length - 1));
+            const rs = localSamples[srcIdx];
+            // Rich local delta: move from (L,a,b) straight toward the sample.
+            const richDL = rs.L - L;
+            const richDA = rs.a - a;
+            const richDB = rs.b - b;
+            // Blend compressed → rich by `richness`. richness 0 keeps the
+            // existing byte-identical anchor behaviour; richness 1 fully
+            // adopts the rank-matched local donor sample.
+            ldL = (1 - richness) * ld.dL + richness * richDL;
+            ldA = (1 - richness) * ld.dA + richness * richDA;
+            ldB = (1 - richness) * ld.dB + richness * richDB;
+          }
+        }
+
         // Spatial lerp: at centre f=1 → pure local, at edge f=0 → pure auto.
         const f = bestFall;
         const inv = 1 - f;
-        dL = autoDL * inv + ld.dL * f;
-        dA = autoDA * inv + ld.dA * f;
-        dB = autoDB * inv + ld.dB * f;
+        dL = autoDL * inv + ldL * f;
+        dA = autoDA * inv + ldA * f;
+        dB = autoDB * inv + ldB * f;
       } else {
         dL = autoDL;
         dA = autoDA;

@@ -638,4 +638,110 @@ describe("transferColors", () => {
     expect(richRange).toBeGreaterThan(20);
     expect(richRange).toBeGreaterThan(compRange * 3);
   });
+
+  it("richness: 1 inside an anchor pulls the anchor's LOCAL source variation", () => {
+    // Anchor with rich-path data: one local target pool whose matched local
+    // donor pool has wide a/b variation. Mirrors the auto-rich test but the
+    // rich shift is driven by the anchor's own local distribution rather than
+    // the global donor's. The auto donor is intentionally neutral and tiny so
+    // any chroma push has to come from the anchor's local samples.
+    const width = 8;
+    const height = 1;
+    const targetPixels: Array<[number, number, number, number]> = [];
+    for (let i = 0; i < width; i++) {
+      const v = 120 + i * 2; // small L ramp — distinct ranks under richness.
+      targetPixels.push([v, v, v, 255]);
+    }
+    const target = fillRgba(width, height, targetPixels);
+
+    // Single global target pool with a single neutral sub-swatch. The anchor
+    // owns the chroma story.
+    const targetPool = makePool(0, [makeSub(127, 127, 127)]);
+    const targetResult = makeResult(width, height, new Array(width).fill(0), [targetPool]);
+
+    // Neutral auto donor — the auto-path's compressed delta is ~zero, so any
+    // a/b shift we measure had to come from the anchor.
+    const sourceResult = makeResult(1, 1, [10], [
+      makePool(10, [makeSub(127, 127, 127)]),
+    ]);
+    const sourceRgba = makeSourceRgba(1, 1, 127, 127, 127);
+    const correspondence: Correspondence = {
+      matches: [{ targetPoolId: 0, sourcePoolId: 10, score: 0 }],
+      unmatchedSourceIds: [],
+    };
+
+    // Anchor local target pool: id 0, covers every pixel. The compressed
+    // sub-mapping is neutral → neutral (no chroma shift). The rich data
+    // carries wide a/b variation in the local DONOR samples.
+    const anchorLabels = new Int32Array(width * height).fill(0);
+    const neutralLocalTarget = makePool(0, [makeSub(127, 127, 127)]);
+    const neutralLocalDonor = makePool(0, [makeSub(127, 127, 127)]);
+
+    // Build a per-pixel L list that matches the target's L ramp so ranks are
+    // well-defined. Build a per-pixel donor sample list that ALTERNATES
+    // strongly-reddish (high a) and strongly-greenish (low a) — all at the
+    // same L so sort order is the construction order.
+    const localTargetLs: number[] = [];
+    const localDonorSamples: { L: number; a: number; b: number }[] = [];
+    for (let i = 0; i < width; i++) {
+      const v = 120 + i * 2;
+      const [L] = rgbToLab(v, v, v);
+      localTargetLs.push(L);
+      const reddish = i < width / 2;
+      const r = reddish ? 220 : 30;
+      const g = reddish ? 30 : 220;
+      const b = 110;
+      const [Ld, ad, bd] = rgbToLab(r, g, b);
+      // Force ascending-L order with tiny epsilons so sort is order-stable.
+      localDonorSamples.push({ L: Ld + i * 1e-6, a: ad, b: bd });
+    }
+    localTargetLs.sort((a, b) => a - b);
+    // localDonorSamples is already L-ascending by construction.
+
+    const anchor: TransferAnchor = {
+      targetX: 0.5, targetY: 0.5, radius: 2.0, // huge radius — full coverage.
+      localTargetLabels: anchorLabels,
+      localMappingsByPool: new Map([[
+        0,
+        buildSubMappings(poolSubColors(neutralLocalTarget), poolSubColors(neutralLocalDonor)),
+      ]]),
+      localTargetLValues: new Map([[0, Float32Array.from(localTargetLs)]]),
+      localDonorLabSamples: new Map([[0, localDonorSamples]]),
+    };
+
+    const compressed = transferColors(
+      target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
+      { strength: 1, richness: 0, anchors: [anchor] },
+    );
+    const rich = transferColors(
+      target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
+      { strength: 1, richness: 1, anchors: [anchor] },
+    );
+
+    // Sample a pixel deep inside the anchor (high falloff) — the rich path
+    // should land its `a` far from the compressed (neutral) result.
+    const pickIdx = 4; // a middle pixel — well inside the giant radius.
+    const oC = pickIdx * 4;
+    const [, aC] = rgbToLab(compressed[oC], compressed[oC + 1], compressed[oC + 2]);
+    const [, aR] = rgbToLab(rich[oC], rich[oC + 1], rich[oC + 2]);
+    // Compressed a is near-zero (neutral local mapping, neutral auto). Rich a
+    // should be pulled meaningfully toward whichever donor sample this rank
+    // landed on — either strongly red (high a) or strongly green (low a).
+    expect(Math.abs(aR - aC)).toBeGreaterThan(10);
+
+    // Across all pixels, the rich path's a values span much wider than the
+    // compressed path's — anchor-local variation actually reached the pixels.
+    const compAs: number[] = [];
+    const richAs: number[] = [];
+    for (let i = 0; i < width; i++) {
+      const o = i * 4;
+      const [, aCi] = rgbToLab(compressed[o], compressed[o + 1], compressed[o + 2]);
+      const [, aRi] = rgbToLab(rich[o], rich[o + 1], rich[o + 2]);
+      compAs.push(aCi);
+      richAs.push(aRi);
+    }
+    const range = (xs: number[]) => Math.max(...xs) - Math.min(...xs);
+    expect(range(richAs)).toBeGreaterThan(20);
+    expect(range(richAs)).toBeGreaterThan(range(compAs) * 3);
+  });
 });

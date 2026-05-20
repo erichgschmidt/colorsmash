@@ -16,8 +16,10 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   app, readLayerPixels, writePixelLayer, writePoolGroupLayers, executeAsModal,
+  setGroupName,
   type PoolLayerData,
 } from "../services/photoshop";
+import { DEFAULT_PREFS, loadPrefs, savePrefs } from "../core/prefs";
 import { useLayers } from "./useLayers";
 import { useLayerPreview } from "./useLayerPreview";
 import { SourceSelector } from "./SourceSelector";
@@ -394,6 +396,19 @@ export function SmashTab() {
   //   "both"   — the single layer AND a per-pool group, in that order.
   type OutputMode = "single" | "group" | "both";
   const [outputMode, setOutputMode] = useState<OutputMode>("single");
+  // User-configurable base name for the output layer / group. Persisted to
+  // localStorage via core/prefs; mirrored into the photoshop service's
+  // GROUP_NAME so any in-session callsite that reads it picks up the choice.
+  // Default until the mount effect below hydrates from storage.
+  const [outputName, setOutputName] = useState<string>(DEFAULT_PREFS.outputName);
+
+  // Hydrate the output-name pref once on mount and push it into the photoshop
+  // service so existing GROUP_NAME readers see the user's choice.
+  useEffect(() => {
+    const prefs = loadPrefs();
+    setOutputName(prefs.outputName);
+    setGroupName(prefs.outputName);
+  }, []);
 
   // Segment both images whenever either input or any control changes. Work is
   // synchronous and can take a moment, so flip on "analyzing", yield a frame
@@ -730,9 +745,12 @@ export function SmashTab() {
       // per-pool group, or both. "group" alone deliberately SKIPS the single
       // layer — the brief is "instead of" not "alongside", and a stray
       // recolored layer underneath the editable group would just be redundant.
+      // Use the user-configured base name (trimmed, with a fallback so a blank
+      // input never produces a "" layer name in Photoshop).
+      const baseName = outputName.trim() || DEFAULT_PREFS.outputName;
       if (outputMode === "single" || outputMode === "both") {
         await writePixelLayer(
-          target.docId, "Color Smash", recolored, fullW, fullH,
+          target.docId, baseName, recolored, fullW, fullH,
           fullBuf.bounds.left, fullBuf.bounds.top,
         );
       }
@@ -767,7 +785,7 @@ export function SmashTab() {
         // Reverse so largest (already first) ends up created LAST → BOTTOM.
         poolLayers.reverse();
         await writePoolGroupLayers(
-          target.docId, "Color Smash · pools", poolLayers,
+          target.docId, `${baseName} · pools`, poolLayers,
           fullW, fullH, fullBuf.bounds.left, fullBuf.bounds.top,
         );
       }
@@ -1011,6 +1029,35 @@ export function SmashTab() {
               )}
             </div>
 
+            {/* Output name — base name applied to the written single layer
+                ("<name>") and / or pool group ("<name> · pools"). Persisted
+                via core/prefs so it survives panel reloads, and mirrored
+                into the photoshop service's GROUP_NAME so any in-session
+                callsite reading that picks up the user's choice. Saves on
+                blur to avoid thrashing localStorage on every keystroke. */}
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 10, color: "#cccccc" }}>Output name:</span>
+              <input
+                type="text"
+                value={outputName}
+                onChange={(e) => setOutputName(e.target.value)}
+                onBlur={() => {
+                  const trimmed = outputName.trim() || DEFAULT_PREFS.outputName;
+                  if (trimmed !== outputName) setOutputName(trimmed);
+                  savePrefs({ outputName: trimmed });
+                  setGroupName(trimmed);
+                }}
+                title="Base name for the written layer / group. The pool-group variant appends ' · pools'."
+                style={{
+                  flex: 1, fontSize: 10,
+                  padding: "3px 6px",
+                  background: "#1f1f1f", color: "#cccccc",
+                  border: "1px solid #4a4a4a", borderRadius: 2,
+                  outline: "none",
+                }}
+              />
+            </div>
+
             {/* Output the smashed result back into the target document at its
                 full resolution. The dropdown next to the button selects
                 between a single recolored layer (today's behaviour), a
@@ -1174,26 +1221,26 @@ export function SmashTab() {
                   </div>
                 )}
               </div>
-              {(anchors.length > 0 || activeSource) && (
-                <>
-                  <Control
-                    label="New-anchor radius"
-                    title="Default falloff radius applied to NEWLY-created anchors only. Existing anchors keep their own radius — tune each one individually with its row slider below."
-                    min={0.05} max={0.6} step={0.025}
-                    value={anchorRadius} onChange={setAnchorRadius}
-                    display={anchorRadius.toFixed(2)}
-                  />
-                  <Control
-                    label="Anchor detail"
-                    title="How densely the mini-Smash inside each anchor analyses local colour structure. Higher = more sub-pools inside the anchor's region = richer local transfer."
-                    min={0} max={1} step={0.05}
-                    value={anchorDetail} onChange={setAnchorDetail}
-                    display={anchorDetail.toFixed(2)}
-                  />
-                  {anchorAnalyzing && (
-                    <span style={{ fontSize: 9, color: "#9a9aa8" }}>analyzing anchors…</span>
-                  )}
-                </>
+              {/* Always-visible anchor config. "New-anchor radius" only seeds
+                  NEW anchors; existing anchors keep their per-row radius. Both
+                  knobs are useful BEFORE any anchor is placed (set defaults),
+                  so we don't gate them on anchors.length / activeSource. */}
+              <Control
+                label="New-anchor radius"
+                title="Default falloff radius applied to NEWLY-created anchors only. Existing anchors keep their own radius — tune each one individually with its row slider below."
+                min={0.05} max={0.6} step={0.025}
+                value={anchorRadius} onChange={setAnchorRadius}
+                display={anchorRadius.toFixed(2)}
+              />
+              <Control
+                label="Anchor detail"
+                title="How densely the mini-Smash inside each anchor analyses local colour structure. Higher = more sub-pools inside the anchor's region = richer local transfer."
+                min={0} max={1} step={0.05}
+                value={anchorDetail} onChange={setAnchorDetail}
+                display={anchorDetail.toFixed(2)}
+              />
+              {anchorAnalyzing && (
+                <span style={{ fontSize: 9, color: "#9a9aa8" }}>analyzing anchors…</span>
               )}
               {anchors.length > 0 && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>

@@ -84,6 +84,27 @@ describe("analyzeAnchor", () => {
     for (const id of analysis.localMappingsByPool.keys()) {
       expect(labelSet.has(id)).toBe(true);
     }
+
+    // Rich-path tables — exist, and at least one matched local target pool
+    // carries non-empty target-L and donor-Lab sample arrays. These power
+    // anchor-aware richness in transferColors; an empty bucket would let the
+    // per-pixel code silently fall back to the compressed delta.
+    expect(analysis.localDonorLabSamples).toBeInstanceOf(Map);
+    expect(analysis.localTargetLValues).toBeInstanceOf(Map);
+    expect(analysis.localDonorLabSamples.size).toBeGreaterThan(0);
+    expect(analysis.localTargetLValues.size).toBeGreaterThan(0);
+    let foundNonEmpty = false;
+    for (const id of analysis.localMappingsByPool.keys()) {
+      const ls = analysis.localTargetLValues.get(id);
+      const ss = analysis.localDonorLabSamples.get(id);
+      if (ls && ss && ls.length > 0 && ss.length > 0) {
+        foundNonEmpty = true;
+        // Sorted ascending — required by the rank-match path in transferColors.
+        for (let i = 1; i < ls.length; i++) expect(ls[i]).toBeGreaterThanOrEqual(ls[i - 1]);
+        for (let i = 1; i < ss.length; i++) expect(ss[i].L).toBeGreaterThanOrEqual(ss[i - 1].L);
+      }
+    }
+    expect(foundNonEmpty).toBe(true);
   });
 
   it("returns an empty analysis when the falloff covers too few pixels", () => {
@@ -113,5 +134,8 @@ describe("analyzeAnchor", () => {
     for (let i = 0; i < analysis.localTargetLabels.length; i++) {
       expect(analysis.localTargetLabels[i]).toBe(-1);
     }
+    // Rich-path tables are empty too — degenerate analysis carries nothing.
+    expect(analysis.localDonorLabSamples.size).toBe(0);
+    expect(analysis.localTargetLValues.size).toBe(0);
   });
 });
