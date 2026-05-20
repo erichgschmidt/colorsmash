@@ -14,7 +14,10 @@
 // before the synchronous segment work blocks the main thread.
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { app, readLayerPixels, writePixelLayer, executeAsModal } from "../services/photoshop";
+import {
+  app, readLayerPixels, writePixelLayer, writePoolGroupLayers, executeAsModal,
+  type PoolLayerData,
+} from "../services/photoshop";
 import { useLayers } from "./useLayers";
 import { useLayerPreview } from "./useLayerPreview";
 import { SourceSelector } from "./SourceSelector";
@@ -332,6 +335,13 @@ export function SmashTab() {
   const [outputting, setOutputting] = useState(false);
   // Last error from an "Output to document" attempt, if any.
   const [outputError, setOutputError] = useState<string | null>(null);
+  // What the Output button writes:
+  //   "single" — one recolored "Color Smash" pixel layer (legacy behaviour).
+  //   "group"  — one layer group ("Color Smash · pools") with one transparent
+  //              pixel layer per pool, hand-editable region by region.
+  //   "both"   — the single layer AND a per-pool group, in that order.
+  type OutputMode = "single" | "group" | "both";
+  const [outputMode, setOutputMode] = useState<OutputMode>("single");
 
   // Segment both images whenever either input or any control changes. Work is
   // synchronous and can take a moment, so flip on "analyzing", yield a frame
@@ -661,11 +671,52 @@ export function SmashTab() {
         { strength, relax, preserveLuminance, richness, anchors: transferAnchors },
       );
 
-      // Place the new layer over the target layer's region, not at (0,0).
-      await writePixelLayer(
-        target.docId, "Color Smash", recolored, fullW, fullH,
-        fullBuf.bounds.left, fullBuf.bounds.top,
-      );
+      // Place the result(s) over the target layer's region, not at (0,0).
+      // `outputMode` decides whether we write the single recolored layer, a
+      // per-pool group, or both. "group" alone deliberately SKIPS the single
+      // layer — the brief is "instead of" not "alongside", and a stray
+      // recolored layer underneath the editable group would just be redundant.
+      if (outputMode === "single" || outputMode === "both") {
+        await writePixelLayer(
+          target.docId, "Color Smash", recolored, fullW, fullH,
+          fullBuf.bounds.left, fullBuf.bounds.top,
+        );
+      }
+      if (outputMode === "group" || outputMode === "both") {
+        // Build one PoolLayerData per TOP-LEVEL pool: copy the recolored
+        // pixels where `fullLabels[i] === pool.id`, leave everything else
+        // transparent. Pools come weight-desc, but UXP creates layers
+        // top-down — so reverse the array so the LARGEST pool ends up at
+        // the BOTTOM of the group and smaller, more specific pools overlay
+        // it. Intent: the dominant swatch is the base layer; targeted
+        // pools sit on top, easy to mask / re-color individually.
+        const pixelCount = fullW * fullH;
+        const poolLayers: PoolLayerData[] = [];
+        for (const pool of fullResult.pools) {
+          const rgba = new Uint8Array(pixelCount * 4); // zero-init = transparent
+          for (let i = 0; i < pixelCount; i++) {
+            if (fullLabels[i] === pool.id) {
+              const o = i * 4;
+              rgba[o]     = recolored[o];
+              rgba[o + 1] = recolored[o + 1];
+              rgba[o + 2] = recolored[o + 2];
+              rgba[o + 3] = recolored[o + 3];
+            }
+          }
+          const weightPct = (pool.descriptor.weight * 100).toFixed(1);
+          poolLayers.push({
+            poolId: pool.id,
+            name: `Pool ${pool.id} · ${weightPct}%`,
+            rgba,
+          });
+        }
+        // Reverse so largest (already first) ends up created LAST → BOTTOM.
+        poolLayers.reverse();
+        await writePoolGroupLayers(
+          target.docId, "Color Smash · pools", poolLayers,
+          fullW, fullH, fullBuf.bounds.left, fullBuf.bounds.top,
+        );
+      }
     } catch (e: any) {
       setOutputError(e?.message ?? String(e));
     } finally {
@@ -895,11 +946,16 @@ export function SmashTab() {
             </div>
 
             {/* Output the smashed result back into the target document at its
-                full resolution, as a new layer. */}
+                full resolution. The dropdown next to the button selects
+                between a single recolored layer (today's behaviour), a
+                per-pool layer group (each pool becomes a hand-editable
+                transparent layer inside one group), or both. Custom
+                Dropdown — see Dropdown.tsx for why we avoid native <select>
+                in the panel. */}
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <div
                 onClick={canOutput ? outputToDocument : undefined}
-                title="Run the transfer at the target document's full resolution and add the result as a new 'Color Smash' layer."
+                title="Run the transfer at the target document's full resolution and add the result as a new layer (or per-pool group, depending on the mode picker)."
                 style={{
                   padding: "5px 12px", fontSize: 11, fontWeight: 600, borderRadius: 2,
                   border: "1px solid #4a4a4a",
@@ -910,6 +966,17 @@ export function SmashTab() {
               >
                 {outputting ? "Working…" : "Output to document"}
               </div>
+              <Dropdown<OutputMode>
+                value={outputMode}
+                onChange={setOutputMode}
+                title="What 'Output to document' writes. Single = one recolored layer. Pool group = one transparent layer per pool, wrapped in a group (hand-editable region by region). Both = single layer plus the group."
+                style={{ minWidth: 130 }}
+                options={[
+                  { value: "single", label: "Single layer" },
+                  { value: "group",  label: "Pool group" },
+                  { value: "both",   label: "Both" },
+                ]}
+              />
             </div>
 
             {transferError && (

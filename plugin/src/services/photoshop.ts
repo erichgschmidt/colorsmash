@@ -583,4 +583,173 @@ export async function writePixelLayer(
   });
 }
 
+/**
+ * Per-pool layer payload for `writePoolGroupLayers`. Each entry becomes
+ * one pixel layer inside the group, named `name`, with the pool's pixels
+ * at full alpha and all other pixels transparent.
+ */
+export interface PoolLayerData {
+  /** Pool id — informational only; not stamped into PS (we name the layer). */
+  poolId?: number;
+  /** Layer name shown in the Photoshop Layers panel. */
+  name: string;
+  /** Tightly-packed RGBA, length === width*height*4. Pool pixels at α=255,
+   *  all other pixels (0,0,0,0). */
+  rgba: Uint8Array;
+}
+
+/**
+ * Write the smash result as a Photoshop layer group containing one pixel
+ * layer per pool. Each layer carries that pool's recolored pixels at full
+ * alpha; everywhere else is transparent. The layers are created top → bottom
+ * in array order — i.e. `layers[0]` ends up at the TOP of the group, so the
+ * caller should pass smaller / more specific pools FIRST and larger swaths
+ * LAST so the big pool sits at the bottom and the small ones overlay it.
+ *
+ * Sister of `writePixelLayer`. Same UXP Imaging API requirements (Photoshop
+ * 24.2+). All work happens inside a single `executeAsModal`:
+ *   1. Make `documentId` the active document (cross-doc safety).
+ *   2. Create an empty layer group ("layerSection") with `groupName`.
+ *      After this call the group is the active selection, so newly-made
+ *      layers land INSIDE it automatically.
+ *   3. For each pool entry, in order:
+ *        a. Create a pixel layer via batchPlay "make layer".
+ *        b. Capture its layerID (same fallback as writePixelLayer).
+ *        c. Build an ImageData with createImageDataFromBuffer.
+ *        d. putPixels into the layer with replace:true at (left,top).
+ *        e. Set the layer's name via batchPlay set.
+ *        f. Dispose the ImageData (try/finally).
+ *
+ * CANNOT be unit-tested (no Photoshop in vitest). Things to verify by hand:
+ *   - A new group `groupName` appears at the top of the doc's layer stack.
+ *   - The group contains one pixel layer per pool entry, top→bottom in
+ *     array order.
+ *   - Each layer's pool pixels are visible, surrounding pixels transparent.
+ *   - Toggling layer visibility hides only that pool's contribution.
+ *   - Re-running output a second time creates a SECOND group (this function
+ *     never reuses an existing group — that's by design).
+ *   - All layers/group remain after the modal scope completes (no PS undo
+ *     fold-back).
+ *   - Works when the target document isn't the currently-active document.
+ *
+ * @param documentId  Target document id (not necessarily the active doc).
+ * @param groupName   Name for the new layer group ("layerSection").
+ * @param layers      Per-pool layers in top→bottom render order.
+ * @param width       Pixel width — every `layers[i].rgba` must be this wide.
+ * @param height      Pixel height — every `layers[i].rgba` must be this tall.
+ * @param left        Document x of the buffer's top-left (offset for putPixels).
+ * @param top         Document y of the buffer's top-left.
+ */
+export async function writePoolGroupLayers(
+  documentId: number,
+  groupName: string,
+  layers: PoolLayerData[],
+  width: number,
+  height: number,
+  left = 0,
+  top = 0,
+): Promise<void> {
+  if (!imaging || !imaging.putPixels || !imaging.createImageDataFromBuffer) {
+    throw new Error("Imaging API unavailable. Requires Photoshop 24.2+.");
+  }
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
+    throw new Error(`writePoolGroupLayers: invalid dimensions ${width}x${height}.`);
+  }
+  if (!Array.isArray(layers) || layers.length === 0) {
+    throw new Error("writePoolGroupLayers: no pool layers to write.");
+  }
+  const expected = width * height * 4;
+  for (let i = 0; i < layers.length; i++) {
+    const l = layers[i];
+    if (!l || !l.rgba || l.rgba.length !== expected) {
+      throw new Error(
+        `writePoolGroupLayers: layer[${i}] rgba length ${l?.rgba?.length} does not match width*height*4 (${expected}).`,
+      );
+    }
+    if (typeof l.name !== "string" || l.name.length === 0) {
+      throw new Error(`writePoolGroupLayers: layer[${i}] missing name.`);
+    }
+  }
+
+  await executeAsModal("Color Smash group", async () => {
+    // 1. Target the requested document. Mirror writePixelLayer's safety:
+    //    we may be called with a doc that isn't currently active.
+    const targetDoc = (app.documents ?? []).find((d: any) => d.id === documentId);
+    if (!targetDoc) {
+      throw new Error(`writePoolGroupLayers: no open document with id ${documentId}.`);
+    }
+    if (app.activeDocument?.id !== documentId) {
+      app.activeDocument = targetDoc;
+    }
+
+    // 2. Make an empty layer group ("layerSection"). After this call the
+    //    group exists at the top of the layer stack AND is the active
+    //    selection — so any layers we create next land INSIDE the group
+    //    automatically (Photoshop's standard "new layer into the active
+    //    container" behaviour).
+    await action.batchPlay([{
+      _obj: "make",
+      _target: [{ _ref: "layerSection" }],
+      using: { _obj: "layerSection", name: groupName },
+      _options: { dialogOptions: "dontDisplay" },
+    }], {});
+
+    // 3. Build each pool layer inside the group, top→bottom in array order.
+    //    Each "make layer" call lands a fresh layer INSIDE the group because
+    //    the group is the active container. The newly-made layer becomes the
+    //    active layer; we capture its id from the play result (with the same
+    //    activeLayers fallback writePixelLayer uses).
+    for (const entry of layers) {
+      const makeResult = await action.batchPlay([{
+        _obj: "make",
+        _target: [{ _ref: "layer" }],
+        using: { _obj: "layer", name: entry.name },
+        _options: { dialogOptions: "dontDisplay" },
+      }], {});
+
+      let layerId: number | undefined =
+        (makeResult?.[0]?.layerID as number | undefined)
+        ?? (makeResult?.[0]?.layerSectionStart as number | undefined);
+      if (typeof layerId !== "number") {
+        layerId = targetDoc.activeLayers?.[0]?.id ?? targetDoc.layers?.[0]?.id;
+      }
+      if (typeof layerId !== "number") {
+        throw new Error(`writePoolGroupLayers: could not determine layer id for "${entry.name}".`);
+      }
+
+      const imageData = await imaging.createImageDataFromBuffer(entry.rgba, {
+        width,
+        height,
+        components: 4,
+        chunky: true,
+        colorProfile: "sRGB IEC61966-2.1",
+        colorSpace: "RGB",
+      });
+      try {
+        await imaging.putPixels({
+          documentID: documentId,
+          layerID: layerId,
+          imageData,
+          replace: true,
+          targetBounds: { left, top, right: left + width, bottom: top + height },
+        });
+        // Re-affirm the layer name via batchPlay set. The "make layer"
+        // descriptor above already includes the name, but some PS builds
+        // ignore the `using.name` field for raw pixel layers — the explicit
+        // set is the defensive fix.
+        try {
+          await action.batchPlay([{
+            _obj: "set",
+            _target: [{ _ref: "layer", _id: layerId }],
+            to: { _obj: "layer", name: entry.name },
+            _options: { dialogOptions: "dontDisplay" },
+          }], {});
+        } catch { /* non-fatal — name is decorative */ }
+      } finally {
+        try { imageData.dispose?.(); } catch { /* ignore */ }
+      }
+    }
+  });
+}
+
 export { action, app };
