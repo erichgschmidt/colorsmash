@@ -7,7 +7,7 @@ import type {
 } from "./clusters";
 import { rgbToLab } from "./palette";
 import type { Correspondence } from "./match";
-import { transferColors } from "./transfer";
+import { transferColors, buildSubMappings, poolSubColors, type TransferAnchor } from "./transfer";
 
 // ────────── Minimal builders ──────────
 
@@ -406,49 +406,63 @@ describe("transferColors", () => {
     expect(softGap).toBeLessThan(hardGap);
   });
 
-  it("multi-anchor: each anchor recolors its own region toward its donor", () => {
-    // 12×1 image. Single target pool of neutral mid-gray with an auto donor
-    // (also neutral) — so the auto recolor leaves color roughly neutral. Two
-    // small anchors land at x=1 (red donor) and x=10 (blue donor); their
-    // falloffs are non-overlapping. Pixels in between stay auto-neutral.
+  it("multi-anchor: each anchor recolors its own region via its local mini-Smash", () => {
+    // Pre-analysed anchors carry their own localTargetLabels + a per-local-
+    // pool sub-mapping table. The fixture below constructs two such anchors
+    // by hand instead of calling analyzeAnchor — keeping the test focused on
+    // transferColors's anchor-consumption logic, not on segmentPixelSet.
+    //
+    // 12×1 image. Single GLOBAL target pool of neutral mid-gray with an auto
+    // donor (also neutral) — so outside the anchors the recolor is a no-op.
+    // Two anchors with narrow falloffs land at x=1 and x=10; their local
+    // mini-Smash mappings push the target pixel toward red and blue.
     const width = 12;
     const height = 1;
     const pixels: Array<[number, number, number, number]> = [];
     for (let i = 0; i < width; i++) pixels.push([140, 140, 140, 255]);
     const target = fillRgba(width, height, pixels);
     const labels = new Array(width).fill(0);
-    const targetResult = makeResult(width, height, labels, [
-      makePool(0, [makeSub(140, 140, 140)]),
-    ]);
-    // Three source pools: a neutral auto donor (pool 10), a red donor (pool
-    // 20), and a blue donor (pool 30). The auto correspondence pairs target
-    // pool 0 with the neutral donor; the anchors override toward red/blue.
-    const sourceResult = makeResult(1, 3, [10, 20, 30], [
+    const targetPool = makePool(0, [makeSub(140, 140, 140)]);
+    const targetResult = makeResult(width, height, labels, [targetPool]);
+    const sourceResult = makeResult(1, 1, [10], [
       makePool(10, [makeSub(140, 140, 140)]),
-      makePool(20, [makeSub(220, 30, 30)]),
-      makePool(30, [makeSub(30, 30, 220)]),
     ]);
-    // 1×3 source rgba mirroring the source label map (neutral / red / blue).
-    const sourceRgba = new Uint8Array([
-      140, 140, 140, 255,
-      220, 30, 30, 255,
-      30, 30, 220, 255,
-    ]);
+    const sourceRgba = makeSourceRgba(1, 1, 140, 140, 140);
     const correspondence: Correspondence = {
       matches: [{ targetPoolId: 0, sourcePoolId: 10, score: 0 }],
-      unmatchedSourceIds: [20, 30],
+      unmatchedSourceIds: [],
     };
 
-    const anchors = [
-      // Anchor 0: red donor at x≈1.
-      { sourcePoolId: 20, targetX: 1 / (width - 1), targetY: 0.5, radius: 0.15 },
-      // Anchor 1: blue donor at x≈10.
-      { sourcePoolId: 30, targetX: 10 / (width - 1), targetY: 0.5, radius: 0.15 },
-    ];
+    // Build a synthetic anchor: at pixel x=1, the local pool id is 0; sub-
+    // mappings push the target's mid-gray sub-colour toward a red donor.
+    const redLocalPool = makePool(0, [makeSub(220, 30, 30)]);
+    const redAnchorLabels = new Int32Array(width * height).fill(-1);
+    redAnchorLabels[1] = 0; // pixel x=1 belongs to local pool 0
+    const redAnchor: TransferAnchor = {
+      targetX: 1 / (width - 1), targetY: 0.5, radius: 0.15,
+      localTargetLabels: redAnchorLabels,
+      localMappingsByPool: new Map([[
+        0,
+        buildSubMappings(poolSubColors(targetPool), poolSubColors(redLocalPool)),
+      ]]),
+    };
+
+    // Same shape, blue donor, at x=10.
+    const blueLocalPool = makePool(0, [makeSub(30, 30, 220)]);
+    const blueAnchorLabels = new Int32Array(width * height).fill(-1);
+    blueAnchorLabels[10] = 0;
+    const blueAnchor: TransferAnchor = {
+      targetX: 10 / (width - 1), targetY: 0.5, radius: 0.15,
+      localTargetLabels: blueAnchorLabels,
+      localMappingsByPool: new Map([[
+        0,
+        buildSubMappings(poolSubColors(targetPool), poolSubColors(blueLocalPool)),
+      ]]),
+    };
 
     const out = transferColors(
       target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
-      { strength: 1, anchors },
+      { strength: 1, anchors: [redAnchor, blueAnchor] },
     );
 
     // The pixel under anchor 0 (x=1) recolors strongly toward red: R high,
@@ -464,7 +478,7 @@ describe("transferColors", () => {
     expect(blueB).toBeGreaterThan(180);
 
     // The middle pixel (x=5) is outside both falloffs (radius 0.15 of max edge
-    // = 1.8 px), so it stays on the auto neutral donor → roughly unchanged.
+    // = 1.8 px), so it stays on the auto neutral donor → unchanged.
     const midR = out[5 * 4];
     const midG = out[5 * 4 + 1];
     const midB = out[5 * 4 + 2];

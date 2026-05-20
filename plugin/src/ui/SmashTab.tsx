@@ -30,6 +30,7 @@ import { matchStyles } from "./MatchSliders";
 import { segmentImage, SegmentResult, Pool } from "../core/clusters";
 import { matchPools, PoolMatch, Correspondence } from "../core/match";
 import { transferColors, vectorizeUpscaleLabels, type TransferAnchor } from "../core/transfer";
+import { analyzeAnchor, type AnchorAnalysis } from "../core/anchorAnalysis";
 
 // Default max edge fed into segmentImage — keeps per-pixel clustering under a
 // frame budget while staying detailed enough for a recognizable pool map. The
@@ -218,44 +219,94 @@ export function SmashTab() {
   const [sortMode, setSortMode] = useState<SortMode>("weightDesc");
 
   // ── Focal anchors (list of pairs) ──
-  // Each anchor is a completed source↔target pair, captured with the source
-  // pool id picked at the click site. The workflow is "sticky source":
+  // Each anchor is a completed source↔target pair. Each click captures a
+  // source POINT (no longer a single source pool id — anchors now run their
+  // own mini-Smash on the pixels inside their falloff). Workflow is sticky
+  // source:
   //   1. Click the SOURCE map → sets `activeSource` (the "loaded gun").
-  //   2. Click the TARGET map → drops an anchor using activeSource's point
-  //      + pool id; activeSource PERSISTS so subsequent target clicks
-  //      spawn more anchors all sharing the same source.
-  // activeSource is replaced by another source-map click, or cleared via
-  // the × on its dot. Each anchor carries its OWN falloff radius; the
-  // shared `anchorRadius` state below seeds NEW anchors only — existing
-  // anchors keep what they were created with (re-tune via the list slider).
+  //   2. Click the TARGET map → drops an anchor using activeSource's point;
+  //      activeSource PERSISTS so subsequent target clicks spawn more anchors
+  //      all sharing the same source point.
+  // activeSource is replaced by another source-map click, or cleared via the
+  // × on its dot. Each anchor carries its OWN falloff radius; the shared
+  // `anchorRadius` state below seeds NEW anchors only.
   interface AnchorPair {
     sourceX: number;
     sourceY: number;
-    sourcePoolId: number;
     targetX: number;
     targetY: number;
     radius: number;
   }
   const [anchors, setAnchors] = useState<AnchorPair[]>([]);
-  const [activeSource, setActiveSource] = useState<
-    { nx: number; ny: number; poolId: number } | null
-  >(null);
+  const [activeSource, setActiveSource] = useState<{ nx: number; ny: number } | null>(null);
   // Default falloff radius applied to NEW anchors when they're completed.
   // Existing anchors keep whatever radius they were created with — change
   // them individually via their row slider.
   const [anchorRadius, setAnchorRadius] = useState(0.2);
+  // "Anchor detail" — controls the local pool density of the mini-Smash run
+  // inside each anchor's falloff. Higher = more sub-pools = richer local
+  // transfer. See anchorAnalysis.ts for the detail→poolCount mapping.
+  const [anchorDetail, setAnchorDetail] = useState(0.5);
 
-  // The list passed into transferColors. Each anchor carries its own radius,
-  // so the memo depends only on the anchors array.
+  // ── Per-anchor mini-Smash analyses ──
+  // Each anchor in the list above is fed through analyzeAnchor (which runs a
+  // local segmentation on both sides of the anchor's circle, matches the
+  // local pools, and builds per-local-pool sub-mappings). The result is what
+  // transferColors actually consumes — the AnchorPair list is purely the UI
+  // representation. Analysis depends on: anchors, anchorDetail, the global
+  // segmentation opts, and both segInputs (which carry the rgba pixels +
+  // dimensions). Deferred a frame so the UI can render an "analyzing…" state
+  // before the synchronous work blocks the main thread.
+  const [anchorAnalyses, setAnchorAnalyses] = useState<AnchorAnalysis[]>([]);
+  const [anchorAnalyzing, setAnchorAnalyzing] = useState(false);
+
+  useEffect(() => {
+    if (anchors.length === 0 || !source.segInput || !target.segInput) {
+      setAnchorAnalyses([]);
+      setAnchorAnalyzing(false);
+      return;
+    }
+    let cancelled = false;
+    setAnchorAnalyzing(true);
+    const handle = setTimeout(() => {
+      if (cancelled) return;
+      try {
+        const baseSegmentOpts = {
+          poolCount, edgePreservation, regionCleanup, colorVsValueBias,
+          subPaletteSize, neutralProtection, poolContinuity,
+        };
+        const next = anchors.map(a => analyzeAnchor({
+          sourceRgba: source.segInput!.data,
+          sourceWidth: source.segInput!.width,
+          sourceHeight: source.segInput!.height,
+          sourceX: a.sourceX, sourceY: a.sourceY,
+          targetRgba: target.segInput!.data,
+          targetWidth: target.segInput!.width,
+          targetHeight: target.segInput!.height,
+          targetX: a.targetX, targetY: a.targetY,
+          radius: a.radius,
+          baseSegmentOpts,
+          detail: anchorDetail,
+        }));
+        if (!cancelled) setAnchorAnalyses(next);
+      } finally {
+        if (!cancelled) setAnchorAnalyzing(false);
+      }
+    }, 16);
+    return () => { cancelled = true; clearTimeout(handle); };
+  }, [
+    anchors, anchorDetail,
+    source.segInput, target.segInput,
+    poolCount, edgePreservation, regionCleanup, colorVsValueBias,
+    subPaletteSize, neutralProtection, poolContinuity,
+  ]);
+
+  // The list passed into transferColors. Each AnchorAnalysis IS the
+  // TransferAnchor shape (geometry + localTargetLabels + per-pool mappings),
+  // so this is a straight pass-through.
   const transferAnchors = useMemo<TransferAnchor[]>(
-    () =>
-      anchors.map(a => ({
-        sourcePoolId: a.sourcePoolId,
-        targetX: a.targetX,
-        targetY: a.targetY,
-        radius: a.radius,
-      })),
-    [anchors],
+    () => anchorAnalyses,
+    [anchorAnalyses],
   );
 
   // Repeating distinguishable palette so multiple anchors on the maps don't
@@ -515,8 +566,10 @@ export function SmashTab() {
 
   // ── Focal anchor click handlers ──
   // Source-map click: load (or replace) the sticky activeSource at the click
-  // site. The pool id is read from the segmentation labels at that spot. The
-  // activeSource then persists across target clicks (sticky source).
+  // site. We just store the point — no single source pool id is captured;
+  // the mini-Smash inside the anchor's falloff analyses whatever local source
+  // structure is around that click. Transparent pixels are still rejected so
+  // the source point is always inside the figure.
   const handleAnchorSourceClick = useCallback((nx: number, ny: number) => {
     if (!sourceResult) return;
     const sx = Math.min(
@@ -529,18 +582,17 @@ export function SmashTab() {
     );
     const poolId = sourceResult.labels[sy * sourceResult.width + sx];
     if (poolId < 0) return; // clicked a transparent / unlabeled pixel
-    setActiveSource({ nx, ny, poolId });
+    setActiveSource({ nx, ny });
   }, [sourceResult]);
   // Target-map click: drop a new anchor using the sticky activeSource. The
   // activeSource is NOT cleared — subsequent target clicks spawn more anchors
-  // all sharing the same source.
+  // all sharing the same source point.
   const handleAnchorTargetClick = useCallback((nx: number, ny: number) => {
     if (!targetResult) return;
     if (!activeSource) return; // no source loaded yet — hint shown in the UI
     const pair: AnchorPair = {
       sourceX: activeSource.nx,
       sourceY: activeSource.ny,
-      sourcePoolId: activeSource.poolId,
       targetX: nx,
       targetY: ny,
       // Snapshot the current "default for new anchors" value — this becomes
@@ -566,8 +618,9 @@ export function SmashTab() {
   };
 
   // ── Drag handlers — repositioning existing anchor dots / activeSource ──
-  // Updates an anchor's source position. Re-reads the pool id at the new spot;
-  // returns false if the new pixel is transparent (caller snaps back).
+  // Anchors no longer carry a single source pool id; we still reject drops
+  // onto transparent pixels so the source point stays inside the figure (the
+  // mini-Smash needs source pixels to analyse).
   const moveAnchorSource = useCallback((index: number, nx: number, ny: number): boolean => {
     if (!sourceResult) return false;
     const sx = Math.min(
@@ -581,7 +634,7 @@ export function SmashTab() {
     const poolId = sourceResult.labels[sy * sourceResult.width + sx];
     if (poolId < 0) return false;
     setAnchors(prev => prev.map((a, i) =>
-      i === index ? { ...a, sourceX: nx, sourceY: ny, sourcePoolId: poolId } : a,
+      i === index ? { ...a, sourceX: nx, sourceY: ny } : a,
     ));
     return true;
   }, [sourceResult]);
@@ -604,7 +657,7 @@ export function SmashTab() {
     );
     const poolId = sourceResult.labels[sy * sourceResult.width + sx];
     if (poolId < 0) return false;
-    setActiveSource({ nx, ny, poolId });
+    setActiveSource({ nx, ny });
     return true;
   }, [sourceResult]);
 
@@ -1122,19 +1175,32 @@ export function SmashTab() {
                 )}
               </div>
               {(anchors.length > 0 || activeSource) && (
-                <Control
-                  label="New-anchor radius"
-                  title="Default falloff radius applied to NEWLY-created anchors only. Existing anchors keep their own radius — tune each one individually with its row slider below."
-                  min={0.05} max={0.6} step={0.025}
-                  value={anchorRadius} onChange={setAnchorRadius}
-                  display={anchorRadius.toFixed(2)}
-                />
+                <>
+                  <Control
+                    label="New-anchor radius"
+                    title="Default falloff radius applied to NEWLY-created anchors only. Existing anchors keep their own radius — tune each one individually with its row slider below."
+                    min={0.05} max={0.6} step={0.025}
+                    value={anchorRadius} onChange={setAnchorRadius}
+                    display={anchorRadius.toFixed(2)}
+                  />
+                  <Control
+                    label="Anchor detail"
+                    title="How densely the mini-Smash inside each anchor analyses local colour structure. Higher = more sub-pools inside the anchor's region = richer local transfer."
+                    min={0} max={1} step={0.05}
+                    value={anchorDetail} onChange={setAnchorDetail}
+                    display={anchorDetail.toFixed(2)}
+                  />
+                  {anchorAnalyzing && (
+                    <span style={{ fontSize: 9, color: "#9a9aa8" }}>analyzing anchors…</span>
+                  )}
+                </>
               )}
               {anchors.length > 0 && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                   {anchors.map((a, i) => {
                     const color = colorForAnchor(i);
-                    const donor = sourcePoolsById.get(a.sourcePoolId);
+                    const analysis = anchorAnalyses[i];
+                    const localPoolCount = analysis?.localMappingsByPool.size ?? 0;
                     return (
                       <div
                         key={i}
@@ -1146,7 +1212,7 @@ export function SmashTab() {
                           borderRadius: 2,
                         }}
                       >
-                        {/* Top row — colour chip + label + donor + remove */}
+                        {/* Top row — colour chip + label + local-pool count + remove */}
                         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                           <div style={{
                             width: 12, height: 12, borderRadius: "50%",
@@ -1156,8 +1222,11 @@ export function SmashTab() {
                           <span style={{ fontSize: 10, color: "#cccccc" }}>
                             anchor {i + 1}
                           </span>
-                          <span style={{ fontSize: 9, color: "#777" }}>
-                            {donor ? `source pool ${donor.id}` : "—"}
+                          <span
+                            style={{ fontSize: 9, color: "#777" }}
+                            title="Number of local target pools the mini-Smash inside this anchor produced."
+                          >
+                            {localPoolCount > 0 ? `${localPoolCount} local pools` : "—"}
                           </span>
                           <div style={{ flex: 1 }} />
                           <div

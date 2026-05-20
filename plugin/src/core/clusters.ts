@@ -269,7 +269,11 @@ function maxPoolId(pools: Pool[]): number {
 //   4. majority-filter smoothing (CutWise)
 //   5. build Pool[] (descriptor + sub-palette + noise) from the final labels
 // `assignment[j]` is the pool id chosen for `indices[j]`.
-function segmentPixelSet(
+//
+// Exported so per-anchor mini-Smash analysis (anchorAnalysis.ts) can re-use
+// the same engine on a subset of source / target pixels — keeping island
+// merge / smoothing / pool-building behaviour identical to the global pass.
+export function segmentPixelSet(
   rgba: Uint8Array,
   width: number,
   height: number,

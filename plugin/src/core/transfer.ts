@@ -28,8 +28,7 @@ export interface TransferOptions {
   strength: number; // 0..1 — blend between the original and the fully transferred result
   relax?: number; // 0..1 — boundary softness; blurs the delta field (default 0 = hard pool edges)
   preserveLuminance?: number; // 0..1 — keep the target's original L; only a/b shift (default 0)
-  anchor?: TransferAnchor; // legacy single-anchor (back-compat — folded into `anchors` internally)
-  anchors?: TransferAnchor[]; // multi-anchor: list of focal pairs, blended additively (see below)
+  anchors?: TransferAnchor[]; // pre-analysed focal anchors — see `TransferAnchor` below
   richness?: number; // 0..1 — 0 = sub-swatch averaged transfer (today, default),
                     //          1 = per-pixel sample-rank match against the donor
                     //              pool's actual source pixels. Pulls the donor's
@@ -37,15 +36,26 @@ export interface TransferOptions {
                     //              instead of the few sub-swatch averages.
 }
 
-// A focal anchor pairs a SOURCE pool with a TARGET region. Inside the target
-// falloff, pixels recolor toward this anchor source pool instead of their
-// auto-matched donor (smoothly blended by the falloff). The radius is
-// normalized to the larger image edge so it scales with resolution.
+// A focal anchor is a pre-analysed local correspondence over a small region
+// of the target image. Each anchor was produced by running a mini-Smash on
+// the source pixels inside its falloff and the target pixels inside its
+// falloff (see core/anchorAnalysis.ts) — so it carries its own per-pixel
+// local target labels and its own per-local-pool sub-mappings. At transfer
+// time, inside the anchor's falloff the local result REPLACES the global
+// delta. The smoothstep falloff is now purely a SPATIAL GATE (where the
+// local applies → smooth transition to global at the edge), not a colour
+// blend with a single donor pool.
 export interface TransferAnchor {
-  sourcePoolId: number; // donor source pool the user picked under their source-map click
   targetX: number;      // 0..1 normalized over target width
   targetY: number;      // 0..1 normalized over target height
   radius: number;       // 0..1 normalized to max(width, height)
+  // Per-pixel local target labels at TARGET resolution. -1 outside the
+  // anchor's reach OR transparent. Inside the falloff, holds a local target
+  // pool id (its own id space, independent of the global pool ids).
+  localTargetLabels: Int32Array;
+  // Local-target-pool id → sub-mappings to its matched local donor pool.
+  // Used exactly like the global mappingsByPool inside the per-pixel loop.
+  localMappingsByPool: Map<number, SubMapping[]>;
 }
 
 // A 3-component CIE Lab delta to add to a pixel's Lab value.
@@ -63,7 +73,8 @@ interface LabSample {
 }
 
 // One target sub-color paired with its lightness-ranked donor.
-interface SubMapping {
+// Exported so anchor analysis can build local mappings consistently.
+export interface SubMapping {
   // Target sub-color Lab — the anchor used for inverse-distance weighting.
   labL: number;
   labA: number;
@@ -124,14 +135,16 @@ export function vectorizeUpscaleLabels(
 }
 
 // Combined sub-color list for a pool: structured sub-palette + noise swatches.
-function poolSubColors(pool: Pool): SubSwatch[] {
+// Exported so anchor-analysis builds local sub-mapping inputs the same way.
+export function poolSubColors(pool: Pool): SubSwatch[] {
   const list = pool.subPalette.slice();
   if (pool.noise) list.push(...pool.noise.swatches);
   return list;
 }
 
 // Sort a sub-color list by lightness (labL) ascending. Returns a new array.
-function sortByLightness(swatches: SubSwatch[]): SubSwatch[] {
+// Exported so anchor analysis can sort consistently.
+export function sortByLightness(swatches: SubSwatch[]): SubSwatch[] {
   return swatches.slice().sort((a, b) => a.labL - b.labL);
 }
 
@@ -141,7 +154,8 @@ function sortByLightness(swatches: SubSwatch[]): SubSwatch[] {
 // differ, the target rank is normalized to 0..1 (targetRank/(Tlen−1)) and that
 // position is projected onto the donor list, picking the nearest donor rank —
 // so every target sub-color always gets a donor, dark→dark and light→light.
-function buildSubMappings(
+// Exported so anchor analysis builds local sub-mappings the same way.
+export function buildSubMappings(
   targetSubs: SubSwatch[],
   sourceSubs: SubSwatch[],
 ): SubMapping[] {
@@ -441,30 +455,15 @@ export function transferColors(
     );
   }
 
-  // Multi-anchor input. The new `anchors` array is the canonical form; the
-  // legacy single `anchor` is folded in for back-compat. Each anchor gets its
-  // own per-target-pool sub-mapping table — used inside that anchor's falloff.
-  const anchorList: TransferAnchor[] = [];
-  if (opts.anchors) anchorList.push(...opts.anchors);
-  if (opts.anchor) anchorList.push(opts.anchor);
-
-  // Anchors whose source pool actually exists in the source segmentation.
-  // anchorMappingsByPoolList[i] is the per-pool sub-mapping table for anchor i.
-  const activeAnchors: TransferAnchor[] = [];
-  const anchorMappingsByPoolList: Map<number, SubMapping[]>[] = [];
-  for (const a of anchorList) {
-    const donor = sourceById.get(a.sourcePoolId);
-    if (!donor) continue;
-    const map = new Map<number, SubMapping[]>();
-    for (const targetPool of targetResult.pools) {
-      map.set(
-        targetPool.id,
-        buildSubMappings(poolSubColors(targetPool), poolSubColors(donor)),
-      );
-    }
-    activeAnchors.push(a);
-    anchorMappingsByPoolList.push(map);
-  }
+  // Pre-analysed anchors. Each anchor carries its own local target labels
+  // and its own local-pool sub-mappings (the result of a mini-Smash inside
+  // the anchor's falloff — see core/anchorAnalysis.ts). Only anchors whose
+  // analysis actually produced non-empty mappings are kept active; the rest
+  // are effectively no-ops.
+  const anchorList: TransferAnchor[] = opts.anchors ? [...opts.anchors] : [];
+  const activeAnchors: TransferAnchor[] = anchorList.filter(
+    a => a.localMappingsByPool.size > 0 && a.localTargetLabels.length === width * height,
+  );
 
   // ── Lazy precompute for the rich sample-rank path (richness > 0). ──
   // For each donor source pool referenced by `correspondence`, collect a
@@ -509,6 +508,8 @@ export function transferColors(
   const opaque = new Uint8Array(pxCount);
 
   // Anchor geometry per anchor, in pixel units of this transfer's resolution.
+  // Each anchor's `localTargetLabels` was produced at (width, height), so
+  // pixel-index lookups into it are direct.
   const anchorCount = activeAnchors.length;
   const anchorCx = new Float32Array(anchorCount);
   const anchorCy = new Float32Array(anchorCount);
@@ -519,8 +520,6 @@ export function transferColors(
     anchorCy[k] = a.targetY * Math.max(0, height - 1);
     anchorR[k] = Math.max(1, a.radius * Math.max(width, height));
   }
-  // Scratch buffer reused per pixel for each anchor's falloff weight.
-  const falls = new Float32Array(anchorCount);
 
   for (let i = 0; i < pxCount; i++) {
     const o = i * 4;
@@ -535,67 +534,84 @@ export function transferColors(
     const autoMappings = mappingsByPool.get(poolId);
     const hasAuto = !!(autoMappings && autoMappings.length > 0);
 
-    // Per-anchor falloff for this pixel, plus the running sum W. Anchors with
-    // no per-pool mapping (donor pool missing — already filtered above, but
-    // double-checked below) contribute zero. Skip the geometry math entirely
-    // when there are no anchors active.
-    let W = 0;
+    // Find the dominant anchor covering this pixel — the one with the highest
+    // smoothstep falloff. The local mini-Smash result REPLACES the auto delta
+    // weighted by that anchor's falloff; the smoothstep gates spatially, not
+    // chromatically. Overlapping anchors are resolved by max-falloff (cleanest
+    // — keeps each anchor's local structure crisp). Multi-anchor blending is a
+    // future extension.
+    let bestAnchor = -1;
+    let bestFall = 0;
     if (anchorCount > 0) {
       const x = i % width;
       const y = (i / width) | 0;
       for (let k = 0; k < anchorCount; k++) {
         const f = anchorFalloff(x, y, anchorCx[k], anchorCy[k], anchorR[k]);
-        falls[k] = f;
-        W += f;
-      }
-      // Multiple overlapping anchors can sum to > 1. Renormalize so they sum
-      // to exactly 1 and the auto donor drops to 0 — "anchors fully take over".
-      if (W > 1) {
-        const inv = 1 / W;
-        for (let k = 0; k < anchorCount; k++) falls[k] *= inv;
-        W = 1;
+        if (f > bestFall) {
+          bestFall = f;
+          bestAnchor = k;
+        }
       }
     }
 
-    if (!hasAuto && W <= 0) continue; // no transfer for this pixel
+    if (!hasAuto && bestAnchor < 0) continue; // no transfer for this pixel
 
     const [L, a, b] = rgbToLab(targetRgba[o], targetRgba[o + 1], targetRgba[o + 2]);
 
-    // Final per-pixel delta = (1 − ΣW)·autoDelta + Σ falls_k · anchorDelta_k.
-    const autoWeight = 1 - W;
-    let dL = 0, dA = 0, dB = 0;
-    if (hasAuto && autoWeight > 0) {
+    // Auto delta from the global correspondence — used both outside any
+    // anchor and as the "edge" of the lerp inside an anchor.
+    let autoDL = 0, autoDA = 0, autoDB = 0;
+    if (hasAuto) {
       const d = softDelta(L, a, b, autoMappings!);
-      dL = d.dL * autoWeight;
-      dA = d.dA * autoWeight;
-      dB = d.dB * autoWeight;
+      autoDL = d.dL;
+      autoDA = d.dA;
+      autoDB = d.dB;
     }
-    for (let k = 0; k < anchorCount; k++) {
-      const f = falls[k];
-      if (f <= 0) continue;
-      const am = anchorMappingsByPoolList[k].get(poolId);
-      if (!am || am.length === 0) continue;
-      const d = softDelta(L, a, b, am);
-      dL += f * d.dL;
-      dA += f * d.dA;
-      dB += f * d.dB;
+
+    // Local delta from the dominant anchor's mini-Smash. Looked up by this
+    // pixel's local target label inside the anchor (which can be -1 even
+    // when the falloff is > 0, e.g. transparent pixels or pixels whose
+    // segmented sample was excluded); in that case we fall back to auto.
+    let dL: number, dA: number, dB: number;
+    if (bestAnchor >= 0) {
+      const anchor = activeAnchors[bestAnchor];
+      const localLabel = anchor.localTargetLabels[i];
+      let localMappings: SubMapping[] | undefined;
+      if (localLabel >= 0) {
+        localMappings = anchor.localMappingsByPool.get(localLabel);
+      }
+      if (localMappings && localMappings.length > 0) {
+        const ld = softDelta(L, a, b, localMappings);
+        // Spatial lerp: at centre f=1 → pure local, at edge f=0 → pure auto.
+        const f = bestFall;
+        const inv = 1 - f;
+        dL = autoDL * inv + ld.dL * f;
+        dA = autoDA * inv + ld.dA * f;
+        dB = autoDB * inv + ld.dB * f;
+      } else {
+        dL = autoDL;
+        dA = autoDA;
+        dB = autoDB;
+      }
+    } else {
+      dL = autoDL;
+      dA = autoDA;
+      dB = autoDB;
     }
 
     // Rich sample-rank blend. The compressed path above gave us a per-pixel
-    // delta from the auto donor's averaged sub-swatches (and any anchors). The
-    // rich path replaces the auto donor's contribution with that donor pool's
-    // actual Lab sample at this pixel's lightness rank, pulling the donor's
-    // full a/b chroma variation through instead of the few averages.
+    // delta from the auto donor's averaged sub-swatches (and any dominant
+    // anchor). The rich path replaces the auto donor's contribution with that
+    // donor pool's actual Lab sample at this pixel's lightness rank, pulling
+    // the donor's full a/b chroma variation through instead of the few
+    // averages.
     //
-    // SIMPLIFICATION: the rich-Lab path is computed from the AUTO donor only;
-    // any anchor contribution stays in the sub-swatch delta. Anchor-aware
-    // richness is a future extension. To make that explicit, the rich blend
-    // is applied with weight `richness * autoWeight` — at full richness inside
-    // a non-anchored pixel (autoWeight = 1) the auto path is fully replaced,
-    // while a pixel halfway under an anchor only sees half the rich shift.
-    //
-    // The blend stays in DELTA form so phase-2 blur and phase-3 application
-    // never need to know richness existed.
+    // SIMPLIFICATION: rich-Lab is computed from the AUTO donor only; any
+    // anchor contribution stays in the sub-swatch delta path. To express
+    // that, the rich blend's weight is scaled by (1 − bestFall) — outside
+    // any anchor the auto is fully replaced; deeper inside an anchor the
+    // rich shift fades out and the local mini-Smash dominates.
+    const autoWeight = 1 - bestFall; // 1 outside anchors, 0 at anchor centre
     if (richness > 0 && hasAuto && autoWeight > 0) {
       const donorId = donorByTarget.get(poolId);
       if (donorId !== undefined) {
@@ -610,8 +626,8 @@ export function transferColors(
           const richSample = donorSamples[srcIdx];
 
           // Recompute the auto donor's compressed delta so we can swap it for
-          // the rich shift (the running dL/A/B above bundles the auto and any
-          // anchor contributions together).
+          // the rich shift. The running dL/A/B is (autoDelta*(1−f) +
+          // localDelta*f), so the auto's contribution is autoD * autoWeight.
           const autoD = softDelta(L, a, b, autoMappings!);
           const autoShiftL = autoD.dL * autoWeight;
           const autoShiftA = autoD.dA * autoWeight;
