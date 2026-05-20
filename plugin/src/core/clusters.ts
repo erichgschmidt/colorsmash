@@ -1,10 +1,14 @@
 // Content-following hierarchical color segmentation.
 //
-// Pass 1 (macro): color-only Lab k-means quantizes the image into pool colors;
-// connected-component "islands" then give the spatial structure, and small
-// islands are merged into neighbours with edge protection (CutWise's island
-// logic). Because no spatial term is mixed into the clustering, pool
-// boundaries follow real image content instead of forming convex tiles.
+// Pass 1 (macro): the k-means quantize runs in an LCh polar feature space
+// [L·vw, C·cw, sin(H)·hw·gate, cos(H)·hw·gate] so value, chroma magnitude and
+// hue identity are independently weightable. The hue terms are gated by
+// chroma so near-neutral pixels don't get spurious hue separation. A single
+// "Color vs Value bias" slider tilts vw against (cw, hw). Then connected-
+// component "islands" supply the spatial structure and small islands are
+// merged into neighbours with edge protection (CutWise's island logic).
+// Because no spatial term is mixed into the clustering, pool boundaries
+// follow real image content instead of forming convex tiles.
 // Pass 2 (per pool): each pool's pixels are sub-clustered into a sub-palette;
 // sub-colors that are spatially diffuse within the pool are split off as a
 // separate noise component.
@@ -65,10 +69,12 @@ export interface Pool {
 }
 
 export interface SegmentOptions {
-  poolCount: number;        // k for the color quantize, e.g. 2..12
-  edgePreservation: number; // 0..1 — refuse island merges across strong color edges
-  regionCleanup: number;    // 0..1 — how aggressively small islands are absorbed
-  subPaletteSize: number;   // k for each pool's sub-palette, e.g. 3..7
+  poolCount: number;          // k for the color quantize, e.g. 2..12
+  edgePreservation: number;   // 0..1 — refuse island merges across strong color edges
+  regionCleanup: number;      // 0..1 — how aggressively small islands are absorbed
+  colorVsValueBias: number;   // 0..1 — 0 = color/chroma identity dominates,
+                              // 0.5 = balanced (≈ Lab), 1 = value/lightness dominates
+  subPaletteSize: number;     // k for each pool's sub-palette, e.g. 3..7
 }
 
 export interface SegmentResult {
@@ -93,6 +99,14 @@ const SHAPE_SIZE = 12;
 // Majority-filter passes that clean the merged label map's contours.
 const SMOOTH_PASSES = 2;
 
+// Hue is unreliable at low chroma; below this Lab-chroma threshold the hue
+// contribution to clustering distance is faded out so near-neutral pixels
+// don't get spurious hue separation.
+const CHROMA_GATE = 5;
+// How far the colorVsValueBias slider tilts the V vs (C, H) weights apart.
+// At bias 0.5 all three weights are 1; at 0 / 1 they spread by ±BIAS_K/2.
+const BIAS_K = 1.5;
+
 // A sub-color counts as noise when it is spread almost as widely as its whole
 // parent pool (relativeSpread above the threshold) yet is only a minority
 // share — i.e. speckle sprinkled across the pool, not a localized block.
@@ -111,11 +125,39 @@ const HIGHLIGHT_MIN_L = 66;
 // ────────── Internal types ──────────
 
 interface Sample {
-  // Lab feature vector — color-only k-means (no spatial term).
+  // Raw Lab per pixel; 4D LCh polar features are precomputed alongside.
   fl: number; fa: number; fb: number;
 }
 
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+// Map the user-facing 0..1 bias onto value / chroma / hue axis weights.
+// bias < 0.5 → chroma & hue count more (color identity dominates).
+// bias > 0.5 → value counts more (classic luminance-driven cutout).
+function biasWeights(bias: number): { vw: number; cw: number; hw: number } {
+  const b = clamp01(bias) - 0.5;
+  const vw = Math.max(0.1, 1 + b * BIAS_K);
+  const cw = Math.max(0.1, 1 - b * BIAS_K);
+  return { vw, cw, hw: cw };
+}
+
+// Write the 4D LCh polar feature for a Lab pixel into `out` at offset `off`.
+// Hue is encoded as (sin H, cos H) so it's continuous across the 0°/360° wrap;
+// both terms are gated by chroma so near-neutral pixels collapse onto the L/C
+// plane and don't pollute the partition with meaningless hue noise.
+function buildFeature(
+  L: number, a: number, b: number,
+  vw: number, cw: number, hw: number,
+  out: Float32Array, off: number,
+): void {
+  const C = Math.sqrt(a * a + b * b);
+  const H = Math.atan2(b, a);
+  const gate = C < CHROMA_GATE ? C / CHROMA_GATE : 1;
+  out[off]     = L * vw;
+  out[off + 1] = C * cw;
+  out[off + 2] = Math.sin(H) * hw * gate;
+  out[off + 3] = Math.cos(H) * hw * gate;
+}
 
 // ────────── Top-level + drill-down API ──────────
 
@@ -218,7 +260,11 @@ function segmentPixelSet(
 
   const k = Math.max(1, Math.floor(opts.poolCount));
 
-  // ── 1. Color-only Lab k-means. Decimated samples drive the fit. ──
+  // ── 1. LCh polar feature k-means. The bias slider tilts V vs (C, H). ──
+  const { vw, cw, hw } = biasWeights(opts.colorVsValueBias);
+
+  // Decimated raw-Lab samples drive the fit; their 4D LCh features are
+  // precomputed once into sampleFeatures so Lloyd doesn't recompute them.
   const samples: Sample[] = [];
   for (let j = 0; j < total; j += SAMPLE_STRIDE) {
     const o = indices[j] * 4;
@@ -229,27 +275,35 @@ function segmentPixelSet(
   if (n === 0) return { pools: [], assignment };
   const effK = Math.min(k, n);
 
-  const cents = buildInitCentroids(samples, n, effK, warmPools);
+  const sampleFeatures = new Float32Array(n * 4);
+  for (let i = 0; i < n; i++) {
+    buildFeature(samples[i].fl, samples[i].fa, samples[i].fb, vw, cw, hw, sampleFeatures, i * 4);
+  }
+
+  const cents = buildInitCentroids(sampleFeatures, n, effK, vw, cw, hw, warmPools);
   const assign = new Int32Array(n);
-  const sums = new Float64Array(effK * 3);
+  const sums = new Float64Array(effK * 4);
   const counts = new Int32Array(effK);
   for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
-    for (let i = 0; i < n; i++) assign[i] = nearestCentroid(samples[i], cents, effK);
+    for (let i = 0; i < n; i++) assign[i] = nearestCentroid(sampleFeatures, i * 4, cents, effK);
     sums.fill(0); counts.fill(0);
     for (let i = 0; i < n; i++) {
-      const c = assign[i], s = samples[i];
-      sums[c * 3] += s.fl; sums[c * 3 + 1] += s.fa; sums[c * 3 + 2] += s.fb;
+      const c = assign[i], off = i * 4;
+      sums[c * 4]     += sampleFeatures[off];
+      sums[c * 4 + 1] += sampleFeatures[off + 1];
+      sums[c * 4 + 2] += sampleFeatures[off + 2];
+      sums[c * 4 + 3] += sampleFeatures[off + 3];
       counts[c]++;
     }
     let totalShift = 0;
     for (let c = 0; c < effK; c++) {
       if (counts[c] === 0) continue; // dead cluster — leave centroid in place
       let shift = 0;
-      for (let d = 0; d < 3; d++) {
-        const nv = sums[c * 3 + d] / counts[c];
-        const dv = nv - cents[c * 3 + d];
+      for (let d = 0; d < 4; d++) {
+        const nv = sums[c * 4 + d] / counts[c];
+        const dv = nv - cents[c * 4 + d];
         shift += dv * dv;
-        cents[c * 3 + d] = nv;
+        cents[c * 4 + d] = nv;
       }
       totalShift += Math.sqrt(shift);
     }
@@ -257,23 +311,38 @@ function segmentPixelSet(
   }
 
   // ── 2. Assign every pixel → a width*height cluster-label map. ──
+  // The merge step needs each cluster's representative Lab; we accumulate
+  // per-cluster Lab sums in the same pass to get mean Lab per cluster — more
+  // faithful than inverting the polar centroid (especially under the chroma
+  // gate, which is non-trivial to invert).
   const clusterLabels = new Int32Array(width * height).fill(-1);
   const clusterCount = new Int32Array(effK);
-  const tmp: Sample = { fl: 0, fa: 0, fb: 0 };
+  const clusterLabSum = new Float64Array(effK * 3);
+  const featTmp = new Float32Array(4);
   for (let j = 0; j < total; j++) {
-    const o = indices[j] * 4;
+    const i = indices[j], o = i * 4;
     const [L, a, b] = rgbToLab(rgba[o], rgba[o + 1], rgba[o + 2]);
-    tmp.fl = L; tmp.fa = a; tmp.fb = b;
-    const c = nearestCentroid(tmp, cents, effK);
-    clusterLabels[indices[j]] = c;
+    buildFeature(L, a, b, vw, cw, hw, featTmp, 0);
+    const c = nearestCentroid(featTmp, 0, cents, effK);
+    clusterLabels[i] = c;
     clusterCount[c]++;
+    clusterLabSum[c * 3]     += L;
+    clusterLabSum[c * 3 + 1] += a;
+    clusterLabSum[c * 3 + 2] += b;
   }
 
-  // Cluster colors for the island-merge nearest-color test.
+  // Cluster colors for the island-merge nearest-color test — mean Lab.
   const clusters: Cluster[] = [];
   for (let c = 0; c < effK; c++) {
-    const L = cents[c * 3], a = cents[c * 3 + 1], b = cents[c * 3 + 2];
-    clusters.push({ rgb: labToRgb(L, a, b), lab: [L, a, b], count: clusterCount[c] });
+    const cnt = clusterCount[c];
+    if (cnt > 0) {
+      const L = clusterLabSum[c * 3] / cnt;
+      const a = clusterLabSum[c * 3 + 1] / cnt;
+      const b = clusterLabSum[c * 3 + 2] / cnt;
+      clusters.push({ rgb: labToRgb(L, a, b), lab: [L, a, b], count: cnt });
+    } else {
+      clusters.push({ rgb: [0, 0, 0], lab: [0, 0, 0], count: 0 });
+    }
   }
 
   // ── 3-4. Islands → edge-protected merge → smoothing (CutWise). ──
@@ -482,22 +551,26 @@ function analyzePool(
 // ────────── centroid init (cold k-means++ or warm-start) ──────────
 
 function buildInitCentroids(
-  samples: Sample[],
+  sampleFeatures: Float32Array,
   n: number,
   effK: number,
+  vw: number,
+  cw: number,
+  hw: number,
   warmPools?: Pool[],
 ): Float32Array {
-  const cents = new Float32Array(effK * 3);
+  const cents = new Float32Array(effK * 4);
   let seeded = 0;
 
-  // Warm-start: seed from the previous pools' mean Lab so pool identity and
-  // the partition stay stable while the user drags a control. warmPools is
-  // weight-sorted, so when poolCount shrank we keep the heaviest pools.
+  // Warm-start: seed from the previous pools' mean Lab — reprojected through
+  // the CURRENT bias weights — so pool identity and the partition stay stable
+  // while the user drags the controls. warmPools is weight-sorted, so when
+  // poolCount shrank we keep the heaviest pools.
   if (warmPools && warmPools.length > 0) {
     const take = Math.min(effK, warmPools.length);
     for (let c = 0; c < take; c++) {
       const d = warmPools[c].descriptor;
-      cents[c * 3] = d.labL; cents[c * 3 + 1] = d.labA; cents[c * 3 + 2] = d.labB;
+      buildFeature(d.labL, d.labA, d.labB, vw, cw, hw, cents, c * 4);
     }
     seeded = take;
   }
@@ -506,8 +579,10 @@ function buildInitCentroids(
   // k-means++ — first centroid = first sample, each next = the sample
   // farthest from its nearest existing centroid. No Math.random.
   if (seeded === 0) {
-    const s0 = samples[0];
-    cents[0] = s0.fl; cents[1] = s0.fa; cents[2] = s0.fb;
+    cents[0] = sampleFeatures[0];
+    cents[1] = sampleFeatures[1];
+    cents[2] = sampleFeatures[2];
+    cents[3] = sampleFeatures[3];
     seeded = 1;
   }
   if (seeded < effK) {
@@ -515,7 +590,7 @@ function buildInitCentroids(
     for (let i = 0; i < n; i++) {
       let mn = Infinity;
       for (let c = 0; c < seeded; c++) {
-        const d = sqDist3(samples[i], cents, c);
+        const d = sqDist4(sampleFeatures, i * 4, cents, c * 4);
         if (d < mn) mn = d;
       }
       nearest[i] = mn;
@@ -525,10 +600,12 @@ function buildInitCentroids(
       for (let i = 0; i < n; i++) {
         if (nearest[i] > bestD) { bestD = nearest[i]; bestI = i; }
       }
-      const s = samples[bestI];
-      cents[c * 3] = s.fl; cents[c * 3 + 1] = s.fa; cents[c * 3 + 2] = s.fb;
+      cents[c * 4]     = sampleFeatures[bestI * 4];
+      cents[c * 4 + 1] = sampleFeatures[bestI * 4 + 1];
+      cents[c * 4 + 2] = sampleFeatures[bestI * 4 + 2];
+      cents[c * 4 + 3] = sampleFeatures[bestI * 4 + 3];
       for (let i = 0; i < n; i++) {
-        const d = sqDist3(samples[i], cents, c);
+        const d = sqDist4(sampleFeatures, i * 4, cents, c * 4);
         if (d < nearest[i]) nearest[i] = d;
       }
     }
@@ -575,17 +652,18 @@ function assignIds(pools: Pool[], idStart: number, warmPools?: Pool[]): void {
 
 // ────────── distance + color helpers ──────────
 
-function sqDist3(s: Sample, cents: Float32Array, c: number): number {
-  const dl = s.fl - cents[c * 3];
-  const da = s.fa - cents[c * 3 + 1];
-  const db = s.fb - cents[c * 3 + 2];
-  return dl * dl + da * da + db * db;
+function sqDist4(f: Float32Array, fOff: number, cents: Float32Array, cOff: number): number {
+  const d0 = f[fOff] - cents[cOff];
+  const d1 = f[fOff + 1] - cents[cOff + 1];
+  const d2 = f[fOff + 2] - cents[cOff + 2];
+  const d3 = f[fOff + 3] - cents[cOff + 3];
+  return d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3;
 }
 
-function nearestCentroid(s: Sample, cents: Float32Array, k: number): number {
+function nearestCentroid(f: Float32Array, fOff: number, cents: Float32Array, k: number): number {
   let best = 0, bestD = Infinity;
   for (let c = 0; c < k; c++) {
-    const d = sqDist3(s, cents, c);
+    const d = sqDist4(f, fOff, cents, c * 4);
     if (d < bestD) { bestD = d; best = c; }
   }
   return best;

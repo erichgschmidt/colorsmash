@@ -75,6 +75,7 @@ export function AnalysisTab() {
   const [poolCount, setPoolCount] = useState(6);
   const [edgePreservation, setEdgePreservation] = useState(0.55);
   const [regionCleanup, setRegionCleanup] = useState(0.4);
+  const [colorVsValueBias, setColorVsValueBias] = useState(0.5);
   const [subPaletteSize, setSubPaletteSize] = useState(5);
 
   // ── Segmentation result + analyzing state ───────────────────────
@@ -121,7 +122,7 @@ export function AnalysisTab() {
     const handle = setTimeout(() => {
       if (cancelled) return;
       try {
-        const opts = { poolCount, edgePreservation, regionCleanup, subPaletteSize };
+        const opts = { poolCount, edgePreservation, regionCleanup, colorVsValueBias, subPaletteSize };
         let r = segmentImage(segInput.data, segInput.width, segInput.height, opts, warm);
         // Re-apply drilled-down pools by id (top-level ids are warm-stable).
         for (const id of expandedIdsRef.current) {
@@ -141,7 +142,7 @@ export function AnalysisTab() {
       }
     }, 16);
     return () => { cancelled = true; clearTimeout(handle); };
-  }, [segInput, poolCount, edgePreservation, regionCleanup, subPaletteSize]);
+  }, [segInput, poolCount, edgePreservation, regionCleanup, colorVsValueBias, subPaletteSize]);
 
   // Drill a pool down into child pools (or fold it back up). Operates on the
   // current result directly so the click is snappy.
@@ -150,7 +151,7 @@ export function AnalysisTab() {
     const willExpand = !expandedIds.has(poolId);
     const next = new Set(expandedIds);
     if (willExpand) next.add(poolId); else next.delete(poolId);
-    const opts = { poolCount, edgePreservation, regionCleanup, subPaletteSize };
+    const opts = { poolCount, edgePreservation, regionCleanup, colorVsValueBias, subPaletteSize };
     const r = willExpand
       ? expandPool(result, segInput.data, poolId, opts)
       : collapsePool(result, poolId);
@@ -251,6 +252,13 @@ export function AnalysisTab() {
           min={0} max={1} step={0.05}
           value={regionCleanup} onChange={setRegionCleanup}
           display={regionCleanup.toFixed(2)}
+        />
+        <Control
+          label="Color vs Value"
+          title="0 = chroma/hue identity dominates (skin shadow and shirt shadow stay separate by color). 0.5 = balanced. 1 = value/lightness dominates (classic luminance-driven cutout)."
+          min={0} max={1} step={0.05}
+          value={colorVsValueBias} onChange={setColorVsValueBias}
+          display={colorVsValueBias.toFixed(2)}
         />
         <Control
           label="Sub-palette size"

@@ -37,6 +37,30 @@ const POOL_MAP_W = (PANEL_WIDTH - 6) / 2;
 
 type SrcMode = "layer" | "selection" | "folder";
 
+// Sort modes for the TARGET → SOURCE list. Display-only — doesn't affect
+// the underlying matches array or anything downstream.
+type SortMode =
+  | "weightDesc"   // largest first (default — matches segmentImage's order)
+  | "weightAsc"    // smallest first
+  | "lightToDark"  // by Lab L descending
+  | "darkToLight"  // by Lab L ascending
+  | "warmToCool"   // by (a + b) descending — yellow/red warm vs blue/cyan cool
+  | "coolToWarm";  // by (a + b) ascending
+
+function sortPools(pools: Pool[], mode: SortMode): Pool[] {
+  const arr = [...pools];
+  switch (mode) {
+    case "weightAsc":   arr.sort((p, q) => p.descriptor.weight - q.descriptor.weight); break;
+    case "lightToDark": arr.sort((p, q) => q.descriptor.labL - p.descriptor.labL); break;
+    case "darkToLight": arr.sort((p, q) => p.descriptor.labL - q.descriptor.labL); break;
+    case "warmToCool":  arr.sort((p, q) => (q.descriptor.labA + q.descriptor.labB) - (p.descriptor.labA + p.descriptor.labB)); break;
+    case "coolToWarm":  arr.sort((p, q) => (p.descriptor.labA + p.descriptor.labB) - (q.descriptor.labA + q.descriptor.labB)); break;
+    case "weightDesc":
+    default:            arr.sort((p, q) => q.descriptor.weight - p.descriptor.weight); break;
+  }
+  return arr;
+}
+
 // Recursively search the layer tree for a layer with the given id. doc.layers
 // only holds top-level items, so layers nested in groups need this walk.
 // Mirrors the same helper in useLayerPreview.ts.
@@ -140,6 +164,7 @@ export function SmashTab() {
   const [poolCount, setPoolCount] = useState(6);
   const [edgePreservation, setEdgePreservation] = useState(0.55);
   const [regionCleanup, setRegionCleanup] = useState(0.4);
+  const [colorVsValueBias, setColorVsValueBias] = useState(0.5);
   const [subPaletteSize, setSubPaletteSize] = useState(5);
 
   // ── Segmentation results + analyzing state ─────────────────────────
@@ -161,6 +186,8 @@ export function SmashTab() {
   const [hoveredSourceId, setHoveredSourceId] = useState<number | null>(null);
   // Nice-to-have: tint the target pool map by each region's matched donor.
   const [donorPreview, setDonorPreview] = useState(false);
+  // Display-only sort for the correspondence list.
+  const [sortMode, setSortMode] = useState<SortMode>("weightDesc");
 
   // ── Color transfer (in-panel preview) ─────────────────────────────
   // Blend amount fed to transferColors — 0 = unchanged target, 1 = full donor.
@@ -201,7 +228,7 @@ export function SmashTab() {
     const handle = setTimeout(() => {
       if (cancelled) return;
       try {
-        const opts = { poolCount, edgePreservation, regionCleanup, subPaletteSize };
+        const opts = { poolCount, edgePreservation, regionCleanup, colorVsValueBias, subPaletteSize };
         const sRes = segmentImage(source.segInput!.data, source.segInput!.width, source.segInput!.height, opts);
         const tRes = segmentImage(target.segInput!.data, target.segInput!.width, target.segInput!.height, opts);
         const corr = matchPools(sRes.pools, tRes.pools);
@@ -223,7 +250,7 @@ export function SmashTab() {
       }
     }, 16);
     return () => { cancelled = true; clearTimeout(handle); };
-  }, [source.segInput, target.segInput, poolCount, edgePreservation, regionCleanup, subPaletteSize]);
+  }, [source.segInput, target.segInput, poolCount, edgePreservation, regionCleanup, colorVsValueBias, subPaletteSize]);
 
   // ── Lookups ────────────────────────────────────────────────────────
   const sourcePoolsById = useMemo(() => {
@@ -445,6 +472,11 @@ export function SmashTab() {
   // Target pools sorted heaviest-first for the correspondence list.
   const targetPools = targetResult?.pools ?? [];
   const sourcePools = sourceResult?.pools ?? [];
+  // Display-sorted target pools — re-orders only the visible list.
+  const sortedTargetPools = useMemo(
+    () => sortPools(targetPools, sortMode),
+    [targetPools, sortMode],
+  );
 
   return (
     <div style={{ padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
@@ -479,6 +511,13 @@ export function SmashTab() {
             min={0} max={1} step={0.05}
             value={regionCleanup} onChange={setRegionCleanup}
             display={regionCleanup.toFixed(2)}
+          />
+          <Control
+            label="Color vs Value"
+            title="0 = chroma/hue identity dominates (skin shadow and shirt shadow stay separate by color). 0.5 = balanced. 1 = value/lightness dominates (classic luminance-driven cutout)."
+            min={0} max={1} step={0.05}
+            value={colorVsValueBias} onChange={setColorVsValueBias}
+            display={colorVsValueBias.toFixed(2)}
           />
           <Control
             label="Sub-palette size"
@@ -520,61 +559,9 @@ export function SmashTab() {
 
       {ready && (
         <>
-          {/* ── Correspondence: donor strip + target→source list ── */}
-          <Section title="CORRESPONDENCE">
-            {/* Donor-preview toggle + reset */}
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, cursor: "pointer" }}
-                title="Tint the target pool map by each region's matched source color — a preview of which donor goes where.">
-                <input type="checkbox" checked={donorPreview}
-                  onChange={e => setDonorPreview(e.target.checked)}
-                  style={{ cursor: "pointer", margin: 0 }} />
-                Donor preview
-              </label>
-              <div style={{ flex: 1 }} />
-              <div
-                onClick={isEdited ? resetToAuto : undefined}
-                title="Restore the automatic correspondence."
-                style={{
-                  padding: "3px 8px", fontSize: 10, borderRadius: 2,
-                  border: "1px solid #4a4a4a",
-                  background: isEdited ? "#3a3a3a" : "#2a2a2a",
-                  color: isEdited ? "#cccccc" : "#666666",
-                  cursor: isEdited ? "pointer" : "default", userSelect: "none",
-                }}
-              >
-                Reset to auto
-              </div>
-            </div>
-
-            {/* Correspondence list — one row per TARGET pool. Hover a row to
-                locate its region in the target map; click to open its inline
-                source-pool picker. */}
-            <div style={SUB_HEADER}>TARGET → SOURCE — hover to locate · click to remap</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              {targetPools.map(tp => {
-                const match = matchByTargetId.get(tp.id);
-                const donor = match ? sourcePoolsById.get(match.sourcePoolId) : undefined;
-                const selected = selectedTargetId === tp.id;
-                return (
-                  <CorrespondenceRow
-                    key={tp.id}
-                    targetPool={tp}
-                    donorPool={donor}
-                    score={match?.score}
-                    selected={selected}
-                    sourcePools={sourcePools}
-                    onSelect={() => setSelectedTargetId(selected ? null : tp.id)}
-                    onAssign={sid => assignDonorTo(tp.id, sid)}
-                    onHoverTarget={setHoveredTargetId}
-                    onHoverSource={setHoveredSourceId}
-                  />
-                );
-              })}
-            </div>
-          </Section>
-
-          {/* ── Color transfer — in-panel before/after preview ── */}
+          {/* ── Color transfer — in-panel before/after preview.
+                Placed ABOVE Correspondence so it stays anchored to a stable
+                spot while the correspondence list grows. ── */}
           <Section title="COLOR TRANSFER">
             <Control
               label="Strength"
@@ -690,6 +677,80 @@ export function SmashTab() {
                   </div>
                 )}
               </div>
+            </div>
+          </Section>
+
+          {/* ── Correspondence: target→source list with sort + scroll ── */}
+          <Section title="CORRESPONDENCE">
+            {/* Donor-preview toggle + sort selector + reset */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, cursor: "pointer" }}
+                title="Tint the target pool map by each region's matched source color — a preview of which donor goes where.">
+                <input type="checkbox" checked={donorPreview}
+                  onChange={e => setDonorPreview(e.target.checked)}
+                  style={{ cursor: "pointer", margin: 0 }} />
+                Donor preview
+              </label>
+              <div style={{ flex: 1 }} />
+              <select
+                value={sortMode}
+                onChange={e => setSortMode(e.target.value as SortMode)}
+                title="Reorder the target → source list for easier scanning. Display-only — doesn't change the mapping."
+                style={{
+                  fontSize: 10, padding: "2px 4px", borderRadius: 2,
+                  border: "1px solid #4a4a4a", background: "#2a2a2a",
+                  color: "#cccccc", fontFamily: "inherit", cursor: "pointer",
+                }}
+              >
+                <option value="weightDesc">Sort: largest first</option>
+                <option value="weightAsc">Sort: smallest first</option>
+                <option value="lightToDark">Sort: light → dark</option>
+                <option value="darkToLight">Sort: dark → light</option>
+                <option value="warmToCool">Sort: warm → cool</option>
+                <option value="coolToWarm">Sort: cool → warm</option>
+              </select>
+              <div
+                onClick={isEdited ? resetToAuto : undefined}
+                title="Restore the automatic correspondence."
+                style={{
+                  padding: "3px 8px", fontSize: 10, borderRadius: 2,
+                  border: "1px solid #4a4a4a",
+                  background: isEdited ? "#3a3a3a" : "#2a2a2a",
+                  color: isEdited ? "#cccccc" : "#666666",
+                  cursor: isEdited ? "pointer" : "default", userSelect: "none",
+                }}
+              >
+                Reset to auto
+              </div>
+            </div>
+
+            {/* Correspondence list — scrollable, capped height. Hover a row
+                to locate its region in the target map; click to open its
+                inline source-pool picker. */}
+            <div style={SUB_HEADER}>TARGET → SOURCE — hover to locate · click to remap</div>
+            <div style={{
+              display: "flex", flexDirection: "column", gap: 4,
+              maxHeight: 360, overflowY: "auto", paddingRight: 2,
+            }}>
+              {sortedTargetPools.map(tp => {
+                const match = matchByTargetId.get(tp.id);
+                const donor = match ? sourcePoolsById.get(match.sourcePoolId) : undefined;
+                const selected = selectedTargetId === tp.id;
+                return (
+                  <CorrespondenceRow
+                    key={tp.id}
+                    targetPool={tp}
+                    donorPool={donor}
+                    score={match?.score}
+                    selected={selected}
+                    sourcePools={sourcePools}
+                    onSelect={() => setSelectedTargetId(selected ? null : tp.id)}
+                    onAssign={sid => assignDonorTo(tp.id, sid)}
+                    onHoverTarget={setHoveredTargetId}
+                    onHoverSource={setHoveredSourceId}
+                  />
+                );
+              })}
             </div>
           </Section>
         </>
