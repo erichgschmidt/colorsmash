@@ -13,7 +13,7 @@
 // Segmentation runs in a deferred effect so the "analyzing…" state can paint
 // before the synchronous segment work blocks the main thread.
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { app, readLayerPixels, writePixelLayer, executeAsModal } from "../services/photoshop";
 import { useLayers } from "./useLayers";
 import { useLayerPreview } from "./useLayerPreview";
@@ -38,6 +38,21 @@ const HOVER_DIM = 0.32;
 const POOL_MAP_W = (PANEL_WIDTH - 6) / 2;
 
 type SrcMode = "layer" | "selection" | "folder";
+
+// Overlay dot rendered on a PoolMapPane. `kind` selects how PoolMapPane wires
+// pointer events: "source" / "target" dots reference an anchor by index;
+// "activeSource" is the unique sticky-source "loaded gun" dot which lives
+// outside the anchors array. `dashed` is purely cosmetic (used by activeSource
+// to read as pending/uncommitted).
+type PoolMapDot = {
+  kind: "source" | "target" | "activeSource";
+  anchorIndex?: number;
+  nx: number;
+  ny: number;
+  radius: number;
+  color: string;
+  dashed?: boolean;
+};
 
 // Sort modes for the TARGET → SOURCE list. Display-only — doesn't affect
 // the underlying matches array or anything downstream.
@@ -194,12 +209,15 @@ export function SmashTab() {
 
   // ── Focal anchors (list of pairs) ──
   // Each anchor is a completed source↔target pair, captured with the source
-  // pool id picked at the click site. Building one happens in two clicks:
-  // first the SOURCE map (sets pendingSource), then the TARGET map (consumes
-  // pendingSource and pushes the new pair). Each anchor carries its OWN
-  // falloff radius; the shared `anchorRadius` state below is the default
-  // value stamped onto newly-completed anchors (and is editable per-row
-  // afterwards via the list slider).
+  // pool id picked at the click site. The workflow is "sticky source":
+  //   1. Click the SOURCE map → sets `activeSource` (the "loaded gun").
+  //   2. Click the TARGET map → drops an anchor using activeSource's point
+  //      + pool id; activeSource PERSISTS so subsequent target clicks
+  //      spawn more anchors all sharing the same source.
+  // activeSource is replaced by another source-map click, or cleared via
+  // the × on its dot. Each anchor carries its OWN falloff radius; the
+  // shared `anchorRadius` state below seeds NEW anchors only — existing
+  // anchors keep what they were created with (re-tune via the list slider).
   interface AnchorPair {
     sourceX: number;
     sourceY: number;
@@ -209,7 +227,7 @@ export function SmashTab() {
     radius: number;
   }
   const [anchors, setAnchors] = useState<AnchorPair[]>([]);
-  const [pendingSource, setPendingSource] = useState<
+  const [activeSource, setActiveSource] = useState<
     { nx: number; ny: number; poolId: number } | null
   >(null);
   // Default falloff radius applied to NEW anchors when they're completed.
@@ -235,34 +253,45 @@ export function SmashTab() {
   // so they read as a pair.
   const ANCHOR_COLORS = ["#ff9a00", "#22c1d6", "#d646b9", "#7ad62f", "#e8d227"];
   const colorForAnchor = (i: number) => ANCHOR_COLORS[i % ANCHOR_COLORS.length];
+  // Distinct hue for the "loaded gun" — reads as "not yet committed".
+  const ACTIVE_SOURCE_COLOR = "#fff14d";
 
-  // Dot+ring overlays for the two pool maps. Each completed anchor contributes
-  // a source dot and a target dot in its paired colour. A pending source (no
-  // target yet) is shown on the source map only, in the colour the next anchor
-  // would take.
-  const sourceAnchorDots = useMemo(() => {
-    const dots = anchors.map((a, i) => ({
+  // Dot+ring overlays for the two pool maps. Each committed anchor contributes
+  // a source dot and a target dot in its paired colour. The active source (a
+  // sticky "loaded gun", may spawn many anchors) is shown on the source map
+  // only, in a distinct colour with a dashed ring so it reads as pending.
+  //
+  // The `kind` field tells PoolMapPane how to wire pointer events: anchor dots
+  // map back to an `anchorIndex`; the active-source dot drags/removes the
+  // activeSource state directly.
+  const sourceAnchorDots = useMemo<PoolMapDot[]>(() => {
+    const dots: PoolMapDot[] = anchors.map((a, i) => ({
+      kind: "source",
+      anchorIndex: i,
       nx: a.sourceX,
       ny: a.sourceY,
       radius: a.radius,
       color: colorForAnchor(i),
     }));
-    if (pendingSource) {
-      // Pending source has no committed radius yet — preview it at the
-      // default-for-new-anchors value so the ring shows what the next anchor
-      // will spawn with.
+    if (activeSource) {
       dots.push({
-        nx: pendingSource.nx,
-        ny: pendingSource.ny,
+        kind: "activeSource",
+        nx: activeSource.nx,
+        ny: activeSource.ny,
+        // Active source has no committed radius; preview it at the
+        // default-for-new-anchors value.
         radius: anchorRadius,
-        color: colorForAnchor(anchors.length),
+        color: ACTIVE_SOURCE_COLOR,
+        dashed: true,
       });
     }
     return dots;
-  }, [anchors, pendingSource, anchorRadius]);
-  const targetAnchorDots = useMemo(
+  }, [anchors, activeSource, anchorRadius]);
+  const targetAnchorDots = useMemo<PoolMapDot[]>(
     () =>
       anchors.map((a, i) => ({
+        kind: "target",
+        anchorIndex: i,
         nx: a.targetX,
         ny: a.targetY,
         radius: a.radius,
@@ -462,10 +491,10 @@ export function SmashTab() {
   };
 
   // ── Focal anchor click handlers ──
-  // Source-map click: capture a pending source point + the pool id beneath it.
-  // The pool id is read from the segmentation labels at the clicked location.
-  // The next target-map click consumes this pendingSource to push a new pair.
-  const handleAnchorSourceClick = (nx: number, ny: number) => {
+  // Source-map click: load (or replace) the sticky activeSource at the click
+  // site. The pool id is read from the segmentation labels at that spot. The
+  // activeSource then persists across target clicks (sticky source).
+  const handleAnchorSourceClick = useCallback((nx: number, ny: number) => {
     if (!sourceResult) return;
     const sx = Math.min(
       sourceResult.width - 1,
@@ -477,15 +506,18 @@ export function SmashTab() {
     );
     const poolId = sourceResult.labels[sy * sourceResult.width + sx];
     if (poolId < 0) return; // clicked a transparent / unlabeled pixel
-    setPendingSource({ nx, ny, poolId });
-  };
-  const handleAnchorTargetClick = (nx: number, ny: number) => {
+    setActiveSource({ nx, ny, poolId });
+  }, [sourceResult]);
+  // Target-map click: drop a new anchor using the sticky activeSource. The
+  // activeSource is NOT cleared — subsequent target clicks spawn more anchors
+  // all sharing the same source.
+  const handleAnchorTargetClick = useCallback((nx: number, ny: number) => {
     if (!targetResult) return;
-    if (!pendingSource) return; // no source click yet — hint shown in the UI
+    if (!activeSource) return; // no source loaded yet — hint shown in the UI
     const pair: AnchorPair = {
-      sourceX: pendingSource.nx,
-      sourceY: pendingSource.ny,
-      sourcePoolId: pendingSource.poolId,
+      sourceX: activeSource.nx,
+      sourceY: activeSource.ny,
+      sourcePoolId: activeSource.poolId,
       targetX: nx,
       targetY: ny,
       // Snapshot the current "default for new anchors" value — this becomes
@@ -493,19 +525,65 @@ export function SmashTab() {
       radius: anchorRadius,
     };
     setAnchors(prev => [...prev, pair]);
-    setPendingSource(null);
-  };
+    // activeSource intentionally NOT cleared — sticky source persists.
+  }, [targetResult, activeSource, anchorRadius]);
   const clearAllAnchors = () => {
     setAnchors([]);
-    setPendingSource(null);
+    setActiveSource(null);
   };
-  const removeAnchor = (index: number) => {
+  const removeAnchor = useCallback((index: number) => {
     setAnchors(prev => prev.filter((_, i) => i !== index));
-  };
+  }, []);
+  const clearActiveSource = useCallback(() => {
+    setActiveSource(null);
+  }, []);
   // Mutate a single anchor's radius (driven by the per-row slider).
   const setAnchorRadiusAt = (index: number, radius: number) => {
     setAnchors(prev => prev.map((a, i) => (i === index ? { ...a, radius } : a)));
   };
+
+  // ── Drag handlers — repositioning existing anchor dots / activeSource ──
+  // Updates an anchor's source position. Re-reads the pool id at the new spot;
+  // returns false if the new pixel is transparent (caller snaps back).
+  const moveAnchorSource = useCallback((index: number, nx: number, ny: number): boolean => {
+    if (!sourceResult) return false;
+    const sx = Math.min(
+      sourceResult.width - 1,
+      Math.max(0, Math.floor(nx * sourceResult.width)),
+    );
+    const sy = Math.min(
+      sourceResult.height - 1,
+      Math.max(0, Math.floor(ny * sourceResult.height)),
+    );
+    const poolId = sourceResult.labels[sy * sourceResult.width + sx];
+    if (poolId < 0) return false;
+    setAnchors(prev => prev.map((a, i) =>
+      i === index ? { ...a, sourceX: nx, sourceY: ny, sourcePoolId: poolId } : a,
+    ));
+    return true;
+  }, [sourceResult]);
+  const moveAnchorTarget = useCallback((index: number, nx: number, ny: number): boolean => {
+    if (!targetResult) return false;
+    setAnchors(prev => prev.map((a, i) =>
+      i === index ? { ...a, targetX: nx, targetY: ny } : a,
+    ));
+    return true;
+  }, [targetResult]);
+  const moveActiveSource = useCallback((nx: number, ny: number): boolean => {
+    if (!sourceResult) return false;
+    const sx = Math.min(
+      sourceResult.width - 1,
+      Math.max(0, Math.floor(nx * sourceResult.width)),
+    );
+    const sy = Math.min(
+      sourceResult.height - 1,
+      Math.max(0, Math.floor(ny * sourceResult.height)),
+    );
+    const poolId = sourceResult.labels[sy * sourceResult.width + sx];
+    if (poolId < 0) return false;
+    setActiveSource({ nx, ny, poolId });
+    return true;
+  }, [sourceResult]);
 
   // First press starts the live preview; the effect above keeps it current
   // from then on, so every control change is reflected automatically.
@@ -698,8 +776,12 @@ export function SmashTab() {
               display={sourceMapDisplay}
               analyzing={analyzing}
               placeholder={source.snapError ?? "Pick a source layer."}
-              onClickNormalized={sourceResult ? handleAnchorSourceClick : undefined}
+              onPlaceNormalized={sourceResult ? handleAnchorSourceClick : undefined}
               anchorDots={sourceAnchorDots}
+              onMoveAnchor={moveAnchorSource}
+              onMoveActiveSource={moveActiveSource}
+              onRemoveAnchor={removeAnchor}
+              onRemoveActiveSource={clearActiveSource}
             />
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -709,8 +791,10 @@ export function SmashTab() {
               display={targetMapDisplay}
               analyzing={analyzing}
               placeholder={target.snapError ?? "Pick a target layer."}
-              onClickNormalized={targetResult ? handleAnchorTargetClick : undefined}
+              onPlaceNormalized={targetResult ? handleAnchorTargetClick : undefined}
               anchorDots={targetAnchorDots}
+              onMoveAnchor={moveAnchorTarget}
+              onRemoveAnchor={removeAnchor}
             />
           </div>
         </div>
@@ -897,25 +981,27 @@ export function SmashTab() {
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span style={{
                   fontSize: 10,
-                  color: pendingSource
+                  color: activeSource
                     ? "#d8c87d"
                     : anchors.length > 0
                       ? "#7dd87d"
                       : "#9a9aa8",
                 }}>
-                  {pendingSource
-                    ? `Click the TARGET map to complete anchor ${anchors.length + 1}`
+                  {activeSource
+                    ? anchors.length === 0
+                      ? "Active source ready — click TARGET to drop an anchor (source stays loaded)."
+                      : `Active source ready — click TARGET to drop another anchor (${anchors.length} so far). Drag dots to reposition · × to remove.`
                     : anchors.length === 0
                       ? "0 anchors — click the SOURCE map to start one."
                       : anchors.length === 1
-                        ? "1 anchor active — click the SOURCE map to add another."
-                        : `${anchors.length} anchors active — click the SOURCE map to add another.`}
+                        ? "1 anchor active — click SOURCE to load another. Drag dots to reposition · × to remove."
+                        : `${anchors.length} anchors active — click SOURCE to load another. Drag dots to reposition · × to remove.`}
                 </span>
                 <div style={{ flex: 1 }} />
-                {(anchors.length > 0 || pendingSource) && (
+                {(anchors.length > 0 || activeSource) && (
                   <div
                     onClick={clearAllAnchors}
-                    title="Remove every focal anchor."
+                    title="Remove every focal anchor and clear the active source."
                     style={{
                       padding: "3px 8px", fontSize: 10, borderRadius: 2,
                       border: "1px solid #4a4a4a", background: "#3a3a3a",
@@ -926,7 +1012,7 @@ export function SmashTab() {
                   </div>
                 )}
               </div>
-              {(anchors.length > 0 || pendingSource) && (
+              {(anchors.length > 0 || activeSource) && (
                 <Control
                   label="New-anchor radius"
                   title="Default falloff radius applied to NEWLY-created anchors only. Existing anchors keep their own radius — tune each one individually with its row slider below."
@@ -1076,34 +1162,206 @@ function useDisplaySize(result: SegmentResult | null, maxWidth = PANEL_WIDTH): {
 }
 
 // ── One pool-map image pane (label + framed image + analyzing overlay) ──
+//
+// Interaction model:
+// - Place-new: a pointerdown on empty map area starts a "place candidate".
+//   If the pointer doesn't move past PLACE_DRAG_PX before pointerup, the
+//   pointerup site is treated as a click and `onPlaceNormalized` fires.
+// - Drag: a pointerdown on a dot's hit area starts a drag for that dot;
+//   pointermove (attached to window) calls the matching move callback, and
+//   pointerup detaches and clears the drag. If a source-side drag tries to
+//   land on a transparent pixel, the move callback returns false and the
+//   anchor stays where it last validly was (snap-back).
+// - Remove: the × badge eats its own pointer events and short-circuits to
+//   the matching remove callback — never starts a drag.
+//
+// Movement past PLACE_DRAG_PX during a place candidate cancels the place
+// (treated as a stray drag) so users don't get an unwanted anchor when they
+// just shifted the cursor.
 function PoolMapPane({
   label, url, display, analyzing, placeholder,
-  onClickNormalized, anchorDots,
+  onPlaceNormalized, anchorDots,
+  onMoveAnchor, onMoveActiveSource,
+  onRemoveAnchor, onRemoveActiveSource,
 }: {
   label: string;
   url: string | null;
   display: { w: number; h: number };
   analyzing: boolean;
   placeholder: string;
-  onClickNormalized?: (nx: number, ny: number) => void;
+  // Click-on-empty-area handler (true "place new" click — debounced against
+  // stray drag motion).
+  onPlaceNormalized?: (nx: number, ny: number) => void;
   // Anchor overlays — every dot+ring this map should render. Order is the
   // pair index, so callers control colour pairing across the two maps.
-  anchorDots?: { nx: number; ny: number; radius: number; color: string }[];
+  anchorDots?: PoolMapDot[];
+  // Drag the dot at anchorIndex to (nx, ny). Returns false to indicate the
+  // attempt is invalid (e.g. transparent pixel) — the pane interprets that
+  // as "snap back to previous valid position".
+  onMoveAnchor?: (anchorIndex: number, nx: number, ny: number) => boolean;
+  // Drag the activeSource dot. Same return semantics as onMoveAnchor.
+  onMoveActiveSource?: (nx: number, ny: number) => boolean;
+  onRemoveAnchor?: (anchorIndex: number) => void;
+  onRemoveActiveSource?: () => void;
 }) {
-  const handleClick = onClickNormalized
-    ? (e: React.MouseEvent<HTMLDivElement>) => {
-        const rect = e.currentTarget.getBoundingClientRect();
-        if (rect.width === 0 || rect.height === 0) return;
-        const nx = (e.clientX - rect.left) / rect.width;
-        const ny = (e.clientY - rect.top) / rect.height;
-        if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return;
-        onClickNormalized(nx, ny);
+  // Hit radius (px) for grabbing a dot — slightly larger than the 8-px
+  // visual for forgiving grabs.
+  const DOT_HIT_RADIUS = 12;
+  // Max pixel movement between pointerdown and pointerup that still counts
+  // as a "click" rather than a drag (used for place-new candidates and
+  // distinguishing a real drag from a jitter on dot pointerdown).
+  const PLACE_DRAG_PX = 4;
+  // Pointerup site for a place-new candidate must be within this many px of
+  // the pointerdown site (same general area) to count as a click.
+  const PLACE_TOLERANCE_PX = 6;
+
+  // Drag state. `dragging` is null when idle. `moved` flips true once the
+  // pointer has moved past PLACE_DRAG_PX from `startX`/`startY`, which both
+  // suppresses the place-new on pointerup and enables visual drag boost.
+  type DragState =
+    | { mode: "place"; startX: number; startY: number; moved: boolean }
+    | { mode: "dragAnchor"; anchorIndex: number; startX: number; startY: number; moved: boolean; lastValid: { nx: number; ny: number } }
+    | { mode: "dragActive"; startX: number; startY: number; moved: boolean; lastValid: { nx: number; ny: number } };
+  const [dragging, setDragging] = useState<DragState | null>(null);
+  // Hovered dot index — null when none. `-1` is the special id for the
+  // activeSource dot. Drives the opacity boost.
+  const [hoveredDotKey, setHoveredDotKey] = useState<string | null>(null);
+
+  const mapRef = useRef<HTMLDivElement | null>(null);
+
+  // Convert a window-space pointer event to normalized [0,1] map coords,
+  // clamped to the map rect.
+  const toNormalized = useCallback((clientX: number, clientY: number): { nx: number; ny: number } | null => {
+    const el = mapRef.current;
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return null;
+    const nx = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    const ny = Math.min(1, Math.max(0, (clientY - rect.top) / rect.height));
+    return { nx, ny };
+  }, []);
+
+  // Window-level pointermove/pointerup wiring — only mounted while a drag
+  // (or place candidate) is in progress. Lets the cursor leave the map.
+  useEffect(() => {
+    if (!dragging) return;
+
+    const onMove = (e: PointerEvent) => {
+      const dx = e.clientX - dragging.startX;
+      const dy = e.clientY - dragging.startY;
+      const past = Math.hypot(dx, dy) > PLACE_DRAG_PX;
+
+      if (dragging.mode === "place") {
+        if (past && !dragging.moved) {
+          // Place candidate cancelled — user dragged too far.
+          setDragging({ ...dragging, moved: true });
+        }
+        return;
       }
-    : undefined;
+
+      // Real drag — update the anchored point continuously.
+      const norm = toNormalized(e.clientX, e.clientY);
+      if (!norm) return;
+      if (dragging.mode === "dragAnchor") {
+        const ok = onMoveAnchor?.(dragging.anchorIndex, norm.nx, norm.ny) ?? false;
+        if (ok) {
+          setDragging({ ...dragging, moved: true, lastValid: norm });
+        } else {
+          // Invalid drop — keep the last valid position but mark moved so
+          // we don't treat pointerup as a click.
+          setDragging({ ...dragging, moved: true });
+        }
+      } else if (dragging.mode === "dragActive") {
+        const ok = onMoveActiveSource?.(norm.nx, norm.ny) ?? false;
+        if (ok) {
+          setDragging({ ...dragging, moved: true, lastValid: norm });
+        } else {
+          setDragging({ ...dragging, moved: true });
+        }
+      }
+    };
+
+    const onUp = (e: PointerEvent) => {
+      if (dragging.mode === "place") {
+        // Place-new fires only if we didn't drag away AND the up is in the
+        // same area AND we're still over the map.
+        if (!dragging.moved) {
+          const dx = e.clientX - dragging.startX;
+          const dy = e.clientY - dragging.startY;
+          if (Math.hypot(dx, dy) <= PLACE_TOLERANCE_PX) {
+            const norm = toNormalized(e.clientX, e.clientY);
+            if (norm) onPlaceNormalized?.(norm.nx, norm.ny);
+          }
+        }
+      } else if (dragging.mode === "dragAnchor") {
+        // If the final drop was invalid (off-image, transparent), snap
+        // back to the last valid position so the anchor doesn't sit on a
+        // visually wrong spot. moveAnchor returns true on success, so the
+        // anchor already lives at lastValid — nothing more to do.
+        const norm = toNormalized(e.clientX, e.clientY);
+        if (norm) {
+          const ok = onMoveAnchor?.(dragging.anchorIndex, norm.nx, norm.ny) ?? false;
+          if (!ok) {
+            onMoveAnchor?.(dragging.anchorIndex, dragging.lastValid.nx, dragging.lastValid.ny);
+          }
+        }
+      } else if (dragging.mode === "dragActive") {
+        const norm = toNormalized(e.clientX, e.clientY);
+        if (norm) {
+          const ok = onMoveActiveSource?.(norm.nx, norm.ny) ?? false;
+          if (!ok) {
+            onMoveActiveSource?.(dragging.lastValid.nx, dragging.lastValid.ny);
+          }
+        }
+      }
+      setDragging(null);
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+  }, [dragging, toNormalized, onPlaceNormalized, onMoveAnchor, onMoveActiveSource]);
+
+  // Place candidate starter — pointerdown on map area NOT on a dot.
+  const onMapPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!onPlaceNormalized) return;
+    // Don't start a place candidate if the down hit a dot's interactive
+    // child (badge / dot hit area) — those stopPropagation on themselves.
+    setDragging({
+      mode: "place", startX: e.clientX, startY: e.clientY, moved: false,
+    });
+  };
 
   // Falloff rings size by the larger displayed edge, matching radius units.
   const ringDiameterFor = (radius: number) =>
     radius * 2 * Math.max(display.w, display.h);
+
+  // Base opacities — lower than before so stacks of anchors stay legible.
+  // The ring gets an additional scale-down when many anchors are present
+  // (clamped to a floor so it never disappears entirely). The dragged or
+  // hovered dot is boosted back to full to make manipulation obvious.
+  const dotCount = anchorDots?.length ?? 0;
+  const ringStackScale = dotCount <= 2
+    ? 1
+    : Math.max(0.45, 1 / Math.sqrt(dotCount / 2));
+  const BASE_RING_OPACITY = 0.55 * ringStackScale;
+  const BASE_DOT_OPACITY = 0.85;
+
+  const dotKey = (d: PoolMapDot) =>
+    d.kind === "activeSource" ? "active" : `${d.kind}-${d.anchorIndex}`;
+
+  const isDraggingDot = (d: PoolMapDot): boolean => {
+    if (!dragging) return false;
+    if (d.kind === "activeSource" && dragging.mode === "dragActive") return true;
+    if (d.kind !== "activeSource" && dragging.mode === "dragAnchor"
+      && dragging.anchorIndex === d.anchorIndex) return true;
+    return false;
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
@@ -1116,11 +1374,17 @@ function PoolMapPane({
       }}>
         {url && (
           <div
-            onClick={handleClick}
+            ref={mapRef}
+            onPointerDown={onMapPointerDown}
             style={{
               position: "relative",
               width: display.w, height: display.h,
-              cursor: handleClick ? "crosshair" : "default",
+              cursor: onPlaceNormalized
+                ? (dragging?.mode === "dragAnchor" || dragging?.mode === "dragActive"
+                    ? "grabbing"
+                    : "crosshair")
+                : "default",
+              touchAction: "none",
             }}
           >
             <img
@@ -1128,31 +1392,120 @@ function PoolMapPane({
               style={{
                 width: display.w, height: display.h,
                 imageRendering: "pixelated", display: "block",
+                pointerEvents: "none",
               }}
             />
-            {anchorDots && anchorDots.map((d, i) => {
+            {anchorDots && anchorDots.map(d => {
+              const key = dotKey(d);
               const ringDiameter = ringDiameterFor(d.radius);
+              const draggingThis = isDraggingDot(d);
+              const hoveredThis = hoveredDotKey === key;
+              const boost = draggingThis || hoveredThis;
+              const ringOpacity = boost ? 1 : BASE_RING_OPACITY;
+              const dotOpacity = boost ? 1 : BASE_DOT_OPACITY;
+
+              const canDrag = d.kind === "activeSource"
+                ? !!onMoveActiveSource
+                : !!onMoveAnchor;
+              const canRemove = d.kind === "activeSource"
+                ? !!onRemoveActiveSource
+                : !!onRemoveAnchor;
+
+              const startDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+                if (!canDrag) return;
+                e.stopPropagation(); // suppress place-new candidate
+                if (d.kind === "activeSource") {
+                  setDragging({
+                    mode: "dragActive",
+                    startX: e.clientX, startY: e.clientY, moved: false,
+                    lastValid: { nx: d.nx, ny: d.ny },
+                  });
+                } else {
+                  setDragging({
+                    mode: "dragAnchor",
+                    anchorIndex: d.anchorIndex!,
+                    startX: e.clientX, startY: e.clientY, moved: false,
+                    lastValid: { nx: d.nx, ny: d.ny },
+                  });
+                }
+              };
+
+              const handleRemove = (e: React.PointerEvent<HTMLDivElement>) => {
+                // Eat the event so it never starts a drag or a place-new.
+                e.stopPropagation();
+                e.preventDefault();
+                if (d.kind === "activeSource") onRemoveActiveSource?.();
+                else onRemoveAnchor?.(d.anchorIndex!);
+              };
+
               return (
-                <Fragment key={i}>
-                  {/* Falloff ring */}
+                <Fragment key={key}>
+                  {/* Falloff ring — visual only, never intercepts pointer. */}
                   <div style={{
                     position: "absolute", pointerEvents: "none",
                     left: d.nx * display.w - ringDiameter / 2,
                     top: d.ny * display.h - ringDiameter / 2,
                     width: ringDiameter, height: ringDiameter,
                     borderRadius: "50%",
-                    border: `1px solid ${d.color}`,
-                    opacity: 0.85,
+                    border: d.dashed
+                      ? `1px dashed ${d.color}`
+                      : `1px solid ${d.color}`,
+                    opacity: ringOpacity,
                   }} />
-                  {/* Center dot */}
-                  <div style={{
-                    position: "absolute", pointerEvents: "none",
-                    left: d.nx * display.w - 4,
-                    top: d.ny * display.h - 4,
-                    width: 8, height: 8, borderRadius: "50%",
-                    background: d.color,
-                    border: "1px solid #000",
-                  }} />
+                  {/* Center dot — also the drag handle (square hit area
+                      slightly larger than the visible 8px). */}
+                  <div
+                    onPointerDown={startDrag}
+                    onPointerEnter={() => setHoveredDotKey(key)}
+                    onPointerLeave={() => setHoveredDotKey(k => k === key ? null : k)}
+                    style={{
+                      position: "absolute",
+                      left: d.nx * display.w - DOT_HIT_RADIUS,
+                      top: d.ny * display.h - DOT_HIT_RADIUS,
+                      width: DOT_HIT_RADIUS * 2, height: DOT_HIT_RADIUS * 2,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      cursor: canDrag
+                        ? (draggingThis ? "grabbing" : "grab")
+                        : "default",
+                    }}
+                  >
+                    <div style={{
+                      width: 8, height: 8, borderRadius: "50%",
+                      background: d.color,
+                      border: "1px solid #000",
+                      opacity: dotOpacity,
+                      pointerEvents: "none",
+                    }} />
+                  </div>
+                  {/* × remove badge — high opacity, takes precedence over
+                      the drag hit area via stopPropagation + its own offset
+                      pointer-events region. */}
+                  {canRemove && (
+                    <div
+                      onPointerDown={handleRemove}
+                      title={d.kind === "activeSource"
+                        ? "Clear the active source."
+                        : `Remove anchor ${(d.anchorIndex ?? 0) + 1}.`}
+                      style={{
+                        position: "absolute",
+                        // Upper-right of the dot.
+                        left: d.nx * display.w + 4,
+                        top: d.ny * display.h - 12,
+                        width: 12, height: 12,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        background: "#1f1f1f",
+                        color: "#ffffff",
+                        border: `1px solid ${d.color}`,
+                        borderRadius: "50%",
+                        fontSize: 10, lineHeight: "10px", fontWeight: 700,
+                        cursor: "pointer",
+                        userSelect: "none",
+                        opacity: 0.95,
+                      }}
+                    >
+                      ×
+                    </div>
+                  )}
                 </Fragment>
               );
             })}
