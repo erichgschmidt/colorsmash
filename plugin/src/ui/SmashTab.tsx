@@ -27,8 +27,9 @@ import { segmentImage, SegmentResult, Pool } from "../core/clusters";
 import { matchPools, PoolMatch, Correspondence } from "../core/match";
 import { transferColors, vectorizeUpscaleLabels, type TransferAnchor } from "../core/transfer";
 
-// Max edge fed into segmentImage — keeps per-pixel clustering under a frame
-// budget while staying detailed enough for a recognizable pool map.
+// Default max edge fed into segmentImage — keeps per-pixel clustering under a
+// frame budget while staying detailed enough for a recognizable pool map. The
+// live value is component state (the Fidelity slider) — this is just the seed.
 const SEGMENT_MAX_EDGE = 256;
 // Panel content width budget — pool-map images scale to fit this.
 const PANEL_WIDTH = 220;
@@ -96,7 +97,7 @@ function findLayerById(layers: any[], id: number): any | null {
 // Encapsulates one image's doc list + active doc + layer pick + snapshot.
 // SmashTab uses two of these (source + target). Duplication of AnalysisTab's
 // machinery is intentional — a prototype, not worth a shared abstraction yet.
-function useImagePicker() {
+function useImagePicker(segmentMaxEdge: number) {
   const [docs, setDocs] = useState<{ id: number; name: string }[]>([]);
   const [docId, setDocId] = useState<number | null>(null);
   const [layerId, setLayerId] = useState<number | null>(null);
@@ -132,9 +133,9 @@ function useImagePicker() {
     const bounds = snap.bounds ?? { left: 0, top: 0, right: snap.width, bottom: snap.height };
     return downsampleToMaxEdge(
       { width: snap.width, height: snap.height, data: snap.data, bounds },
-      SEGMENT_MAX_EDGE,
+      segmentMaxEdge,
     );
-  }, [snap]);
+  }, [snap, segmentMaxEdge]);
 
   return {
     docs, docId, setDocId, layerId, setLayerId,
@@ -174,9 +175,6 @@ function buildPoolMapUrl(
 }
 
 export function SmashTab() {
-  const source = useImagePicker();
-  const target = useImagePicker();
-
   // ── Shared segmentation controls (applied to BOTH images) ──────────
   const [poolCount, setPoolCount] = useState(6);
   const [edgePreservation, setEdgePreservation] = useState(0.55);
@@ -184,6 +182,13 @@ export function SmashTab() {
   const [colorVsValueBias, setColorVsValueBias] = useState(0.5);
   const [neutralProtection, setNeutralProtection] = useState(0);
   const [subPaletteSize, setSubPaletteSize] = useState(5);
+  // Fidelity = segmentation working resolution. Higher = finer islands /
+  // crisper boundaries, but slower to re-segment on every control change.
+  // Shared between source and target so both sides recompute together.
+  const [segmentMaxEdge, setSegmentMaxEdge] = useState(SEGMENT_MAX_EDGE);
+
+  const source = useImagePicker(segmentMaxEdge);
+  const target = useImagePicker(segmentMaxEdge);
 
   // ── Segmentation results + analyzing state ─────────────────────────
   const [sourceResult, setSourceResult] = useState<SegmentResult | null>(null);
@@ -307,6 +312,10 @@ export function SmashTab() {
   const [relax, setRelax] = useState(0.35);
   // Luminance preservation — 0 = full recolor, 1 = keep target's lightness.
   const [preserveLuminance, setPreserveLuminance] = useState(0);
+  // Source richness — 0 = sub-swatch averaged transfer (today's behaviour),
+  // 1 = per-pixel sample-rank match against the donor pool's actual source
+  // pixels, pulling the donor's original chroma variation through.
+  const [richness, setRichness] = useState(0);
   // The recolored-target PNG data URL. null until a transfer has been run.
   const [transferUrl, setTransferUrl] = useState<string | null>(null);
   // Before/after toggle for the preview pane (false = before, true = after).
@@ -458,8 +467,10 @@ export function SmashTab() {
         const { data, width, height } = target.segInput!;
         const recolored = transferColors(
           data, width, height,
-          targetResult, sourceResult,
-          correspondence, { strength, relax, preserveLuminance, anchors: transferAnchors },
+          targetResult,
+          source.segInput!.data, sourceResult,
+          correspondence,
+          { strength, relax, preserveLuminance, richness, anchors: transferAnchors },
         );
         if (!cancelled) {
           setTransferUrl(rgbaToPngDataUrl(recolored, width, height));
@@ -473,7 +484,7 @@ export function SmashTab() {
       }
     }, 16);
     return () => { cancelled = true; clearTimeout(handle); };
-  }, [hasApplied, sourceResult, targetResult, target.segInput, matches, strength, relax, preserveLuminance, transferAnchors]);
+  }, [hasApplied, source.segInput, sourceResult, targetResult, target.segInput, matches, strength, relax, preserveLuminance, richness, transferAnchors]);
 
   // ── Remap interaction ──────────────────────────────────────────────
   // Reassign a target pool's donor (from a row's inline source-pool picker).
@@ -643,8 +654,10 @@ export function SmashTab() {
 
       const recolored = transferColors(
         fullBuf.data, fullW, fullH,
-        fullResult, sourceResult,
-        correspondence, { strength, relax, preserveLuminance, anchors: transferAnchors },
+        fullResult,
+        source.segInput!.data, sourceResult,
+        correspondence,
+        { strength, relax, preserveLuminance, richness, anchors: transferAnchors },
       );
 
       // Place the new layer over the target layer's region, not at (0,0).
@@ -763,6 +776,13 @@ export function SmashTab() {
             value={subPaletteSize} onChange={setSubPaletteSize}
             display={String(subPaletteSize)}
           />
+          <Control
+            label="Fidelity"
+            title="Working resolution for the segmentation. Higher = finer islands and crisper boundaries, but slower to re-segment. Default 256."
+            min={256} max={512} step={64}
+            value={segmentMaxEdge} onChange={setSegmentMaxEdge}
+            display={String(segmentMaxEdge)}
+          />
         </div>
       </Section>
 
@@ -830,6 +850,13 @@ export function SmashTab() {
               min={0} max={1} step={0.05}
               value={preserveLuminance} onChange={setPreserveLuminance}
               display={preserveLuminance.toFixed(2)}
+            />
+            <Control
+              label="Source richness"
+              title="0 = simplified sub-swatch transfer (today's behaviour). 1 = pull the donor pool's actual source pixel colours through via lightness-rank matching, so the source's full chroma variation comes through instead of just a few averages."
+              min={0} max={1} step={0.05}
+              value={richness} onChange={setRichness}
+              display={richness.toFixed(2)}
             />
 
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>

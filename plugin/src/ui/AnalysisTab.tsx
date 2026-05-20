@@ -20,9 +20,10 @@ import { rgbaToPngDataUrl } from "./encodePng";
 import { matchStyles } from "./MatchSliders";
 import { segmentImage, expandPool, collapsePool, SegmentResult, Pool } from "../core/clusters";
 
-// Max edge fed into segmentImage. The layer snapshot already comes in at
-// PREVIEW_MAX_EDGE (640); 256 keeps the per-pixel clustering well under a
-// frame budget while staying detailed enough for a recognizable pool map.
+// Default max edge fed into segmentImage. The layer snapshot already comes in
+// at PREVIEW_MAX_EDGE (640); 256 keeps the per-pixel clustering well under a
+// frame budget while staying detailed enough for a recognizable pool map. The
+// live value is component state (the Fidelity slider) — this is just the seed.
 const SEGMENT_MAX_EDGE = 256;
 // Panel content width budget — the pool-map canvas scales to fit this.
 const PANEL_WIDTH = 220;
@@ -79,6 +80,9 @@ export function AnalysisTab() {
   const [colorVsValueBias, setColorVsValueBias] = useState(0.5);
   const [neutralProtection, setNeutralProtection] = useState(0);
   const [subPaletteSize, setSubPaletteSize] = useState(5);
+  // Fidelity = segmentation working resolution. Higher = finer islands /
+  // crisper boundaries, but slower to re-segment on every control change.
+  const [segmentMaxEdge, setSegmentMaxEdge] = useState(SEGMENT_MAX_EDGE);
 
   // ── Segmentation result + analyzing state ───────────────────────
   const [result, setResult] = useState<SegmentResult | null>(null);
@@ -97,9 +101,9 @@ export function AnalysisTab() {
     const bounds = snap.bounds ?? { left: 0, top: 0, right: snap.width, bottom: snap.height };
     return downsampleToMaxEdge(
       { width: snap.width, height: snap.height, data: snap.data, bounds },
-      SEGMENT_MAX_EDGE,
+      segmentMaxEdge,
     );
-  }, [snap]);
+  }, [snap, segmentMaxEdge]);
 
   // Warm-start state: the last result + the input it came from. Re-segmenting
   // after a control change reuses the prior result so pool ids and the
@@ -277,6 +281,13 @@ export function AnalysisTab() {
             min={3} max={7} step={1}
             value={subPaletteSize} onChange={setSubPaletteSize}
             display={String(subPaletteSize)}
+          />
+          <Control
+            label="Fidelity"
+            title="Working resolution for the segmentation. Higher = finer islands and crisper boundaries, but slower to re-segment. Default 256."
+            min={256} max={512} step={64}
+            value={segmentMaxEdge} onChange={setSegmentMaxEdge}
+            display={String(segmentMaxEdge)}
           />
         </div>
       </Section>

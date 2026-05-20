@@ -30,6 +30,11 @@ export interface TransferOptions {
   preserveLuminance?: number; // 0..1 — keep the target's original L; only a/b shift (default 0)
   anchor?: TransferAnchor; // legacy single-anchor (back-compat — folded into `anchors` internally)
   anchors?: TransferAnchor[]; // multi-anchor: list of focal pairs, blended additively (see below)
+  richness?: number; // 0..1 — 0 = sub-swatch averaged transfer (today, default),
+                    //          1 = per-pixel sample-rank match against the donor
+                    //              pool's actual source pixels. Pulls the donor's
+                    //              raw a/b chroma variation into the target
+                    //              instead of the few sub-swatch averages.
 }
 
 // A focal anchor pairs a SOURCE pool with a TARGET region. Inside the target
@@ -48,6 +53,13 @@ interface LabDelta {
   dL: number;
   dA: number;
   dB: number;
+}
+
+// A single Lab triple — used by the rich sample-rank path below.
+interface LabSample {
+  L: number;
+  a: number;
+  b: number;
 }
 
 // One target sub-color paired with its lightness-ranked donor.
@@ -193,6 +205,96 @@ function softDelta(
   return { dL: dL / wSum, dA: dA / wSum, dB: dB / wSum };
 }
 
+// Stride used when sampling pool pixels for the rich sample-rank path. Matches
+// the cadence used elsewhere in the file for sub-sampling — keeps the cost
+// linear in pool size while still capturing the full chroma distribution.
+const RICHNESS_SAMPLE_STRIDE = 4;
+
+// Collect a strided Lab sample of one pool's pixels from an rgba buffer, sorted
+// ascending by L. Used by the rich sample-rank path to rebuild the donor pool's
+// FULL color distribution (not just its sub-swatch averages). Returns null if
+// the pool has no usable pixels at the sample stride.
+function collectPoolLabSamples(
+  rgba: Uint8Array,
+  labels: Int32Array,
+  poolId: number,
+): LabSample[] | null {
+  const n = labels.length;
+  const out: LabSample[] = [];
+  // Stride by RICHNESS_SAMPLE_STRIDE pixels through the label map. We accept
+  // any opaque pixel whose label matches; transparent / mislabeled pixels are
+  // skipped so they don't contribute zero-Lab samples.
+  for (let i = 0; i < n; i += RICHNESS_SAMPLE_STRIDE) {
+    if (labels[i] !== poolId) continue;
+    const o = i * 4;
+    if (rgba[o + 3] < 128) continue;
+    const [L, a, b] = rgbToLab(rgba[o], rgba[o + 1], rgba[o + 2]);
+    out.push({ L, a, b });
+  }
+  // Fallback: if striding missed every pixel of a small pool, walk every pixel
+  // so we still capture something rather than returning null.
+  if (out.length === 0) {
+    for (let i = 0; i < n; i++) {
+      if (labels[i] !== poolId) continue;
+      const o = i * 4;
+      if (rgba[o + 3] < 128) continue;
+      const [L, a, b] = rgbToLab(rgba[o], rgba[o + 1], rgba[o + 2]);
+      out.push({ L, a, b });
+    }
+    if (out.length === 0) return null;
+  }
+  out.sort((p, q) => p.L - q.L);
+  return out;
+}
+
+// Strided list of a target pool's pixel L values, sorted ascending. Used to
+// rank a pixel's lightness within its pool so the rich path can project it
+// onto the donor's distribution. Same stride / fallback strategy as above.
+function collectPoolLValues(
+  rgba: Uint8Array,
+  labels: Int32Array,
+  poolId: number,
+): Float32Array | null {
+  const n = labels.length;
+  const tmp: number[] = [];
+  for (let i = 0; i < n; i += RICHNESS_SAMPLE_STRIDE) {
+    if (labels[i] !== poolId) continue;
+    const o = i * 4;
+    if (rgba[o + 3] < 128) continue;
+    const [L] = rgbToLab(rgba[o], rgba[o + 1], rgba[o + 2]);
+    tmp.push(L);
+  }
+  if (tmp.length === 0) {
+    for (let i = 0; i < n; i++) {
+      if (labels[i] !== poolId) continue;
+      const o = i * 4;
+      if (rgba[o + 3] < 128) continue;
+      const [L] = rgbToLab(rgba[o], rgba[o + 1], rgba[o + 2]);
+      tmp.push(L);
+    }
+    if (tmp.length === 0) return null;
+  }
+  tmp.sort((a, b) => a - b);
+  return Float32Array.from(tmp);
+}
+
+// Find the rank of value `v` within an ascending-sorted array via binary
+// search — returned as an integer index in [0, arr.length - 1]. When `v` falls
+// between two entries we pick the closer of the two, so two pixels with very
+// similar L land on adjacent ranks instead of all collapsing to one bucket.
+function rankInSorted(arr: Float32Array, v: number): number {
+  const n = arr.length;
+  if (n <= 1) return 0;
+  if (v <= arr[0]) return 0;
+  if (v >= arr[n - 1]) return n - 1;
+  let lo = 0, hi = n - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (arr[mid] <= v) lo = mid; else hi = mid;
+  }
+  return v - arr[lo] <= arr[hi] - v ? lo : hi;
+}
+
 // One horizontal pass of an alpha-weighted box blur.
 //
 // `src`/`dst` are width*height channel buffers; `mask` is 1 for opaque pixels
@@ -284,13 +386,21 @@ function blurField(
 }
 
 // Recolor the target image. Both `targetRgba` and `targetResult.labels` are at
-// the SAME resolution (the segmentation resolution). Returns a new recolored
-// RGBA buffer of the same dimensions; alpha is preserved everywhere.
+// the SAME resolution (the segmentation resolution). `sourceRgba` is the
+// source-map pixels at sourceResult.{width,height} — only consulted when
+// `opts.richness > 0`, where it supplies the donor pools' raw Lab samples for
+// the per-pixel sample-rank match. Returns a new recolored RGBA buffer of the
+// same dimensions; alpha is preserved everywhere.
+//
+// NOTE TO CALLERS: this signature added a required `sourceRgba` parameter in
+// front of `sourceResult`. The UI caller (SmashTab.tsx) must thread the source
+// pool map's rgba pixels through alongside its existing sourceResult.
 export function transferColors(
   targetRgba: Uint8Array,
   width: number,
   height: number,
   targetResult: SegmentResult,
+  sourceRgba: Uint8Array,
   sourceResult: SegmentResult,
   correspondence: Correspondence,
   opts: TransferOptions,
@@ -299,6 +409,7 @@ export function transferColors(
   const strength = clamp01(opts.strength);
   const relax = clamp01(opts.relax ?? 0);
   const preserveLuminance = clamp01(opts.preserveLuminance ?? 0);
+  const richness = clamp01(opts.richness ?? 0);
 
   // Index source pools by id for donor lookup.
   const sourceById = new Map<number, Pool>();
@@ -353,6 +464,33 @@ export function transferColors(
     }
     activeAnchors.push(a);
     anchorMappingsByPoolList.push(map);
+  }
+
+  // ── Lazy precompute for the rich sample-rank path (richness > 0). ──
+  // For each donor source pool referenced by `correspondence`, collect a
+  // strided, lightness-sorted list of its actual source-pixel Lab samples.
+  // For each target pool with an auto donor, collect a strided, sorted list of
+  // its target-pixel L values — used to rank each pixel's lightness within its
+  // pool's distribution. Both maps stay empty when richness is 0 so the
+  // existing path is byte-for-byte unchanged in that case.
+  //
+  // Note: anchor donors do NOT participate in the rich path; the rich-Lab
+  // contribution comes from the AUTO donor only. The anchor's recolor stays in
+  // the sub-swatch delta path. Anchor-aware richness is a future extension.
+  const donorLabSamplesByPool = new Map<number, LabSample[]>();
+  const targetLValuesByPool = new Map<number, Float32Array>();
+  if (richness > 0) {
+    const donorIds = new Set<number>();
+    for (const m of correspondence.matches) donorIds.add(m.sourcePoolId);
+    for (const id of donorIds) {
+      const samples = collectPoolLabSamples(sourceRgba, sourceResult.labels, id);
+      if (samples) donorLabSamplesByPool.set(id, samples);
+    }
+    for (const targetPool of targetResult.pools) {
+      if (!donorByTarget.has(targetPool.id)) continue;
+      const lValues = collectPoolLValues(targetRgba, targetResult.labels, targetPool.id);
+      if (lValues) targetLValuesByPool.set(targetPool.id, lValues);
+    }
   }
 
   // Strength 0 is a pure pass-through; skip the per-pixel work entirely.
@@ -442,6 +580,57 @@ export function transferColors(
       dA += f * d.dA;
       dB += f * d.dB;
     }
+
+    // Rich sample-rank blend. The compressed path above gave us a per-pixel
+    // delta from the auto donor's averaged sub-swatches (and any anchors). The
+    // rich path replaces the auto donor's contribution with that donor pool's
+    // actual Lab sample at this pixel's lightness rank, pulling the donor's
+    // full a/b chroma variation through instead of the few averages.
+    //
+    // SIMPLIFICATION: the rich-Lab path is computed from the AUTO donor only;
+    // any anchor contribution stays in the sub-swatch delta. Anchor-aware
+    // richness is a future extension. To make that explicit, the rich blend
+    // is applied with weight `richness * autoWeight` — at full richness inside
+    // a non-anchored pixel (autoWeight = 1) the auto path is fully replaced,
+    // while a pixel halfway under an anchor only sees half the rich shift.
+    //
+    // The blend stays in DELTA form so phase-2 blur and phase-3 application
+    // never need to know richness existed.
+    if (richness > 0 && hasAuto && autoWeight > 0) {
+      const donorId = donorByTarget.get(poolId);
+      if (donorId !== undefined) {
+        const donorSamples = donorLabSamplesByPool.get(donorId);
+        const targetLs = targetLValuesByPool.get(poolId);
+        if (donorSamples && targetLs && donorSamples.length > 0 && targetLs.length > 0) {
+          // Rank this pixel's L within its target pool's L distribution, then
+          // project that rank onto the donor pool's sample list.
+          const r = rankInSorted(targetLs, L);
+          const denom = Math.max(1, targetLs.length - 1);
+          const srcIdx = Math.round((r / denom) * (donorSamples.length - 1));
+          const richSample = donorSamples[srcIdx];
+
+          // Recompute the auto donor's compressed delta so we can swap it for
+          // the rich shift (the running dL/A/B above bundles the auto and any
+          // anchor contributions together).
+          const autoD = softDelta(L, a, b, autoMappings!);
+          const autoShiftL = autoD.dL * autoWeight;
+          const autoShiftA = autoD.dA * autoWeight;
+          const autoShiftB = autoD.dB * autoWeight;
+          // Rich shift: move toward richSample by the same auto weight.
+          const richShiftL = (richSample.L - L) * autoWeight;
+          const richShiftA = (richSample.a - a) * autoWeight;
+          const richShiftB = (richSample.b - b) * autoWeight;
+          // Blend the auto slice toward the rich slice by `richness`.
+          const newAutoL = (1 - richness) * autoShiftL + richness * richShiftL;
+          const newAutoA = (1 - richness) * autoShiftA + richness * richShiftA;
+          const newAutoB = (1 - richness) * autoShiftB + richness * richShiftB;
+          dL = dL - autoShiftL + newAutoL;
+          dA = dA - autoShiftA + newAutoA;
+          dB = dB - autoShiftB + newAutoB;
+        }
+      }
+    }
+
     deltaL[i] = dL;
     deltaA[i] = dA;
     deltaB[i] = dB;

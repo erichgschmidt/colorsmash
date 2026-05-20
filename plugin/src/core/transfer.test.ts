@@ -59,6 +59,19 @@ function fillRgba(
   return buf;
 }
 
+// Filler for the new `sourceRgba` argument when the test doesn't exercise the
+// rich (sample-rank) path — the contents don't affect the compressed transfer.
+function makeSourceRgba(width: number, height: number, r = 0, g = 0, b = 0): Uint8Array {
+  const buf = new Uint8Array(width * height * 4);
+  for (let i = 0; i < width * height; i++) {
+    buf[i * 4] = r;
+    buf[i * 4 + 1] = g;
+    buf[i * 4 + 2] = b;
+    buf[i * 4 + 3] = 255;
+  }
+  return buf;
+}
+
 describe("transferColors", () => {
   it("returns the original unchanged at strength 0", () => {
     const width = 2;
@@ -73,13 +86,14 @@ describe("transferColors", () => {
     const sourceResult = makeResult(1, 1, [100], [
       makePool(10, [makeSub(20, 80, 220)]),
     ]);
+    const sourceRgba = makeSourceRgba(1, 1, 20, 80, 220);
     const correspondence: Correspondence = {
       matches: [{ targetPoolId: 0, sourcePoolId: 10, score: 0 }],
       unmatchedSourceIds: [],
     };
 
     const out = transferColors(
-      target, width, height, targetResult, sourceResult, correspondence,
+      target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
       { strength: 0 },
     );
     expect(Array.from(out)).toEqual(Array.from(target));
@@ -99,13 +113,14 @@ describe("transferColors", () => {
     const sourceResult = makeResult(1, 1, [40], [
       makePool(10, [makeSub(40, 90, 230)]),
     ]);
+    const sourceRgba = makeSourceRgba(1, 1, 40, 90, 230);
     const correspondence: Correspondence = {
       matches: [{ targetPoolId: 0, sourcePoolId: 10, score: 0 }],
       unmatchedSourceIds: [],
     };
 
     const out = transferColors(
-      target, width, height, targetResult, sourceResult, correspondence,
+      target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
       { strength: 1 },
     );
 
@@ -129,17 +144,18 @@ describe("transferColors", () => {
     const sourceResult = makeResult(1, 1, [40], [
       makePool(10, [makeSub(40, 90, 230)]),
     ]);
+    const sourceRgba = makeSourceRgba(1, 1, 40, 90, 230);
     const correspondence: Correspondence = {
       matches: [{ targetPoolId: 0, sourcePoolId: 10, score: 0 }],
       unmatchedSourceIds: [],
     };
 
     const full = transferColors(
-      target, width, height, targetResult, sourceResult, correspondence,
+      target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
       { strength: 1 },
     );
     const half = transferColors(
-      target, width, height, targetResult, sourceResult, correspondence,
+      target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
       { strength: 0.5 },
     );
     // The half-strength red channel lies between the original and full result.
@@ -162,13 +178,14 @@ describe("transferColors", () => {
     const sourceResult = makeResult(1, 1, [10], [
       makePool(10, [makeSub(40, 90, 230)]),
     ]);
+    const sourceRgba = makeSourceRgba(1, 1, 40, 90, 230);
     const correspondence: Correspondence = {
       matches: [{ targetPoolId: 0, sourcePoolId: 10, score: 0 }],
       unmatchedSourceIds: [],
     };
 
     const out = transferColors(
-      target, width, height, targetResult, sourceResult, correspondence,
+      target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
       { strength: 1 },
     );
 
@@ -202,13 +219,14 @@ describe("transferColors", () => {
         makeSub(200, 210, 255),
       ]),
     ]);
+    const sourceRgba = makeSourceRgba(1, 1, 110, 120, 180);
     const correspondence: Correspondence = {
       matches: [{ targetPoolId: 0, sourcePoolId: 10, score: 0 }],
       unmatchedSourceIds: [],
     };
 
     const out = transferColors(
-      target, width, height, targetResult, sourceResult, correspondence,
+      target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
       { strength: 1 },
     );
 
@@ -231,6 +249,7 @@ describe("transferColors", () => {
     const sourceResult = makeResult(1, 1, [10], [
       makePool(10, [makeSub(40, 90, 230)]),
     ]);
+    const sourceRgba = makeSourceRgba(1, 1, 40, 90, 230);
     // Empty correspondence — no match for pool 0.
     const correspondence: Correspondence = {
       matches: [],
@@ -238,7 +257,7 @@ describe("transferColors", () => {
     };
 
     const out = transferColors(
-      target, width, height, targetResult, sourceResult, correspondence,
+      target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
       { strength: 1 },
     );
     expect([out[0], out[1], out[2]]).toEqual([200, 50, 50]);
@@ -255,13 +274,14 @@ describe("transferColors", () => {
     const sourceResult = makeResult(1, 1, [10], [
       makePool(10, [makeSub(60, 90, 200)]),
     ]);
+    const sourceRgba = makeSourceRgba(1, 1, 60, 90, 200);
     const correspondence: Correspondence = {
       matches: [{ targetPoolId: 0, sourcePoolId: 10, score: 0 }],
       unmatchedSourceIds: [],
     };
 
     const out = transferColors(
-      target, width, height, targetResult, sourceResult, correspondence,
+      target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
       { strength: 1 },
     );
     expect(out.length).toBe(width * height * 4);
@@ -279,6 +299,7 @@ describe("transferColors", () => {
     const sourcePool = makePool(10, [makeSub(60, 60, 60)]);
     sourcePool.noise = { swatches: [makeSub(200, 200, 200)], weight: 0.2 };
     const sourceResult = makeResult(1, 1, [10], [sourcePool]);
+    const sourceRgba = makeSourceRgba(1, 1, 60, 60, 60);
 
     const correspondence: Correspondence = {
       matches: [{ targetPoolId: 0, sourcePoolId: 10, score: 0 }],
@@ -286,7 +307,7 @@ describe("transferColors", () => {
     };
 
     const out = transferColors(
-      target, width, height, targetResult, sourceResult, correspondence,
+      target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
       { strength: 1 },
     );
     // The pixel is recolored — proving noise swatches participated (a 1-sub
@@ -310,17 +331,18 @@ describe("transferColors", () => {
     const sourceResult = makeResult(1, 1, [10], [
       makePool(10, [makeSub(40, 90, 230), makeSub(70, 110, 240)]),
     ]);
+    const sourceRgba = makeSourceRgba(1, 1, 50, 100, 235);
     const correspondence: Correspondence = {
       matches: [{ targetPoolId: 0, sourcePoolId: 10, score: 0 }],
       unmatchedSourceIds: [],
     };
 
     const omitted = transferColors(
-      target, width, height, targetResult, sourceResult, correspondence,
+      target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
       { strength: 1 },
     );
     const explicitZero = transferColors(
-      target, width, height, targetResult, sourceResult, correspondence,
+      target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
       { strength: 1, relax: 0, preserveLuminance: 0 },
     );
     expect(Array.from(explicitZero)).toEqual(Array.from(omitted));
@@ -348,6 +370,11 @@ describe("transferColors", () => {
       makePool(10, [makeSub(30, 30, 30)]),
       makePool(11, [makeSub(240, 240, 240)]),
     ]);
+    // sourceRgba mirrors the two-pixel source label map.
+    const sourceRgba = new Uint8Array([
+      30, 30, 30, 255,
+      240, 240, 240, 255,
+    ]);
     const correspondence: Correspondence = {
       matches: [
         { targetPoolId: 0, sourcePoolId: 10, score: 0 },
@@ -357,11 +384,11 @@ describe("transferColors", () => {
     };
 
     const hard = transferColors(
-      target, width, height, targetResult, sourceResult, correspondence,
+      target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
       { strength: 1, relax: 0 },
     );
     const soft = transferColors(
-      target, width, height, targetResult, sourceResult, correspondence,
+      target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
       { strength: 1, relax: 0.8 },
     );
 
@@ -401,6 +428,12 @@ describe("transferColors", () => {
       makePool(20, [makeSub(220, 30, 30)]),
       makePool(30, [makeSub(30, 30, 220)]),
     ]);
+    // 1×3 source rgba mirroring the source label map (neutral / red / blue).
+    const sourceRgba = new Uint8Array([
+      140, 140, 140, 255,
+      220, 30, 30, 255,
+      30, 30, 220, 255,
+    ]);
     const correspondence: Correspondence = {
       matches: [{ targetPoolId: 0, sourcePoolId: 10, score: 0 }],
       unmatchedSourceIds: [20, 30],
@@ -414,7 +447,7 @@ describe("transferColors", () => {
     ];
 
     const out = transferColors(
-      target, width, height, targetResult, sourceResult, correspondence,
+      target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
       { strength: 1, anchors },
     );
 
@@ -455,13 +488,14 @@ describe("transferColors", () => {
     const sourceResult = makeResult(1, 1, [10], [
       makePool(10, [makeSub(30, 60, 210)]),
     ]);
+    const sourceRgba = makeSourceRgba(1, 1, 30, 60, 210);
     const correspondence: Correspondence = {
       matches: [{ targetPoolId: 0, sourcePoolId: 10, score: 0 }],
       unmatchedSourceIds: [],
     };
 
     const out = transferColors(
-      target, width, height, targetResult, sourceResult, correspondence,
+      target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
       { strength: 1, preserveLuminance: 1 },
     );
 
@@ -474,5 +508,120 @@ describe("transferColors", () => {
     // donor's b is ~100 units bluer than the target's, so b moves a lot.
     expect(Math.abs(outB - origB)).toBeGreaterThan(20);
     expect(outB).toBeLessThan(origB); // moved toward blue (negative b)
+  });
+
+  it("richness: 0 is byte-identical to omitting richness", () => {
+    // The richness option must default to 0 / no-op so existing flows keep
+    // their byte-for-byte output. Build a setup with non-trivial source pixels
+    // so we'd notice if the rich path crept in.
+    const width = 4;
+    const height = 4;
+    const labels = new Array(width * height).fill(0);
+    const pixels: Array<[number, number, number, number]> = [];
+    for (let i = 0; i < width * height; i++) {
+      pixels.push([180 + (i % 3) * 10, 60, 70, 255]);
+    }
+    const target = fillRgba(width, height, pixels);
+    const targetResult = makeResult(width, height, labels, [
+      makePool(0, [makeSub(180, 60, 70), makeSub(200, 60, 70)]),
+    ]);
+    const sourceResult = makeResult(2, 2, [10, 10, 10, 10], [
+      makePool(10, [makeSub(40, 90, 230), makeSub(70, 110, 240)]),
+    ]);
+    // Varied source pixels so the rich path WOULD diverge if accidentally engaged.
+    const sourceRgba = new Uint8Array([
+      30, 80, 220, 255,
+      80, 120, 250, 255,
+      40, 90, 230, 255,
+      70, 110, 240, 255,
+    ]);
+    const correspondence: Correspondence = {
+      matches: [{ targetPoolId: 0, sourcePoolId: 10, score: 0 }],
+      unmatchedSourceIds: [],
+    };
+
+    const omitted = transferColors(
+      target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
+      { strength: 1 },
+    );
+    const explicitZero = transferColors(
+      target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
+      { strength: 1, richness: 0 },
+    );
+    expect(Array.from(explicitZero)).toEqual(Array.from(omitted));
+  });
+
+  it("richness: 1 pulls the donor's full chroma variation through", () => {
+    // Source pool with WIDE a/b variation but uniform lightness: half the
+    // pixels are reddish (high a) and half are greenish (low a). The donor's
+    // sub-swatch averages would collapse this to a near-neutral mid color, so
+    // the compressed transfer barely shifts the target's chroma. The rich path
+    // should instead surface that a/b variation onto the target pixels.
+    const width = 8;
+    const height = 1;
+    // Target pool: 8 mid-gray pixels, ramped slightly in L so each pixel maps
+    // to a distinct rank in [0, 7] under the rich path.
+    const targetPixels: Array<[number, number, number, number]> = [];
+    for (let i = 0; i < width; i++) {
+      const v = 120 + i * 2; // 120..134 — small L ramp, neutral a/b
+      targetPixels.push([v, v, v, 255]);
+    }
+    const target = fillRgba(width, height, targetPixels);
+    const targetResult = makeResult(width, height, new Array(width).fill(0), [
+      // One sub-swatch — sub-palette compression flattens the donor to its mean.
+      makePool(0, [makeSub(127, 127, 127)]),
+    ]);
+
+    // Source pool: 8 pixels of identical lightness (~mid gray) but split into
+    // reddish and greenish halves. Building the sub-swatch from the MEAN would
+    // give a near-neutral donor — so the compressed path barely shifts a/b.
+    const sourcePool = makePool(10, [makeSub(127, 127, 127)]);
+    const sourceResult = makeResult(width, 1, new Array(width).fill(10), [sourcePool]);
+    const sourceRgba = new Uint8Array(width * 4);
+    for (let i = 0; i < width; i++) {
+      const o = i * 4;
+      // Alternate reddish (high a) and greenish (low a). Equal L so sample
+      // sorting by L is order-stable; the diversity lives entirely in a/b.
+      const reddish = i < width / 2;
+      sourceRgba[o] = reddish ? 200 : 60;        // R
+      sourceRgba[o + 1] = reddish ? 60 : 200;    // G
+      sourceRgba[o + 2] = 100;                    // B
+      sourceRgba[o + 3] = 255;
+    }
+
+    const correspondence: Correspondence = {
+      matches: [{ targetPoolId: 0, sourcePoolId: 10, score: 0 }],
+      unmatchedSourceIds: [],
+    };
+
+    const compressed = transferColors(
+      target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
+      { strength: 1, richness: 0 },
+    );
+    const rich = transferColors(
+      target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
+      { strength: 1, richness: 1 },
+    );
+
+    // The compressed output's per-pixel a values cluster tightly (one donor
+    // average); the rich output's spread is dramatically wider because each
+    // target pixel pulled in a different donor sample.
+    const compAs: number[] = [];
+    const richAs: number[] = [];
+    for (let i = 0; i < width; i++) {
+      const o = i * 4;
+      const [, aC] = rgbToLab(compressed[o], compressed[o + 1], compressed[o + 2]);
+      const [, aR] = rgbToLab(rich[o], rich[o + 1], rich[o + 2]);
+      compAs.push(aC);
+      richAs.push(aR);
+    }
+    const range = (xs: number[]) => Math.max(...xs) - Math.min(...xs);
+    const compRange = range(compAs);
+    const richRange = range(richAs);
+
+    // Rich path's `a` spread is meaningful AND much larger than the compressed
+    // path's. (Compressed is near-zero because one sub-swatch → one delta.)
+    expect(richRange).toBeGreaterThan(20);
+    expect(richRange).toBeGreaterThan(compRange * 3);
   });
 });
