@@ -24,6 +24,7 @@ import { rgbToLab, extractPalette } from "./palette";
 import { labelComponents, mergeSmallIslands } from "./cutwise/islands";
 import type { Cluster, MergeParams } from "./cutwise/islands";
 import { smoothLabels } from "./cutwise/smooth";
+import { slic } from "./slic";
 
 // ────────── Public interface ──────────
 
@@ -89,9 +90,23 @@ export interface SegmentResult {
 
 // ────────── Tuning constants ──────────
 
-// Decimate input for the k-means fit (mirrors palette.ts SAMPLE_STRIDE). Labels
-// are still produced for every full-res pixel after the fit converges.
-const SAMPLE_STRIDE = 4;
+// Pool k-means runs over SLIC superpixels, not raw pixels — this is the unit
+// of clustering. Each superpixel is a small, color-coherent, edge-aware region
+// produced by slic.ts; macro-pool k-means then groups superpixels into the
+// final pool count. Far stabler partitions than per-pixel clustering on real
+// photographs, with no change to the downstream merge / smooth / pool-building
+// pipeline (those still see a per-pixel cluster-label map).
+//
+// SLIC_K_PER_POOL: target superpixel count scales with the requested pool
+// count — more pools deserve a finer base partition. The floor (SLIC_K_MIN)
+// keeps small images from degenerating into one giant superpixel per cluster.
+const SLIC_K_PER_POOL = 80;
+const SLIC_K_MIN = 64;
+// Compactness in the SLIC distance metric. 15 trades the spatial term firmly
+// against color so superpixels respect edges but stay roughly tile-shaped.
+const SLIC_COMPACTNESS = 15;
+const SLIC_ITERATIONS = 10;
+
 const MAX_ITERATIONS = 16;
 const CONVERGENCE_THRESHOLD = 0.5; // mean centroid shift below which we stop
 
@@ -125,11 +140,6 @@ const SHADOW_MAX_L = 33;
 const HIGHLIGHT_MIN_L = 66;
 
 // ────────── Internal types ──────────
-
-interface Sample {
-  // Raw Lab per pixel; 4D LCh polar features are precomputed alongside.
-  fl: number; fa: number; fb: number;
-}
 
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
 
@@ -262,47 +272,59 @@ function segmentPixelSet(
 
   const k = Math.max(1, Math.floor(opts.poolCount));
 
-  // ── 1. LCh polar feature k-means. The bias slider tilts V vs (C, H). ──
-  const { vw, cw, hw } = biasWeights(opts.colorVsValueBias);
-
-  // Decimated raw-Lab samples drive the fit; their 4D LCh features are
-  // precomputed once into sampleFeatures so Lloyd doesn't recompute them.
-  const samples: Sample[] = [];
-  for (let j = 0; j < total; j += SAMPLE_STRIDE) {
-    const o = indices[j] * 4;
-    const [L, a, b] = rgbToLab(rgba[o], rgba[o + 1], rgba[o + 2]);
-    samples.push({ fl: L, fa: a, fb: b });
-  }
-  const n = samples.length;
+  // ── 1. SLIC superpixels — the analysis unit for pool clustering. ──
+  // SLIC collapses the pixel set into a few hundred small, color-coherent,
+  // edge-aware regions; pool k-means then runs over THOSE rather than raw
+  // (or decimated) pixels. The number of superpixels scales with poolCount
+  // so a higher pool count gets a finer base partition.
+  const slicK = Math.max(SLIC_K_MIN, k * SLIC_K_PER_POOL);
+  const sp = slic(rgba, width, height, indices, {
+    K: slicK,
+    compactness: SLIC_COMPACTNESS,
+    iterations: SLIC_ITERATIONS,
+  });
+  const n = sp.centers.length;
   if (n === 0) return { pools: [], assignment };
+
+  // ── 2. LCh polar feature k-means over SUPERPIXELS. Bias tilts V vs (C, H). ──
+  const { vw, cw, hw } = biasWeights(opts.colorVsValueBias);
   const effK = Math.min(k, n);
 
+  // 4D feature per superpixel, plus a parallel weight buffer = superpixel pixel
+  // count. The k-means accumulator weights each sample by its superpixel size,
+  // so centroids stay faithful to the underlying pixel distribution even
+  // though we're now iterating over O(K_slic) samples instead of O(N).
   const sampleFeatures = new Float32Array(n * 4);
+  const sampleWeights = new Float64Array(n);
   for (let i = 0; i < n; i++) {
-    buildFeature(samples[i].fl, samples[i].fa, samples[i].fb, vw, cw, hw, sampleFeatures, i * 4);
+    const c = sp.centers[i];
+    buildFeature(c.L, c.a, c.b, vw, cw, hw, sampleFeatures, i * 4);
+    sampleWeights[i] = c.count;
   }
 
   const cents = buildInitCentroids(sampleFeatures, n, effK, vw, cw, hw, warmPools);
   const assign = new Int32Array(n);
   const sums = new Float64Array(effK * 4);
-  const counts = new Int32Array(effK);
+  const wsums = new Float64Array(effK);
   for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
     for (let i = 0; i < n; i++) assign[i] = nearestCentroid(sampleFeatures, i * 4, cents, effK);
-    sums.fill(0); counts.fill(0);
+    sums.fill(0); wsums.fill(0);
     for (let i = 0; i < n; i++) {
       const c = assign[i], off = i * 4;
-      sums[c * 4]     += sampleFeatures[off];
-      sums[c * 4 + 1] += sampleFeatures[off + 1];
-      sums[c * 4 + 2] += sampleFeatures[off + 2];
-      sums[c * 4 + 3] += sampleFeatures[off + 3];
-      counts[c]++;
+      const w = sampleWeights[i];
+      sums[c * 4]     += sampleFeatures[off]     * w;
+      sums[c * 4 + 1] += sampleFeatures[off + 1] * w;
+      sums[c * 4 + 2] += sampleFeatures[off + 2] * w;
+      sums[c * 4 + 3] += sampleFeatures[off + 3] * w;
+      wsums[c] += w;
     }
     let totalShift = 0;
     for (let c = 0; c < effK; c++) {
-      if (counts[c] === 0) continue; // dead cluster — leave centroid in place
+      if (wsums[c] === 0) continue; // dead cluster — leave centroid in place
       let shift = 0;
+      const inv = 1 / wsums[c];
       for (let d = 0; d < 4; d++) {
-        const nv = sums[c * 4 + d] / counts[c];
+        const nv = sums[c * 4 + d] * inv;
         const dv = nv - cents[c * 4 + d];
         shift += dv * dv;
         cents[c * 4 + d] = nv;
@@ -312,20 +334,26 @@ function segmentPixelSet(
     if (totalShift / effK < CONVERGENCE_THRESHOLD) break;
   }
 
-  // ── 2. Assign every pixel → a width*height cluster-label map. ──
-  // The merge step needs each cluster's representative Lab; we accumulate
-  // per-cluster Lab sums in the same pass to get mean Lab per cluster — more
-  // faithful than inverting the polar centroid (especially under the chroma
-  // gate, which is non-trivial to invert).
+  // ── 3. Superpixel → cluster map, then propagate to every pixel. ──
+  // Each superpixel takes its final nearest centroid; the per-pixel label map
+  // is just a lookup through the SLIC labels. Per-cluster mean Lab is still
+  // accumulated from REAL pixels (not superpixel means) so the merge step's
+  // edge / value / neutral protections operate on the same Lab statistics they
+  // always have.
+  const spToCluster = new Int32Array(n);
+  for (let i = 0; i < n; i++) {
+    spToCluster[i] = nearestCentroid(sampleFeatures, i * 4, cents, effK);
+  }
   const clusterLabels = new Int32Array(width * height).fill(-1);
   const clusterCount = new Int32Array(effK);
   const clusterLabSum = new Float64Array(effK * 3);
-  const featTmp = new Float32Array(4);
   for (let j = 0; j < total; j++) {
-    const i = indices[j], o = i * 4;
+    const i = indices[j];
+    const spId = sp.labels[i];
+    if (spId < 0) continue;
+    const c = spToCluster[spId];
+    const o = i * 4;
     const [L, a, b] = rgbToLab(rgba[o], rgba[o + 1], rgba[o + 2]);
-    buildFeature(L, a, b, vw, cw, hw, featTmp, 0);
-    const c = nearestCentroid(featTmp, 0, cents, effK);
     clusterLabels[i] = c;
     clusterCount[c]++;
     clusterLabSum[c * 3]     += L;

@@ -28,7 +28,8 @@ export interface TransferOptions {
   strength: number; // 0..1 — blend between the original and the fully transferred result
   relax?: number; // 0..1 — boundary softness; blurs the delta field (default 0 = hard pool edges)
   preserveLuminance?: number; // 0..1 — keep the target's original L; only a/b shift (default 0)
-  anchor?: TransferAnchor; // optional focal-point override (see below)
+  anchor?: TransferAnchor; // legacy single-anchor (back-compat — folded into `anchors` internally)
+  anchors?: TransferAnchor[]; // multi-anchor: list of focal pairs, blended additively (see below)
 }
 
 // A focal anchor pairs a SOURCE pool with a TARGET region. Inside the target
@@ -329,20 +330,29 @@ export function transferColors(
     );
   }
 
-  // Same again, but pairing every target pool with the ANCHOR donor instead
-  // of its auto-matched donor — used inside the anchor falloff.
-  const anchorMappingsByPool = new Map<number, SubMapping[]>();
-  const anchor = opts.anchor;
-  if (anchor !== undefined) {
-    const anchorDonor = sourceById.get(anchor.sourcePoolId);
-    if (anchorDonor) {
-      for (const targetPool of targetResult.pools) {
-        anchorMappingsByPool.set(
-          targetPool.id,
-          buildSubMappings(poolSubColors(targetPool), poolSubColors(anchorDonor)),
-        );
-      }
+  // Multi-anchor input. The new `anchors` array is the canonical form; the
+  // legacy single `anchor` is folded in for back-compat. Each anchor gets its
+  // own per-target-pool sub-mapping table — used inside that anchor's falloff.
+  const anchorList: TransferAnchor[] = [];
+  if (opts.anchors) anchorList.push(...opts.anchors);
+  if (opts.anchor) anchorList.push(opts.anchor);
+
+  // Anchors whose source pool actually exists in the source segmentation.
+  // anchorMappingsByPoolList[i] is the per-pool sub-mapping table for anchor i.
+  const activeAnchors: TransferAnchor[] = [];
+  const anchorMappingsByPoolList: Map<number, SubMapping[]>[] = [];
+  for (const a of anchorList) {
+    const donor = sourceById.get(a.sourcePoolId);
+    if (!donor) continue;
+    const map = new Map<number, SubMapping[]>();
+    for (const targetPool of targetResult.pools) {
+      map.set(
+        targetPool.id,
+        buildSubMappings(poolSubColors(targetPool), poolSubColors(donor)),
+      );
     }
+    activeAnchors.push(a);
+    anchorMappingsByPoolList.push(map);
   }
 
   // Strength 0 is a pure pass-through; skip the per-pixel work entirely.
@@ -360,10 +370,19 @@ export function transferColors(
   const deltaB = new Float32Array(pxCount);
   const opaque = new Uint8Array(pxCount);
 
-  // Anchor geometry (in pixel units of this transfer's resolution).
-  const aCx = anchor ? anchor.targetX * Math.max(0, width - 1) : 0;
-  const aCy = anchor ? anchor.targetY * Math.max(0, height - 1) : 0;
-  const aR = anchor ? Math.max(1, anchor.radius * Math.max(width, height)) : 0;
+  // Anchor geometry per anchor, in pixel units of this transfer's resolution.
+  const anchorCount = activeAnchors.length;
+  const anchorCx = new Float32Array(anchorCount);
+  const anchorCy = new Float32Array(anchorCount);
+  const anchorR = new Float32Array(anchorCount);
+  for (let k = 0; k < anchorCount; k++) {
+    const a = activeAnchors[k];
+    anchorCx[k] = a.targetX * Math.max(0, width - 1);
+    anchorCy[k] = a.targetY * Math.max(0, height - 1);
+    anchorR[k] = Math.max(1, a.radius * Math.max(width, height));
+  }
+  // Scratch buffer reused per pixel for each anchor's falloff weight.
+  const falls = new Float32Array(anchorCount);
 
   for (let i = 0; i < pxCount; i++) {
     const o = i * 4;
@@ -378,31 +397,50 @@ export function transferColors(
     const autoMappings = mappingsByPool.get(poolId);
     const hasAuto = !!(autoMappings && autoMappings.length > 0);
 
-    // Anchor falloff for this pixel — 0 if no anchor or outside its reach.
-    let fall = 0;
-    if (anchor) {
+    // Per-anchor falloff for this pixel, plus the running sum W. Anchors with
+    // no per-pool mapping (donor pool missing — already filtered above, but
+    // double-checked below) contribute zero. Skip the geometry math entirely
+    // when there are no anchors active.
+    let W = 0;
+    if (anchorCount > 0) {
       const x = i % width;
       const y = (i / width) | 0;
-      fall = anchorFalloff(x, y, aCx, aCy, aR);
+      for (let k = 0; k < anchorCount; k++) {
+        const f = anchorFalloff(x, y, anchorCx[k], anchorCy[k], anchorR[k]);
+        falls[k] = f;
+        W += f;
+      }
+      // Multiple overlapping anchors can sum to > 1. Renormalize so they sum
+      // to exactly 1 and the auto donor drops to 0 — "anchors fully take over".
+      if (W > 1) {
+        const inv = 1 / W;
+        for (let k = 0; k < anchorCount; k++) falls[k] *= inv;
+        W = 1;
+      }
     }
-    if (!hasAuto && fall <= 0) continue; // no transfer for this pixel
+
+    if (!hasAuto && W <= 0) continue; // no transfer for this pixel
 
     const [L, a, b] = rgbToLab(targetRgba[o], targetRgba[o + 1], targetRgba[o + 2]);
 
-    // Blend: auto donor's delta + anchor donor's delta, weighted by falloff.
+    // Final per-pixel delta = (1 − ΣW)·autoDelta + Σ falls_k · anchorDelta_k.
+    const autoWeight = 1 - W;
     let dL = 0, dA = 0, dB = 0;
-    if (hasAuto) {
+    if (hasAuto && autoWeight > 0) {
       const d = softDelta(L, a, b, autoMappings!);
-      dL = d.dL; dA = d.dA; dB = d.dB;
+      dL = d.dL * autoWeight;
+      dA = d.dA * autoWeight;
+      dB = d.dB * autoWeight;
     }
-    if (fall > 0) {
-      const am = anchorMappingsByPool.get(poolId);
-      if (am && am.length > 0) {
-        const d2 = softDelta(L, a, b, am);
-        dL = dL * (1 - fall) + d2.dL * fall;
-        dA = dA * (1 - fall) + d2.dA * fall;
-        dB = dB * (1 - fall) + d2.dB * fall;
-      }
+    for (let k = 0; k < anchorCount; k++) {
+      const f = falls[k];
+      if (f <= 0) continue;
+      const am = anchorMappingsByPoolList[k].get(poolId);
+      if (!am || am.length === 0) continue;
+      const d = softDelta(L, a, b, am);
+      dL += f * d.dL;
+      dA += f * d.dA;
+      dB += f * d.dB;
     }
     deltaL[i] = dL;
     deltaA[i] = dA;

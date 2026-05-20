@@ -13,7 +13,7 @@
 // Segmentation runs in a deferred effect so the "analyzing…" state can paint
 // before the synchronous segment work blocks the main thread.
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { app, readLayerPixels, writePixelLayer, executeAsModal } from "../services/photoshop";
 import { useLayers } from "./useLayers";
 import { useLayerPreview } from "./useLayerPreview";
@@ -191,39 +191,75 @@ export function SmashTab() {
   // Display-only sort for the correspondence list.
   const [sortMode, setSortMode] = useState<SortMode>("weightDesc");
 
-  // ── Focal anchor (MVP: one pair) ──
-  // anchorSource: source point + the pool id under it (captured at click time).
-  // anchorTarget: target point. Anchor is "active" only when both are set.
-  // anchorRadius: falloff radius, normalized to max image edge.
-  const [anchorSource, setAnchorSource] = useState<
+  // ── Focal anchors (list of pairs) ──
+  // Each anchor is a completed source↔target pair, captured with the source
+  // pool id picked at the click site. Building one happens in two clicks:
+  // first the SOURCE map (sets pendingSource), then the TARGET map (consumes
+  // pendingSource and pushes the new pair). The radius is SHARED across all
+  // anchors for this round — per-anchor radius is a later refinement.
+  interface AnchorPair {
+    sourceX: number;
+    sourceY: number;
+    sourcePoolId: number;
+    targetX: number;
+    targetY: number;
+  }
+  const [anchors, setAnchors] = useState<AnchorPair[]>([]);
+  const [pendingSource, setPendingSource] = useState<
     { nx: number; ny: number; poolId: number } | null
-  >(null);
-  const [anchorTarget, setAnchorTarget] = useState<
-    { nx: number; ny: number } | null
   >(null);
   const [anchorRadius, setAnchorRadius] = useState(0.2);
 
-  // Anchor option passed into transferColors — only active when both source
-  // and target points are placed. Memoised so the live-preview effect doesn't
-  // re-run on identity changes.
-  const anchorOpt = useMemo<TransferAnchor | undefined>(() => {
-    if (!anchorSource || !anchorTarget) return undefined;
-    return {
-      sourcePoolId: anchorSource.poolId,
-      targetX: anchorTarget.nx,
-      targetY: anchorTarget.ny,
-      radius: anchorRadius,
-    };
-  }, [anchorSource, anchorTarget, anchorRadius]);
+  // The list passed into transferColors. Memoised so the live-preview effect
+  // re-runs only when the actual list contents (or shared radius) change.
+  const transferAnchors = useMemo<TransferAnchor[]>(
+    () =>
+      anchors.map(a => ({
+        sourcePoolId: a.sourcePoolId,
+        targetX: a.targetX,
+        targetY: a.targetY,
+        radius: anchorRadius,
+      })),
+    [anchors, anchorRadius],
+  );
 
-  // Dot+ring overlays for the two pool maps. Source = orange, target = cyan;
-  // both rings size by the live anchorRadius slider.
-  const sourceAnchorDot = anchorSource
-    ? { nx: anchorSource.nx, ny: anchorSource.ny, radius: anchorRadius, color: "#ff9a00" }
-    : undefined;
-  const targetAnchorDot = anchorTarget
-    ? { nx: anchorTarget.nx, ny: anchorTarget.ny, radius: anchorRadius, color: "#1473e6" }
-    : undefined;
+  // Repeating distinguishable palette so multiple anchors on the maps don't
+  // collide visually. Source and target dots for anchor N share the same hue
+  // so they read as a pair.
+  const ANCHOR_COLORS = ["#ff9a00", "#22c1d6", "#d646b9", "#7ad62f", "#e8d227"];
+  const colorForAnchor = (i: number) => ANCHOR_COLORS[i % ANCHOR_COLORS.length];
+
+  // Dot+ring overlays for the two pool maps. Each completed anchor contributes
+  // a source dot and a target dot in its paired colour. A pending source (no
+  // target yet) is shown on the source map only, in the colour the next anchor
+  // would take.
+  const sourceAnchorDots = useMemo(() => {
+    const dots = anchors.map((a, i) => ({
+      nx: a.sourceX,
+      ny: a.sourceY,
+      radius: anchorRadius,
+      color: colorForAnchor(i),
+    }));
+    if (pendingSource) {
+      dots.push({
+        nx: pendingSource.nx,
+        ny: pendingSource.ny,
+        radius: anchorRadius,
+        color: colorForAnchor(anchors.length),
+      });
+    }
+    return dots;
+  }, [anchors, pendingSource, anchorRadius]);
+  const targetAnchorDots = useMemo(
+    () =>
+      anchors.map((a, i) => ({
+        nx: a.targetX,
+        ny: a.targetY,
+        radius: anchorRadius,
+        color: colorForAnchor(i),
+      })),
+    [anchors, anchorRadius],
+  );
 
   // ── Color transfer (in-panel preview) ─────────────────────────────
   // Blend amount fed to transferColors — 0 = unchanged target, 1 = full donor.
@@ -384,7 +420,7 @@ export function SmashTab() {
         const recolored = transferColors(
           data, width, height,
           targetResult, sourceResult,
-          correspondence, { strength, relax, preserveLuminance, anchor: anchorOpt },
+          correspondence, { strength, relax, preserveLuminance, anchors: transferAnchors },
         );
         if (!cancelled) {
           setTransferUrl(rgbaToPngDataUrl(recolored, width, height));
@@ -398,7 +434,7 @@ export function SmashTab() {
       }
     }, 16);
     return () => { cancelled = true; clearTimeout(handle); };
-  }, [hasApplied, sourceResult, targetResult, target.segInput, matches, strength, relax, preserveLuminance, anchorOpt]);
+  }, [hasApplied, sourceResult, targetResult, target.segInput, matches, strength, relax, preserveLuminance, transferAnchors]);
 
   // ── Remap interaction ──────────────────────────────────────────────
   // Reassign a target pool's donor (from a row's inline source-pool picker).
@@ -416,10 +452,9 @@ export function SmashTab() {
   };
 
   // ── Focal anchor click handlers ──
-  // Source-map click: capture the source point + the pool id beneath it. Pool
-  // id is read from the segmentation labels at the clicked location, so a
-  // user clicking on a region of the source map "picks" that pool as the
-  // anchor donor.
+  // Source-map click: capture a pending source point + the pool id beneath it.
+  // The pool id is read from the segmentation labels at the clicked location.
+  // The next target-map click consumes this pendingSource to push a new pair.
   const handleAnchorSourceClick = (nx: number, ny: number) => {
     if (!sourceResult) return;
     const sx = Math.min(
@@ -432,15 +467,27 @@ export function SmashTab() {
     );
     const poolId = sourceResult.labels[sy * sourceResult.width + sx];
     if (poolId < 0) return; // clicked a transparent / unlabeled pixel
-    setAnchorSource({ nx, ny, poolId });
+    setPendingSource({ nx, ny, poolId });
   };
   const handleAnchorTargetClick = (nx: number, ny: number) => {
     if (!targetResult) return;
-    setAnchorTarget({ nx, ny });
+    if (!pendingSource) return; // no source click yet — hint shown in the UI
+    const pair: AnchorPair = {
+      sourceX: pendingSource.nx,
+      sourceY: pendingSource.ny,
+      sourcePoolId: pendingSource.poolId,
+      targetX: nx,
+      targetY: ny,
+    };
+    setAnchors(prev => [...prev, pair]);
+    setPendingSource(null);
   };
-  const clearAnchor = () => {
-    setAnchorSource(null);
-    setAnchorTarget(null);
+  const clearAllAnchors = () => {
+    setAnchors([]);
+    setPendingSource(null);
+  };
+  const removeAnchor = (index: number) => {
+    setAnchors(prev => prev.filter((_, i) => i !== index));
   };
 
   // First press starts the live preview; the effect above keeps it current
@@ -502,7 +549,7 @@ export function SmashTab() {
       const recolored = transferColors(
         fullBuf.data, fullW, fullH,
         fullResult, sourceResult,
-        correspondence, { strength, relax, preserveLuminance, anchor: anchorOpt },
+        correspondence, { strength, relax, preserveLuminance, anchors: transferAnchors },
       );
 
       // Place the new layer over the target layer's region, not at (0,0).
@@ -611,7 +658,7 @@ export function SmashTab() {
               analyzing={analyzing}
               placeholder={source.snapError ?? "Pick a source layer."}
               onClickNormalized={sourceResult ? handleAnchorSourceClick : undefined}
-              anchorDot={sourceAnchorDot}
+              anchorDots={sourceAnchorDots}
             />
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -622,7 +669,7 @@ export function SmashTab() {
               analyzing={analyzing}
               placeholder={target.snapError ?? "Pick a target layer."}
               onClickNormalized={targetResult ? handleAnchorTargetClick : undefined}
-              anchorDot={targetAnchorDot}
+              anchorDots={targetAnchorDots}
             />
           </div>
         </div>
@@ -799,53 +846,98 @@ export function SmashTab() {
               </div>
             </div>
 
-            {/* ── Focal anchor (one pair) ──
-                Click the SOURCE map to drop the source point, then the TARGET
-                map to drop the target point. Under the target falloff, those
-                pixels recolor toward the source point's pool instead of the
-                auto donor (smoothly blended by the radius). */}
-            <div style={SUB_HEADER}>FOCAL ANCHOR</div>
+            {/* ── Focal anchors (list of pairs) ──
+                Drop pairs by clicking the SOURCE map then the TARGET map. Each
+                completed anchor pulls pixels inside its target falloff toward
+                the source pool picked at click time. Multiple anchors blend
+                additively; overlapping anchors are renormalized to sum 1. */}
+            <div style={SUB_HEADER}>FOCAL ANCHORS</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span style={{
                   fontSize: 10,
-                  color: anchorOpt
-                    ? "#7dd87d"
-                    : anchorSource || anchorTarget
-                      ? "#d8c87d"
+                  color: pendingSource
+                    ? "#d8c87d"
+                    : anchors.length > 0
+                      ? "#7dd87d"
                       : "#9a9aa8",
                 }}>
-                  {anchorOpt
-                    ? "Active — anchor source pool wins under the target falloff."
-                    : anchorSource
-                      ? "Click the TARGET map to complete the anchor."
-                      : anchorTarget
-                        ? "Click the SOURCE map to complete the anchor."
-                        : "Click the SOURCE map to start an anchor."}
+                  {pendingSource
+                    ? `Click the TARGET map to complete anchor ${anchors.length + 1}`
+                    : anchors.length === 0
+                      ? "0 anchors — click the SOURCE map to start one."
+                      : anchors.length === 1
+                        ? "1 anchor active — click the SOURCE map to add another."
+                        : `${anchors.length} anchors active — click the SOURCE map to add another.`}
                 </span>
                 <div style={{ flex: 1 }} />
-                {(anchorSource || anchorTarget) && (
+                {(anchors.length > 0 || pendingSource) && (
                   <div
-                    onClick={clearAnchor}
-                    title="Remove the focal anchor."
+                    onClick={clearAllAnchors}
+                    title="Remove every focal anchor."
                     style={{
                       padding: "3px 8px", fontSize: 10, borderRadius: 2,
                       border: "1px solid #4a4a4a", background: "#3a3a3a",
                       color: "#cccccc", cursor: "pointer", userSelect: "none",
                     }}
                   >
-                    Clear anchor
+                    Clear all
                   </div>
                 )}
               </div>
-              {(anchorSource || anchorTarget) && (
+              {(anchors.length > 0 || pendingSource) && (
                 <Control
                   label="Anchor radius"
-                  title="Falloff radius around the target point — how far the anchor's source pool reaches before fading back to the auto donor."
+                  title="Shared falloff radius around every target anchor — how far each anchor's source pool reaches before fading back to the auto donor."
                   min={0.05} max={0.6} step={0.025}
                   value={anchorRadius} onChange={setAnchorRadius}
                   display={anchorRadius.toFixed(2)}
                 />
+              )}
+              {anchors.length > 0 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                  {anchors.map((a, i) => {
+                    const color = colorForAnchor(i);
+                    const donor = sourcePoolsById.get(a.sourcePoolId);
+                    return (
+                      <div
+                        key={i}
+                        style={{
+                          display: "flex", alignItems: "center", gap: 6,
+                          padding: "3px 6px",
+                          background: "#1f1f1f",
+                          border: "1px solid #3a3a3a",
+                          borderRadius: 2,
+                        }}
+                      >
+                        <div style={{
+                          width: 12, height: 12, borderRadius: "50%",
+                          background: color, border: "1px solid #000",
+                          flexShrink: 0,
+                        }} title={`anchor ${i + 1}`} />
+                        <span style={{ fontSize: 10, color: "#cccccc" }}>
+                          anchor {i + 1}
+                        </span>
+                        <span style={{ fontSize: 9, color: "#777" }}>
+                          {donor ? `source pool ${donor.id}` : "—"}
+                        </span>
+                        <div style={{ flex: 1 }} />
+                        <div
+                          onClick={() => removeAnchor(i)}
+                          title="Remove this anchor."
+                          style={{
+                            padding: "1px 6px", fontSize: 11, lineHeight: "12px",
+                            borderRadius: 2,
+                            border: "1px solid #4a4a4a", background: "#3a3a3a",
+                            color: "#cccccc", cursor: "pointer", userSelect: "none",
+                          }}
+                        >
+                          ×
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </div>
 
@@ -924,7 +1016,7 @@ function useDisplaySize(result: SegmentResult | null, maxWidth = PANEL_WIDTH): {
 // ── One pool-map image pane (label + framed image + analyzing overlay) ──
 function PoolMapPane({
   label, url, display, analyzing, placeholder,
-  onClickNormalized, anchorDot,
+  onClickNormalized, anchorDots,
 }: {
   label: string;
   url: string | null;
@@ -932,7 +1024,9 @@ function PoolMapPane({
   analyzing: boolean;
   placeholder: string;
   onClickNormalized?: (nx: number, ny: number) => void;
-  anchorDot?: { nx: number; ny: number; radius: number; color: string };
+  // Anchor overlays — every dot+ring this map should render. Order is the
+  // pair index, so callers control colour pairing across the two maps.
+  anchorDots?: { nx: number; ny: number; radius: number; color: string }[];
 }) {
   const handleClick = onClickNormalized
     ? (e: React.MouseEvent<HTMLDivElement>) => {
@@ -945,10 +1039,9 @@ function PoolMapPane({
       }
     : undefined;
 
-  // Visualised falloff ring + center dot for an anchor placed on this map.
-  const ringDiameter = anchorDot
-    ? anchorDot.radius * 2 * Math.max(display.w, display.h)
-    : 0;
+  // Falloff rings size by the larger displayed edge, matching radius units.
+  const ringDiameterFor = (radius: number) =>
+    radius * 2 * Math.max(display.w, display.h);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
@@ -975,29 +1068,32 @@ function PoolMapPane({
                 imageRendering: "pixelated", display: "block",
               }}
             />
-            {anchorDot && (
-              <>
-                {/* Falloff ring */}
-                <div style={{
-                  position: "absolute", pointerEvents: "none",
-                  left: anchorDot.nx * display.w - ringDiameter / 2,
-                  top: anchorDot.ny * display.h - ringDiameter / 2,
-                  width: ringDiameter, height: ringDiameter,
-                  borderRadius: "50%",
-                  border: `1px solid ${anchorDot.color}`,
-                  opacity: 0.85,
-                }} />
-                {/* Center dot */}
-                <div style={{
-                  position: "absolute", pointerEvents: "none",
-                  left: anchorDot.nx * display.w - 4,
-                  top: anchorDot.ny * display.h - 4,
-                  width: 8, height: 8, borderRadius: "50%",
-                  background: anchorDot.color,
-                  border: "1px solid #000",
-                }} />
-              </>
-            )}
+            {anchorDots && anchorDots.map((d, i) => {
+              const ringDiameter = ringDiameterFor(d.radius);
+              return (
+                <Fragment key={i}>
+                  {/* Falloff ring */}
+                  <div style={{
+                    position: "absolute", pointerEvents: "none",
+                    left: d.nx * display.w - ringDiameter / 2,
+                    top: d.ny * display.h - ringDiameter / 2,
+                    width: ringDiameter, height: ringDiameter,
+                    borderRadius: "50%",
+                    border: `1px solid ${d.color}`,
+                    opacity: 0.85,
+                  }} />
+                  {/* Center dot */}
+                  <div style={{
+                    position: "absolute", pointerEvents: "none",
+                    left: d.nx * display.w - 4,
+                    top: d.ny * display.h - 4,
+                    width: 8, height: 8, borderRadius: "50%",
+                    background: d.color,
+                    border: "1px solid #000",
+                  }} />
+                </Fragment>
+              );
+            })}
           </div>
         )}
         {!url && !analyzing && (

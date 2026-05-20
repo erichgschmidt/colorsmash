@@ -379,6 +379,67 @@ describe("transferColors", () => {
     expect(softGap).toBeLessThan(hardGap);
   });
 
+  it("multi-anchor: each anchor recolors its own region toward its donor", () => {
+    // 12×1 image. Single target pool of neutral mid-gray with an auto donor
+    // (also neutral) — so the auto recolor leaves color roughly neutral. Two
+    // small anchors land at x=1 (red donor) and x=10 (blue donor); their
+    // falloffs are non-overlapping. Pixels in between stay auto-neutral.
+    const width = 12;
+    const height = 1;
+    const pixels: Array<[number, number, number, number]> = [];
+    for (let i = 0; i < width; i++) pixels.push([140, 140, 140, 255]);
+    const target = fillRgba(width, height, pixels);
+    const labels = new Array(width).fill(0);
+    const targetResult = makeResult(width, height, labels, [
+      makePool(0, [makeSub(140, 140, 140)]),
+    ]);
+    // Three source pools: a neutral auto donor (pool 10), a red donor (pool
+    // 20), and a blue donor (pool 30). The auto correspondence pairs target
+    // pool 0 with the neutral donor; the anchors override toward red/blue.
+    const sourceResult = makeResult(1, 3, [10, 20, 30], [
+      makePool(10, [makeSub(140, 140, 140)]),
+      makePool(20, [makeSub(220, 30, 30)]),
+      makePool(30, [makeSub(30, 30, 220)]),
+    ]);
+    const correspondence: Correspondence = {
+      matches: [{ targetPoolId: 0, sourcePoolId: 10, score: 0 }],
+      unmatchedSourceIds: [20, 30],
+    };
+
+    const anchors = [
+      // Anchor 0: red donor at x≈1.
+      { sourcePoolId: 20, targetX: 1 / (width - 1), targetY: 0.5, radius: 0.15 },
+      // Anchor 1: blue donor at x≈10.
+      { sourcePoolId: 30, targetX: 10 / (width - 1), targetY: 0.5, radius: 0.15 },
+    ];
+
+    const out = transferColors(
+      target, width, height, targetResult, sourceResult, correspondence,
+      { strength: 1, anchors },
+    );
+
+    // The pixel under anchor 0 (x=1) recolors strongly toward red: R high,
+    // B low. The pixel under anchor 1 (x=10) recolors strongly toward blue.
+    const redR = out[1 * 4];
+    const redB = out[1 * 4 + 2];
+    expect(redR).toBeGreaterThan(redB + 40);
+    expect(redR).toBeGreaterThan(180);
+
+    const blueR = out[10 * 4];
+    const blueB = out[10 * 4 + 2];
+    expect(blueB).toBeGreaterThan(blueR + 40);
+    expect(blueB).toBeGreaterThan(180);
+
+    // The middle pixel (x=5) is outside both falloffs (radius 0.15 of max edge
+    // = 1.8 px), so it stays on the auto neutral donor → roughly unchanged.
+    const midR = out[5 * 4];
+    const midG = out[5 * 4 + 1];
+    const midB = out[5 * 4 + 2];
+    expect(Math.abs(midR - 140)).toBeLessThan(15);
+    expect(Math.abs(midG - 140)).toBeLessThan(15);
+    expect(Math.abs(midB - 140)).toBeLessThan(15);
+  });
+
   it("preserveLuminance: 1 keeps original L while a/b still shift", () => {
     const width = 2;
     const height = 1;
