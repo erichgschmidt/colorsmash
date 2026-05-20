@@ -19,6 +19,7 @@ import { useLayers } from "./useLayers";
 import { useLayerPreview } from "./useLayerPreview";
 import { SourceSelector } from "./SourceSelector";
 import { Section } from "./Section";
+import { SmashRecipes } from "./SmashRecipes";
 import { downsampleToMaxEdge } from "../core/downsample";
 import { rgbaToPngDataUrl } from "./encodePng";
 import { matchStyles } from "./MatchSliders";
@@ -195,32 +196,38 @@ export function SmashTab() {
   // Each anchor is a completed source↔target pair, captured with the source
   // pool id picked at the click site. Building one happens in two clicks:
   // first the SOURCE map (sets pendingSource), then the TARGET map (consumes
-  // pendingSource and pushes the new pair). The radius is SHARED across all
-  // anchors for this round — per-anchor radius is a later refinement.
+  // pendingSource and pushes the new pair). Each anchor carries its OWN
+  // falloff radius; the shared `anchorRadius` state below is the default
+  // value stamped onto newly-completed anchors (and is editable per-row
+  // afterwards via the list slider).
   interface AnchorPair {
     sourceX: number;
     sourceY: number;
     sourcePoolId: number;
     targetX: number;
     targetY: number;
+    radius: number;
   }
   const [anchors, setAnchors] = useState<AnchorPair[]>([]);
   const [pendingSource, setPendingSource] = useState<
     { nx: number; ny: number; poolId: number } | null
   >(null);
+  // Default falloff radius applied to NEW anchors when they're completed.
+  // Existing anchors keep whatever radius they were created with — change
+  // them individually via their row slider.
   const [anchorRadius, setAnchorRadius] = useState(0.2);
 
-  // The list passed into transferColors. Memoised so the live-preview effect
-  // re-runs only when the actual list contents (or shared radius) change.
+  // The list passed into transferColors. Each anchor carries its own radius,
+  // so the memo depends only on the anchors array.
   const transferAnchors = useMemo<TransferAnchor[]>(
     () =>
       anchors.map(a => ({
         sourcePoolId: a.sourcePoolId,
         targetX: a.targetX,
         targetY: a.targetY,
-        radius: anchorRadius,
+        radius: a.radius,
       })),
-    [anchors, anchorRadius],
+    [anchors],
   );
 
   // Repeating distinguishable palette so multiple anchors on the maps don't
@@ -237,10 +244,13 @@ export function SmashTab() {
     const dots = anchors.map((a, i) => ({
       nx: a.sourceX,
       ny: a.sourceY,
-      radius: anchorRadius,
+      radius: a.radius,
       color: colorForAnchor(i),
     }));
     if (pendingSource) {
+      // Pending source has no committed radius yet — preview it at the
+      // default-for-new-anchors value so the ring shows what the next anchor
+      // will spawn with.
       dots.push({
         nx: pendingSource.nx,
         ny: pendingSource.ny,
@@ -255,10 +265,10 @@ export function SmashTab() {
       anchors.map((a, i) => ({
         nx: a.targetX,
         ny: a.targetY,
-        radius: anchorRadius,
+        radius: a.radius,
         color: colorForAnchor(i),
       })),
-    [anchors, anchorRadius],
+    [anchors],
   );
 
   // ── Color transfer (in-panel preview) ─────────────────────────────
@@ -478,6 +488,9 @@ export function SmashTab() {
       sourcePoolId: pendingSource.poolId,
       targetX: nx,
       targetY: ny,
+      // Snapshot the current "default for new anchors" value — this becomes
+      // the anchor's own radius and can be re-tuned later via its row slider.
+      radius: anchorRadius,
     };
     setAnchors(prev => [...prev, pair]);
     setPendingSource(null);
@@ -488,6 +501,10 @@ export function SmashTab() {
   };
   const removeAnchor = (index: number) => {
     setAnchors(prev => prev.filter((_, i) => i !== index));
+  };
+  // Mutate a single anchor's radius (driven by the per-row slider).
+  const setAnchorRadiusAt = (index: number, radius: number) => {
+    setAnchors(prev => prev.map((a, i) => (i === index ? { ...a, radius } : a)));
   };
 
   // First press starts the live preview; the effect above keeps it current
@@ -592,6 +609,30 @@ export function SmashTab() {
   return (
     <div style={{ padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={SECTION_HEADER}>SMASH — POOL CORRESPONDENCE</div>
+
+      {/* ── Recipes: save / load global settings (no per-image data) ── */}
+      <Section title="RECIPES" defaultOpen={false}>
+        <SmashRecipes
+          current={{
+            segmentation: {
+              poolCount, edgePreservation, regionCleanup,
+              colorVsValueBias, neutralProtection, subPaletteSize,
+            },
+            transfer: { strength, relax, preserveLuminance },
+          }}
+          onApply={(s) => {
+            setPoolCount(s.segmentation.poolCount);
+            setEdgePreservation(s.segmentation.edgePreservation);
+            setRegionCleanup(s.segmentation.regionCleanup);
+            setColorVsValueBias(s.segmentation.colorVsValueBias);
+            setNeutralProtection(s.segmentation.neutralProtection);
+            setSubPaletteSize(s.segmentation.subPaletteSize);
+            setStrength(s.transfer.strength);
+            setRelax(s.transfer.relax);
+            setPreserveLuminance(s.transfer.preserveLuminance);
+          }}
+        />
+      </Section>
 
       {/* ── Inputs: source + target pickers + segmentation controls ── */}
       <Section title="INPUTS">
@@ -887,8 +928,8 @@ export function SmashTab() {
               </div>
               {(anchors.length > 0 || pendingSource) && (
                 <Control
-                  label="Anchor radius"
-                  title="Shared falloff radius around every target anchor — how far each anchor's source pool reaches before fading back to the auto donor."
+                  label="New-anchor radius"
+                  title="Default falloff radius applied to NEWLY-created anchors only. Existing anchors keep their own radius — tune each one individually with its row slider below."
                   min={0.05} max={0.6} step={0.025}
                   value={anchorRadius} onChange={setAnchorRadius}
                   display={anchorRadius.toFixed(2)}
@@ -903,36 +944,57 @@ export function SmashTab() {
                       <div
                         key={i}
                         style={{
-                          display: "flex", alignItems: "center", gap: 6,
+                          display: "flex", flexDirection: "column", gap: 3,
                           padding: "3px 6px",
                           background: "#1f1f1f",
                           border: "1px solid #3a3a3a",
                           borderRadius: 2,
                         }}
                       >
-                        <div style={{
-                          width: 12, height: 12, borderRadius: "50%",
-                          background: color, border: "1px solid #000",
-                          flexShrink: 0,
-                        }} title={`anchor ${i + 1}`} />
-                        <span style={{ fontSize: 10, color: "#cccccc" }}>
-                          anchor {i + 1}
-                        </span>
-                        <span style={{ fontSize: 9, color: "#777" }}>
-                          {donor ? `source pool ${donor.id}` : "—"}
-                        </span>
-                        <div style={{ flex: 1 }} />
+                        {/* Top row — colour chip + label + donor + remove */}
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <div style={{
+                            width: 12, height: 12, borderRadius: "50%",
+                            background: color, border: "1px solid #000",
+                            flexShrink: 0,
+                          }} title={`anchor ${i + 1}`} />
+                          <span style={{ fontSize: 10, color: "#cccccc" }}>
+                            anchor {i + 1}
+                          </span>
+                          <span style={{ fontSize: 9, color: "#777" }}>
+                            {donor ? `source pool ${donor.id}` : "—"}
+                          </span>
+                          <div style={{ flex: 1 }} />
+                          <div
+                            onClick={() => removeAnchor(i)}
+                            title="Remove this anchor."
+                            style={{
+                              padding: "1px 6px", fontSize: 11, lineHeight: "12px",
+                              borderRadius: 2,
+                              border: "1px solid #4a4a4a", background: "#3a3a3a",
+                              color: "#cccccc", cursor: "pointer", userSelect: "none",
+                            }}
+                          >
+                            ×
+                          </div>
+                        </div>
+                        {/* Per-anchor radius — tunes ONLY this anchor's falloff. */}
                         <div
-                          onClick={() => removeAnchor(i)}
-                          title="Remove this anchor."
-                          style={{
-                            padding: "1px 6px", fontSize: 11, lineHeight: "12px",
-                            borderRadius: 2,
-                            border: "1px solid #4a4a4a", background: "#3a3a3a",
-                            color: "#cccccc", cursor: "pointer", userSelect: "none",
-                          }}
+                          style={{ display: "flex", alignItems: "center", gap: 6 }}
+                          title="Falloff radius for THIS anchor only — how far its source pool reaches before fading back to the auto donor."
                         >
-                          ×
+                          <span style={{ fontSize: 9, color: "#9a9aa8", width: 38, flexShrink: 0 }}>
+                            Radius
+                          </span>
+                          <input
+                            type="range"
+                            min={0.05} max={0.6} step={0.025} value={a.radius}
+                            onChange={e => setAnchorRadiusAt(i, parseFloat(e.target.value))}
+                            style={{ flex: 1, minWidth: 0, margin: 0, cursor: "pointer", height: 10 }}
+                          />
+                          <span style={{ fontSize: 9, width: 26, textAlign: "right", flexShrink: 0, opacity: 0.8 }}>
+                            {a.radius.toFixed(2)}
+                          </span>
                         </div>
                       </div>
                     );
