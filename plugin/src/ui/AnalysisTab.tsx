@@ -14,6 +14,7 @@ import { app } from "../services/photoshop";
 import { useLayers } from "./useLayers";
 import { useLayerPreview } from "./useLayerPreview";
 import { SourceSelector } from "./SourceSelector";
+import { Section } from "./Section";
 import { downsampleToMaxEdge } from "../core/downsample";
 import { rgbaToPngDataUrl } from "./encodePng";
 import { matchStyles } from "./MatchSliders";
@@ -76,6 +77,7 @@ export function AnalysisTab() {
   const [edgePreservation, setEdgePreservation] = useState(0.55);
   const [regionCleanup, setRegionCleanup] = useState(0.4);
   const [colorVsValueBias, setColorVsValueBias] = useState(0.5);
+  const [neutralProtection, setNeutralProtection] = useState(0);
   const [subPaletteSize, setSubPaletteSize] = useState(5);
 
   // ── Segmentation result + analyzing state ───────────────────────
@@ -122,7 +124,7 @@ export function AnalysisTab() {
     const handle = setTimeout(() => {
       if (cancelled) return;
       try {
-        const opts = { poolCount, edgePreservation, regionCleanup, colorVsValueBias, subPaletteSize };
+        const opts = { poolCount, edgePreservation, regionCleanup, colorVsValueBias, subPaletteSize, neutralProtection };
         let r = segmentImage(segInput.data, segInput.width, segInput.height, opts, warm);
         // Re-apply drilled-down pools by id (top-level ids are warm-stable).
         for (const id of expandedIdsRef.current) {
@@ -142,7 +144,7 @@ export function AnalysisTab() {
       }
     }, 16);
     return () => { cancelled = true; clearTimeout(handle); };
-  }, [segInput, poolCount, edgePreservation, regionCleanup, colorVsValueBias, subPaletteSize]);
+  }, [segInput, poolCount, edgePreservation, regionCleanup, colorVsValueBias, neutralProtection, subPaletteSize]);
 
   // Drill a pool down into child pools (or fold it back up). Operates on the
   // current result directly so the click is snappy.
@@ -151,7 +153,7 @@ export function AnalysisTab() {
     const willExpand = !expandedIds.has(poolId);
     const next = new Set(expandedIds);
     if (willExpand) next.add(poolId); else next.delete(poolId);
-    const opts = { poolCount, edgePreservation, regionCleanup, colorVsValueBias, subPaletteSize };
+    const opts = { poolCount, edgePreservation, regionCleanup, colorVsValueBias, subPaletteSize, neutralProtection };
     const r = willExpand
       ? expandPool(result, segInput.data, poolId, opts)
       : collapsePool(result, poolId);
@@ -206,127 +208,145 @@ export function AnalysisTab() {
     <div style={{ padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={SECTION_HEADER}>COLOR POOLS</div>
 
-      <SourceSelector
-        docs={docs}
-        activeDocId={docId}
-        srcMode={"layer" as SrcMode}
-        browsedFile=""
-        onSwitchDoc={setDocId}
-        onSwitchSrcMode={() => { /* analysis is layer-only */ }}
-        setBrowsedFile={() => { /* unused */ }}
-        onBrowseImage={() => { /* unused */ }}
-        layers={layers}
-        sourceId={layerId}
-        setSourceId={setLayerId}
-        autoUpdate={false}
-        setAutoUpdate={() => { /* unused */ }}
-        sampleMerged={false}
-        setSampleMerged={() => { /* unused */ }}
-        sampleLock={false}
-        setSampleLock={() => { /* unused */ }}
-        selStyle={sel}
-        onRefreshLayers={refreshLayers}
-        docsKey={docsKey}
-        layersKey={layersKey}
-      />
+      {/* ── Inputs: source picker + segmentation controls ── */}
+      <Section title="INPUTS">
+        <SourceSelector
+          docs={docs}
+          activeDocId={docId}
+          srcMode={"layer" as SrcMode}
+          browsedFile=""
+          onSwitchDoc={setDocId}
+          onSwitchSrcMode={() => { /* analysis is layer-only */ }}
+          setBrowsedFile={() => { /* unused */ }}
+          onBrowseImage={() => { /* unused */ }}
+          layers={layers}
+          sourceId={layerId}
+          setSourceId={setLayerId}
+          autoUpdate={false}
+          setAutoUpdate={() => { /* unused */ }}
+          sampleMerged={false}
+          setSampleMerged={() => { /* unused */ }}
+          sampleLock={false}
+          setSampleLock={() => { /* unused */ }}
+          selStyle={sel}
+          onRefreshLayers={refreshLayers}
+          docsKey={docsKey}
+          layersKey={layersKey}
+        />
 
-      {/* Controls */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 2 }}>
-        <Control
-          label="Pool count"
-          title="Number of color pools to segment the image into."
-          min={2} max={12} step={1}
-          value={poolCount} onChange={setPoolCount}
-          display={String(poolCount)}
-        />
-        <Control
-          label="Edge preservation"
-          title="Higher keeps more pool boundaries — refuses to merge regions across strong color edges."
-          min={0} max={1} step={0.05}
-          value={edgePreservation} onChange={setEdgePreservation}
-          display={edgePreservation.toFixed(2)}
-        />
-        <Control
-          label="Region cleanup"
-          title="Higher absorbs more small speckled regions into their neighbours for simpler shapes."
-          min={0} max={1} step={0.05}
-          value={regionCleanup} onChange={setRegionCleanup}
-          display={regionCleanup.toFixed(2)}
-        />
-        <Control
-          label="Color vs Value"
-          title="0 = chroma/hue identity dominates (skin shadow and shirt shadow stay separate by color). 0.5 = balanced. 1 = value/lightness dominates (classic luminance-driven cutout)."
-          min={0} max={1} step={0.05}
-          value={colorVsValueBias} onChange={setColorVsValueBias}
-          display={colorVsValueBias.toFixed(2)}
-        />
-        <Control
-          label="Sub-palette size"
-          title="Number of swatches sampled within each pool."
-          min={3} max={7} step={1}
-          value={subPaletteSize} onChange={setSubPaletteSize}
-          display={String(subPaletteSize)}
-        />
-      </div>
-
-      {/* Pool map canvas */}
-      <div style={{
-        position: "relative", alignSelf: "center",
-        width: canvasDisplay.w || PANEL_WIDTH, minHeight: 60,
-        display: "flex", alignItems: "center", justifyContent: "center",
-        background: "#1f1f1f", border: "1px solid #3a3a3a", borderRadius: 2,
-      }}>
-        {poolMapUrl && (
-          <img
-            src={poolMapUrl}
-            style={{
-              width: canvasDisplay.w, height: canvasDisplay.h,
-              imageRendering: "pixelated", display: "block",
-            }}
+        {/* Controls */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 2 }}>
+          <Control
+            label="Pool count"
+            title="Number of color pools to segment the image into."
+            min={2} max={12} step={1}
+            value={poolCount} onChange={setPoolCount}
+            display={String(poolCount)}
           />
-        )}
-        {!result && !analyzing && (
-          <div style={{ padding: 24, fontSize: 10, opacity: 0.5 }}>
-            {snapError ?? segError ?? "Pick a layer to analyze."}
-          </div>
-        )}
-        {analyzing && (
-          <div style={{
-            position: "absolute", inset: 0, display: "flex",
-            alignItems: "center", justifyContent: "center",
-            background: "rgba(31,31,31,0.78)", fontSize: 10, color: "#cccccc",
-          }}>
-            analyzing…
-          </div>
-        )}
-      </div>
-
-      {segError && (
-        <div style={{ fontSize: 10, color: "#d8867d" }}>Segmentation failed: {segError}</div>
-      )}
-
-      {/* Pool breakdown list — click a pool's chevron to drill into sub-pools */}
-      {sortedPools.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          {sortedPools.map(pool => (
-            <div key={pool.id} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-              <PoolRow
-                pool={pool}
-                depth={0}
-                expanded={!!pool.subPools}
-                onToggle={() => toggleExpand(pool.id)}
-              />
-              {pool.subPools && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 3, marginLeft: 16 }}>
-                  {pool.subPools.map(child => (
-                    <PoolRow key={child.id} pool={child} depth={1} />
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
+          <Control
+            label="Edge preservation"
+            title="Higher keeps more pool boundaries — refuses to merge regions across strong color edges."
+            min={0} max={1} step={0.05}
+            value={edgePreservation} onChange={setEdgePreservation}
+            display={edgePreservation.toFixed(2)}
+          />
+          <Control
+            label="Region cleanup"
+            title="Higher absorbs more small speckled regions into their neighbours for simpler shapes."
+            min={0} max={1} step={0.05}
+            value={regionCleanup} onChange={setRegionCleanup}
+            display={regionCleanup.toFixed(2)}
+          />
+          <Control
+            label="Neutral protection"
+            title="Higher refuses merges across strong chroma steps — defends low-chroma neighbours (gray shadows) from swallowing chromatic regions."
+            min={0} max={1} step={0.05}
+            value={neutralProtection} onChange={setNeutralProtection}
+            display={neutralProtection.toFixed(2)}
+          />
+          <Control
+            label="Color vs Value"
+            title="0 = chroma/hue identity dominates (skin shadow and shirt shadow stay separate by color). 0.5 = balanced. 1 = value/lightness dominates (classic luminance-driven cutout)."
+            min={0} max={1} step={0.05}
+            value={colorVsValueBias} onChange={setColorVsValueBias}
+            display={colorVsValueBias.toFixed(2)}
+          />
+          <Control
+            label="Sub-palette size"
+            title="Number of swatches sampled within each pool."
+            min={3} max={7} step={1}
+            value={subPaletteSize} onChange={setSubPaletteSize}
+            display={String(subPaletteSize)}
+          />
         </div>
-      )}
+      </Section>
+
+      {/* ── Pool map image pane (with placeholder / analyzing states) ── */}
+      <Section title="POOL MAP">
+        <div style={{
+          position: "relative", alignSelf: "center",
+          width: canvasDisplay.w || PANEL_WIDTH, minHeight: 60,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          background: "#1f1f1f", border: "1px solid #3a3a3a", borderRadius: 2,
+        }}>
+          {poolMapUrl && (
+            <img
+              src={poolMapUrl}
+              style={{
+                width: canvasDisplay.w, height: canvasDisplay.h,
+                imageRendering: "pixelated", display: "block",
+              }}
+            />
+          )}
+          {!result && !analyzing && (
+            <div style={{ padding: 24, fontSize: 10, opacity: 0.5 }}>
+              {snapError ?? segError ?? "Pick a layer to analyze."}
+            </div>
+          )}
+          {analyzing && (
+            <div style={{
+              position: "absolute", inset: 0, display: "flex",
+              alignItems: "center", justifyContent: "center",
+              background: "rgba(31,31,31,0.78)", fontSize: 10, color: "#cccccc",
+            }}>
+              analyzing…
+            </div>
+          )}
+        </div>
+
+        {segError && (
+          <div style={{ fontSize: 10, color: "#d8867d" }}>Segmentation failed: {segError}</div>
+        )}
+      </Section>
+
+      {/* ── Pool breakdown list — click a pool's chevron to drill into sub-pools ── */}
+      <Section title="POOLS">
+        {sortedPools.length > 0 ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {sortedPools.map(pool => (
+              <div key={pool.id} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                <PoolRow
+                  pool={pool}
+                  depth={0}
+                  expanded={!!pool.subPools}
+                  onToggle={() => toggleExpand(pool.id)}
+                />
+                {pool.subPools && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 3, marginLeft: 16 }}>
+                    {pool.subPools.map(child => (
+                      <PoolRow key={child.id} pool={child} depth={1} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ padding: 8, fontSize: 10, opacity: 0.5 }}>
+            No pools yet — pick a layer to analyze.
+          </div>
+        )}
+      </Section>
     </div>
   );
 }

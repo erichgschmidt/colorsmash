@@ -18,6 +18,7 @@ import { app, readLayerPixels, writePixelLayer, executeAsModal } from "../servic
 import { useLayers } from "./useLayers";
 import { useLayerPreview } from "./useLayerPreview";
 import { SourceSelector } from "./SourceSelector";
+import { Section } from "./Section";
 import { downsampleToMaxEdge } from "../core/downsample";
 import { rgbaToPngDataUrl } from "./encodePng";
 import { matchStyles } from "./MatchSliders";
@@ -165,6 +166,7 @@ export function SmashTab() {
   const [edgePreservation, setEdgePreservation] = useState(0.55);
   const [regionCleanup, setRegionCleanup] = useState(0.4);
   const [colorVsValueBias, setColorVsValueBias] = useState(0.5);
+  const [neutralProtection, setNeutralProtection] = useState(0);
   const [subPaletteSize, setSubPaletteSize] = useState(5);
 
   // ── Segmentation results + analyzing state ─────────────────────────
@@ -262,7 +264,7 @@ export function SmashTab() {
     const handle = setTimeout(() => {
       if (cancelled) return;
       try {
-        const opts = { poolCount, edgePreservation, regionCleanup, colorVsValueBias, subPaletteSize };
+        const opts = { poolCount, edgePreservation, regionCleanup, colorVsValueBias, subPaletteSize, neutralProtection };
         const sRes = segmentImage(source.segInput!.data, source.segInput!.width, source.segInput!.height, opts);
         const tRes = segmentImage(target.segInput!.data, target.segInput!.width, target.segInput!.height, opts);
         const corr = matchPools(sRes.pools, tRes.pools);
@@ -284,7 +286,7 @@ export function SmashTab() {
       }
     }, 16);
     return () => { cancelled = true; clearTimeout(handle); };
-  }, [source.segInput, target.segInput, poolCount, edgePreservation, regionCleanup, colorVsValueBias, subPaletteSize]);
+  }, [source.segInput, target.segInput, poolCount, edgePreservation, regionCleanup, colorVsValueBias, neutralProtection, subPaletteSize]);
 
   // ── Lookups ────────────────────────────────────────────────────────
   const sourcePoolsById = useMemo(() => {
@@ -573,6 +575,13 @@ export function SmashTab() {
             min={0} max={1} step={0.05}
             value={regionCleanup} onChange={setRegionCleanup}
             display={regionCleanup.toFixed(2)}
+          />
+          <Control
+            label="Neutral protection"
+            title="Higher refuses merges across strong chroma steps — defends low-chroma neighbours (gray shadows) from swallowing chromatic regions."
+            min={0} max={1} step={0.05}
+            value={neutralProtection} onChange={setNeutralProtection}
+            display={neutralProtection.toFixed(2)}
           />
           <Control
             label="Color vs Value"
@@ -910,34 +919,6 @@ function useDisplaySize(result: SegmentResult | null, maxWidth = PANEL_WIDTH): {
     const scale = Math.min(1, maxWidth / result.width);
     return { w: Math.round(result.width * scale), h: Math.round(result.height * scale) };
   }, [result, maxWidth]);
-}
-
-// ── Collapsible section — the header chip toggles its body open/closed ──
-function Section({ title, children, defaultOpen = true }: {
-  title: string;
-  children: React.ReactNode;
-  defaultOpen?: boolean;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <div
-        onClick={() => setOpen(o => !o)}
-        style={{
-          ...SECTION_HEADER, cursor: "pointer", userSelect: "none",
-          display: "flex", alignItems: "center", gap: 6,
-        }}
-      >
-        <span style={{ fontSize: 8 }}>{open ? "▾" : "▸"}</span>
-        {title}
-      </div>
-      {open && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {children}
-        </div>
-      )}
-    </div>
-  );
 }
 
 // ── One pool-map image pane (label + framed image + analyzing overlay) ──

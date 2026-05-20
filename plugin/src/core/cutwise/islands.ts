@@ -103,6 +103,13 @@ export interface MergeParams {
   // Unlike edgePreservation this only engages in focal zones and only on L —
   // hue/chroma differences are ignored. 0 = no value protection (unchanged).
   valuePreservation: number;
+  // Neutral protection 0..100. Higher = refuse to merge across strong CHROMA
+  // steps regardless of overall Lab distance. Defends the common failure mode
+  // where a low-chroma / neutral island absorbs a chromatic neighbour (gray
+  // shadows swallowing colors), and vice versa. Symmetric — the chroma
+  // differential captures both directions. 0 = no protection (unchanged).
+  // ColorSmash-side divergence from upstream CutWise.
+  neutralProtection: number;
 }
 
 // How aggressively low-priority zones inflate the merge threshold at full
@@ -119,6 +126,16 @@ const EDGE_TIGHT = 60; // Lab dist² ceiling at edgePreservation=100
 // survives, keeping the focal subject's value structure intact.
 const VALUE_LOOSE = 100;
 const VALUE_TIGHT = 12;
+
+// Neutral protection: chroma-step ceiling above which a merge is blocked.
+// LOOSE = 100 spans nearly the full chroma range, so at zero protection
+// strength no merge is ever blocked — neutralProtection=0 is a no-op. TIGHT =
+// 10 is roughly the chroma differential at which neutral and chromatic regions
+// read as distinct material kinds; at full strength any neighbour whose chroma
+// differs by more than that survives, defending color identity against
+// gray/neutral encroachment (and vice versa).
+const NEUTRAL_LOOSE = 100;
+const NEUTRAL_TIGHT = 10;
 
 // Minimal binary min-heap over (key, value) pairs. Used with lazy invalidation:
 // stale entries are detected and skipped by the caller after popping.
@@ -161,6 +178,10 @@ class MinHeap {
 
 // Merge under-threshold islands into their nearest-colour neighbour. Returns a
 // per-pixel cluster index map (-1 for transparent) ready for recolouring.
+//
+// NOTE: the `neutralProtection` chroma-step gate below is a ColorSmash-side
+// divergence from upstream CutWise — CutWise's version of this function has
+// no such guard.
 export function mergeSmallIslands(
   regionOf: Int32Array,
   regions: Region[],
@@ -209,7 +230,11 @@ export function mergeSmallIslands(
   const sim = Math.max(0, Math.min(100, params.simplification)) / 100;
   const ep = Math.max(0, Math.min(100, params.edgePreservation)) / 100;
   const vp = Math.max(0, Math.min(100, params.valuePreservation)) / 100;
+  const np = Math.max(0, Math.min(100, params.neutralProtection)) / 100;
   const maxMergeDist2 = ep <= 0 ? Infinity : EDGE_LOOSE - ep * (EDGE_LOOSE - EDGE_TIGHT);
+  // At np=0 the ceiling is LOOSE (effectively unreachable → no-op); at np=1 it
+  // drops to TIGHT so even a modest chroma differential blocks the merge.
+  const maxChromaStep = NEUTRAL_LOOSE - np * (NEUTRAL_LOOSE - NEUTRAL_TIGHT);
 
   // avgPriority(root) — region's mean anchor priority, clamped to 0..1.
   const avgPriority = (root: number): number => {
@@ -253,6 +278,18 @@ export function mergeSmallIslands(
     }
     if (best === -1) continue; // isolated island — nothing to merge into
     if (bestD > maxMergeDist2) continue; // sits on a real edge — protect it
+
+    // Neutral protection: refuse a merge that would cross a strong chroma
+    // step, defending against gray/neutral regions swallowing chromatic
+    // neighbours (and vice versa). Symmetric — the |ΔC| differential captures
+    // both directions. At np=0 the ceiling is LOOSE so this is a no-op.
+    if (np > 0) {
+      const bestLab = clusters[clusterOf[best]].lab;
+      const chromaRoot = Math.sqrt(myLab[1] * myLab[1] + myLab[2] * myLab[2]);
+      const chromaBest = Math.sqrt(bestLab[1] * bestLab[1] + bestLab[2] * bestLab[2]);
+      const chromaStep = Math.abs(chromaRoot - chromaBest);
+      if (chromaStep > maxChromaStep) continue; // strong neutral↔chromatic step
+    }
 
     // Value-contrast protection: in focal zones, refuse a merge that would
     // erase a strong lightness step. Protection strength is vp × priority, so

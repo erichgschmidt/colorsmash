@@ -75,6 +75,8 @@ export interface SegmentOptions {
   colorVsValueBias: number;   // 0..1 — 0 = color/chroma identity dominates,
                               // 0.5 = balanced (≈ Lab), 1 = value/lightness dominates
   subPaletteSize: number;     // k for each pool's sub-palette, e.g. 3..7
+  neutralProtection: number;  // 0..1 — refuses merges across strong chroma steps
+                              // (defends against gray shadows swallowing chromatic neighbours)
 }
 
 export interface SegmentResult {
@@ -354,6 +356,7 @@ function segmentPixelSet(
     simplification: clamp01(opts.regionCleanup) * 100,
     edgePreservation: clamp01(opts.edgePreservation) * 100,
     valuePreservation: 0, // focal-zone only — engaged once anchors land
+    neutralProtection: clamp01(opts.neutralProtection) * 100,
   };
   const merged = mergeSmallIslands(regionOf, regions, clusters, priorityMap, width, mergeParams);
   const finalLabels = smoothLabels(merged, width, height, SMOOTH_PASSES);

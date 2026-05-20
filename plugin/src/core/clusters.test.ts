@@ -29,6 +29,7 @@ describe("segmentImage", () => {
       edgePreservation: 0.5,
       regionCleanup: 0.4,
       colorVsValueBias: 0.5, subPaletteSize: 3,
+      neutralProtection: 0,
     });
 
     expect(res.width).toBe(W);
@@ -66,10 +67,12 @@ describe("segmentImage", () => {
     // Low edge preservation: the tiny block is absorbed into the field.
     const loose = segmentImage(img, W, H, {
       poolCount: 2, edgePreservation: 0, regionCleanup: 1, colorVsValueBias: 0.5, subPaletteSize: 3,
+      neutralProtection: 0,
     });
     // High edge preservation: the strong color edge blocks the merge.
     const tight = segmentImage(img, W, H, {
       poolCount: 2, edgePreservation: 1, regionCleanup: 1, colorVsValueBias: 0.5, subPaletteSize: 3,
+      neutralProtection: 0,
     });
 
     expect(tight.pools.length).toBeGreaterThan(loose.pools.length);
@@ -85,6 +88,7 @@ describe("segmentImage", () => {
     // Region cleanup 0 → the despeckle floor (12px); the 64px blob survives.
     const res = segmentImage(img, W, H, {
       poolCount: 2, edgePreservation: 0.5, regionCleanup: 0, colorVsValueBias: 0.5, subPaletteSize: 3,
+      neutralProtection: 0,
     });
 
     expect(res.pools.length).toBe(2);
@@ -103,6 +107,7 @@ describe("segmentImage", () => {
 
     const r1 = segmentImage(img, W, H, {
       poolCount: 3, edgePreservation: 0.6, regionCleanup: 0.2, colorVsValueBias: 0.5, subPaletteSize: 3,
+      neutralProtection: 0,
     });
     const ids1 = r1.pools.map((p) => p.id);
     expect(r1.pools.length).toBe(3);
@@ -110,6 +115,7 @@ describe("segmentImage", () => {
     // Re-segment with a changed control, warm-started from r1.
     const r2 = segmentImage(img, W, H, {
       poolCount: 3, edgePreservation: 0.6, regionCleanup: 0.6, colorVsValueBias: 0.5, subPaletteSize: 3,
+      neutralProtection: 0,
     }, r1);
 
     // The original pool ids are carried forward by the warm-start match.
@@ -130,6 +136,7 @@ describe("segmentImage", () => {
     });
     const opts = {
       poolCount: 2, edgePreservation: 0.6, regionCleanup: 0.3, colorVsValueBias: 0.5, subPaletteSize: 3,
+      neutralProtection: 0,
     };
 
     const base = segmentImage(img, W, H, opts);

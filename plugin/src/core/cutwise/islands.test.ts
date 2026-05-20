@@ -32,6 +32,7 @@ describe("mergeSmallIslands", () => {
     simplification: 100,
     edgePreservation: 0,
     valuePreservation: 0,
+    neutralProtection: 0,
   };
 
   it("keeps a small island alive inside a focal zone", () => {
@@ -72,6 +73,7 @@ describe("mergeSmallIslands", () => {
       simplification: 50,
       edgePreservation: 0,
       valuePreservation: 0,
+      neutralProtection: 0,
     };
 
     const focal = mergeSmallIslands(
