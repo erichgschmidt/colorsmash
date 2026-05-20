@@ -29,7 +29,7 @@ describe("segmentImage", () => {
       edgePreservation: 0.5,
       regionCleanup: 0.4,
       colorVsValueBias: 0.5, subPaletteSize: 3,
-      neutralProtection: 0,
+      neutralProtection: 0, poolContinuity: 0,
     });
 
     expect(res.width).toBe(W);
@@ -67,12 +67,12 @@ describe("segmentImage", () => {
     // Low edge preservation: the tiny block is absorbed into the field.
     const loose = segmentImage(img, W, H, {
       poolCount: 2, edgePreservation: 0, regionCleanup: 1, colorVsValueBias: 0.5, subPaletteSize: 3,
-      neutralProtection: 0,
+      neutralProtection: 0, poolContinuity: 0,
     });
     // High edge preservation: the strong color edge blocks the merge.
     const tight = segmentImage(img, W, H, {
       poolCount: 2, edgePreservation: 1, regionCleanup: 1, colorVsValueBias: 0.5, subPaletteSize: 3,
-      neutralProtection: 0,
+      neutralProtection: 0, poolContinuity: 0,
     });
 
     expect(tight.pools.length).toBeGreaterThan(loose.pools.length);
@@ -88,7 +88,7 @@ describe("segmentImage", () => {
     // Region cleanup 0 → the despeckle floor (12px); the 64px blob survives.
     const res = segmentImage(img, W, H, {
       poolCount: 2, edgePreservation: 0.5, regionCleanup: 0, colorVsValueBias: 0.5, subPaletteSize: 3,
-      neutralProtection: 0,
+      neutralProtection: 0, poolContinuity: 0,
     });
 
     expect(res.pools.length).toBe(2);
@@ -107,7 +107,7 @@ describe("segmentImage", () => {
 
     const r1 = segmentImage(img, W, H, {
       poolCount: 3, edgePreservation: 0.6, regionCleanup: 0.2, colorVsValueBias: 0.5, subPaletteSize: 3,
-      neutralProtection: 0,
+      neutralProtection: 0, poolContinuity: 0,
     });
     const ids1 = r1.pools.map((p) => p.id);
     expect(r1.pools.length).toBe(3);
@@ -115,7 +115,7 @@ describe("segmentImage", () => {
     // Re-segment with a changed control, warm-started from r1.
     const r2 = segmentImage(img, W, H, {
       poolCount: 3, edgePreservation: 0.6, regionCleanup: 0.6, colorVsValueBias: 0.5, subPaletteSize: 3,
-      neutralProtection: 0,
+      neutralProtection: 0, poolContinuity: 0,
     }, r1);
 
     // The original pool ids are carried forward by the warm-start match.
@@ -136,7 +136,7 @@ describe("segmentImage", () => {
     });
     const opts = {
       poolCount: 2, edgePreservation: 0.6, regionCleanup: 0.3, colorVsValueBias: 0.5, subPaletteSize: 3,
-      neutralProtection: 0,
+      neutralProtection: 0, poolContinuity: 0,
     };
 
     const base = segmentImage(img, W, H, opts);
@@ -154,5 +154,33 @@ describe("segmentImage", () => {
     const collapsed = collapsePool(expanded, targetId);
     expect(collapsed.pools.find((p) => p.id === targetId)!.subPools).toBeNull();
     expect(Array.from(collapsed.labels)).toEqual(Array.from(base.labels));
+  });
+
+  it("poolContinuity unifies chromatically-near clusters across spatial separation", () => {
+    const W = 96, H = 32;
+    // Three vertical bands: similar red | gray sash | similar red.
+    // With continuity = 0, k=3 should produce 3 distinct pools.
+    // With continuity > 0 high enough to fold the two reds together, the
+    // result should drop to 2 pools — one unified red (spanning both ends)
+    // and the gray sash. The dress-under-sash test.
+    const img = makeImage(W, H, (x) => {
+      if (x < W / 3) return [200, 60, 60];        // red half A
+      if (x < 2 * W / 3) return [150, 150, 150];  // gray sash
+      return [205, 65, 55];                       // red half B (very similar)
+    });
+
+    const optsBase = {
+      poolCount: 3, edgePreservation: 0.5, regionCleanup: 0.2,
+      colorVsValueBias: 0.5, subPaletteSize: 3, neutralProtection: 0,
+    };
+
+    const noUnify = segmentImage(img, W, H, { ...optsBase, poolContinuity: 0 });
+    const withUnify = segmentImage(img, W, H, { ...optsBase, poolContinuity: 0.6 });
+
+    expect(noUnify.pools.length).toBe(3);
+    // The two reds collapse → 2 pools (one large unified red + gray).
+    expect(withUnify.pools.length).toBeLessThan(noUnify.pools.length);
+    // The biggest pool covers >50% of the image (the two red bands together).
+    expect(withUnify.pools[0].descriptor.weight).toBeGreaterThan(0.5);
   });
 });

@@ -18,11 +18,16 @@ export interface SmashRecipeSettings {
     colorVsValueBias: number;
     neutralProtection: number;
     subPaletteSize: number;
+    // Optional for back-compat with recipes saved before this field existed.
+    // Missing fields default to 0 at apply time.
+    poolContinuity?: number;
   };
   transfer: {
     strength: number;
     relax: number;
     preserveLuminance: number;
+    // Optional for back-compat with pre-richness recipes.
+    richness?: number;
   };
 }
 

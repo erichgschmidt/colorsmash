@@ -79,6 +79,7 @@ export function AnalysisTab() {
   const [regionCleanup, setRegionCleanup] = useState(0.4);
   const [colorVsValueBias, setColorVsValueBias] = useState(0.5);
   const [neutralProtection, setNeutralProtection] = useState(0);
+  const [poolContinuity, setPoolContinuity] = useState(0);
   const [subPaletteSize, setSubPaletteSize] = useState(5);
   // Fidelity = segmentation working resolution. Higher = finer islands /
   // crisper boundaries, but slower to re-segment on every control change.
@@ -128,7 +129,7 @@ export function AnalysisTab() {
     const handle = setTimeout(() => {
       if (cancelled) return;
       try {
-        const opts = { poolCount, edgePreservation, regionCleanup, colorVsValueBias, subPaletteSize, neutralProtection };
+        const opts = { poolCount, edgePreservation, regionCleanup, colorVsValueBias, subPaletteSize, neutralProtection, poolContinuity };
         let r = segmentImage(segInput.data, segInput.width, segInput.height, opts, warm);
         // Re-apply drilled-down pools by id (top-level ids are warm-stable).
         for (const id of expandedIdsRef.current) {
@@ -148,7 +149,7 @@ export function AnalysisTab() {
       }
     }, 16);
     return () => { cancelled = true; clearTimeout(handle); };
-  }, [segInput, poolCount, edgePreservation, regionCleanup, colorVsValueBias, neutralProtection, subPaletteSize]);
+  }, [segInput, poolCount, edgePreservation, regionCleanup, colorVsValueBias, neutralProtection, poolContinuity, subPaletteSize]);
 
   // Drill a pool down into child pools (or fold it back up). Operates on the
   // current result directly so the click is snappy.
@@ -157,7 +158,7 @@ export function AnalysisTab() {
     const willExpand = !expandedIds.has(poolId);
     const next = new Set(expandedIds);
     if (willExpand) next.add(poolId); else next.delete(poolId);
-    const opts = { poolCount, edgePreservation, regionCleanup, colorVsValueBias, subPaletteSize, neutralProtection };
+    const opts = { poolCount, edgePreservation, regionCleanup, colorVsValueBias, subPaletteSize, neutralProtection, poolContinuity };
     const r = willExpand
       ? expandPool(result, segInput.data, poolId, opts)
       : collapsePool(result, poolId);
@@ -267,6 +268,13 @@ export function AnalysisTab() {
             min={0} max={1} step={0.05}
             value={neutralProtection} onChange={setNeutralProtection}
             display={neutralProtection.toFixed(2)}
+          />
+          <Control
+            label="Pool continuity"
+            title="Color-range unification pass: clusters whose mean Lab distance falls below the threshold get merged into a single pool. Restores colour continuity for regions split by an intervening colour (e.g. a dress under a sash). 0 = no unification."
+            min={0} max={1} step={0.05}
+            value={poolContinuity} onChange={setPoolContinuity}
+            display={poolContinuity.toFixed(2)}
           />
           <Control
             label="Color vs Value"

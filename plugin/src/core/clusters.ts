@@ -78,6 +78,12 @@ export interface SegmentOptions {
   subPaletteSize: number;     // k for each pool's sub-palette, e.g. 3..7
   neutralProtection: number;  // 0..1 — refuses merges across strong chroma steps
                               // (defends against gray shadows swallowing chromatic neighbours)
+  poolContinuity: number;     // 0..1 — color-range unification pass: clusters whose
+                              // mean Lab distance falls below `continuity·UNIFY_MAX_LAB`
+                              // get merged into one pool. Lets chromatically-related
+                              // regions split by an intervening colour (e.g. a dress
+                              // under a sash) become a single pool with one donor and
+                              // one transform. 0 = no unification (default).
 }
 
 export interface SegmentResult {
@@ -123,6 +129,12 @@ const CHROMA_GATE = 5;
 // How far the colorVsValueBias slider tilts the V vs (C, H) weights apart.
 // At bias 0.5 all three weights are 1; at 0 / 1 they spread by ±BIAS_K/2.
 const BIAS_K = 1.5;
+
+// Maximum mean-Lab distance considered for color-range unification, in Lab
+// Euclidean units. At poolContinuity=1, cluster pairs within this distance
+// are eligible to merge into one pool. ~30 covers loose colour families
+// (neighbouring warms, neighbouring blues) without crossing identity lines.
+const UNIFY_MAX_LAB = 30;
 
 // A sub-color counts as noise when it is spread almost as widely as its whole
 // parent pool (relativeSpread above the threshold) yet is only a minority
@@ -359,6 +371,77 @@ function segmentPixelSet(
     clusterLabSum[c * 3]     += L;
     clusterLabSum[c * 3 + 1] += a;
     clusterLabSum[c * 3 + 2] += b;
+  }
+
+  // ── Color-range pool unification (poolContinuity). ──
+  // Cluster pairs whose mean Lab distance falls below `continuity·UNIFY_MAX_LAB`
+  // are union-find merged so chromatically-related regions across the canvas
+  // (dress halves under a sash, face under hat brim) collapse to one pool with
+  // one donor and one transform. continuity=0 makes this a no-op. The greedy
+  // nearest-pair-first traversal prevents weak transitive chains from binding
+  // distinct colour families together. See plugin/docs/pool-unification.md.
+  const continuity = clamp01(opts.poolContinuity);
+  if (continuity > 0) {
+    const meanLab = new Float64Array(effK * 3);
+    for (let c = 0; c < effK; c++) {
+      const cnt = clusterCount[c];
+      if (cnt > 0) {
+        meanLab[c * 3]     = clusterLabSum[c * 3]     / cnt;
+        meanLab[c * 3 + 1] = clusterLabSum[c * 3 + 1] / cnt;
+        meanLab[c * 3 + 2] = clusterLabSum[c * 3 + 2] / cnt;
+      }
+    }
+    const threshold = continuity * UNIFY_MAX_LAB;
+    const t2 = threshold * threshold;
+    const parent = new Int32Array(effK);
+    for (let c = 0; c < effK; c++) parent[c] = c;
+    const find = (x: number): number => {
+      while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+      return x;
+    };
+    // All pairs under the threshold, sorted by distance ascending. Greedy union
+    // by nearest pair keeps chains tight: if A-B and B-C both qualify but A-C
+    // doesn't, we still merge transitively, but the order anchors merges to
+    // their closest neighbours first.
+    const pairs: { i: number; j: number; d2: number }[] = [];
+    for (let i = 0; i < effK; i++) {
+      if (clusterCount[i] === 0) continue;
+      for (let j = i + 1; j < effK; j++) {
+        if (clusterCount[j] === 0) continue;
+        const dL = meanLab[i * 3]     - meanLab[j * 3];
+        const dA = meanLab[i * 3 + 1] - meanLab[j * 3 + 1];
+        const dB = meanLab[i * 3 + 2] - meanLab[j * 3 + 2];
+        const d2 = dL * dL + dA * dA + dB * dB;
+        if (d2 < t2) pairs.push({ i, j, d2 });
+      }
+    }
+    pairs.sort((a, b) => a.d2 - b.d2);
+    for (const p of pairs) {
+      const ri = find(p.i), rj = find(p.j);
+      if (ri !== rj) parent[ri] = rj;
+    }
+    // Apply the union map to clusterLabels + collapse stats into root clusters.
+    let touched = false;
+    for (let c = 0; c < effK; c++) if (find(c) !== c) { touched = true; break; }
+    if (touched) {
+      const remap = new Int32Array(effK);
+      for (let c = 0; c < effK; c++) remap[c] = find(c);
+      for (let i = 0; i < clusterLabels.length; i++) {
+        const c = clusterLabels[i];
+        if (c >= 0) clusterLabels[i] = remap[c];
+      }
+      const newCount = new Int32Array(effK);
+      const newSum = new Float64Array(effK * 3);
+      for (let c = 0; c < effK; c++) {
+        const r = remap[c];
+        newCount[r] += clusterCount[c];
+        newSum[r * 3]     += clusterLabSum[c * 3];
+        newSum[r * 3 + 1] += clusterLabSum[c * 3 + 1];
+        newSum[r * 3 + 2] += clusterLabSum[c * 3 + 2];
+      }
+      clusterCount.set(newCount);
+      clusterLabSum.set(newSum);
+    }
   }
 
   // Cluster colors for the island-merge nearest-color test — mean Lab.

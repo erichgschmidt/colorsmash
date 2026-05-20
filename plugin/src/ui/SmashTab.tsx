@@ -185,6 +185,7 @@ export function SmashTab() {
   const [regionCleanup, setRegionCleanup] = useState(0.4);
   const [colorVsValueBias, setColorVsValueBias] = useState(0.5);
   const [neutralProtection, setNeutralProtection] = useState(0);
+  const [poolContinuity, setPoolContinuity] = useState(0);
   const [subPaletteSize, setSubPaletteSize] = useState(5);
   // Fidelity = segmentation working resolution. Higher = finer islands /
   // crisper boundaries, but slower to re-segment on every control change.
@@ -359,7 +360,7 @@ export function SmashTab() {
     const handle = setTimeout(() => {
       if (cancelled) return;
       try {
-        const opts = { poolCount, edgePreservation, regionCleanup, colorVsValueBias, subPaletteSize, neutralProtection };
+        const opts = { poolCount, edgePreservation, regionCleanup, colorVsValueBias, subPaletteSize, neutralProtection, poolContinuity };
         const sRes = segmentImage(source.segInput!.data, source.segInput!.width, source.segInput!.height, opts);
         const tRes = segmentImage(target.segInput!.data, target.segInput!.width, target.segInput!.height, opts);
         const corr = matchPools(sRes.pools, tRes.pools);
@@ -381,7 +382,7 @@ export function SmashTab() {
       }
     }, 16);
     return () => { cancelled = true; clearTimeout(handle); };
-  }, [source.segInput, target.segInput, poolCount, edgePreservation, regionCleanup, colorVsValueBias, neutralProtection, subPaletteSize]);
+  }, [source.segInput, target.segInput, poolCount, edgePreservation, regionCleanup, colorVsValueBias, neutralProtection, poolContinuity, subPaletteSize]);
 
   // ── Lookups ────────────────────────────────────────────────────────
   const sourcePoolsById = useMemo(() => {
@@ -760,8 +761,9 @@ export function SmashTab() {
             segmentation: {
               poolCount, edgePreservation, regionCleanup,
               colorVsValueBias, neutralProtection, subPaletteSize,
+              poolContinuity,
             },
-            transfer: { strength, relax, preserveLuminance },
+            transfer: { strength, relax, preserveLuminance, richness },
           }}
           onApply={(s) => {
             setPoolCount(s.segmentation.poolCount);
@@ -770,9 +772,13 @@ export function SmashTab() {
             setColorVsValueBias(s.segmentation.colorVsValueBias);
             setNeutralProtection(s.segmentation.neutralProtection);
             setSubPaletteSize(s.segmentation.subPaletteSize);
+            // Optional fields — default to 0 when loading a recipe that
+            // pre-dates these controls.
+            setPoolContinuity(s.segmentation.poolContinuity ?? 0);
             setStrength(s.transfer.strength);
             setRelax(s.transfer.relax);
             setPreserveLuminance(s.transfer.preserveLuminance);
+            setRichness(s.transfer.richness ?? 0);
           }}
         />
       </Section>
@@ -813,6 +819,13 @@ export function SmashTab() {
             min={0} max={1} step={0.05}
             value={neutralProtection} onChange={setNeutralProtection}
             display={neutralProtection.toFixed(2)}
+          />
+          <Control
+            label="Pool continuity"
+            title="Color-range unification pass: clusters whose mean Lab distance falls below the threshold get merged into a single pool. Restores colour continuity for regions split by an intervening colour (e.g. a dress under a sash). 0 = no unification."
+            min={0} max={1} step={0.05}
+            value={poolContinuity} onChange={setPoolContinuity}
+            display={poolContinuity.toFixed(2)}
           />
           <Control
             label="Color vs Value"
