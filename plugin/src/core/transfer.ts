@@ -28,6 +28,18 @@ export interface TransferOptions {
   strength: number; // 0..1 — blend between the original and the fully transferred result
   relax?: number; // 0..1 — boundary softness; blurs the delta field (default 0 = hard pool edges)
   preserveLuminance?: number; // 0..1 — keep the target's original L; only a/b shift (default 0)
+  anchor?: TransferAnchor; // optional focal-point override (see below)
+}
+
+// A focal anchor pairs a SOURCE pool with a TARGET region. Inside the target
+// falloff, pixels recolor toward this anchor source pool instead of their
+// auto-matched donor (smoothly blended by the falloff). The radius is
+// normalized to the larger image edge so it scales with resolution.
+export interface TransferAnchor {
+  sourcePoolId: number; // donor source pool the user picked under their source-map click
+  targetX: number;      // 0..1 normalized over target width
+  targetY: number;      // 0..1 normalized over target height
+  radius: number;       // 0..1 normalized to max(width, height)
 }
 
 // A 3-component CIE Lab delta to add to a pixel's Lab value.
@@ -48,6 +60,22 @@ interface SubMapping {
 
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
 const clamp255 = (v: number) => (v < 0 ? 0 : v > 255 ? 255 : v);
+
+// Smoothstep on 0..1: cubic ease, zero derivative at both ends. Used to fade
+// the anchor's influence from 1 at its center to 0 at its radius.
+function smoothstep01(t: number): number {
+  const x = t < 0 ? 0 : t > 1 ? 1 : t;
+  return x * x * (3 - 2 * x);
+}
+
+// Anchor falloff weight for a target pixel: 1 at the anchor center, 0 at the
+// anchor radius and beyond, smoothstep in between.
+function anchorFalloff(x: number, y: number, cx: number, cy: number, radiusPx: number): number {
+  const dx = x - cx, dy = y - cy;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  if (dist >= radiusPx) return 0;
+  return smoothstep01(1 - dist / radiusPx);
+}
 
 // relax 0..1 → box-blur radius in pixels. 0 means "no blur" (handled before
 // this is consulted). The radius scales with image size so the relax softness
@@ -301,6 +329,22 @@ export function transferColors(
     );
   }
 
+  // Same again, but pairing every target pool with the ANCHOR donor instead
+  // of its auto-matched donor — used inside the anchor falloff.
+  const anchorMappingsByPool = new Map<number, SubMapping[]>();
+  const anchor = opts.anchor;
+  if (anchor !== undefined) {
+    const anchorDonor = sourceById.get(anchor.sourcePoolId);
+    if (anchorDonor) {
+      for (const targetPool of targetResult.pools) {
+        anchorMappingsByPool.set(
+          targetPool.id,
+          buildSubMappings(poolSubColors(targetPool), poolSubColors(anchorDonor)),
+        );
+      }
+    }
+  }
+
   // Strength 0 is a pure pass-through; skip the per-pixel work entirely.
   if (strength === 0) return out;
 
@@ -316,6 +360,11 @@ export function transferColors(
   const deltaB = new Float32Array(pxCount);
   const opaque = new Uint8Array(pxCount);
 
+  // Anchor geometry (in pixel units of this transfer's resolution).
+  const aCx = anchor ? anchor.targetX * Math.max(0, width - 1) : 0;
+  const aCy = anchor ? anchor.targetY * Math.max(0, height - 1) : 0;
+  const aR = anchor ? Math.max(1, anchor.radius * Math.max(width, height)) : 0;
+
   for (let i = 0; i < pxCount; i++) {
     const o = i * 4;
     const alpha = targetRgba[o + 3];
@@ -326,14 +375,38 @@ export function transferColors(
     if (poolId < 0 || alpha < 128) continue;
     opaque[i] = 1;
 
-    const mappings = mappingsByPool.get(poolId);
-    if (!mappings || mappings.length === 0) continue; // no transfer for this pool
+    const autoMappings = mappingsByPool.get(poolId);
+    const hasAuto = !!(autoMappings && autoMappings.length > 0);
+
+    // Anchor falloff for this pixel — 0 if no anchor or outside its reach.
+    let fall = 0;
+    if (anchor) {
+      const x = i % width;
+      const y = (i / width) | 0;
+      fall = anchorFalloff(x, y, aCx, aCy, aR);
+    }
+    if (!hasAuto && fall <= 0) continue; // no transfer for this pixel
 
     const [L, a, b] = rgbToLab(targetRgba[o], targetRgba[o + 1], targetRgba[o + 2]);
-    const d = softDelta(L, a, b, mappings);
-    deltaL[i] = d.dL;
-    deltaA[i] = d.dA;
-    deltaB[i] = d.dB;
+
+    // Blend: auto donor's delta + anchor donor's delta, weighted by falloff.
+    let dL = 0, dA = 0, dB = 0;
+    if (hasAuto) {
+      const d = softDelta(L, a, b, autoMappings!);
+      dL = d.dL; dA = d.dA; dB = d.dB;
+    }
+    if (fall > 0) {
+      const am = anchorMappingsByPool.get(poolId);
+      if (am && am.length > 0) {
+        const d2 = softDelta(L, a, b, am);
+        dL = dL * (1 - fall) + d2.dL * fall;
+        dA = dA * (1 - fall) + d2.dA * fall;
+        dB = dB * (1 - fall) + d2.dB * fall;
+      }
+    }
+    deltaL[i] = dL;
+    deltaA[i] = dA;
+    deltaB[i] = dB;
   }
 
   // ── Phase 2: blur the delta field by `relax`. ──

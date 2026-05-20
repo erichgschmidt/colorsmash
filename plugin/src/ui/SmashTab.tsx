@@ -23,7 +23,7 @@ import { rgbaToPngDataUrl } from "./encodePng";
 import { matchStyles } from "./MatchSliders";
 import { segmentImage, SegmentResult, Pool } from "../core/clusters";
 import { matchPools, PoolMatch, Correspondence } from "../core/match";
-import { transferColors, vectorizeUpscaleLabels } from "../core/transfer";
+import { transferColors, vectorizeUpscaleLabels, type TransferAnchor } from "../core/transfer";
 
 // Max edge fed into segmentImage — keeps per-pixel clustering under a frame
 // budget while staying detailed enough for a recognizable pool map.
@@ -189,6 +189,40 @@ export function SmashTab() {
   // Display-only sort for the correspondence list.
   const [sortMode, setSortMode] = useState<SortMode>("weightDesc");
 
+  // ── Focal anchor (MVP: one pair) ──
+  // anchorSource: source point + the pool id under it (captured at click time).
+  // anchorTarget: target point. Anchor is "active" only when both are set.
+  // anchorRadius: falloff radius, normalized to max image edge.
+  const [anchorSource, setAnchorSource] = useState<
+    { nx: number; ny: number; poolId: number } | null
+  >(null);
+  const [anchorTarget, setAnchorTarget] = useState<
+    { nx: number; ny: number } | null
+  >(null);
+  const [anchorRadius, setAnchorRadius] = useState(0.2);
+
+  // Anchor option passed into transferColors — only active when both source
+  // and target points are placed. Memoised so the live-preview effect doesn't
+  // re-run on identity changes.
+  const anchorOpt = useMemo<TransferAnchor | undefined>(() => {
+    if (!anchorSource || !anchorTarget) return undefined;
+    return {
+      sourcePoolId: anchorSource.poolId,
+      targetX: anchorTarget.nx,
+      targetY: anchorTarget.ny,
+      radius: anchorRadius,
+    };
+  }, [anchorSource, anchorTarget, anchorRadius]);
+
+  // Dot+ring overlays for the two pool maps. Source = orange, target = cyan;
+  // both rings size by the live anchorRadius slider.
+  const sourceAnchorDot = anchorSource
+    ? { nx: anchorSource.nx, ny: anchorSource.ny, radius: anchorRadius, color: "#ff9a00" }
+    : undefined;
+  const targetAnchorDot = anchorTarget
+    ? { nx: anchorTarget.nx, ny: anchorTarget.ny, radius: anchorRadius, color: "#1473e6" }
+    : undefined;
+
   // ── Color transfer (in-panel preview) ─────────────────────────────
   // Blend amount fed to transferColors — 0 = unchanged target, 1 = full donor.
   const [strength, setStrength] = useState(1.0);
@@ -348,7 +382,7 @@ export function SmashTab() {
         const recolored = transferColors(
           data, width, height,
           targetResult, sourceResult,
-          correspondence, { strength, relax, preserveLuminance },
+          correspondence, { strength, relax, preserveLuminance, anchor: anchorOpt },
         );
         if (!cancelled) {
           setTransferUrl(rgbaToPngDataUrl(recolored, width, height));
@@ -362,7 +396,7 @@ export function SmashTab() {
       }
     }, 16);
     return () => { cancelled = true; clearTimeout(handle); };
-  }, [hasApplied, sourceResult, targetResult, target.segInput, matches, strength, relax, preserveLuminance]);
+  }, [hasApplied, sourceResult, targetResult, target.segInput, matches, strength, relax, preserveLuminance, anchorOpt]);
 
   // ── Remap interaction ──────────────────────────────────────────────
   // Reassign a target pool's donor (from a row's inline source-pool picker).
@@ -377,6 +411,34 @@ export function SmashTab() {
   const resetToAuto = () => {
     setMatches(autoMatches.map(m => ({ ...m })));
     setSelectedTargetId(null);
+  };
+
+  // ── Focal anchor click handlers ──
+  // Source-map click: capture the source point + the pool id beneath it. Pool
+  // id is read from the segmentation labels at the clicked location, so a
+  // user clicking on a region of the source map "picks" that pool as the
+  // anchor donor.
+  const handleAnchorSourceClick = (nx: number, ny: number) => {
+    if (!sourceResult) return;
+    const sx = Math.min(
+      sourceResult.width - 1,
+      Math.max(0, Math.floor(nx * sourceResult.width)),
+    );
+    const sy = Math.min(
+      sourceResult.height - 1,
+      Math.max(0, Math.floor(ny * sourceResult.height)),
+    );
+    const poolId = sourceResult.labels[sy * sourceResult.width + sx];
+    if (poolId < 0) return; // clicked a transparent / unlabeled pixel
+    setAnchorSource({ nx, ny, poolId });
+  };
+  const handleAnchorTargetClick = (nx: number, ny: number) => {
+    if (!targetResult) return;
+    setAnchorTarget({ nx, ny });
+  };
+  const clearAnchor = () => {
+    setAnchorSource(null);
+    setAnchorTarget(null);
   };
 
   // First press starts the live preview; the effect above keeps it current
@@ -438,7 +500,7 @@ export function SmashTab() {
       const recolored = transferColors(
         fullBuf.data, fullW, fullH,
         fullResult, sourceResult,
-        correspondence, { strength, relax, preserveLuminance },
+        correspondence, { strength, relax, preserveLuminance, anchor: anchorOpt },
       );
 
       // Place the new layer over the target layer's region, not at (0,0).
@@ -539,6 +601,8 @@ export function SmashTab() {
               display={sourceMapDisplay}
               analyzing={analyzing}
               placeholder={source.snapError ?? "Pick a source layer."}
+              onClickNormalized={sourceResult ? handleAnchorSourceClick : undefined}
+              anchorDot={sourceAnchorDot}
             />
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -548,6 +612,8 @@ export function SmashTab() {
               display={targetMapDisplay}
               analyzing={analyzing}
               placeholder={target.snapError ?? "Pick a target layer."}
+              onClickNormalized={targetResult ? handleAnchorTargetClick : undefined}
+              anchorDot={targetAnchorDot}
             />
           </div>
         </div>
@@ -724,6 +790,56 @@ export function SmashTab() {
               </div>
             </div>
 
+            {/* ── Focal anchor (one pair) ──
+                Click the SOURCE map to drop the source point, then the TARGET
+                map to drop the target point. Under the target falloff, those
+                pixels recolor toward the source point's pool instead of the
+                auto donor (smoothly blended by the radius). */}
+            <div style={SUB_HEADER}>FOCAL ANCHOR</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{
+                  fontSize: 10,
+                  color: anchorOpt
+                    ? "#7dd87d"
+                    : anchorSource || anchorTarget
+                      ? "#d8c87d"
+                      : "#9a9aa8",
+                }}>
+                  {anchorOpt
+                    ? "Active — anchor source pool wins under the target falloff."
+                    : anchorSource
+                      ? "Click the TARGET map to complete the anchor."
+                      : anchorTarget
+                        ? "Click the SOURCE map to complete the anchor."
+                        : "Click the SOURCE map to start an anchor."}
+                </span>
+                <div style={{ flex: 1 }} />
+                {(anchorSource || anchorTarget) && (
+                  <div
+                    onClick={clearAnchor}
+                    title="Remove the focal anchor."
+                    style={{
+                      padding: "3px 8px", fontSize: 10, borderRadius: 2,
+                      border: "1px solid #4a4a4a", background: "#3a3a3a",
+                      color: "#cccccc", cursor: "pointer", userSelect: "none",
+                    }}
+                  >
+                    Clear anchor
+                  </div>
+                )}
+              </div>
+              {(anchorSource || anchorTarget) && (
+                <Control
+                  label="Anchor radius"
+                  title="Falloff radius around the target point — how far the anchor's source pool reaches before fading back to the auto donor."
+                  min={0.05} max={0.6} step={0.025}
+                  value={anchorRadius} onChange={setAnchorRadius}
+                  display={anchorRadius.toFixed(2)}
+                />
+              )}
+            </div>
+
             {/* Correspondence list — scrollable, capped height. Hover a row
                 to locate its region in the target map; click to open its
                 inline source-pool picker. */}
@@ -825,13 +941,34 @@ function Section({ title, children, defaultOpen = true }: {
 }
 
 // ── One pool-map image pane (label + framed image + analyzing overlay) ──
-function PoolMapPane({ label, url, display, analyzing, placeholder }: {
+function PoolMapPane({
+  label, url, display, analyzing, placeholder,
+  onClickNormalized, anchorDot,
+}: {
   label: string;
   url: string | null;
   display: { w: number; h: number };
   analyzing: boolean;
   placeholder: string;
+  onClickNormalized?: (nx: number, ny: number) => void;
+  anchorDot?: { nx: number; ny: number; radius: number; color: string };
 }) {
+  const handleClick = onClickNormalized
+    ? (e: React.MouseEvent<HTMLDivElement>) => {
+        const rect = e.currentTarget.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return;
+        const nx = (e.clientX - rect.left) / rect.width;
+        const ny = (e.clientY - rect.top) / rect.height;
+        if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return;
+        onClickNormalized(nx, ny);
+      }
+    : undefined;
+
+  // Visualised falloff ring + center dot for an anchor placed on this map.
+  const ringDiameter = anchorDot
+    ? anchorDot.radius * 2 * Math.max(display.w, display.h)
+    : 0;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
       <span style={{ fontSize: 9, color: "#999", letterSpacing: 0.3 }}>{label}</span>
@@ -842,13 +979,45 @@ function PoolMapPane({ label, url, display, analyzing, placeholder }: {
         background: "#1f1f1f", border: "1px solid #3a3a3a", borderRadius: 2,
       }}>
         {url && (
-          <img
-            src={url}
+          <div
+            onClick={handleClick}
             style={{
+              position: "relative",
               width: display.w, height: display.h,
-              imageRendering: "pixelated", display: "block",
+              cursor: handleClick ? "crosshair" : "default",
             }}
-          />
+          >
+            <img
+              src={url}
+              style={{
+                width: display.w, height: display.h,
+                imageRendering: "pixelated", display: "block",
+              }}
+            />
+            {anchorDot && (
+              <>
+                {/* Falloff ring */}
+                <div style={{
+                  position: "absolute", pointerEvents: "none",
+                  left: anchorDot.nx * display.w - ringDiameter / 2,
+                  top: anchorDot.ny * display.h - ringDiameter / 2,
+                  width: ringDiameter, height: ringDiameter,
+                  borderRadius: "50%",
+                  border: `1px solid ${anchorDot.color}`,
+                  opacity: 0.85,
+                }} />
+                {/* Center dot */}
+                <div style={{
+                  position: "absolute", pointerEvents: "none",
+                  left: anchorDot.nx * display.w - 4,
+                  top: anchorDot.ny * display.h - 4,
+                  width: 8, height: 8, borderRadius: "50%",
+                  background: anchorDot.color,
+                  border: "1px solid #000",
+                }} />
+              </>
+            )}
+          </div>
         )}
         {!url && !analyzing && (
           <div style={{ padding: 24, fontSize: 10, opacity: 0.5 }}>{placeholder}</div>
