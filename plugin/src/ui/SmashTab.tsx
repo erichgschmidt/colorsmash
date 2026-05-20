@@ -20,6 +20,7 @@ import { useLayerPreview } from "./useLayerPreview";
 import { SourceSelector } from "./SourceSelector";
 import { Section } from "./Section";
 import { SmashRecipes } from "./SmashRecipes";
+import { Dropdown } from "./Dropdown";
 import { downsampleToMaxEdge } from "../core/downsample";
 import { rgbaToPngDataUrl } from "./encodePng";
 import { matchStyles } from "./MatchSliders";
@@ -966,23 +967,24 @@ export function SmashTab() {
                 Donor preview
               </label>
               <div style={{ flex: 1 }} />
-              <select
+              {/* Custom (non-native) dropdown — UXP's native <select> popovers
+                  interfere with each other across the panel (the open list of
+                  one shows up next to another's value). This one is divs only,
+                  so SourceSelector's native selects stay clean. */}
+              <Dropdown<SortMode>
                 value={sortMode}
-                onChange={e => setSortMode(e.target.value as SortMode)}
+                onChange={setSortMode}
                 title="Reorder the target → source list for easier scanning. Display-only — doesn't change the mapping."
-                style={{
-                  fontSize: 10, padding: "2px 4px", borderRadius: 2,
-                  border: "1px solid #4a4a4a", background: "#2a2a2a",
-                  color: "#cccccc", fontFamily: "inherit", cursor: "pointer",
-                }}
-              >
-                <option value="weightDesc">Sort: largest first</option>
-                <option value="weightAsc">Sort: smallest first</option>
-                <option value="lightToDark">Sort: light → dark</option>
-                <option value="darkToLight">Sort: dark → light</option>
-                <option value="warmToCool">Sort: warm → cool</option>
-                <option value="coolToWarm">Sort: cool → warm</option>
-              </select>
+                style={{ minWidth: 130 }}
+                options={[
+                  { value: "weightDesc",   label: "Sort: largest first" },
+                  { value: "weightAsc",    label: "Sort: smallest first" },
+                  { value: "lightToDark",  label: "Sort: light → dark" },
+                  { value: "darkToLight",  label: "Sort: dark → light" },
+                  { value: "warmToCool",   label: "Sort: warm → cool" },
+                  { value: "coolToWarm",   label: "Sort: cool → warm" },
+                ]}
+              />
               <div
                 onClick={isEdited ? resetToAuto : undefined}
                 title="Restore the automatic correspondence."
