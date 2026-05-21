@@ -7,6 +7,7 @@ import {
   polygonBBox,
   polygonPixelIndices,
   polygonEdgeDistancePx,
+  traceMaskOutline,
 } from "./regions";
 
 // ────────── fixtures & helpers ──────────
@@ -238,5 +239,44 @@ describe("simplifyPolygon", () => {
     const dy = first.y - last.y;
     expect(dx * dx + dy * dy).toBeGreaterThan(1e-8); // closing dup removed
     expect(out.length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe("traceMaskOutline", () => {
+  it("traces a filled square mask into a polygon that contains its centre", () => {
+    const W = 40, H = 40;
+    const mask = new Uint8Array(W * H);
+    for (let y = 8; y < 32; y++) for (let x = 8; x < 32; x++) mask[y * W + x] = 1;
+    const poly = traceMaskOutline(mask, W, H, 0.01);
+    expect(poly.length).toBeGreaterThanOrEqual(3);
+    // The outline encloses the square's centre…
+    expect(polygonContains(poly, 0.5, 0.5)).toBe(true);
+    // …and excludes a point well outside the square.
+    expect(polygonContains(poly, 0.05, 0.05)).toBe(false);
+    // Its bbox roughly matches the filled region (x,y ∈ [8/40, 32/40]).
+    const bb = polygonBBox(poly);
+    expect(bb.x0).toBeLessThan(0.3);
+    expect(bb.x1).toBeGreaterThan(0.7);
+  });
+
+  it("returns [] for an empty mask", () => {
+    expect(traceMaskOutline(new Uint8Array(16), 4, 4)).toEqual([]);
+  });
+
+  it("follows an L-shape (concave) — its outline excludes the missing corner", () => {
+    const W = 40, H = 40;
+    const mask = new Uint8Array(W * H);
+    // Full square [8,32) minus the bottom-right quadrant [20,32)×[20,32).
+    for (let y = 8; y < 32; y++) {
+      for (let x = 8; x < 32; x++) {
+        if (x >= 20 && y >= 20) continue;
+        mask[y * W + x] = 1;
+      }
+    }
+    const poly = traceMaskOutline(mask, W, H, 0.01);
+    expect(poly.length).toBeGreaterThanOrEqual(3);
+    // A point in the kept arm is inside; the removed corner is outside.
+    expect(polygonContains(poly, 12 / W, 12 / H)).toBe(true);
+    expect(polygonContains(poly, 27 / W, 27 / H)).toBe(false);
   });
 });

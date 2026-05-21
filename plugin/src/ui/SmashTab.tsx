@@ -30,12 +30,14 @@ import { downsampleToMaxEdge } from "../core/downsample";
 import { rgbaToPngDataUrl } from "./encodePng";
 import { matchStyles } from "./MatchSliders";
 import {
-  segmentImage, applySplits, buildSplitBlendWeight, refineMacros,
+  segmentImage, applySplits, buildSplitBlendWeight, refineMacros, keptRegionMask, labToRgb,
   SegmentResult, SegmentOptions, Pool,
-  SplitEdit, SPLIT_ID_BASE, SPLIT_ID_STRIDE,
+  SplitEdit, ColorExclusion, SPLIT_ID_BASE, SPLIT_ID_STRIDE,
+  EXCL_ID_BASE, EXCL_ID_STRIDE,
 } from "../core/clusters";
 import { SmashEditCanvas, CanvasView, CanvasCircle, CanvasPoly } from "./SmashEditCanvas";
-import { simplifyPolygon, polygonCentroid, type Pt } from "../core/regions";
+import { simplifyPolygon, polygonCentroid, traceMaskOutline, type Pt } from "../core/regions";
+import { rgbToLab } from "../core/palette";
 import { SmashMacroPanel } from "./SmashMacroPanel";
 import {
   seedMacroGroups, matchMacros, buildMacroConstrainedCorrespondence, macroInfoMap,
@@ -311,6 +313,12 @@ export function SmashTab() {
   // partial opts merged over the global ones. Each customised macro re-segments
   // its own pixels with these. Empty = every macro uses the global segmentation.
   const [perMacroOpts, setPerMacroOpts] = useState<Map<number, Partial<SegmentOptions>>>(new Map());
+  // Colour-exclusion editor state: which target split's exclusion editor is open,
+  // the group excluded pixels go to, and (when set) the split awaiting an
+  // eyedropper click on the canvas.
+  const [exclEditSplitId, setExclEditSplitId] = useState<string | null>(null);
+  const [exclTargetGroup, setExclTargetGroup] = useState<number | null>(null);
+  const [eyedropSplitId, setEyedropSplitId] = useState<string | null>(null);
   // Latest macro state, mirrored into refs so the seed/reconcile effect can read
   // the user's current groupings WITHOUT taking them as deps (which would loop).
   const sourceMacrosRef = useRef(sourceMacros);
@@ -628,16 +636,24 @@ export function SmashTab() {
   // segmentation/match path keys off this so changing a split's feather — a
   // pure recolor-blend concern — doesn't re-segment or reset the correspondence.
   const splitGeomSig = useMemo(() => {
+    // Colour exclusions change WHICH pixels the region keeps (ref/tol/baseId), so
+    // they belong here (re-segment); the exclusion's macroId is a tag-only change.
+    const exSig = (s: SplitEdit) => (s.colorExclusions ?? [])
+      .map(e => `${e.id},${e.labL.toFixed(1)},${e.labA.toFixed(1)},${e.labB.toFixed(1)},${e.tol},${e.exclBaseId}`)
+      .join(",");
     const sig = (arr: SplitEdit[]) => arr.map(s =>
-      `${s.id}:${s.nx.toFixed(4)}:${s.ny.toFixed(4)}:${s.radius.toFixed(4)}:${s.partCount}:${s.baseId}`,
+      `${s.id}:${s.nx.toFixed(4)}:${s.ny.toFixed(4)}:${s.radius.toFixed(4)}:${s.partCount}:${s.baseId}:[${exSig(s)}]`,
     ).join("|");
     return `${sig(sourceSplits)}##${sig(targetSplits)}`;
   }, [sourceSplits, targetSplits]);
 
-  // Signature of target-split → macro tags, so a tag change re-runs the macro
+  // Signature of target-split → macro tags (the region's own assignMacroId AND
+  // each colour exclusion's destination), so a tag change re-runs the macro
   // effect (re-applies region assignments) WITHOUT re-segmenting.
   const targetTagSig = useMemo(
-    () => targetSplits.map(s => `${s.id}:${s.assignMacroId ?? ""}`).join("|"),
+    () => targetSplits.map(s =>
+      `${s.id}:${s.assignMacroId ?? ""}:${(s.colorExclusions ?? []).map(e => `${e.id}=${e.macroId}`).join(",")}`,
+    ).join("|"),
     [targetSplits],
   );
 
@@ -735,14 +751,19 @@ export function SmashTab() {
     // Authoritative region→macro tags: force each assigned split's pools into
     // its macro group (overrides colour-based placement). Re-applied every run
     // so tagged regions stay put across re-segmentation.
-    const tags = targetSplits
-      .filter(s => s.assignMacroId != null)
-      .map(s => ({
-        poolIds: targetMembership.pools
-          .filter(p => p.id >= s.baseId && p.id < s.baseId + SPLIT_ID_STRIDE)
-          .map(p => p.id),
-        macroId: s.assignMacroId!,
-      }));
+    const poolsInRange = (baseId: number, stride: number) => targetMembership.pools
+      .filter(p => p.id >= baseId && p.id < baseId + stride)
+      .map(p => p.id);
+    const tags: { poolIds: number[]; macroId: number }[] = [];
+    for (const s of targetSplits) {
+      if (s.assignMacroId != null) {
+        tags.push({ poolIds: poolsInRange(s.baseId, SPLIT_ID_STRIDE), macroId: s.assignMacroId });
+      }
+      // Excluded-colour pixels go to their chosen group.
+      for (const ex of s.colorExclusions ?? []) {
+        tags.push({ poolIds: poolsInRange(ex.exclBaseId, EXCL_ID_STRIDE), macroId: ex.macroId });
+      }
+    }
     if (tags.length > 0) tMacros = applyRegionTags(tMacros, tags);
 
     setSourceMacros(sMacros);
@@ -1030,6 +1051,49 @@ export function SmashTab() {
   const setSplitMacro = useCallback((id: string, macroId: number | null) => {
     patchSplit("target", id, { assignMacroId: macroId ?? undefined });
   }, [patchSplit]);
+
+  // ── Colour exclusion (subtract a colour from a region → another group) ──
+  const DEFAULT_EXCL_TOL = 16; // Lab match radius for "this colour"
+  const nextExclBaseId = (): number => {
+    let m = EXCL_ID_BASE - EXCL_ID_STRIDE;
+    for (const s of [...sourceSplits, ...targetSplits]) {
+      for (const e of s.colorExclusions ?? []) if (e.exclBaseId > m) m = e.exclBaseId;
+    }
+    return m + EXCL_ID_STRIDE;
+  };
+  // Add an exclusion (Lab colour) to a TARGET split, sending those pixels to
+  // `macroId`. Auto-snaps a polygon region's outline to the kept boundary.
+  const addExclusion = useCallback((splitId: string, lab: [number, number, number], macroId: number) => {
+    const seg = target.segInput;
+    const split = targetSplits.find(s => s.id === splitId);
+    if (!seg || !split) return;
+    const ex: ColorExclusion = {
+      id: `ex-${Date.now().toString(36)}-${(split.colorExclusions?.length ?? 0)}`,
+      labL: lab[0], labA: lab[1], labB: lab[2], tol: DEFAULT_EXCL_TOL,
+      exclBaseId: nextExclBaseId(), macroId,
+    };
+    const nextExcl = [...(split.colorExclusions ?? []), ex];
+    const patch: Partial<SplitEdit> = { colorExclusions: nextExcl };
+    // Auto-snap: re-trace the kept outline for polygon regions.
+    if (split.points && split.points.length >= 3) {
+      const mask = keptRegionMask({ ...split, colorExclusions: nextExcl }, seg.data, seg.width, seg.height);
+      const outline = traceMaskOutline(mask, seg.width, seg.height, 0.012);
+      if (outline.length >= 3) {
+        patch.points = outline;
+        const c = polygonCentroid(outline);
+        patch.nx = c.x; patch.ny = c.y;
+      }
+    }
+    patchSplit("target", splitId, patch);
+  }, [target.segInput, targetSplits, sourceSplits, patchSplit]);
+  const removeExclusion = useCallback((splitId: string, exclId: string) => {
+    const split = targetSplits.find(s => s.id === splitId);
+    if (!split) return;
+    patchSplit("target", splitId, {
+      colorExclusions: (split.colorExclusions ?? []).filter(e => e.id !== exclId),
+    });
+  }, [targetSplits, patchSplit]);
+
   const clearAllSplits = () => { setSourceSplits([]); setTargetSplits([]); };
 
   // Pool-map click dispatchers — route to the anchor or split workflow based on
@@ -1040,9 +1104,22 @@ export function SmashTab() {
     else if (poolMapTool === "anchor") handleAnchorSourceClick(nx, ny);
   }, [poolMapTool, addSplit, handleAnchorSourceClick]);
   const handleTargetMapClick = useCallback((nx: number, ny: number) => {
+    // Eyedropper: a click samples the colour under it and excludes it from the
+    // awaiting split (→ the chosen group), instead of placing a split/anchor.
+    if (eyedropSplitId && target.segInput) {
+      const seg = target.segInput;
+      const px = Math.min(seg.width - 1, Math.max(0, Math.floor(nx * seg.width)));
+      const py = Math.min(seg.height - 1, Math.max(0, Math.floor(ny * seg.height)));
+      const o = (py * seg.width + px) * 4;
+      const lab = rgbToLab(seg.data[o], seg.data[o + 1], seg.data[o + 2]);
+      const group = exclTargetGroup ?? targetMacros[0]?.id ?? 0;
+      addExclusion(eyedropSplitId, lab, group);
+      setEyedropSplitId(null);
+      return;
+    }
     if (poolMapTool === "split") addSplit("target", nx, ny);
     else if (poolMapTool === "anchor") handleAnchorTargetClick(nx, ny);
-  }, [poolMapTool, addSplit, handleAnchorTargetClick]);
+  }, [eyedropSplitId, target.segInput, exclTargetGroup, targetMacros, addExclusion, poolMapTool, addSplit, handleAnchorTargetClick]);
 
   const clearAllAnchors = () => {
     setAnchors([]);
@@ -1429,8 +1506,9 @@ export function SmashTab() {
       id: "target", label: "Target",
       url: targetCutoutUrl, imgW: targetResult?.width ?? 1, imgH: targetResult?.height ?? 1,
       circles: targetCircles, polys: targetPolys, placeholder: "Pick a target layer.",
-      onPlace: targetResult && !lasso ? handleTargetMapClick : undefined,
-      onLasso: targetResult && lasso ? (pts => addPolySplit("target", pts)) : undefined,
+      // Eyedrop mode forces a click to sample (no lasso/place) regardless of tool.
+      onPlace: targetResult && (eyedropSplitId || !lasso) ? handleTargetMapClick : undefined,
+      onLasso: targetResult && lasso && !eyedropSplitId ? (pts => addPolySplit("target", pts)) : undefined,
     },
     {
       // Output shows the recolored result and carries the TARGET-side overlays
@@ -1439,10 +1517,10 @@ export function SmashTab() {
       url: transferUrl, imgW: targetResult?.width ?? 1, imgH: targetResult?.height ?? 1,
       circles: targetCircles, polys: targetPolys,
       placeholder: "Set source + target — the recolored output appears here.",
-      onPlace: targetResult && !lasso ? handleTargetMapClick : undefined,
-      onLasso: targetResult && lasso ? (pts => addPolySplit("target", pts)) : undefined,
+      onPlace: targetResult && (eyedropSplitId || !lasso) ? handleTargetMapClick : undefined,
+      onLasso: targetResult && lasso && !eyedropSplitId ? (pts => addPolySplit("target", pts)) : undefined,
     },
-  ], [sourceCutoutUrl, targetCutoutUrl, transferUrl, lasso,
+  ], [sourceCutoutUrl, targetCutoutUrl, transferUrl, lasso, eyedropSplitId,
       sourceCircles, targetCircles, sourcePolys, targetPolys, sourceResult, targetResult,
       handleSourceMapClick, handleTargetMapClick, addPolySplit]);
 
@@ -1708,6 +1786,60 @@ export function SmashTab() {
                             : "auto"}
                         </span>
                       </div>
+                    )}
+                    {/* TARGET splits: subtract a colour and send it elsewhere. */}
+                    {side === "target" && targetMacros.length > 0 && (
+                      <>
+                        <div
+                          onClick={() => setExclEditSplitId(exclEditSplitId === s.id ? null : s.id)}
+                          title="Subtract a colour from this region and send those pixels to another group. The lasso auto-snaps to the colour edge."
+                          style={{ cursor: "pointer", userSelect: "none", color: "#cdb892" }}>
+                          {exclEditSplitId === s.id ? "▾" : "▸"} exclude colours
+                          {(s.colorExclusions?.length ?? 0) > 0 ? ` (${s.colorExclusions!.length})` : ""}
+                        </div>
+                        {exclEditSplitId === s.id && (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 4, paddingLeft: 6, borderLeft: "2px solid #4a3a1a" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                              <span style={{ opacity: 0.7 }}>send →</span>
+                              {targetMacros.map(m => {
+                                const info = targetMacroInfo.get(m.id);
+                                const sel = (exclTargetGroup ?? targetMacros[0]?.id) === m.id;
+                                return (
+                                  <div key={m.id} onClick={() => setExclTargetGroup(m.id)}
+                                    title={`Send excluded pixels to ${m.name}`}
+                                    style={{ width: 13, height: 13, borderRadius: 3, background: info ? `rgb(${info.r}, ${info.g}, ${info.b})` : "#2a2a2a", border: sel ? "2px solid #1473e6" : "1px solid #000", cursor: "pointer", boxSizing: "border-box" }} />
+                                );
+                              })}
+                            </div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                              <div onClick={() => setEyedropSplitId(eyedropSplitId === s.id ? null : s.id)}
+                                title="Eyedropper — then click the colour to remove on the Target/Output canvas"
+                                style={{ padding: "1px 6px", borderRadius: 2, border: `1px solid ${eyedropSplitId === s.id ? "#1473e6" : "#4a4a4a"}`, background: eyedropSplitId === s.id ? "#22364f" : "#3a3a3a", color: "#ddd", cursor: "pointer", userSelect: "none" }}>
+                                ⊙ {eyedropSplitId === s.id ? "click canvas…" : "eyedrop"}
+                              </div>
+                              <span style={{ opacity: 0.7 }}>or:</span>
+                              {(targetMembership?.pools.filter(p => p.id >= s.baseId && p.id < s.baseId + SPLIT_ID_STRIDE) ?? []).map(p => (
+                                <div key={p.id}
+                                  onClick={() => addExclusion(s.id, [p.descriptor.labL, p.descriptor.labA, p.descriptor.labB], exclTargetGroup ?? targetMacros[0]?.id ?? 0)}
+                                  title="Exclude this colour from the region"
+                                  style={{ width: 13, height: 13, borderRadius: 3, background: `rgb(${p.descriptor.r}, ${p.descriptor.g}, ${p.descriptor.b})`, border: "1px solid #000", cursor: "pointer" }} />
+                              ))}
+                            </div>
+                            {(s.colorExclusions ?? []).map(ex => {
+                              const [r, g, b] = labToRgb(ex.labL, ex.labA, ex.labB);
+                              const gname = targetMacros.find(m => m.id === ex.macroId)?.name ?? `Macro ${ex.macroId}`;
+                              return (
+                                <div key={ex.id} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                  <div style={{ width: 12, height: 12, borderRadius: 3, background: `rgb(${r}, ${g}, ${b})`, border: "1px solid #000" }} />
+                                  <span style={{ flex: 1, opacity: 0.8 }}>→ {gname}</span>
+                                  <div onClick={() => removeExclusion(s.id, ex.id)}
+                                    title="Remove this exclusion" style={{ padding: "0 6px", fontSize: 11, borderRadius: 2, border: "1px solid #6a4a4a", background: "#3a2a2a", color: "#e8b0b0", cursor: "pointer", userSelect: "none" }}>×</div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </>
                     )}
                   </div>
                 ))}

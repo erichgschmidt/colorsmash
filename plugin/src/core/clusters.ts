@@ -126,6 +126,19 @@ export interface SplitEdit {
   // into this macro id (authoritative). UI-level concern; segmentation ignores
   // it. See macro.applyRegionTags.
   assignMacroId?: number;
+  // Colours subtracted from this region: pixels within `tol` (Lab) of a ref are
+  // pulled OUT of the region's split and re-segmented into the exclusion's own
+  // reserved id range (so they can be tagged to `macroId`). Lets you carve a
+  // stray colour out of a lasso and send it to another group.
+  colorExclusions?: ColorExclusion[];
+}
+
+export interface ColorExclusion {
+  id: string;          // UI key
+  labL: number; labA: number; labB: number; // reference colour (CIE Lab)
+  tol: number;         // Lab match tolerance (Euclidean)
+  exclBaseId: number;  // reserved pool-id range start for this exclusion's pixels
+  macroId: number;     // macro group the excluded pixels are assigned to
 }
 
 // Stable id space for split parts — far above normal pool ids (which stay small
@@ -139,6 +152,12 @@ export const SPLIT_ID_STRIDE = 1_000;
 // refined pool ids stay stable across re-segmentation.
 export const MACRO_REFINE_BASE = 5_000_000;
 export const MACRO_REFINE_STRIDE = 100_000;
+
+// Stable id space for colour-EXCLUSION pools (pixels subtracted from a region).
+// Between the split and macro-refine ranges; each exclusion gets its own
+// exclBaseId = EXCL_ID_BASE + k·STRIDE.
+export const EXCL_ID_BASE = 3_000_000;
+export const EXCL_ID_STRIDE = 1_000;
 
 // ────────── Tuning constants ──────────
 
@@ -395,6 +414,61 @@ export function buildPoolsFromLabels(
   return pools;
 }
 
+// Opaque pixel indices a split covers — inside its polygon (lasso) or circle.
+export function coveredOpaquePixels(
+  edit: SplitEdit, rgba: Uint8Array, width: number, height: number,
+): number[] {
+  if (edit.points && edit.points.length >= 3) {
+    return polygonPixelIndices(edit.points, width, height).filter(i => rgba[i * 4 + 3] >= 128);
+  }
+  const maxEdge = Math.max(width, height);
+  const cx = edit.nx * width, cy = edit.ny * height;
+  const rPx = Math.max(1, edit.radius * maxEdge);
+  const r2 = rPx * rPx;
+  const x0 = Math.max(0, Math.floor(cx - rPx));
+  const x1 = Math.min(width - 1, Math.ceil(cx + rPx));
+  const y0 = Math.max(0, Math.floor(cy - rPx));
+  const y1 = Math.min(height - 1, Math.ceil(cy + rPx));
+  const out: number[] = [];
+  for (let y = y0; y <= y1; y++) {
+    const dy = y - cy;
+    for (let x = x0; x <= x1; x++) {
+      const dx = x - cx;
+      if (dx * dx + dy * dy > r2) continue;
+      const i = y * width + x;
+      if (rgba[i * 4 + 3] < 128) continue;
+      out.push(i);
+    }
+  }
+  return out;
+}
+
+// 0/1 mask of a split's KEPT pixels (covered minus any colour-excluded). Drives
+// the lasso auto-snap: trace this mask's outline → the new polygon.
+export function keptRegionMask(
+  edit: SplitEdit, rgba: Uint8Array, width: number, height: number,
+): Uint8Array {
+  const mask = new Uint8Array(width * height);
+  const covered = coveredOpaquePixels(edit, rgba, width, height);
+  const exclusions = edit.colorExclusions ?? [];
+  const tol2 = exclusions.map(e => e.tol * e.tol);
+  for (const i of covered) {
+    if (exclusions.length > 0) {
+      const o = i * 4;
+      const [L, a, b] = rgbToLab(rgba[o], rgba[o + 1], rgba[o + 2]);
+      let excluded = false;
+      for (let e = 0; e < exclusions.length; e++) {
+        const ex = exclusions[e];
+        const dl = L - ex.labL, da = a - ex.labA, db = b - ex.labB;
+        if (dl * dl + da * da + db * db <= tol2[e]) { excluded = true; break; }
+      }
+      if (excluded) continue;
+    }
+    mask[i] = 1;
+  }
+  return mask;
+}
+
 // Re-apply a list of manual split edits onto a base segmentation. For each
 // edit we gather the opaque pixels under its circle, re-run the full edge-aware
 // segmenter on JUST those pixels (so the split follows the real colour edge,
@@ -414,47 +488,59 @@ export function applySplits(
   if (!edits || edits.length === 0) return base;
   const { width, height } = base;
   const labels = base.labels.slice();
-  const maxEdge = Math.max(width, height);
 
   for (const edit of edits) {
     const parts = Math.max(2, Math.floor(edit.partCount));
 
     // Covered opaque pixels — inside the polygon (lasso) or the circle.
-    let covered: number[];
-    if (edit.points && edit.points.length >= 3) {
-      covered = polygonPixelIndices(edit.points, width, height)
-        .filter(i => rgba[i * 4 + 3] >= 128);
-    } else {
-      const cx = edit.nx * width, cy = edit.ny * height;
-      const rPx = Math.max(1, edit.radius * maxEdge);
-      const r2 = rPx * rPx;
-      const x0 = Math.max(0, Math.floor(cx - rPx));
-      const x1 = Math.min(width - 1, Math.ceil(cx + rPx));
-      const y0 = Math.max(0, Math.floor(cy - rPx));
-      const y1 = Math.min(height - 1, Math.ceil(cy + rPx));
-      covered = [];
-      for (let y = y0; y <= y1; y++) {
-        const dy = y - cy;
-        for (let x = x0; x <= x1; x++) {
-          const dx = x - cx;
-          if (dx * dx + dy * dy > r2) continue;
-          const i = y * width + x;
-          if (rgba[i * 4 + 3] < 128) continue;
-          covered.push(i);
+    const covered = coveredOpaquePixels(edit, rgba, width, height);
+    if (covered.length < 1) continue;
+
+    // Subtract excluded colours: partition `covered` into KEPT (the region) and
+    // one bucket per exclusion (pixels within tol of its ref colour). Excluded
+    // pixels are re-segmented into the exclusion's own reserved id range so they
+    // can be reassigned to another group.
+    const exclusions = edit.colorExclusions ?? [];
+    let kept = covered;
+    if (exclusions.length > 0) {
+      kept = [];
+      const buckets: number[][] = exclusions.map(() => []);
+      const tol2 = exclusions.map(e => e.tol * e.tol);
+      for (const i of covered) {
+        const o = i * 4;
+        const [L, a, b] = rgbToLab(rgba[o], rgba[o + 1], rgba[o + 2]);
+        let matched = -1;
+        for (let e = 0; e < exclusions.length; e++) {
+          const ex = exclusions[e];
+          const dl = L - ex.labL, da = a - ex.labA, db = b - ex.labB;
+          if (dl * dl + da * da + db * db <= tol2[e]) { matched = e; break; }
+        }
+        if (matched >= 0) buckets[matched].push(i); else kept.push(i);
+      }
+      // Re-segment each exclusion bucket into a single pool in its reserved range.
+      for (let e = 0; e < exclusions.length; e++) {
+        const bucket = buckets[e];
+        if (bucket.length < 1) continue;
+        const { assignment: exAssign } = segmentPixelSet(
+          rgba, width, height, bucket, { ...opts, poolCount: 1 }, exclusions[e].exclBaseId,
+        );
+        for (let j = 0; j < bucket.length; j++) {
+          if (exAssign[j] >= 0) labels[bucket[j]] = exAssign[j];
         }
       }
     }
-    if (covered.length < parts) continue;
 
-    // Cold segmentation of the masked subset into `parts` pools, ids starting
-    // at the edit's reserved baseId (deterministic → stable across re-segments).
+    if (kept.length < parts) continue;
+
+    // Cold segmentation of the kept subset into `parts` pools, ids starting at
+    // the edit's reserved baseId (deterministic → stable across re-segments).
     const { assignment } = segmentPixelSet(
-      rgba, width, height, covered,
+      rgba, width, height, kept,
       { ...opts, poolCount: parts },
       edit.baseId,
     );
-    for (let j = 0; j < covered.length; j++) {
-      if (assignment[j] >= 0) labels[covered[j]] = assignment[j];
+    for (let j = 0; j < kept.length; j++) {
+      if (assignment[j] >= 0) labels[kept[j]] = assignment[j];
     }
   }
 

@@ -2,9 +2,10 @@ import { describe, it, expect } from "vitest";
 import {
   segmentImage, expandPool, collapsePool,
   applySplits, buildPoolsFromLabels, buildSplitBlendWeight,
-  refineMacros,
+  refineMacros, keptRegionMask,
   SPLIT_ID_BASE, SPLIT_ID_STRIDE,
   MACRO_REFINE_BASE, MACRO_REFINE_STRIDE,
+  EXCL_ID_BASE, EXCL_ID_STRIDE,
 } from "./clusters";
 import type { SplitEdit } from "./clusters";
 
@@ -611,5 +612,60 @@ describe("refineMacros", () => {
     expect(m1.poolIds).toEqual([greenPoolId]);
     // The input macros array was not mutated.
     expect(macros[1].poolIds).toEqual([greenPoolId]);
+  });
+});
+
+describe("colour exclusion (subtract a colour from a region)", () => {
+  const OPTS = {
+    poolCount: 1, edgePreservation: 0.5, regionCleanup: 0.2,
+    colorVsValueBias: 0.5, subPaletteSize: 3, neutralProtection: 0,
+    poolContinuity: 0,
+  };
+
+  // Left half red, right half blue — a lasso over the whole image, excluding red.
+  function twoToneImage() {
+    const W = 64, H = 64;
+    const img = makeImage(W, H, (x) => (x < W / 2 ? [200, 40, 40] : [40, 40, 200]));
+    return { img, W, H };
+  }
+
+  it("relabels excluded pixels into the exclusion id range, keeps the rest", () => {
+    const { img, W, H } = twoToneImage();
+    const base = segmentImage(img, W, H, { ...OPTS, poolCount: 1 });
+    // Lab of red ≈ the left half. Exclude colours near red.
+    const redLab = (() => { const o = (32 * W + 16) * 4; return img.slice(o, o + 3); })();
+    // crude rgb→approx not needed; use a wide tol around the pool's mean via segment.
+    const split: SplitEdit = {
+      id: "r1", nx: 0.5, ny: 0.5, radius: 0, partCount: 2, baseId: SPLIT_ID_BASE,
+      points: [ { x: 0.02, y: 0.02 }, { x: 0.98, y: 0.02 }, { x: 0.98, y: 0.98 }, { x: 0.02, y: 0.98 } ],
+      colorExclusions: [
+        // Red in Lab ≈ L53 a61 b46 (200,40,40). Use a generous tolerance.
+        { id: "ex1", labL: 53, labA: 61, labB: 46, tol: 40, exclBaseId: EXCL_ID_BASE, macroId: 1 },
+      ],
+    };
+    const out = applySplits(base, img, [split], OPTS);
+
+    // A left (red) pixel → excluded range; a right (blue) pixel → split range.
+    const leftIdx = 32 * W + 12;
+    const rightIdx = 32 * W + 52;
+    expect(out.labels[leftIdx]).toBeGreaterThanOrEqual(EXCL_ID_BASE);
+    expect(out.labels[leftIdx]).toBeLessThan(EXCL_ID_BASE + EXCL_ID_STRIDE);
+    expect(out.labels[rightIdx]).toBeGreaterThanOrEqual(SPLIT_ID_BASE);
+    expect(out.labels[rightIdx]).toBeLessThan(SPLIT_ID_BASE + SPLIT_ID_STRIDE);
+    void redLab;
+  });
+
+  it("keptRegionMask drops the excluded colour and keeps the rest", () => {
+    const { img, W, H } = twoToneImage();
+    const split: SplitEdit = {
+      id: "r1", nx: 0.5, ny: 0.5, radius: 0, partCount: 2, baseId: SPLIT_ID_BASE,
+      points: [ { x: 0.02, y: 0.02 }, { x: 0.98, y: 0.02 }, { x: 0.98, y: 0.98 }, { x: 0.02, y: 0.98 } ],
+      colorExclusions: [
+        { id: "ex1", labL: 53, labA: 61, labB: 46, tol: 40, exclBaseId: EXCL_ID_BASE, macroId: 1 },
+      ],
+    };
+    const mask = keptRegionMask(split, img, W, H);
+    expect(mask[32 * W + 12]).toBe(0); // red → excluded → not kept
+    expect(mask[32 * W + 52]).toBe(1); // blue → kept
   });
 });

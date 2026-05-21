@@ -114,6 +114,45 @@ export function polygonPixelIndices(points: Pt[], width: number, height: number)
   return out;
 }
 
+// Trace the outer boundary of a binary mask into a simplified polygon (Moore-
+// neighbour boundary following from the top-left set pixel, clockwise). Returns
+// the outline of the component containing that pixel in normalized coords, RDP-
+// simplified; [] if the mask is empty or degenerate. Used to auto-snap a lasso
+// to a colour edge after excluding a colour. Holes/other components are ignored
+// (the outer boundary is what the polygon represents).
+export function traceMaskOutline(
+  mask: Uint8Array, width: number, height: number, tolerance = 0.01,
+): Pt[] {
+  let start = -1;
+  for (let i = 0; i < width * height; i++) { if (mask[i] === 1) { start = i; break; } }
+  if (start < 0) return [];
+  const sx = start % width, sy = (start / width) | 0;
+  const isSet = (x: number, y: number) =>
+    x >= 0 && y >= 0 && x < width && y < height && mask[y * width + x] === 1;
+  // 8 neighbours clockwise starting at E.
+  const nb = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
+  const out: { x: number; y: number }[] = [];
+  let cx = sx, cy = sy, dir = 0;
+  const maxSteps = width * height * 4;
+  let steps = 0;
+  do {
+    out.push({ x: cx, y: cy });
+    let moved = false;
+    const startK = (dir + 6) % 8; // turn back-left, then sweep clockwise
+    for (let k = 0; k < 8; k++) {
+      const d = (startK + k) % 8;
+      const nx = cx + nb[d][0], ny = cy + nb[d][1];
+      if (isSet(nx, ny)) { cx = nx; cy = ny; dir = d; moved = true; break; }
+    }
+    if (!moved) break; // isolated pixel
+    steps++;
+  } while (!(cx === sx && cy === sy) && steps < maxSteps);
+
+  if (out.length < 3) return [];
+  const norm = out.map(p => ({ x: (p.x + 0.5) / width, y: (p.y + 0.5) / height }));
+  return simplifyPolygon(norm, tolerance);
+}
+
 // Distance (in PIXELS) from a pixel centre to the nearest polygon edge segment.
 // Used to build an inward feather: pixels deep inside have a large distance,
 // pixels near the boundary have ~0.
