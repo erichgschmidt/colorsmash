@@ -220,6 +220,12 @@ export function SmashTab() {
   // Display-only sort for the correspondence list.
   const [sortMode, setSortMode] = useState<SortMode>("weightDesc");
 
+  // Inner tab switcher for the two big control surfaces. The pool maps +
+  // before/after preview stay persistently visible above this; only the
+  // Controls (segmentation + transfer) and Correspondence (list + anchors)
+  // surfaces are tabbed so the preview never gets pushed off-screen.
+  const [innerTab, setInnerTab] = useState<"controls" | "correspondence">("controls");
+
   // ── Focal anchors (list of pairs) ──
   // Each anchor is a completed source↔target pair. Each click captures a
   // source POINT (no longer a single source pool id — anchors now run their
@@ -894,288 +900,343 @@ export function SmashTab() {
         />
       </Section>
 
-      {/* ── Inputs: source + target pickers + segmentation controls ── */}
+      {/* ── Inputs: source + target layer pickers only. The segmentation
+            controls that used to live here moved into the Controls tab so the
+            preview can stay anchored higher up. ── */}
       <Section title="INPUTS">
         <div style={SUB_HEADER}>SOURCE</div>
         <SourceSelector {...selectorProps(source)} selStyle={sel} />
 
         <div style={SUB_HEADER}>TARGET</div>
         <SourceSelector {...selectorProps(target)} selStyle={sel} />
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 2 }}>
-          <Control
-            label="Pool count"
-            title="Number of color pools to segment each image into."
-            min={2} max={12} step={1}
-            value={poolCount} onChange={setPoolCount}
-            display={String(poolCount)}
-          />
-          <Control
-            label="Edge preservation"
-            title="Higher keeps more pool boundaries — refuses to merge regions across strong color edges."
-            min={0} max={1} step={0.05}
-            value={edgePreservation} onChange={setEdgePreservation}
-            display={edgePreservation.toFixed(2)}
-          />
-          <Control
-            label="Region cleanup"
-            title="Higher absorbs more small speckled regions into their neighbours for simpler shapes."
-            min={0} max={1} step={0.05}
-            value={regionCleanup} onChange={setRegionCleanup}
-            display={regionCleanup.toFixed(2)}
-          />
-          <Control
-            label="Neutral protection"
-            title="Higher refuses merges across strong chroma steps — defends low-chroma neighbours (gray shadows) from swallowing chromatic regions."
-            min={0} max={1} step={0.05}
-            value={neutralProtection} onChange={setNeutralProtection}
-            display={neutralProtection.toFixed(2)}
-          />
-          <Control
-            label="Pool continuity"
-            title="Color-range unification pass: clusters whose mean Lab distance falls below the threshold get merged into a single pool. Restores colour continuity for regions split by an intervening colour (e.g. a dress under a sash). 0 = no unification."
-            min={0} max={1} step={0.05}
-            value={poolContinuity} onChange={setPoolContinuity}
-            display={poolContinuity.toFixed(2)}
-          />
-          <Control
-            label="Color vs Value"
-            title="0 = chroma/hue identity dominates (skin shadow and shirt shadow stay separate by color). 0.5 = balanced. 1 = value/lightness dominates (classic luminance-driven cutout)."
-            min={0} max={1} step={0.05}
-            value={colorVsValueBias} onChange={setColorVsValueBias}
-            display={colorVsValueBias.toFixed(2)}
-          />
-          <Control
-            label="Sub-palette size"
-            title="Number of swatches sampled within each pool."
-            min={3} max={7} step={1}
-            value={subPaletteSize} onChange={setSubPaletteSize}
-            display={String(subPaletteSize)}
-          />
-          <Control
-            label="Fidelity"
-            title="Working resolution for the segmentation. Higher = finer islands and crisper boundaries, but slower to re-segment. Default 256."
-            min={256} max={512} step={64}
-            value={segmentMaxEdge} onChange={setSegmentMaxEdge}
-            display={String(segmentMaxEdge)}
-          />
-        </div>
       </Section>
 
-      {/* ── Pool maps (source left, target right) ── */}
-      <Section title="POOL MAPS">
-        <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <PoolMapPane
-              label="Source"
-              url={sourceMapUrl}
-              display={sourceMapDisplay}
-              analyzing={analyzing}
-              placeholder={source.snapError ?? "Pick a source layer."}
-              onPlaceNormalized={sourceResult ? handleAnchorSourceClick : undefined}
-              anchorDots={sourceAnchorDots}
-              onMoveAnchor={moveAnchorSource}
-              onMoveActiveSource={moveActiveSource}
-              onRemoveAnchor={removeAnchor}
-              onRemoveActiveSource={clearActiveSource}
-            />
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <PoolMapPane
-              label={showDonorTint ? "Target — donor tint" : "Target"}
-              url={targetMapUrl}
-              display={targetMapDisplay}
-              analyzing={analyzing}
-              placeholder={target.snapError ?? "Pick a target layer."}
-              onPlaceNormalized={targetResult ? handleAnchorTargetClick : undefined}
-              anchorDots={targetAnchorDots}
-              onMoveAnchor={moveAnchorTarget}
-              onRemoveAnchor={removeAnchor}
-            />
-          </div>
+      {/* ── Persistent preview area: pool maps + before/after preview. Always
+            visible — this is the whole point of the layout. The tab strip
+            below switches the control surfaces without ever pushing this
+            off-screen. ── */}
+      <div style={SECTION_HEADER}>PREVIEW / POOL MAPS</div>
+
+      {/* Pool maps (source left, target right) */}
+      <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <PoolMapPane
+            label="Source"
+            url={sourceMapUrl}
+            display={sourceMapDisplay}
+            analyzing={analyzing}
+            placeholder={source.snapError ?? "Pick a source layer."}
+            onPlaceNormalized={sourceResult ? handleAnchorSourceClick : undefined}
+            anchorDots={sourceAnchorDots}
+            onMoveAnchor={moveAnchorSource}
+            onMoveActiveSource={moveActiveSource}
+            onRemoveAnchor={removeAnchor}
+            onRemoveActiveSource={clearActiveSource}
+          />
         </div>
-      </Section>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <PoolMapPane
+            label={showDonorTint ? "Target — donor tint" : "Target"}
+            url={targetMapUrl}
+            display={targetMapDisplay}
+            analyzing={analyzing}
+            placeholder={target.snapError ?? "Pick a target layer."}
+            onPlaceNormalized={targetResult ? handleAnchorTargetClick : undefined}
+            anchorDots={targetAnchorDots}
+            onMoveAnchor={moveAnchorTarget}
+            onRemoveAnchor={removeAnchor}
+          />
+        </div>
+      </div>
+
+      {/* Before/after recolored preview pane — relocated up here from the
+          COLOR TRANSFER section so it stays visible regardless of which tab
+          is active. Its show-before/after toggle lives with the transfer
+          controls in the Controls tab; the toggle + label logic stay wired to
+          the same showAfter / transferUrl / beforeUrl state. */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+        <span style={{ fontSize: 9, color: "#999", letterSpacing: 0.3 }}>
+          {transferUrl
+            ? (showAfter ? "After — recolored target" : "Before — original target")
+            : "Preview"}
+        </span>
+        <div style={{
+          position: "relative", alignSelf: "center",
+          width: targetDisplay.w || PANEL_WIDTH, minHeight: 60,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          background: "#1f1f1f", border: "1px solid #3a3a3a", borderRadius: 2,
+        }}>
+          {transferUrl ? (
+            <img
+              src={(showAfter ? transferUrl : beforeUrl) ?? undefined}
+              style={{
+                width: targetDisplay.w, height: targetDisplay.h,
+                imageRendering: "pixelated", display: "block",
+              }}
+            />
+          ) : (
+            <div style={{ padding: 24, fontSize: 10, opacity: 0.5 }}>
+              Click “Apply Smash” to preview the recolored target.
+            </div>
+          )}
+        </div>
+      </div>
 
       {segError && (
         <div style={{ fontSize: 10, color: "#d8867d" }}>Segmentation failed: {segError}</div>
       )}
 
-      {ready && (
-        <>
-          {/* ── Color transfer — in-panel before/after preview.
-                Placed ABOVE Correspondence so it stays anchored to a stable
-                spot while the correspondence list grows. ── */}
-          <Section title="COLOR TRANSFER">
-            <Control
-              label="Strength"
-              title="Transfer blend amount. 0 = target unchanged, 1 = full donor recolor."
-              min={0} max={1} step={0.05}
-              value={strength} onChange={setStrength}
-              display={strength.toFixed(2)}
-            />
-            <Control
-              label="Relax"
-              title="Softens pool boundaries so the recolor blends instead of looking cutout."
-              min={0} max={1} step={0.05}
-              value={relax} onChange={setRelax}
-              display={relax.toFixed(2)}
-            />
-            <Control
-              label="Preserve detail"
-              title="Keeps the target's original lightness/form; only color is transferred."
-              min={0} max={1} step={0.05}
-              value={preserveLuminance} onChange={setPreserveLuminance}
-              display={preserveLuminance.toFixed(2)}
-            />
-            <Control
-              label="Source richness"
-              title="0 = simplified sub-swatch transfer (today's behaviour). 1 = pull the donor pool's actual source pixel colours through via lightness-rank matching, so the source's full chroma variation comes through instead of just a few averages."
-              min={0} max={1} step={0.05}
-              value={richness} onChange={setRichness}
-              display={richness.toFixed(2)}
-            />
+      {/* ── Tab strip: switch between the Controls surface (segmentation +
+            transfer) and the Correspondence surface (list + focal anchors).
+            Styled distinctly from the Section chips so it reads as a tab
+            control, not another collapsible. ── */}
+      <div style={{ display: "flex", gap: 4 }}>
+        {([
+          { id: "controls" as const, label: "Controls" },
+          { id: "correspondence" as const, label: "Correspondence" },
+        ]).map(t => {
+          const active = innerTab === t.id;
+          return (
+            <div
+              key={t.id}
+              onClick={() => setInnerTab(t.id)}
+              style={{
+                flex: 1, textAlign: "center",
+                padding: "5px 8px", fontSize: 11, fontWeight: 600,
+                letterSpacing: 0.3, borderRadius: 3,
+                border: `1px solid ${active ? "#1473e6" : "#444"}`,
+                background: active ? "#1473e6" : "#2c2c2c",
+                color: active ? "#ffffff" : "#aaaaaa",
+                cursor: "pointer", userSelect: "none",
+              }}
+            >
+              {t.label}
+            </div>
+          );
+        })}
+      </div>
 
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <div
-                onClick={applySmash}
-                title="Recolor the target using the current correspondence. After the first apply the preview updates live."
-                style={{
-                  padding: "5px 12px", fontSize: 11, fontWeight: 600, borderRadius: 2,
-                  border: "1px solid #1473e6",
-                  background: "#1473e6", color: "#ffffff",
-                  cursor: "pointer", userSelect: "none",
-                }}
-              >
-                Apply Smash
-              </div>
-              {transferUrl && (
+      {/* ── Controls tab: segmentation sliders (usable always — they drive the
+            segmentation that happens before `ready`) plus the color-transfer
+            controls (gated on `ready`). ── */}
+      {innerTab === "controls" && (
+        <Section title="CONTROLS">
+          <div style={SUB_HEADER}>SEGMENTATION</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 2 }}>
+            <Control
+              label="Pool count"
+              title="Number of color pools to segment each image into."
+              min={2} max={12} step={1}
+              value={poolCount} onChange={setPoolCount}
+              display={String(poolCount)}
+            />
+            <Control
+              label="Edge preservation"
+              title="Higher keeps more pool boundaries — refuses to merge regions across strong color edges."
+              min={0} max={1} step={0.05}
+              value={edgePreservation} onChange={setEdgePreservation}
+              display={edgePreservation.toFixed(2)}
+            />
+            <Control
+              label="Region cleanup"
+              title="Higher absorbs more small speckled regions into their neighbours for simpler shapes."
+              min={0} max={1} step={0.05}
+              value={regionCleanup} onChange={setRegionCleanup}
+              display={regionCleanup.toFixed(2)}
+            />
+            <Control
+              label="Neutral protection"
+              title="Higher refuses merges across strong chroma steps — defends low-chroma neighbours (gray shadows) from swallowing chromatic regions."
+              min={0} max={1} step={0.05}
+              value={neutralProtection} onChange={setNeutralProtection}
+              display={neutralProtection.toFixed(2)}
+            />
+            <Control
+              label="Pool continuity"
+              title="Color-range unification pass: clusters whose mean Lab distance falls below the threshold get merged into a single pool. Restores colour continuity for regions split by an intervening colour (e.g. a dress under a sash). 0 = no unification."
+              min={0} max={1} step={0.05}
+              value={poolContinuity} onChange={setPoolContinuity}
+              display={poolContinuity.toFixed(2)}
+            />
+            <Control
+              label="Color vs Value"
+              title="0 = chroma/hue identity dominates (skin shadow and shirt shadow stay separate by color). 0.5 = balanced. 1 = value/lightness dominates (classic luminance-driven cutout)."
+              min={0} max={1} step={0.05}
+              value={colorVsValueBias} onChange={setColorVsValueBias}
+              display={colorVsValueBias.toFixed(2)}
+            />
+            <Control
+              label="Sub-palette size"
+              title="Number of swatches sampled within each pool."
+              min={3} max={7} step={1}
+              value={subPaletteSize} onChange={setSubPaletteSize}
+              display={String(subPaletteSize)}
+            />
+            <Control
+              label="Fidelity"
+              title="Working resolution for the segmentation. Higher = finer islands and crisper boundaries, but slower to re-segment. Default 256."
+              min={256} max={512} step={64}
+              value={segmentMaxEdge} onChange={setSegmentMaxEdge}
+              display={String(segmentMaxEdge)}
+            />
+          </div>
+
+          {/* Color transfer controls (minus the preview pane, which moved to
+              the persistent area above). Gated on `ready` like the original
+              COLOR TRANSFER section was. */}
+          <div style={SUB_HEADER}>COLOR TRANSFER</div>
+          {ready ? (
+            <>
+              <Control
+                label="Strength"
+                title="Transfer blend amount. 0 = target unchanged, 1 = full donor recolor."
+                min={0} max={1} step={0.05}
+                value={strength} onChange={setStrength}
+                display={strength.toFixed(2)}
+              />
+              <Control
+                label="Relax"
+                title="Softens pool boundaries so the recolor blends instead of looking cutout."
+                min={0} max={1} step={0.05}
+                value={relax} onChange={setRelax}
+                display={relax.toFixed(2)}
+              />
+              <Control
+                label="Preserve detail"
+                title="Keeps the target's original lightness/form; only color is transferred."
+                min={0} max={1} step={0.05}
+                value={preserveLuminance} onChange={setPreserveLuminance}
+                display={preserveLuminance.toFixed(2)}
+              />
+              <Control
+                label="Source richness"
+                title="0 = simplified sub-swatch transfer (today's behaviour). 1 = pull the donor pool's actual source pixel colours through via lightness-rank matching, so the source's full chroma variation comes through instead of just a few averages."
+                min={0} max={1} step={0.05}
+                value={richness} onChange={setRichness}
+                display={richness.toFixed(2)}
+              />
+
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <div
-                  onClick={() => setShowAfter(s => !s)}
-                  title="Swap the preview between the original target and the recolored result."
+                  onClick={applySmash}
+                  title="Recolor the target using the current correspondence. After the first apply the preview updates live."
                   style={{
-                    padding: "5px 10px", fontSize: 10, borderRadius: 2,
-                    border: "1px solid #4a4a4a", background: "#3a3a3a",
-                    color: "#cccccc", cursor: "pointer", userSelect: "none",
+                    padding: "5px 12px", fontSize: 11, fontWeight: 600, borderRadius: 2,
+                    border: "1px solid #1473e6",
+                    background: "#1473e6", color: "#ffffff",
+                    cursor: "pointer", userSelect: "none",
                   }}
                 >
-                  {showAfter ? "Show before" : "Show after"}
+                  Apply Smash
                 </div>
-              )}
-              {hasApplied && (
-                <span style={{ fontSize: 9, color: "#7dd87d" }}
-                  title="Preview updates automatically as you change controls.">
-                  live
-                </span>
-              )}
-            </div>
-
-            {/* Output name — base name applied to the written single layer
-                ("<name>") and / or pool group ("<name> · pools"). Persisted
-                via core/prefs so it survives panel reloads, and mirrored
-                into the photoshop service's GROUP_NAME so any in-session
-                callsite reading that picks up the user's choice. Saves on
-                blur to avoid thrashing localStorage on every keystroke. */}
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 10, color: "#cccccc" }}>Output name:</span>
-              <input
-                type="text"
-                value={outputName}
-                onChange={(e) => setOutputName(e.target.value)}
-                onBlur={() => {
-                  const trimmed = outputName.trim() || DEFAULT_PREFS.outputName;
-                  if (trimmed !== outputName) setOutputName(trimmed);
-                  savePrefs({ outputName: trimmed });
-                  setGroupName(trimmed);
-                }}
-                title="Base name for the written layer / group. The pool-group variant appends ' · pools'."
-                style={{
-                  flex: 1, fontSize: 10,
-                  padding: "3px 6px",
-                  background: "#1f1f1f", color: "#cccccc",
-                  border: "1px solid #4a4a4a", borderRadius: 2,
-                  outline: "none",
-                }}
-              />
-            </div>
-
-            {/* Output the smashed result back into the target document at its
-                full resolution. The dropdown next to the button selects
-                between a single recolored layer (today's behaviour), a
-                per-pool layer group (each pool becomes a hand-editable
-                transparent layer inside one group), or both. Custom
-                Dropdown — see Dropdown.tsx for why we avoid native <select>
-                in the panel. */}
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <div
-                onClick={canOutput ? outputToDocument : undefined}
-                title="Run the transfer at the target document's full resolution and add the result as a new layer (or per-pool group, depending on the mode picker)."
-                style={{
-                  padding: "5px 12px", fontSize: 11, fontWeight: 600, borderRadius: 2,
-                  border: "1px solid #4a4a4a",
-                  background: canOutput ? "#3a3a3a" : "#2a2a2a",
-                  color: canOutput ? "#cccccc" : "#666666",
-                  cursor: canOutput ? "pointer" : "default", userSelect: "none",
-                }}
-              >
-                {outputting ? "Working…" : "Output to document"}
-              </div>
-              <Dropdown<OutputMode>
-                value={outputMode}
-                onChange={setOutputMode}
-                title="What 'Output to document' writes. Single = one recolored layer. Pool group = one transparent layer per pool, wrapped in a group (hand-editable region by region). Both = single layer plus the group."
-                style={{ minWidth: 130 }}
-                options={[
-                  { value: "single", label: "Single layer" },
-                  { value: "group",  label: "Pool group" },
-                  { value: "both",   label: "Both" },
-                ]}
-              />
-            </div>
-
-            {transferError && (
-              <div style={{ fontSize: 10, color: "#d8867d" }}>
-                Transfer failed: {transferError}
-              </div>
-            )}
-
-            {outputError && (
-              <div style={{ fontSize: 10, color: "#d8867d" }}>
-                Output failed: {outputError}
-              </div>
-            )}
-
-            {/* Before/after preview pane — toggles between the original target
-                pixels and the recolored result. */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-              <span style={{ fontSize: 9, color: "#999", letterSpacing: 0.3 }}>
-                {transferUrl
-                  ? (showAfter ? "After — recolored target" : "Before — original target")
-                  : "Preview"}
-              </span>
-              <div style={{
-                position: "relative", alignSelf: "center",
-                width: targetDisplay.w || PANEL_WIDTH, minHeight: 60,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                background: "#1f1f1f", border: "1px solid #3a3a3a", borderRadius: 2,
-              }}>
-                {transferUrl ? (
-                  <img
-                    src={(showAfter ? transferUrl : beforeUrl) ?? undefined}
+                {transferUrl && (
+                  <div
+                    onClick={() => setShowAfter(s => !s)}
+                    title="Swap the preview between the original target and the recolored result."
                     style={{
-                      width: targetDisplay.w, height: targetDisplay.h,
-                      imageRendering: "pixelated", display: "block",
+                      padding: "5px 10px", fontSize: 10, borderRadius: 2,
+                      border: "1px solid #4a4a4a", background: "#3a3a3a",
+                      color: "#cccccc", cursor: "pointer", userSelect: "none",
                     }}
-                  />
-                ) : (
-                  <div style={{ padding: 24, fontSize: 10, opacity: 0.5 }}>
-                    Click “Apply Smash” to preview the recolored target.
+                  >
+                    {showAfter ? "Show before" : "Show after"}
                   </div>
                 )}
+                {hasApplied && (
+                  <span style={{ fontSize: 9, color: "#7dd87d" }}
+                    title="Preview updates automatically as you change controls.">
+                    live
+                  </span>
+                )}
               </div>
-            </div>
-          </Section>
 
-          {/* ── Correspondence: target→source list with sort + scroll ── */}
+              {/* Output name — base name applied to the written single layer
+                  ("<name>") and / or pool group ("<name> · pools"). Persisted
+                  via core/prefs so it survives panel reloads, and mirrored
+                  into the photoshop service's GROUP_NAME so any in-session
+                  callsite reading that picks up the user's choice. Saves on
+                  blur to avoid thrashing localStorage on every keystroke. */}
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 10, color: "#cccccc" }}>Output name:</span>
+                <input
+                  type="text"
+                  value={outputName}
+                  onChange={(e) => setOutputName(e.target.value)}
+                  onBlur={() => {
+                    const trimmed = outputName.trim() || DEFAULT_PREFS.outputName;
+                    if (trimmed !== outputName) setOutputName(trimmed);
+                    savePrefs({ outputName: trimmed });
+                    setGroupName(trimmed);
+                  }}
+                  title="Base name for the written layer / group. The pool-group variant appends ' · pools'."
+                  style={{
+                    flex: 1, fontSize: 10,
+                    padding: "3px 6px",
+                    background: "#1f1f1f", color: "#cccccc",
+                    border: "1px solid #4a4a4a", borderRadius: 2,
+                    outline: "none",
+                  }}
+                />
+              </div>
+
+              {/* Output the smashed result back into the target document at its
+                  full resolution. The dropdown next to the button selects
+                  between a single recolored layer (today's behaviour), a
+                  per-pool layer group (each pool becomes a hand-editable
+                  transparent layer inside one group), or both. Custom
+                  Dropdown — see Dropdown.tsx for why we avoid native <select>
+                  in the panel. */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div
+                  onClick={canOutput ? outputToDocument : undefined}
+                  title="Run the transfer at the target document's full resolution and add the result as a new layer (or per-pool group, depending on the mode picker)."
+                  style={{
+                    padding: "5px 12px", fontSize: 11, fontWeight: 600, borderRadius: 2,
+                    border: "1px solid #4a4a4a",
+                    background: canOutput ? "#3a3a3a" : "#2a2a2a",
+                    color: canOutput ? "#cccccc" : "#666666",
+                    cursor: canOutput ? "pointer" : "default", userSelect: "none",
+                  }}
+                >
+                  {outputting ? "Working…" : "Output to document"}
+                </div>
+                <Dropdown<OutputMode>
+                  value={outputMode}
+                  onChange={setOutputMode}
+                  title="What 'Output to document' writes. Single = one recolored layer. Pool group = one transparent layer per pool, wrapped in a group (hand-editable region by region). Both = single layer plus the group."
+                  style={{ minWidth: 130 }}
+                  options={[
+                    { value: "single", label: "Single layer" },
+                    { value: "group",  label: "Pool group" },
+                    { value: "both",   label: "Both" },
+                  ]}
+                />
+              </div>
+
+              {transferError && (
+                <div style={{ fontSize: 10, color: "#d8867d" }}>
+                  Transfer failed: {transferError}
+                </div>
+              )}
+
+              {outputError && (
+                <div style={{ fontSize: 10, color: "#d8867d" }}>
+                  Output failed: {outputError}
+                </div>
+              )}
+            </>
+          ) : (
+            <div style={{ fontSize: 10, color: "#9a9aa8" }}>
+              Pick a source and target layer to begin.
+            </div>
+          )}
+        </Section>
+      )}
+
+      {/* ── Correspondence tab: target→source list with sort + scroll, plus
+            the focal-anchors subsection. Gated on `ready`. ── */}
+      {innerTab === "correspondence" && (
+        ready ? (
           <Section title="CORRESPONDENCE">
             {/* Donor-preview toggle + sort selector + reset */}
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -1427,7 +1488,11 @@ export function SmashTab() {
               })}
             </div>
           </Section>
-        </>
+        ) : (
+          <div style={{ fontSize: 10, color: "#9a9aa8" }}>
+            Pick a source and target layer to begin.
+          </div>
+        )
       )}
     </div>
   );
