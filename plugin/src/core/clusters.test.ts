@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   segmentImage, expandPool, collapsePool,
-  applySplits, buildPoolsFromLabels,
+  applySplits, buildPoolsFromLabels, buildSplitFeatherMask,
   SPLIT_ID_BASE, SPLIT_ID_STRIDE,
 } from "./clusters";
 import type { SplitEdit } from "./clusters";
@@ -319,5 +319,38 @@ describe("buildPoolsFromLabels", () => {
     expect(pools.length).toBe(1);
     expect(pools[0].id).toBe(3);
     expect(pools[0].descriptor.pixelCount).toBe(10);
+  });
+});
+
+describe("buildSplitFeatherMask", () => {
+  it("returns null when no split has feather", () => {
+    const edits: SplitEdit[] = [
+      { id: "a", nx: 0.5, ny: 0.5, radius: 0.3, partCount: 2, baseId: SPLIT_ID_BASE },
+      { id: "b", nx: 0.2, ny: 0.2, radius: 0.2, partCount: 2, baseId: SPLIT_ID_BASE + SPLIT_ID_STRIDE, feather: 0 },
+    ];
+    expect(buildSplitFeatherMask(32, 32, edits)).toBeNull();
+  });
+
+  it("ramps the outer band 1→0 and leaves the core + outside at 1", () => {
+    const W = 100, H = 100;
+    // Centred split, radius 0.4 of maxEdge (=40px), feather 0.5 → inner 20px.
+    const edits: SplitEdit[] = [
+      { id: "a", nx: 0.5, ny: 0.5, radius: 0.4, partCount: 2, baseId: SPLIT_ID_BASE, feather: 0.5 },
+    ];
+    const mask = buildSplitFeatherMask(W, H, edits)!;
+    expect(mask).not.toBeNull();
+
+    const at = (x: number, y: number) => mask[y * W + x];
+    const cx = 50, cy = 50;
+    // Centre (d=0, inside inner 20px) → full recolor.
+    expect(at(cx, cy)).toBeCloseTo(1, 5);
+    // Just inside inner radius (d≈18px) → still full.
+    expect(at(cx + 18, cy)).toBeCloseTo(1, 5);
+    // Mid feather band (d≈30px, halfway inner→outer) → attenuated below 1, above 0.
+    const mid = at(cx + 30, cy);
+    expect(mid).toBeGreaterThan(0);
+    expect(mid).toBeLessThan(1);
+    // Far outside the outer radius (d≈45px) → untouched (full global transfer).
+    expect(at(cx + 45, cy)).toBeCloseTo(1, 5);
   });
 });

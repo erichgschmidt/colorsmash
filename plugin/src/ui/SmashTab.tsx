@@ -30,9 +30,10 @@ import { downsampleToMaxEdge } from "../core/downsample";
 import { rgbaToPngDataUrl } from "./encodePng";
 import { matchStyles } from "./MatchSliders";
 import {
-  segmentImage, applySplits, SegmentResult, Pool,
+  segmentImage, applySplits, buildSplitFeatherMask, SegmentResult, Pool,
   SplitEdit, SPLIT_ID_BASE, SPLIT_ID_STRIDE,
 } from "../core/clusters";
+import { SmashEditCanvas, CanvasView, CanvasCircle } from "./SmashEditCanvas";
 import { matchPools, PoolMatch, Correspondence } from "../core/match";
 import { transferColors, vectorizeUpscaleLabels, type TransferAnchor } from "../core/transfer";
 import { analyzeAnchor, type AnchorAnalysis } from "../core/anchorAnalysis";
@@ -292,6 +293,9 @@ export function SmashTab() {
   // Defaults seeded into NEW split circles; each split keeps its own values.
   const [splitRadius, setSplitRadius] = useState(0.15);
   const [splitParts, setSplitParts] = useState(2);
+  const [splitFeatherAmt, setSplitFeatherAmt] = useState(0);
+  // Which image the big editing canvas shows: source / target / output(after).
+  const [canvasTab, setCanvasTab] = useState<"source" | "target" | "output">("target");
 
   // ── Per-anchor mini-Smash analyses ──
   // Each anchor in the list above is fed through analyzeAnchor (which runs a
@@ -453,8 +457,6 @@ export function SmashTab() {
   const [richness, setRichness] = useState(0);
   // The recolored-target PNG data URL. null until a transfer has been run.
   const [transferUrl, setTransferUrl] = useState<string | null>(null);
-  // Before/after toggle for the preview pane (false = before, true = after).
-  const [showAfter, setShowAfter] = useState(true);
   // Last error from a transfer attempt, if any.
   const [transferError, setTransferError] = useState<string | null>(null);
   // Once "Apply Smash" has been pressed the preview goes live — it re-runs
@@ -585,11 +587,9 @@ export function SmashTab() {
       hoveredTargetId, hoveredSourceId, selectedTargetId],
   );
 
-  // Half-width sizes for the side-by-side pool maps; full width is kept for
-  // the before/after preview pane below.
+  // Half-width sizes for the side-by-side pool maps (overview).
   const sourceMapDisplay = useDisplaySize(sourceResult, POOL_MAP_W);
   const targetMapDisplay = useDisplaySize(targetResult, POOL_MAP_W);
-  const targetDisplay = useDisplaySize(targetResult);
 
   // ── Before/after preview ───────────────────────────────────────────
   // "Before" is the actual original target pixels — encode the target's
@@ -600,6 +600,13 @@ export function SmashTab() {
     if (!seg) return null;
     return rgbaToPngDataUrl(seg.data, seg.width, seg.height);
   }, [target.segInput]);
+
+  // The source image (actual pixels) for the editing canvas's Source tab.
+  const sourceImgUrl = useMemo(() => {
+    const seg = source.segInput;
+    if (!seg) return null;
+    return rgbaToPngDataUrl(seg.data, seg.width, seg.height);
+  }, [source.segInput]);
 
   // Live transfer preview. Once "Apply Smash" has been pressed (hasApplied),
   // the recolored result is recomputed whenever the segmentation, the
@@ -624,12 +631,13 @@ export function SmashTab() {
             .map(p => p.id),
         };
         const { data, width, height } = target.segInput!;
+        const splitFeather = buildSplitFeatherMask(width, height, targetSplits) ?? undefined;
         const recolored = transferColors(
           data, width, height,
           targetResult,
           source.segInput!.data, sourceResult,
           correspondence,
-          { strength, relax, preserveLuminance, richness, anchors: transferAnchors },
+          { strength, relax, preserveLuminance, richness, anchors: transferAnchors, splitFeather },
         );
         if (!cancelled) {
           setTransferUrl(rgbaToPngDataUrl(recolored, width, height));
@@ -643,7 +651,7 @@ export function SmashTab() {
       }
     }, 16);
     return () => { cancelled = true; clearTimeout(handle); };
-  }, [hasApplied, source.segInput, sourceResult, targetResult, target.segInput, matches, strength, relax, preserveLuminance, richness, transferAnchors]);
+  }, [hasApplied, source.segInput, sourceResult, targetResult, target.segInput, matches, strength, relax, preserveLuminance, richness, transferAnchors, targetSplits]);
 
   // Auto-smash. The manual "Apply Smash" button is gone — the preview starts
   // as soon as both images are segmented and a correspondence exists, and the
@@ -727,10 +735,11 @@ export function SmashTab() {
       id: `${side}-${Date.now().toString(36)}-${list.length}`,
       nx, ny, radius: splitRadius, partCount: splitParts,
       baseId: nextSplitBaseId(list),
+      feather: splitFeatherAmt,
     });
     if (side === "source") setSourceSplits(prev => [...prev, edit(prev)]);
     else setTargetSplits(prev => [...prev, edit(prev)]);
-  }, [splitRadius, splitParts]);
+  }, [splitRadius, splitParts, splitFeatherAmt]);
   const removeSplit = useCallback((side: "source" | "target", id: string) => {
     if (side === "source") setSourceSplits(prev => prev.filter(s => s.id !== id));
     else setTargetSplits(prev => prev.filter(s => s.id !== id));
@@ -862,12 +871,13 @@ export function SmashTab() {
           .map(p => p.id),
       };
 
+      const splitFeatherFull = buildSplitFeatherMask(fullW, fullH, targetSplits) ?? undefined;
       const recolored = transferColors(
         fullBuf.data, fullW, fullH,
         fullResult,
         source.segInput!.data, sourceResult,
         correspondence,
-        { strength, relax, preserveLuminance, richness, anchors: transferAnchors },
+        { strength, relax, preserveLuminance, richness, anchors: transferAnchors, splitFeather: splitFeatherFull },
       );
 
       // Place the result(s) over the target layer's region, not at (0,0).
@@ -950,6 +960,92 @@ export function SmashTab() {
     () => sortPools(targetPools, sortMode),
     [targetPools, sortMode],
   );
+
+  // ── Editing-canvas circles + views (source / target / output) ──────
+  // Circles unify anchors + splits behind one move/resize/remove protocol; the
+  // key encodes which entity it maps back to. Anchor source/target points and
+  // their radii, the sticky activeSource, and split circles all become
+  // drag-to-move / drag-to-resize on the big canvas.
+  const sourceCircles = useMemo<CanvasCircle[]>(() => {
+    const arr: CanvasCircle[] = anchors.map((a, i) => ({
+      key: `aS:${i}`, nx: a.sourceX, ny: a.sourceY, radius: a.sourceRadius,
+      color: colorForAnchor(i), movable: true, resizable: true, removable: true,
+    }));
+    if (activeSource) arr.push({
+      key: "active", nx: activeSource.nx, ny: activeSource.ny, radius: anchorRadius,
+      color: ACTIVE_SOURCE_COLOR, dashed: true, movable: true, resizable: true, removable: true,
+    });
+    for (const s of sourceSplits) arr.push({
+      key: `sS:${s.id}`, nx: s.nx, ny: s.ny, radius: s.radius,
+      color: SPLIT_COLOR, dashed: true, movable: true, resizable: true, removable: true,
+      innerFrac: (s.feather ?? 0) > 0 ? 1 - (s.feather ?? 0) : undefined,
+    });
+    return arr;
+  }, [anchors, activeSource, anchorRadius, sourceSplits]);
+
+  const targetCircles = useMemo<CanvasCircle[]>(() => {
+    const arr: CanvasCircle[] = anchors.map((a, i) => ({
+      key: `aT:${i}`, nx: a.targetX, ny: a.targetY, radius: a.targetRadius,
+      color: colorForAnchor(i), movable: true, resizable: true, removable: true,
+    }));
+    for (const s of targetSplits) arr.push({
+      key: `sT:${s.id}`, nx: s.nx, ny: s.ny, radius: s.radius,
+      color: SPLIT_COLOR, dashed: true, movable: true, resizable: true, removable: true,
+      innerFrac: (s.feather ?? 0) > 0 ? 1 - (s.feather ?? 0) : undefined,
+    });
+    return arr;
+  }, [anchors, targetSplits]);
+
+  const canvasViews = useMemo<CanvasView[]>(() => [
+    {
+      id: "source", label: "Source",
+      url: sourceImgUrl, imgW: source.segInput?.width ?? 1, imgH: source.segInput?.height ?? 1,
+      circles: sourceCircles, placeholder: "Pick a source layer.",
+      onPlace: sourceResult ? handleSourceMapClick : undefined,
+    },
+    {
+      id: "target", label: "Target",
+      url: beforeUrl, imgW: target.segInput?.width ?? 1, imgH: target.segInput?.height ?? 1,
+      circles: targetCircles, placeholder: "Pick a target layer.",
+      onPlace: targetResult ? handleTargetMapClick : undefined,
+    },
+    {
+      id: "output", label: "Output",
+      url: transferUrl, imgW: target.segInput?.width ?? 1, imgH: target.segInput?.height ?? 1,
+      circles: [], placeholder: "Set source + target — the recolored output appears here.",
+    },
+  ], [sourceImgUrl, beforeUrl, transferUrl, source.segInput, target.segInput,
+      sourceCircles, targetCircles, sourceResult, targetResult,
+      handleSourceMapClick, handleTargetMapClick]);
+
+  const decodeKey = (key: string): { tag: string; id: string } => {
+    const sep = key.indexOf(":");
+    return sep < 0 ? { tag: key, id: "" } : { tag: key.slice(0, sep), id: key.slice(sep + 1) };
+  };
+  const onCanvasMove = useCallback((_view: string, key: string, nx: number, ny: number) => {
+    if (key === "active") { moveActiveSource(nx, ny); return; }
+    const { tag, id } = decodeKey(key);
+    if (tag === "aS") moveAnchorSource(parseInt(id, 10), nx, ny);
+    else if (tag === "aT") moveAnchorTarget(parseInt(id, 10), nx, ny);
+    else if (tag === "sS") patchSplit("source", id, { nx, ny });
+    else if (tag === "sT") patchSplit("target", id, { nx, ny });
+  }, [moveActiveSource, moveAnchorSource, moveAnchorTarget, patchSplit]);
+  const onCanvasResize = useCallback((_view: string, key: string, radius: number) => {
+    const r = Math.max(0.02, radius);
+    if (key === "active") { setAnchorRadius(r); return; }
+    const { tag, id } = decodeKey(key);
+    if (tag === "aS") patchAnchorAt(parseInt(id, 10), { sourceRadius: r });
+    else if (tag === "aT") patchAnchorAt(parseInt(id, 10), { targetRadius: r });
+    else if (tag === "sS") patchSplit("source", id, { radius: r });
+    else if (tag === "sT") patchSplit("target", id, { radius: r });
+  }, [setAnchorRadius, patchAnchorAt, patchSplit]);
+  const onCanvasRemove = useCallback((_view: string, key: string) => {
+    if (key === "active") { clearActiveSource(); return; }
+    const { tag, id } = decodeKey(key);
+    if (tag === "aS" || tag === "aT") removeAnchor(parseInt(id, 10));
+    else if (tag === "sS") removeSplit("source", id);
+    else if (tag === "sT") removeSplit("target", id);
+  }, [clearActiveSource, removeAnchor, removeSplit]);
 
   return (
     <div style={{ padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1095,18 +1191,26 @@ export function SmashTab() {
             border: "1px solid #4a3a1a", borderRadius: 3,
           }}>
             <div style={{ fontSize: 9, color: "#cdb892", lineHeight: 1.4 }}>
-              Click a pool map to drop a split. The circle re-clusters that area
-              into edge-following sub-pools — un-merges things the sliders fuse
-              (e.g. a face in shadow from a collar in shadow). Each part shows up
-              in the correspondence list to map to its own donor. Splits persist
-              when you change segmentation controls.
+              Click a pool map (or the Source/Target canvas) to drop a split. The
+              circle re-clusters that area into edge-following sub-pools — un-merges
+              things the sliders fuse (e.g. a face in shadow from a collar in
+              shadow). Each part shows up in the correspondence list to map to its
+              own donor. Drag a circle on the canvas to move it, its square handle
+              to resize. Splits persist when you change segmentation controls.
             </div>
             <Control
               label="New split radius"
-              title="Size of the circle for newly-dropped splits (fraction of the longest image edge)."
+              title="Size of the circle for newly-dropped splits (fraction of the longest image edge). Resize existing splits by dragging their handle on the canvas."
               min={0.03} max={0.6} step={0.01}
               value={splitRadius} onChange={setSplitRadius}
               display={splitRadius.toFixed(2)}
+            />
+            <Control
+              label="New split feather"
+              title="Soft edge for newly-dropped splits. 0 = hard. Higher fades the split's recolor toward the original across an outer band, so it melts into its surroundings."
+              min={0} max={1} step={0.05}
+              value={splitFeatherAmt} onChange={setSplitFeatherAmt}
+              display={splitFeatherAmt.toFixed(2)}
             />
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: 10, color: "#cccccc", flex: 1 }}
@@ -1127,19 +1231,29 @@ export function SmashTab() {
                   ...targetSplits.map(s => ({ side: "target" as const, s })),
                 ].map(({ side, s }) => (
                   <div key={`${side}-${s.id}`} style={{
-                    display: "flex", alignItems: "center", gap: 6,
+                    display: "flex", flexDirection: "column", gap: 3,
                     fontSize: 9, color: "#cccccc",
                     background: "#1f1f1f", border: "1px solid #3a3a3a",
                     borderRadius: 2, padding: "3px 6px",
                   }}>
-                    <span style={{ width: 42, color: side === "source" ? "#8fb5e8" : "#e8b58f" }}>{side}</span>
-                    <span style={{ flex: 1 }}>{s.partCount} parts · r {s.radius.toFixed(2)}</span>
-                    <div onClick={() => patchSplit(side, s.id, { partCount: Math.max(2, s.partCount - 1) })}
-                      title="Fewer parts" style={{ padding: "0 7px", fontSize: 11, borderRadius: 2, border: "1px solid #4a4a4a", background: "#333", color: "#ddd", cursor: "pointer", userSelect: "none" }}>−</div>
-                    <div onClick={() => patchSplit(side, s.id, { partCount: Math.min(8, s.partCount + 1) })}
-                      title="More parts" style={{ padding: "0 7px", fontSize: 11, borderRadius: 2, border: "1px solid #4a4a4a", background: "#333", color: "#ddd", cursor: "pointer", userSelect: "none" }}>+</div>
-                    <div onClick={() => removeSplit(side, s.id)}
-                      title="Remove this split" style={{ padding: "0 7px", fontSize: 11, borderRadius: 2, border: "1px solid #6a4a4a", background: "#3a2a2a", color: "#e8b0b0", cursor: "pointer", userSelect: "none" }}>×</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ width: 42, color: side === "source" ? "#8fb5e8" : "#e8b58f" }}>{side}</span>
+                      <span style={{ flex: 1 }}>{s.partCount}p · r{s.radius.toFixed(2)} · f{(s.feather ?? 0).toFixed(2)}</span>
+                      <div onClick={() => patchSplit(side, s.id, { partCount: Math.max(2, s.partCount - 1) })}
+                        title="Fewer parts" style={{ padding: "0 7px", fontSize: 11, borderRadius: 2, border: "1px solid #4a4a4a", background: "#333", color: "#ddd", cursor: "pointer", userSelect: "none" }}>−</div>
+                      <div onClick={() => patchSplit(side, s.id, { partCount: Math.min(8, s.partCount + 1) })}
+                        title="More parts" style={{ padding: "0 7px", fontSize: 11, borderRadius: 2, border: "1px solid #4a4a4a", background: "#333", color: "#ddd", cursor: "pointer", userSelect: "none" }}>+</div>
+                      <div onClick={() => removeSplit(side, s.id)}
+                        title="Remove this split" style={{ padding: "0 7px", fontSize: 11, borderRadius: 2, border: "1px solid #6a4a4a", background: "#3a2a2a", color: "#e8b0b0", cursor: "pointer", userSelect: "none" }}>×</div>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ width: 42, opacity: 0.7 }}>feather</span>
+                      <input type="range" min={0} max={1} step={0.05}
+                        value={s.feather ?? 0}
+                        onChange={(e) => patchSplit(side, s.id, { feather: parseFloat(e.target.value) })}
+                        title="Soft edge for this split."
+                        style={{ flex: 1, margin: 0, cursor: "pointer" }} />
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1148,53 +1262,18 @@ export function SmashTab() {
         )}
       </div>
 
-      {/* Before/after recolored preview pane — relocated up here from the
-          COLOR TRANSFER section so it stays visible regardless of which tab
-          is active. The show-before/after toggle sits right in the header next
-          to the pane, so it can be flicked without leaving any tab. */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 9, color: "#999", letterSpacing: 0.3 }}>
-            {transferUrl
-              ? (showAfter ? "After — recolored target" : "Before — original target")
-              : "Preview"}
-          </span>
-          <div style={{ flex: 1 }} />
-          {transferUrl && (
-            <div
-              onClick={() => setShowAfter(s => !s)}
-              title="Swap the preview between the original target and the recolored result."
-              style={{
-                padding: "3px 9px", fontSize: 10, borderRadius: 2,
-                border: "1px solid #4a4a4a", background: "#3a3a3a",
-                color: "#cccccc", cursor: "pointer", userSelect: "none",
-              }}
-            >
-              {showAfter ? "Show before" : "Show after"}
-            </div>
-          )}
-        </div>
-        <div style={{
-          position: "relative", alignSelf: "center",
-          width: targetDisplay.w || PANEL_WIDTH, minHeight: 60,
-          display: "flex", alignItems: "center", justifyContent: "center",
-          background: "#1f1f1f", border: "1px solid #3a3a3a", borderRadius: 2,
-        }}>
-          {transferUrl ? (
-            <img
-              src={(showAfter ? transferUrl : beforeUrl) ?? undefined}
-              style={{
-                width: targetDisplay.w, height: targetDisplay.h,
-                imageRendering: "pixelated", display: "block",
-              }}
-            />
-          ) : (
-            <div style={{ padding: 24, fontSize: 10, opacity: 0.5 }}>
-              Pick a source and target layer — the recolored preview generates automatically.
-            </div>
-          )}
-        </div>
-      </div>
+      {/* Big editing canvas: Source / Target / Output tabs with zoom + pan and
+          draggable/resizable circle overlays. Replaces the old before/after
+          pane — "before" is the Target tab, "after" is the Output tab — and is
+          the high-resolution surface for tuning anchor + split radii. */}
+      <SmashEditCanvas
+        views={canvasViews}
+        activeId={canvasTab}
+        onActiveChange={(id) => setCanvasTab(id as "source" | "target" | "output")}
+        onMoveCircle={onCanvasMove}
+        onResizeCircle={onCanvasResize}
+        onRemoveCircle={onCanvasRemove}
+      />
 
       {segError && (
         <div style={{ fontSize: 10, color: "#d8867d" }}>Segmentation failed: {segError}</div>

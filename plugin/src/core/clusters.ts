@@ -112,6 +112,11 @@ export interface SplitEdit {
   radius: number;      // normalized radius as a fraction of max(width,height), 0..1
   partCount: number;   // how many sub-pools to split the covered pixels into (≥2)
   baseId: number;      // start of this edit's reserved pool-id range
+  // Soft edge, 0..1 (optional, default 0 = hard). The split still relabels every
+  // pixel inside the full radius; feather only attenuates the RECOLOR in an outer
+  // band [radius·(1−feather), radius] so the split fades into the original toward
+  // its rim instead of swapping donor abruptly. See buildSplitFeatherMask.
+  feather?: number;
 }
 
 // Stable id space for split parts — far above normal pool ids (which stay small
@@ -435,6 +440,52 @@ export function applySplits(
 
   const pools = buildPoolsFromLabels(rgba, width, height, labels, opts.subPaletteSize);
   return { width, height, labels, pools };
+}
+
+// Build a per-pixel recolor-attenuation mask for feathered splits, or null when
+// no edit has feather. The transfer multiplies its blend strength by this mask,
+// so a value of 1 = full recolor and 0 = keep the original pixel. Each feathered
+// split ramps 1→0 (smoothstep) across its outer band [innerR, outerR]; pixels
+// inside innerR or outside outerR are left at 1. Overlapping feathers take the
+// strongest attenuation (min). Pure geometry → regenerate at any resolution
+// (preview vs full-res output) and it stays aligned.
+export function buildSplitFeatherMask(
+  width: number,
+  height: number,
+  edits: SplitEdit[],
+): Float32Array | null {
+  const active = edits.filter((e) => (e.feather ?? 0) > 0);
+  if (active.length === 0) return null;
+
+  const mask = new Float32Array(width * height).fill(1);
+  const maxEdge = Math.max(width, height);
+  for (const e of active) {
+    const feather = clamp01(e.feather ?? 0);
+    const cx = e.nx * width;
+    const cy = e.ny * height;
+    const outerR = Math.max(1, e.radius * maxEdge);
+    const innerR = outerR * (1 - feather);
+    const band = Math.max(1e-6, outerR - innerR);
+
+    const x0 = Math.max(0, Math.floor(cx - outerR));
+    const x1 = Math.min(width - 1, Math.ceil(cx + outerR));
+    const y0 = Math.max(0, Math.floor(cy - outerR));
+    const y1 = Math.min(height - 1, Math.ceil(cy + outerR));
+    for (let y = y0; y <= y1; y++) {
+      const dy = y - cy;
+      for (let x = x0; x <= x1; x++) {
+        const dx = x - cx;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        if (d <= innerR || d >= outerR) continue; // full recolor / outside band
+        const t = (d - innerR) / band;            // 0 at inner → 1 at outer
+        const w = 1 - t;                           // 1 at inner → 0 at outer
+        const sw = w * w * (3 - 2 * w);            // smoothstep for a soft falloff
+        const i = y * width + x;
+        if (sw < mask[i]) mask[i] = sw;
+      }
+    }
+  }
+  return mask;
 }
 
 // ────────── pass 1: segment a pixel set into pools ──────────
