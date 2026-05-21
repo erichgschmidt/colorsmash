@@ -16,7 +16,10 @@ import {
   macroInfoMap,
   matchMacros,
   buildMacroConstrainedCorrespondence,
+  macroSuggestions,
+  nearestMacroFor,
 } from "./macro";
+import type { MacroGroup } from "./macro";
 import { matchPools } from "./match";
 
 // ────────── fixtures ──────────
@@ -468,5 +471,54 @@ describe("buildMacroConstrainedCorrespondence", () => {
     // Still total: every target pool covered exactly once.
     const tgtIds = corr.matches.map((m) => m.targetPoolId).sort((a, b) => a - b);
     expect(tgtIds).toEqual([200, 210]);
+  });
+});
+
+describe("macroSuggestions / nearestMacroFor", () => {
+  // Macro 0 = two heavy reds + one light BLUE outlier (contamination).
+  // Macro 1 = a red-ish pool (belongs near macro 0) + a heavy blue.
+  const pools: Pool[] = [
+    makePool(1, { labL: 50, labA: 40, labB: 25, weight: 0.30 }),  // red (m0)
+    makePool(2, { labL: 52, labA: 38, labB: 22, weight: 0.30 }),  // red (m0)
+    makePool(3, { labL: 45, labA: -5, labB: -35, weight: 0.04 }), // blue outlier (m0)
+    makePool(10, { labL: 50, labA: 41, labB: 24, weight: 0.10 }), // red-ish (m1) — should belong to m0
+    makePool(11, { labL: 40, labA: -8, labB: -38, weight: 0.30 }),// blue (m1)
+  ];
+  const macros: MacroGroup[] = [
+    { id: 0, name: "M0", poolIds: [1, 2, 3] },
+    { id: 1, name: "M1", poolIds: [10, 11] },
+  ];
+
+  it("flags a far member as contaminating and a near foreign pool as a candidate", () => {
+    const sug = macroSuggestions(0, macros, pools);
+    // The blue outlier (3) is far from the red aggregate → contaminating; the
+    // two reds are not.
+    expect(sug.contaminating).toContain(3);
+    expect(sug.contaminating).not.toContain(1);
+    expect(sug.contaminating).not.toContain(2);
+    // The red-ish pool 10 (currently in macro 1) sits near macro 0 → candidate.
+    expect(sug.candidates.map((c) => c.poolId)).toContain(10);
+    const cand = sug.candidates.find((c) => c.poolId === 10)!;
+    expect(cand.fromMacroId).toBe(1);
+    // The blue pool 11 is NOT near macro 0 → not a candidate.
+    expect(sug.candidates.map((c) => c.poolId)).not.toContain(11);
+  });
+
+  it("macroSuggestions returns empty for an unknown macro id", () => {
+    const sug = macroSuggestions(99, macros, pools);
+    expect(sug.contaminating).toEqual([]);
+    expect(sug.candidates).toEqual([]);
+  });
+
+  it("nearestMacroFor rehomes a pool to the closest OTHER macro", () => {
+    // Pool 10 is red; excluding its own macro (1), the nearest is the red M0.
+    expect(nearestMacroFor(10, macros, pools, 1)).toBe(0);
+    // The blue outlier 3, removed from M0, is nearest to the blue-heavy M1.
+    expect(nearestMacroFor(3, macros, pools, 0)).toBe(1);
+  });
+
+  it("nearestMacroFor returns null when there is no other macro", () => {
+    const single: MacroGroup[] = [{ id: 0, name: "Only", poolIds: [1, 2, 3] }];
+    expect(nearestMacroFor(1, single, pools, 0)).toBeNull();
   });
 });

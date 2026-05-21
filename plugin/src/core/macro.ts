@@ -216,6 +216,82 @@ export function matchMacros(
   return out;
 }
 
+// ────────── membership suggestions (contamination / missing) ──────────
+
+export interface MacroSuggestion {
+  // Member pool ids that sit far from the macro's aggregate colour — likely
+  // contamination (something that wandered into the wrong group). Worst first.
+  contaminating: number[];
+  // Pools currently in OTHER macros that sit close to this macro's aggregate —
+  // likely missing members. Nearest first.
+  candidates: { poolId: number; fromMacroId: number }[];
+}
+
+// A member farther than this (Lab units) from its macro's aggregate is flagged
+// as possible contamination; a non-member nearer than CANDIDATE_LAB is offered
+// as a possible missing member.
+const CONTAM_LAB = 32;
+const CANDIDATE_LAB = 22;
+
+function labDistance(d: PoolDescriptor, L: number, a: number, b: number): number {
+  const dl = d.labL - L, da = d.labA - a, db = d.labB - b;
+  return Math.sqrt(dl * dl + da * da + db * db);
+}
+
+// For one macro: which members look contaminating, and which pools from other
+// macros look like they belong here. Pure ranking by Lab proximity to the
+// macro's weighted aggregate — drives the +add / −remove suggestions in the UI.
+export function macroSuggestions(
+  macroId: number,
+  macros: MacroGroup[],
+  pools: Pool[],
+): MacroSuggestion {
+  const byId = mapById(pools);
+  const macro = macros.find(m => m.id === macroId);
+  if (!macro) return { contaminating: [], candidates: [] };
+  const agg = macroDescriptor(macro.poolIds, byId);
+  const memberSet = new Set(macro.poolIds);
+
+  const contaminating = macro.poolIds
+    .map(id => ({ id, dist: byId.has(id) ? labDistance(byId.get(id)!.descriptor, agg.labL, agg.labA, agg.labB) : 0 }))
+    .filter(x => x.dist > CONTAM_LAB)
+    .sort((p, q) => q.dist - p.dist)
+    .map(x => x.id);
+
+  const poolToMacro = new Map<number, number>();
+  for (const m of macros) for (const pid of m.poolIds) poolToMacro.set(pid, m.id);
+
+  const candidates = pools
+    .filter(p => !memberSet.has(p.id))
+    .map(p => ({ poolId: p.id, fromMacroId: poolToMacro.get(p.id) ?? -1, dist: labDistance(p.descriptor, agg.labL, agg.labA, agg.labB) }))
+    .filter(x => x.dist < CANDIDATE_LAB)
+    .sort((p, q) => p.dist - q.dist)
+    .map(x => ({ poolId: x.poolId, fromMacroId: x.fromMacroId }));
+
+  return { contaminating, candidates };
+}
+
+// The macro (excluding `excludeMacroId`) whose aggregate is nearest to a pool —
+// where a "−remove"d pool should be rehomed.
+export function nearestMacroFor(
+  poolId: number,
+  macros: MacroGroup[],
+  pools: Pool[],
+  excludeMacroId: number,
+): number | null {
+  const byId = mapById(pools);
+  const p = byId.get(poolId);
+  if (!p) return null;
+  let best: number | null = null, bestD = Infinity;
+  for (const m of macros) {
+    if (m.id === excludeMacroId || m.poolIds.length === 0) continue;
+    const agg = macroDescriptor(m.poolIds, byId);
+    const d = labDistance(p.descriptor, agg.labL, agg.labA, agg.labB);
+    if (d < bestD) { bestD = d; best = m.id; }
+  }
+  return best;
+}
+
 // Build a per-pool correspondence CONSTRAINED by the macro matching: each target
 // pool is matched only against the source pools inside its macro's matched
 // source macro. Target macros with no matched source macro (or an empty one)

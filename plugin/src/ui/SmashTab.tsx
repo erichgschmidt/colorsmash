@@ -37,6 +37,7 @@ import { SmashEditCanvas, CanvasView, CanvasCircle } from "./SmashEditCanvas";
 import { SmashMacroPanel } from "./SmashMacroPanel";
 import {
   seedMacroGroups, matchMacros, buildMacroConstrainedCorrespondence, macroInfoMap,
+  macroSuggestions, nearestMacroFor,
   type MacroGroup,
 } from "../core/macro";
 import { PoolMatch, Correspondence } from "../core/match";
@@ -299,6 +300,8 @@ export function SmashTab() {
   const [sourceMacros, setSourceMacros] = useState<MacroGroup[]>([]);
   const [targetMacros, setTargetMacros] = useState<MacroGroup[]>([]);
   const [macroMatch, setMacroMatch] = useState<Map<number, number>>(new Map());
+  // Which target macro's editor is open in the macro panel (single-accordion).
+  const [expandedMacroId, setExpandedMacroId] = useState<number | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [segError, setSegError] = useState<string | null>(null);
 
@@ -625,26 +628,15 @@ export function SmashTab() {
         // → deterministic, so the splits persist across this re-segmentation.
         const sRes = applySplits(sBase, source.segInput!.data, sourceSplits, opts);
         const tRes = applySplits(tBase, target.segInput!.data, targetSplits, opts);
-        // Macro foundation: cluster each side's pools into macro groups, match
-        // macro→macro, then build a macro-CONSTRAINED per-pool correspondence so
-        // each target pool only draws a donor from its matched source macro.
-        const sMacros = seedMacroGroups(sRes.pools, macroCount);
-        const tMacros = seedMacroGroups(tRes.pools, macroCount);
-        const mMatch = matchMacros(sMacros, sRes.pools, tMacros, tRes.pools);
-        const corr = buildMacroConstrainedCorrespondence(
-          sMacros, sRes.pools, tMacros, tRes.pools, mMatch,
-        );
         if (!cancelled) {
           setSourceResult(sRes);
           setTargetResult(tRes);
           setTargetBase(tBase); // no-split base, for feather blending
-          setSourceMacros(sMacros);
-          setTargetMacros(tMacros);
-          setMacroMatch(mMatch);
-          setMatches(corr.matches.map(m => ({ ...m })));
-          setAutoMatches(corr.matches.map(m => ({ ...m })));
-          setSelectedTargetId(null);
         }
+        // Macro seeding + the macro-constrained correspondence are derived in
+        // their own effects below — so changing the macro count (or hand-editing
+        // macro membership/donors) reflows the correspondence WITHOUT a full,
+        // expensive re-segmentation.
       } catch (e: any) {
         if (!cancelled) {
           setSourceResult(null);
@@ -659,7 +651,44 @@ export function SmashTab() {
     return () => { cancelled = true; clearTimeout(handle); };
     // splitGeomSig (not the split arrays) so feather-only edits skip re-segment.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source.segInput, target.segInput, poolCount, edgePreservation, regionCleanup, colorVsValueBias, neutralProtection, poolContinuity, subPaletteSize, splitGeomSig, macroCount]);
+  }, [source.segInput, target.segInput, poolCount, edgePreservation, regionCleanup, colorVsValueBias, neutralProtection, poolContinuity, subPaletteSize, splitGeomSig]);
+
+  // ── Macro seeding ──────────────────────────────────────────────────
+  // Auto-cluster each side's pools into ~macroCount macro groups and auto-match
+  // them. Runs when the segmentation results or the macro count change — NOT on
+  // a transfer-slider change, and not on a hand-edit (those update the macro
+  // state directly and are preserved until the next re-seed). Re-seeding resets
+  // any manual membership/donor edits, which is the intended "fresh start".
+  useEffect(() => {
+    if (!sourceResult || !targetResult) {
+      setSourceMacros([]); setTargetMacros([]); setMacroMatch(new Map());
+      return;
+    }
+    const sMacros = seedMacroGroups(sourceResult.pools, macroCount);
+    const tMacros = seedMacroGroups(targetResult.pools, macroCount);
+    const mMatch = matchMacros(sMacros, sourceResult.pools, tMacros, targetResult.pools);
+    setSourceMacros(sMacros);
+    setTargetMacros(tMacros);
+    setMacroMatch(mMatch);
+  }, [sourceResult, targetResult, macroCount]);
+
+  // ── Macro-constrained correspondence ───────────────────────────────
+  // Rebuilt whenever the macros, the macro→macro match, or the segmentation
+  // change — including hand-edits to macro membership/donors. Resets the
+  // editable per-pool `matches` to this auto result (manual per-pool remaps are
+  // intentionally cleared when the macro foundation changes).
+  useEffect(() => {
+    if (!sourceResult || !targetResult || sourceMacros.length === 0 || targetMacros.length === 0) {
+      setMatches([]); setAutoMatches([]); setSelectedTargetId(null);
+      return;
+    }
+    const corr = buildMacroConstrainedCorrespondence(
+      sourceMacros, sourceResult.pools, targetMacros, targetResult.pools, macroMatch,
+    );
+    setMatches(corr.matches.map(m => ({ ...m })));
+    setAutoMatches(corr.matches.map(m => ({ ...m })));
+    setSelectedTargetId(null);
+  }, [sourceMacros, targetMacros, macroMatch, sourceResult, targetResult]);
 
   // ── Lookups ────────────────────────────────────────────────────────
   const sourcePoolsById = useMemo(() => {
@@ -1116,6 +1145,41 @@ export function SmashTab() {
   const renameMacro = useCallback((id: number, name: string) => {
     setTargetMacros(prev => prev.map(m => (m.id === id ? { ...m, name } : m)));
   }, []);
+  // Move a TARGET pool into `toMacroId` (and out of whatever macro held it),
+  // keeping the exactly-one-membership invariant. Drives both +add and rehome.
+  const movePoolToMacro = useCallback((poolId: number, toMacroId: number) => {
+    setTargetMacros(prev => prev.map(m => ({
+      ...m,
+      poolIds: m.id === toMacroId
+        ? (m.poolIds.includes(poolId) ? m.poolIds : [...m.poolIds, poolId])
+        : m.poolIds.filter(id => id !== poolId),
+    })));
+  }, []);
+  // "−remove" a member → rehome it to the nearest OTHER macro (every pool must
+  // belong to exactly one macro).
+  const removePoolFromMacro = useCallback((poolId: number, fromMacroId: number) => {
+    if (!targetResult) return;
+    const dest = nearestMacroFor(poolId, targetMacros, targetResult.pools, fromMacroId);
+    if (dest != null) movePoolToMacro(poolId, dest);
+  }, [targetMacros, targetResult, movePoolToMacro]);
+  const setMacroDonor = useCallback((targetMacroId: number, sourceMacroId: number) => {
+    setMacroMatch(prev => {
+      const next = new Map(prev);
+      next.set(targetMacroId, sourceMacroId);
+      return next;
+    });
+  }, []);
+  // Color + weight chip for a TARGET pool (member / candidate display).
+  const targetPoolChip = useCallback((poolId: number) => {
+    const p = targetResult?.pools.find(pp => pp.id === poolId);
+    if (!p) return undefined;
+    return { r: p.descriptor.r, g: p.descriptor.g, b: p.descriptor.b, weightPct: Math.round(p.descriptor.weight * 100) };
+  }, [targetResult]);
+  // Contamination / missing suggestions for one target macro.
+  const suggestionsFor = useCallback((macroId: number) => {
+    if (!targetResult) return { contaminating: [], candidates: [] };
+    return macroSuggestions(macroId, targetMacros, targetResult.pools);
+  }, [targetMacros, targetResult]);
 
   // ── Editing-canvas circles + views (source / target / output) ──────
   // Circles unify anchors + splits behind one move/resize/remove protocol; the
@@ -1853,11 +1917,19 @@ export function SmashTab() {
             <SmashMacroPanel
               targetMacros={targetMacros}
               targetMacroInfo={targetMacroInfo}
+              sourceMacros={sourceMacros}
               sourceMacroInfo={sourceMacroInfo}
               macroMatch={macroMatch}
               macroCount={macroCount}
               onReseed={setMacroCount}
               onRenameMacro={renameMacro}
+              onSetDonor={setMacroDonor}
+              targetPoolChip={targetPoolChip}
+              suggestionsFor={suggestionsFor}
+              onAddPoolToMacro={movePoolToMacro}
+              onRemovePoolFromMacro={removePoolFromMacro}
+              expandedMacroId={expandedMacroId}
+              onToggleExpand={setExpandedMacroId}
             />
 
             {/* Donor-preview toggle + sort selector + reset */}
