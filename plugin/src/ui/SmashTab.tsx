@@ -29,7 +29,10 @@ import { Dropdown } from "./Dropdown";
 import { downsampleToMaxEdge } from "../core/downsample";
 import { rgbaToPngDataUrl } from "./encodePng";
 import { matchStyles } from "./MatchSliders";
-import { segmentImage, SegmentResult, Pool } from "../core/clusters";
+import {
+  segmentImage, applySplits, SegmentResult, Pool,
+  SplitEdit, SPLIT_ID_BASE, SPLIT_ID_STRIDE,
+} from "../core/clusters";
 import { matchPools, PoolMatch, Correspondence } from "../core/match";
 import { transferColors, vectorizeUpscaleLabels, type TransferAnchor } from "../core/transfer";
 import { analyzeAnchor, type AnchorAnalysis } from "../core/anchorAnalysis";
@@ -53,7 +56,7 @@ type SrcMode = "layer" | "selection" | "folder";
 // outside the anchors array. `dashed` is purely cosmetic (used by activeSource
 // to read as pending/uncommitted).
 type PoolMapDot = {
-  kind: "source" | "target" | "activeSource";
+  kind: "source" | "target" | "activeSource" | "split";
   anchorIndex?: number;
   nx: number;
   ny: number;
@@ -273,6 +276,23 @@ export function SmashTab() {
   // than a Set so it degrades gracefully as indices shift on removal.
   const [expandedAnchor, setExpandedAnchor] = useState<number | null>(null);
 
+  // ── Selection refine (intelligent split) ──
+  // Manual split edits per side. Each is a circle that re-clusters the raw
+  // pixels under it into `partCount` edge-following sub-pools — the escape
+  // hatch for when segmentation fuses two things that no slider separates
+  // (face-in-shadow + collar-in-shadow). Applied AFTER segmentImage and BEFORE
+  // matchPools, so the split parts flow through correspondence/transfer/output
+  // automatically. Edits are pure geometry, so they survive re-segmentation.
+  const [sourceSplits, setSourceSplits] = useState<SplitEdit[]>([]);
+  const [targetSplits, setTargetSplits] = useState<SplitEdit[]>([]);
+  // Which surface a pool-map click drives: drop a focal anchor (default) or
+  // drop a split circle. The pool maps are always visible, so this toggle lives
+  // up with them rather than inside a tab.
+  const [poolMapTool, setPoolMapTool] = useState<"anchor" | "split">("anchor");
+  // Defaults seeded into NEW split circles; each split keeps its own values.
+  const [splitRadius, setSplitRadius] = useState(0.15);
+  const [splitParts, setSplitParts] = useState(2);
+
   // ── Per-anchor mini-Smash analyses ──
   // Each anchor in the list above is fed through analyzeAnchor (which runs a
   // local segmentation on both sides of the anchor's circle, matches the
@@ -401,6 +421,25 @@ export function SmashTab() {
     [anchors],
   );
 
+  // Split circles as map overlays — rendered non-interactively (managed from
+  // the split list), dashed amber to read as "selection edit", distinct from
+  // the per-anchor coloured rings.
+  const SPLIT_COLOR = "#f5a623";
+  const sourceSplitDots = useMemo<PoolMapDot[]>(
+    () => sourceSplits.map((s) => ({
+      kind: "split", nx: s.nx, ny: s.ny, radius: s.radius,
+      color: SPLIT_COLOR, dashed: true,
+    })),
+    [sourceSplits],
+  );
+  const targetSplitDots = useMemo<PoolMapDot[]>(
+    () => targetSplits.map((s) => ({
+      kind: "split", nx: s.nx, ny: s.ny, radius: s.radius,
+      color: SPLIT_COLOR, dashed: true,
+    })),
+    [targetSplits],
+  );
+
   // ── Color transfer (in-panel preview) ─────────────────────────────
   // Blend amount fed to transferColors — 0 = unchanged target, 1 = full donor.
   const [strength, setStrength] = useState(1.0);
@@ -465,8 +504,12 @@ export function SmashTab() {
       if (cancelled) return;
       try {
         const opts = { poolCount, edgePreservation, regionCleanup, colorVsValueBias, subPaletteSize, neutralProtection, poolContinuity };
-        const sRes = segmentImage(source.segInput!.data, source.segInput!.width, source.segInput!.height, opts);
-        const tRes = segmentImage(target.segInput!.data, target.segInput!.width, target.segInput!.height, opts);
+        const sBase = segmentImage(source.segInput!.data, source.segInput!.width, source.segInput!.height, opts);
+        const tBase = segmentImage(target.segInput!.data, target.segInput!.width, target.segInput!.height, opts);
+        // Re-apply manual split edits onto the fresh segmentation. Pure geometry
+        // → deterministic, so the splits persist across this re-segmentation.
+        const sRes = applySplits(sBase, source.segInput!.data, sourceSplits, opts);
+        const tRes = applySplits(tBase, target.segInput!.data, targetSplits, opts);
         const corr = matchPools(sRes.pools, tRes.pools);
         if (!cancelled) {
           setSourceResult(sRes);
@@ -486,7 +529,7 @@ export function SmashTab() {
       }
     }, 16);
     return () => { cancelled = true; clearTimeout(handle); };
-  }, [source.segInput, target.segInput, poolCount, edgePreservation, regionCleanup, colorVsValueBias, neutralProtection, poolContinuity, subPaletteSize]);
+  }, [source.segInput, target.segInput, poolCount, edgePreservation, regionCleanup, colorVsValueBias, neutralProtection, poolContinuity, subPaletteSize, sourceSplits, targetSplits]);
 
   // ── Lookups ────────────────────────────────────────────────────────
   const sourcePoolsById = useMemo(() => {
@@ -670,6 +713,46 @@ export function SmashTab() {
     setAnchors(prev => [...prev, pair]);
     // activeSource intentionally NOT cleared — sticky source persists.
   }, [targetResult, activeSource, anchorRadius]);
+
+  // ── Split tool handlers ──
+  // Next free baseId for a side's split list: one stride past the current max,
+  // so deleting then re-adding never reuses a live id range.
+  const nextSplitBaseId = (list: SplitEdit[]): number => {
+    let m = SPLIT_ID_BASE - SPLIT_ID_STRIDE;
+    for (const s of list) if (s.baseId > m) m = s.baseId;
+    return m + SPLIT_ID_STRIDE;
+  };
+  const addSplit = useCallback((side: "source" | "target", nx: number, ny: number) => {
+    const edit = (list: SplitEdit[]): SplitEdit => ({
+      id: `${side}-${Date.now().toString(36)}-${list.length}`,
+      nx, ny, radius: splitRadius, partCount: splitParts,
+      baseId: nextSplitBaseId(list),
+    });
+    if (side === "source") setSourceSplits(prev => [...prev, edit(prev)]);
+    else setTargetSplits(prev => [...prev, edit(prev)]);
+  }, [splitRadius, splitParts]);
+  const removeSplit = useCallback((side: "source" | "target", id: string) => {
+    if (side === "source") setSourceSplits(prev => prev.filter(s => s.id !== id));
+    else setTargetSplits(prev => prev.filter(s => s.id !== id));
+  }, []);
+  const patchSplit = useCallback((side: "source" | "target", id: string, patch: Partial<SplitEdit>) => {
+    const map = (prev: SplitEdit[]) => prev.map(s => (s.id === id ? { ...s, ...patch } : s));
+    if (side === "source") setSourceSplits(map);
+    else setTargetSplits(map);
+  }, []);
+  const clearAllSplits = () => { setSourceSplits([]); setTargetSplits([]); };
+
+  // Pool-map click dispatchers — route to the anchor or split workflow based on
+  // the active tool. The pane only knows "a click happened here".
+  const handleSourceMapClick = useCallback((nx: number, ny: number) => {
+    if (poolMapTool === "split") addSplit("source", nx, ny);
+    else handleAnchorSourceClick(nx, ny);
+  }, [poolMapTool, addSplit, handleAnchorSourceClick]);
+  const handleTargetMapClick = useCallback((nx: number, ny: number) => {
+    if (poolMapTool === "split") addSplit("target", nx, ny);
+    else handleAnchorTargetClick(nx, ny);
+  }, [poolMapTool, addSplit, handleAnchorTargetClick]);
+
   const clearAllAnchors = () => {
     setAnchors([]);
     setActiveSource(null);
@@ -927,8 +1010,9 @@ export function SmashTab() {
             display={sourceMapDisplay}
             analyzing={analyzing}
             placeholder={source.snapError ?? "Pick a source layer."}
-            onPlaceNormalized={sourceResult ? handleAnchorSourceClick : undefined}
+            onPlaceNormalized={sourceResult ? handleSourceMapClick : undefined}
             anchorDots={sourceAnchorDots}
+            splitDots={sourceSplitDots}
             onMoveAnchor={moveAnchorSource}
             onMoveActiveSource={moveActiveSource}
             onRemoveAnchor={removeAnchor}
@@ -942,12 +1026,126 @@ export function SmashTab() {
             display={targetMapDisplay}
             analyzing={analyzing}
             placeholder={target.snapError ?? "Pick a target layer."}
-            onPlaceNormalized={targetResult ? handleAnchorTargetClick : undefined}
+            onPlaceNormalized={targetResult ? handleTargetMapClick : undefined}
             anchorDots={targetAnchorDots}
+            splitDots={targetSplitDots}
             onMoveAnchor={moveAnchorTarget}
             onRemoveAnchor={removeAnchor}
           />
         </div>
+      </div>
+
+      {/* ── Pool-map tool selector + split controls. Lives in the persistent
+            area because it governs clicks on the always-visible pool maps:
+            "Anchor" drops focal anchors (existing flow); "Split" drops an
+            intelligent-split circle that re-clusters that area into
+            edge-following sub-pools. ── */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 10, color: "#cccccc" }}>Click maps to:</span>
+          {([
+            { id: "anchor" as const, label: "Anchor" },
+            { id: "split" as const, label: "Split" },
+          ]).map(t => {
+            const active = poolMapTool === t.id;
+            return (
+              <div
+                key={t.id}
+                onClick={() => setPoolMapTool(t.id)}
+                title={t.id === "anchor"
+                  ? "Click the source then target maps to drop a focal anchor (mini-Smash region)."
+                  : "Click a pool map to drop a split circle — it re-clusters that area into edge-following sub-pools you can map to separate donors."}
+                style={{
+                  padding: "3px 12px", fontSize: 10, fontWeight: 600, borderRadius: 3,
+                  border: `1px solid ${active ? "#f5a623" : "#444"}`,
+                  background: active ? "#5a4416" : "#2c2c2c",
+                  color: active ? "#ffd591" : "#aaaaaa",
+                  cursor: "pointer", userSelect: "none",
+                }}
+              >
+                {t.label}
+              </div>
+            );
+          })}
+          {(sourceSplits.length + targetSplits.length) > 0 && (
+            <>
+              <div style={{ flex: 1 }} />
+              <span style={{ fontSize: 9, color: "#999" }}>
+                {sourceSplits.length + targetSplits.length} split{(sourceSplits.length + targetSplits.length) === 1 ? "" : "s"}
+              </span>
+              <div
+                onClick={clearAllSplits}
+                title="Remove all split edits."
+                style={{
+                  padding: "2px 8px", fontSize: 9, borderRadius: 2,
+                  border: "1px solid #4a4a4a", background: "#3a3a3a",
+                  color: "#cccccc", cursor: "pointer", userSelect: "none",
+                }}
+              >
+                Clear splits
+              </div>
+            </>
+          )}
+        </div>
+
+        {poolMapTool === "split" && (
+          <div style={{
+            display: "flex", flexDirection: "column", gap: 6,
+            padding: 8, background: "#241f16",
+            border: "1px solid #4a3a1a", borderRadius: 3,
+          }}>
+            <div style={{ fontSize: 9, color: "#cdb892", lineHeight: 1.4 }}>
+              Click a pool map to drop a split. The circle re-clusters that area
+              into edge-following sub-pools — un-merges things the sliders fuse
+              (e.g. a face in shadow from a collar in shadow). Each part shows up
+              in the correspondence list to map to its own donor. Splits persist
+              when you change segmentation controls.
+            </div>
+            <Control
+              label="New split radius"
+              title="Size of the circle for newly-dropped splits (fraction of the longest image edge)."
+              min={0.03} max={0.6} step={0.01}
+              value={splitRadius} onChange={setSplitRadius}
+              display={splitRadius.toFixed(2)}
+            />
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 10, color: "#cccccc", flex: 1 }}
+                title="How many sub-pools to split a new circle into.">
+                New split parts
+              </span>
+              <div onClick={() => setSplitParts(p => Math.max(2, p - 1))}
+                style={{ padding: "1px 9px", fontSize: 12, borderRadius: 2, border: "1px solid #4a4a4a", background: "#3a3a3a", color: "#ddd", cursor: "pointer", userSelect: "none" }}>−</div>
+              <span style={{ fontSize: 11, color: "#eee", minWidth: 14, textAlign: "center" }}>{splitParts}</span>
+              <div onClick={() => setSplitParts(p => Math.min(8, p + 1))}
+                style={{ padding: "1px 9px", fontSize: 12, borderRadius: 2, border: "1px solid #4a4a4a", background: "#3a3a3a", color: "#ddd", cursor: "pointer", userSelect: "none" }}>+</div>
+            </div>
+
+            {(sourceSplits.length + targetSplits.length) > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {[
+                  ...sourceSplits.map(s => ({ side: "source" as const, s })),
+                  ...targetSplits.map(s => ({ side: "target" as const, s })),
+                ].map(({ side, s }) => (
+                  <div key={`${side}-${s.id}`} style={{
+                    display: "flex", alignItems: "center", gap: 6,
+                    fontSize: 9, color: "#cccccc",
+                    background: "#1f1f1f", border: "1px solid #3a3a3a",
+                    borderRadius: 2, padding: "3px 6px",
+                  }}>
+                    <span style={{ width: 42, color: side === "source" ? "#8fb5e8" : "#e8b58f" }}>{side}</span>
+                    <span style={{ flex: 1 }}>{s.partCount} parts · r {s.radius.toFixed(2)}</span>
+                    <div onClick={() => patchSplit(side, s.id, { partCount: Math.max(2, s.partCount - 1) })}
+                      title="Fewer parts" style={{ padding: "0 7px", fontSize: 11, borderRadius: 2, border: "1px solid #4a4a4a", background: "#333", color: "#ddd", cursor: "pointer", userSelect: "none" }}>−</div>
+                    <div onClick={() => patchSplit(side, s.id, { partCount: Math.min(8, s.partCount + 1) })}
+                      title="More parts" style={{ padding: "0 7px", fontSize: 11, borderRadius: 2, border: "1px solid #4a4a4a", background: "#333", color: "#ddd", cursor: "pointer", userSelect: "none" }}>+</div>
+                    <div onClick={() => removeSplit(side, s.id)}
+                      title="Remove this split" style={{ padding: "0 7px", fontSize: 11, borderRadius: 2, border: "1px solid #6a4a4a", background: "#3a2a2a", color: "#e8b0b0", cursor: "pointer", userSelect: "none" }}>×</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Before/after recolored preview pane — relocated up here from the
@@ -1536,7 +1734,7 @@ function useDisplaySize(result: SegmentResult | null, maxWidth = PANEL_WIDTH): {
 // just shifted the cursor.
 function PoolMapPane({
   label, url, display, analyzing, placeholder,
-  onPlaceNormalized, anchorDots,
+  onPlaceNormalized, anchorDots, splitDots,
   onMoveAnchor, onMoveActiveSource,
   onRemoveAnchor, onRemoveActiveSource,
 }: {
@@ -1551,6 +1749,9 @@ function PoolMapPane({
   // Anchor overlays — every dot+ring this map should render. Order is the
   // pair index, so callers control colour pairing across the two maps.
   anchorDots?: PoolMapDot[];
+  // Split-circle overlays — purely visual (managed from the split list), so
+  // they never intercept pointer events or start a drag.
+  splitDots?: PoolMapDot[];
   // Drag the dot at anchorIndex to (nx, ny). Returns false to indicate the
   // attempt is invalid (e.g. transparent pixel) — the pane interprets that
   // as "snap back to previous valid position".
@@ -1862,6 +2063,31 @@ function PoolMapPane({
                       ×
                     </div>
                   )}
+                </Fragment>
+              );
+            })}
+            {/* Split circles — visual only (dashed ring + small centre dot),
+                never interactive. Managed via the split list in the panel. */}
+            {splitDots && splitDots.map((d, i) => {
+              const ringDiameter = ringDiameterFor(d.radius);
+              return (
+                <Fragment key={`split-${i}`}>
+                  <div style={{
+                    position: "absolute", pointerEvents: "none",
+                    left: d.nx * display.w - ringDiameter / 2,
+                    top: d.ny * display.h - ringDiameter / 2,
+                    width: ringDiameter, height: ringDiameter,
+                    borderRadius: "50%",
+                    border: `1px dashed ${d.color}`,
+                    opacity: 0.85,
+                  }} />
+                  <div style={{
+                    position: "absolute", pointerEvents: "none",
+                    left: d.nx * display.w - 3,
+                    top: d.ny * display.h - 3,
+                    width: 6, height: 6, borderRadius: "50%",
+                    background: d.color, border: "1px solid #000",
+                  }} />
                 </Fragment>
               );
             })}

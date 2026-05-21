@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { segmentImage, expandPool, collapsePool } from "./clusters";
+import {
+  segmentImage, expandPool, collapsePool,
+  applySplits, buildPoolsFromLabels,
+  SPLIT_ID_BASE, SPLIT_ID_STRIDE,
+} from "./clusters";
+import type { SplitEdit } from "./clusters";
 
 // Build a w×h RGBA buffer (alpha = 255) from a per-pixel color function.
 function makeImage(
@@ -182,5 +187,137 @@ describe("segmentImage", () => {
     expect(withUnify.pools.length).toBeLessThan(noUnify.pools.length);
     // The biggest pool covers >50% of the image (the two red bands together).
     expect(withUnify.pools[0].descriptor.weight).toBeGreaterThan(0.5);
+  });
+});
+
+describe("applySplits", () => {
+  const OPTS = {
+    poolCount: 1, edgePreservation: 0.5, regionCleanup: 0.2,
+    colorVsValueBias: 0.5, subPaletteSize: 3, neutralProtection: 0,
+    poolContinuity: 0,
+  };
+
+  // A 64×64 image whose left half is one near-shadow colour and right half a
+  // slightly different near-shadow colour — the "two things fused into one
+  // pool" case. Segmented at poolCount=1 they merge; a split should separate.
+  function fusedShadowImage() {
+    const W = 64, H = 64;
+    const img = makeImage(W, H, (x) =>
+      x < W / 2 ? [60, 58, 70] : [58, 64, 60],
+    );
+    return { img, W, H };
+  }
+
+  it("no edits returns the base result unchanged", () => {
+    const { img, W, H } = fusedShadowImage();
+    const base = segmentImage(img, W, H, OPTS);
+    const out = applySplits(base, img, [], OPTS);
+    expect(out).toBe(base);
+  });
+
+  it("splits a fused pool into edge-following parts within the circle", () => {
+    const { img, W, H } = fusedShadowImage();
+    const base = segmentImage(img, W, H, OPTS);
+    expect(base.pools.length).toBe(1); // the two halves fused at poolCount=1
+
+    const edit: SplitEdit = {
+      id: "e1", nx: 0.5, ny: 0.5, radius: 0.6, partCount: 2,
+      baseId: SPLIT_ID_BASE,
+    };
+    const out = applySplits(base, img, [edit], OPTS);
+
+    // The split introduced new pools in the reserved id range.
+    expect(out.pools.length).toBeGreaterThan(base.pools.length);
+    const splitPools = out.pools.filter((p) => p.id >= SPLIT_ID_BASE);
+    expect(splitPools.length).toBeGreaterThanOrEqual(2);
+
+    // A pixel on the left vs right (both inside the circle) land in different
+    // pools now — the fused colours were separated along the real edge.
+    const leftIdx = (H / 2) * W + (W / 2 - 8);
+    const rightIdx = (H / 2) * W + (W / 2 + 8);
+    expect(out.labels[leftIdx]).not.toBe(out.labels[rightIdx]);
+    expect(out.labels[leftIdx]).toBeGreaterThanOrEqual(SPLIT_ID_BASE);
+    expect(out.labels[rightIdx]).toBeGreaterThanOrEqual(SPLIT_ID_BASE);
+
+    // Pool weights still sum to ~1 after the rebuild.
+    const totalWeight = out.pools.reduce((s, p) => s + p.descriptor.weight, 0);
+    expect(totalWeight).toBeCloseTo(1, 5);
+  });
+
+  it("keeps split-part ids stable across a re-segmentation (persistence)", () => {
+    const { img, W, H } = fusedShadowImage();
+    const edit: SplitEdit = {
+      id: "e1", nx: 0.5, ny: 0.5, radius: 0.6, partCount: 2,
+      baseId: SPLIT_ID_BASE,
+    };
+
+    // Two different base segmentations (different control), same edit.
+    const baseA = segmentImage(img, W, H, OPTS);
+    const baseB = segmentImage(img, W, H, { ...OPTS, regionCleanup: 0.6 });
+
+    const outA = applySplits(baseA, img, [edit], OPTS);
+    const outB = applySplits(baseB, img, [edit], { ...OPTS, regionCleanup: 0.6 });
+
+    const idsA = outA.pools.filter((p) => p.id >= SPLIT_ID_BASE).map((p) => p.id).sort();
+    const idsB = outB.pools.filter((p) => p.id >= SPLIT_ID_BASE).map((p) => p.id).sort();
+    // The reserved id range is deterministic, so the split's part ids are the
+    // same set both times — a donor mapping to a split survives the re-segment.
+    expect(idsA).toEqual(idsB);
+    expect(idsA.every((id) => id >= SPLIT_ID_BASE && id < SPLIT_ID_BASE + SPLIT_ID_STRIDE)).toBe(true);
+  });
+
+  it("gives separate edits non-overlapping id ranges", () => {
+    const W = 96, H = 48;
+    // Two distinct fused regions, one on each side.
+    const img = makeImage(W, H, (x) =>
+      x < W / 2
+        ? (x < W / 4 ? [60, 58, 70] : [58, 64, 60])
+        : (x < 3 * W / 4 ? [120, 70, 70] : [120, 80, 64]),
+    );
+    const base = segmentImage(img, W, H, { ...OPTS, poolCount: 2 });
+
+    const edits: SplitEdit[] = [
+      { id: "a", nx: 0.25, ny: 0.5, radius: 0.3, partCount: 2, baseId: SPLIT_ID_BASE },
+      { id: "b", nx: 0.75, ny: 0.5, radius: 0.3, partCount: 2, baseId: SPLIT_ID_BASE + SPLIT_ID_STRIDE },
+    ];
+    const out = applySplits(base, img, edits, { ...OPTS, poolCount: 2 });
+
+    const aIds = out.pools.filter((p) => p.id >= SPLIT_ID_BASE && p.id < SPLIT_ID_BASE + SPLIT_ID_STRIDE);
+    const bIds = out.pools.filter((p) => p.id >= SPLIT_ID_BASE + SPLIT_ID_STRIDE);
+    expect(aIds.length).toBeGreaterThanOrEqual(1);
+    expect(bIds.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("buildPoolsFromLabels", () => {
+  it("rebuilds pools keyed by the ids present in the label map", () => {
+    const W = 32, H = 32;
+    const img = makeImage(W, H, (x) => (x < W / 2 ? [200, 40, 40] : [40, 40, 200]));
+    // Hand-built label map: left half id 5, right half id 9.
+    const labels = new Int32Array(W * H);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        labels[y * W + x] = x < W / 2 ? 5 : 9;
+      }
+    }
+    const pools = buildPoolsFromLabels(img, W, H, labels, 3);
+    expect(pools.map((p) => p.id).sort((a, b) => a - b)).toEqual([5, 9]);
+    const total = pools.reduce((s, p) => s + p.descriptor.weight, 0);
+    expect(total).toBeCloseTo(1, 5);
+    for (const p of pools) {
+      expect(p.descriptor.pixelCount).toBe((W * H) / 2);
+    }
+  });
+
+  it("drops ids that have no pixels and ignores -1 (transparent)", () => {
+    const W = 16, H = 16;
+    const img = makeImage(W, H, () => [128, 128, 128]);
+    const labels = new Int32Array(W * H).fill(-1);
+    // Only a few pixels carry id 3; everything else transparent.
+    for (let i = 0; i < 10; i++) labels[i] = 3;
+    const pools = buildPoolsFromLabels(img, W, H, labels, 3);
+    expect(pools.length).toBe(1);
+    expect(pools[0].id).toBe(3);
+    expect(pools[0].descriptor.pixelCount).toBe(10);
   });
 });

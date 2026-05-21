@@ -94,6 +94,32 @@ export interface SegmentResult {
   pools: Pool[];            // top-level pools, sorted by descriptor.weight desc
 }
 
+// A manual "intelligent split" edit applied AFTER segmentation: re-cluster the
+// raw pixels under a circle into `partCount` edge-aware sub-pools, so a janky
+// merge (e.g. face-in-shadow fused with collar-in-shadow) can be hand-divided
+// and each part mapped to its own donor.
+//
+// The edit is pure geometry — normalized centre + radius — so it's resolution-
+// and segmentation-independent: re-applying it after the user moves a control
+// just re-clusters the same physical pixels. `baseId` reserves a stable id
+// range for this edit's parts so a correspondence mapping to a split survives a
+// re-segmentation (part ids don't churn). Allocate baseIds with SPLIT_ID_BASE /
+// SPLIT_ID_STRIDE so they never collide with normal pool ids or each other.
+export interface SplitEdit {
+  id: string;          // UI key (not the pool id space)
+  nx: number;          // normalized circle centre X, 0..1
+  ny: number;          // normalized circle centre Y, 0..1
+  radius: number;      // normalized radius as a fraction of max(width,height), 0..1
+  partCount: number;   // how many sub-pools to split the covered pixels into (≥2)
+  baseId: number;      // start of this edit's reserved pool-id range
+}
+
+// Stable id space for split parts — far above normal pool ids (which stay small
+// even with drill-downs). Each edit gets baseId = SPLIT_ID_BASE + k·STRIDE; the
+// stride dwarfs any realistic partCount so edits never overlap.
+export const SPLIT_ID_BASE = 1_000_000;
+export const SPLIT_ID_STRIDE = 1_000;
+
 // ────────── Tuning constants ──────────
 
 // Pool k-means runs over SLIC superpixels, not raw pixels — this is the unit
@@ -257,6 +283,158 @@ function maxPoolId(pools: Pool[]): number {
     if (p.subPools) for (const c of p.subPools) if (c.id > m) m = c.id;
   }
   return m;
+}
+
+// ────────── manual split edits (selection refine) ──────────
+
+// Rebuild a flat Pool[] from an arbitrary label map, KEYED BY the ids already
+// present in `labels` (so existing pool identity is preserved and split parts
+// keep their reserved ids). Descriptors/sub-palettes/noise are recomputed
+// image-wide so weights, centroids and bboxes are correct after splits have
+// moved pixels between pools. Pools that lost all their pixels simply vanish.
+//
+// This mirrors the descriptor + analyzePool build inside segmentPixelSet, but
+// driven by final label ids rather than transient cluster indices — kept
+// separate so the proven segmentation hot path stays untouched.
+export function buildPoolsFromLabels(
+  rgba: Uint8Array,
+  width: number,
+  height: number,
+  labels: Int32Array,
+  subPaletteSize: number,
+): Pool[] {
+  const byId = new Map<number, number[]>();
+  let total = 0;
+  let setMinX = width, setMaxX = -1, setMinY = height, setMaxY = -1;
+  for (let i = 0; i < labels.length; i++) {
+    const id = labels[i];
+    if (id < 0) continue;
+    let arr = byId.get(id);
+    if (!arr) { arr = []; byId.set(id, arr); }
+    arr.push(i);
+    total++;
+    const x = i % width, y = (i / width) | 0;
+    if (x < setMinX) setMinX = x;
+    if (x > setMaxX) setMaxX = x;
+    if (y < setMinY) setMinY = y;
+    if (y > setMaxY) setMaxY = y;
+  }
+  if (total === 0) return [];
+
+  const refW = Math.max(0, setMaxX - setMinX);
+  const refH = Math.max(0, setMaxY - setMinY);
+  const refVar = (refW * refW + refH * refH) / 12;
+  const xDen = width > 1 ? width - 1 : 1;
+  const yDen = height > 1 ? height - 1 : 1;
+
+  const pools: Pool[] = [];
+  for (const [id, idx] of byId) {
+    const cnt = idx.length;
+    let Ls = 0, As = 0, Bs = 0, Xs = 0, Ys = 0, XXs = 0, YYs = 0;
+    let minX = width, maxX = -1, minY = height, maxY = -1;
+    for (const i of idx) {
+      const o = i * 4;
+      const [L, a, b] = rgbToLab(rgba[o], rgba[o + 1], rgba[o + 2]);
+      const x = i % width, y = (i / width) | 0;
+      Ls += L; As += a; Bs += b;
+      Xs += x; Ys += y; XXs += x * x; YYs += y * y;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+    const meanL = Ls / cnt, meanA = As / cnt, meanB = Bs / cnt;
+    const [mr, mg, mb] = labToRgb(meanL, meanA, meanB);
+    const mx = Xs / cnt, my = Ys / cnt;
+    const varX = Math.max(0, XXs / cnt - mx * mx);
+    const varY = Math.max(0, YYs / cnt - my * my);
+    const compactness = refVar > 1e-6 ? clamp01(1 - (varX + varY) / refVar) : 1;
+
+    const descriptor: PoolDescriptor = {
+      r: mr, g: mg, b: mb,
+      labL: meanL, labA: meanA, labB: meanB,
+      chroma: Math.sqrt(meanA * meanA + meanB * meanB),
+      valueBand: meanL < SHADOW_MAX_L ? "shadow" : meanL > HIGHLIGHT_MIN_L ? "highlight" : "mid",
+      pixelCount: cnt,
+      weight: cnt / total,
+      compactness,
+      centroidX: clamp01(mx / xDen),
+      centroidY: clamp01(my / yDen),
+      bboxX0: clamp01(minX / xDen),
+      bboxY0: clamp01(minY / yDen),
+      bboxX1: clamp01(maxX / xDen),
+      bboxY1: clamp01(maxY / yDen),
+    };
+    const { subPalette, noise } = analyzePool(
+      idx, rgba, width, varX + varY, compactness, subPaletteSize,
+    );
+    pools.push({ id, descriptor, subPalette, noise, subPools: null });
+  }
+
+  pools.sort((a, b) => b.descriptor.weight - a.descriptor.weight);
+  return pools;
+}
+
+// Re-apply a list of manual split edits onto a base segmentation. For each
+// edit we gather the opaque pixels under its circle, re-run the full edge-aware
+// segmenter on JUST those pixels (so the split follows the real colour edge,
+// not a hard disc), and relabel them into the edit's reserved id range. After
+// all edits land we rebuild every pool descriptor from the final labels so the
+// downstream match/transfer see correct image-wide statistics.
+//
+// Deterministic for a fixed (base, pixels, edits, opts) — which is what makes
+// the edits persist across re-segmentation: the caller just re-runs this on the
+// freshly segmented base and the same physical pixels split the same way.
+export function applySplits(
+  base: SegmentResult,
+  rgba: Uint8Array,
+  edits: SplitEdit[],
+  opts: SegmentOptions,
+): SegmentResult {
+  if (!edits || edits.length === 0) return base;
+  const { width, height } = base;
+  const labels = base.labels.slice();
+  const maxEdge = Math.max(width, height);
+
+  for (const edit of edits) {
+    const parts = Math.max(2, Math.floor(edit.partCount));
+    const cx = edit.nx * width;
+    const cy = edit.ny * height;
+    const rPx = Math.max(1, edit.radius * maxEdge);
+    const r2 = rPx * rPx;
+
+    const x0 = Math.max(0, Math.floor(cx - rPx));
+    const x1 = Math.min(width - 1, Math.ceil(cx + rPx));
+    const y0 = Math.max(0, Math.floor(cy - rPx));
+    const y1 = Math.min(height - 1, Math.ceil(cy + rPx));
+
+    const circle: number[] = [];
+    for (let y = y0; y <= y1; y++) {
+      const dy = y - cy;
+      for (let x = x0; x <= x1; x++) {
+        const dx = x - cx;
+        if (dx * dx + dy * dy > r2) continue;
+        const i = y * width + x;
+        if (rgba[i * 4 + 3] < 128) continue;
+        circle.push(i);
+      }
+    }
+    if (circle.length < parts) continue;
+
+    // Cold segmentation of the masked subset into `parts` pools, ids starting
+    // at the edit's reserved baseId (deterministic → stable across re-segments).
+    const { assignment } = segmentPixelSet(
+      rgba, width, height, circle,
+      { ...opts, poolCount: parts },
+      edit.baseId,
+    );
+    for (let j = 0; j < circle.length; j++) {
+      if (assignment[j] >= 0) labels[circle[j]] = assignment[j];
+    }
+  }
+
+  const pools = buildPoolsFromLabels(rgba, width, height, labels, opts.subPaletteSize);
+  return { width, height, labels, pools };
 }
 
 // ────────── pass 1: segment a pixel set into pools ──────────
