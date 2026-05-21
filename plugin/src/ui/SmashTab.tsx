@@ -34,7 +34,12 @@ import {
   SplitEdit, SPLIT_ID_BASE, SPLIT_ID_STRIDE,
 } from "../core/clusters";
 import { SmashEditCanvas, CanvasView, CanvasCircle } from "./SmashEditCanvas";
-import { matchPools, PoolMatch, Correspondence } from "../core/match";
+import { SmashMacroPanel } from "./SmashMacroPanel";
+import {
+  seedMacroGroups, matchMacros, buildMacroConstrainedCorrespondence, macroInfoMap,
+  type MacroGroup,
+} from "../core/macro";
+import { PoolMatch, Correspondence } from "../core/match";
 import { transferColors, vectorizeUpscaleLabels, type TransferAnchor } from "../core/transfer";
 import { analyzeAnchor, type AnchorAnalysis } from "../core/anchorAnalysis";
 
@@ -283,6 +288,17 @@ export function SmashTab() {
   // The target segmentation BEFORE splits are applied — kept so feathered
   // splits can blend their recolor over the "no-split" recolor (true feather).
   const [targetBase, setTargetBase] = useState<SegmentResult | null>(null);
+
+  // ── Macro groups (the semantic foundation) ─────────────────────────
+  // Pools are auto-clustered into ~macroCount macro groups per side. The
+  // correspondence is then macro-constrained: each target pool only draws a
+  // donor from its macro's matched source macro (skin→skin), so the foundation
+  // is correct before any micro finishing. Auto-seeded each segmentation;
+  // names are editable in-session.
+  const [macroCount, setMacroCount] = useState(5);
+  const [sourceMacros, setSourceMacros] = useState<MacroGroup[]>([]);
+  const [targetMacros, setTargetMacros] = useState<MacroGroup[]>([]);
+  const [macroMatch, setMacroMatch] = useState<Map<number, number>>(new Map());
   const [analyzing, setAnalyzing] = useState(false);
   const [segError, setSegError] = useState<string | null>(null);
 
@@ -590,6 +606,9 @@ export function SmashTab() {
       setSourceResult(null);
       setTargetResult(null);
       setTargetBase(null);
+      setSourceMacros([]);
+      setTargetMacros([]);
+      setMacroMatch(new Map());
       setSegError(null);
       return;
     }
@@ -606,11 +625,22 @@ export function SmashTab() {
         // → deterministic, so the splits persist across this re-segmentation.
         const sRes = applySplits(sBase, source.segInput!.data, sourceSplits, opts);
         const tRes = applySplits(tBase, target.segInput!.data, targetSplits, opts);
-        const corr = matchPools(sRes.pools, tRes.pools);
+        // Macro foundation: cluster each side's pools into macro groups, match
+        // macro→macro, then build a macro-CONSTRAINED per-pool correspondence so
+        // each target pool only draws a donor from its matched source macro.
+        const sMacros = seedMacroGroups(sRes.pools, macroCount);
+        const tMacros = seedMacroGroups(tRes.pools, macroCount);
+        const mMatch = matchMacros(sMacros, sRes.pools, tMacros, tRes.pools);
+        const corr = buildMacroConstrainedCorrespondence(
+          sMacros, sRes.pools, tMacros, tRes.pools, mMatch,
+        );
         if (!cancelled) {
           setSourceResult(sRes);
           setTargetResult(tRes);
           setTargetBase(tBase); // no-split base, for feather blending
+          setSourceMacros(sMacros);
+          setTargetMacros(tMacros);
+          setMacroMatch(mMatch);
           setMatches(corr.matches.map(m => ({ ...m })));
           setAutoMatches(corr.matches.map(m => ({ ...m })));
           setSelectedTargetId(null);
@@ -629,7 +659,7 @@ export function SmashTab() {
     return () => { cancelled = true; clearTimeout(handle); };
     // splitGeomSig (not the split arrays) so feather-only edits skip re-segment.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source.segInput, target.segInput, poolCount, edgePreservation, regionCleanup, colorVsValueBias, neutralProtection, poolContinuity, subPaletteSize, splitGeomSig]);
+  }, [source.segInput, target.segInput, poolCount, edgePreservation, regionCleanup, colorVsValueBias, neutralProtection, poolContinuity, subPaletteSize, splitGeomSig, macroCount]);
 
   // ── Lookups ────────────────────────────────────────────────────────
   const sourcePoolsById = useMemo(() => {
@@ -1073,6 +1103,19 @@ export function SmashTab() {
     () => sortPools(targetPools, sortMode),
     [targetPools, sortMode],
   );
+
+  // ── Macro-group display + edit ─────────────────────────────────────
+  const targetMacroInfo = useMemo(
+    () => macroInfoMap(targetMacros, targetResult?.pools ?? []),
+    [targetMacros, targetResult],
+  );
+  const sourceMacroInfo = useMemo(
+    () => macroInfoMap(sourceMacros, sourceResult?.pools ?? []),
+    [sourceMacros, sourceResult],
+  );
+  const renameMacro = useCallback((id: number, name: string) => {
+    setTargetMacros(prev => prev.map(m => (m.id === id ? { ...m, name } : m)));
+  }, []);
 
   // ── Editing-canvas circles + views (source / target / output) ──────
   // Circles unify anchors + splits behind one move/resize/remove protocol; the
@@ -1805,6 +1848,18 @@ export function SmashTab() {
       {innerTab === "correspondence" && (
         ready ? (
           <Section title="CORRESPONDENCE">
+            {/* Macro foundation: which donor GROUP feeds each target group.
+                Per-pool donors below are constrained to stay inside these. */}
+            <SmashMacroPanel
+              targetMacros={targetMacros}
+              targetMacroInfo={targetMacroInfo}
+              sourceMacroInfo={sourceMacroInfo}
+              macroMatch={macroMatch}
+              macroCount={macroCount}
+              onReseed={setMacroCount}
+              onRenameMacro={renameMacro}
+            />
+
             {/* Donor-preview toggle + sort selector + reset */}
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, cursor: "pointer" }}
