@@ -602,6 +602,15 @@ export function SmashTab() {
     return () => { cancelled = true; clearTimeout(handle); };
   }, [hasApplied, source.segInput, sourceResult, targetResult, target.segInput, matches, strength, relax, preserveLuminance, richness, transferAnchors]);
 
+  // Auto-smash. The manual "Apply Smash" button is gone — the preview starts
+  // as soon as both images are segmented and a correspondence exists, and the
+  // live-preview effect above keeps it current on every control change. We
+  // latch hasApplied on (never off) so a transient empty-matches blip mid-edit
+  // doesn't tear the preview down.
+  useEffect(() => {
+    if (sourceResult && targetResult && matches.length > 0) setHasApplied(true);
+  }, [sourceResult, targetResult, matches.length]);
+
   // ── Remap interaction ──────────────────────────────────────────────
   // Reassign a target pool's donor (from a row's inline source-pool picker).
   const assignDonorTo = (targetPoolId: number, sourcePoolId: number) => {
@@ -721,14 +730,6 @@ export function SmashTab() {
     setActiveSource({ nx, ny });
     return true;
   }, [sourceResult]);
-
-  // First press starts the live preview; the effect above keeps it current
-  // from then on, so every control change is reflected automatically.
-  const applySmash = () => {
-    if (!sourceResult || !targetResult || !target.segInput || matches.length === 0) return;
-    setHasApplied(true);
-    setShowAfter(true);
-  };
 
   // Run the transfer at the TARGET document's real resolution and write the
   // recolored pixels back as a new "Color Smash" layer.
@@ -951,15 +952,30 @@ export function SmashTab() {
 
       {/* Before/after recolored preview pane — relocated up here from the
           COLOR TRANSFER section so it stays visible regardless of which tab
-          is active. Its show-before/after toggle lives with the transfer
-          controls in the Controls tab; the toggle + label logic stay wired to
-          the same showAfter / transferUrl / beforeUrl state. */}
+          is active. The show-before/after toggle sits right in the header next
+          to the pane, so it can be flicked without leaving any tab. */}
       <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-        <span style={{ fontSize: 9, color: "#999", letterSpacing: 0.3 }}>
-          {transferUrl
-            ? (showAfter ? "After — recolored target" : "Before — original target")
-            : "Preview"}
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 9, color: "#999", letterSpacing: 0.3 }}>
+            {transferUrl
+              ? (showAfter ? "After — recolored target" : "Before — original target")
+              : "Preview"}
+          </span>
+          <div style={{ flex: 1 }} />
+          {transferUrl && (
+            <div
+              onClick={() => setShowAfter(s => !s)}
+              title="Swap the preview between the original target and the recolored result."
+              style={{
+                padding: "3px 9px", fontSize: 10, borderRadius: 2,
+                border: "1px solid #4a4a4a", background: "#3a3a3a",
+                color: "#cccccc", cursor: "pointer", userSelect: "none",
+              }}
+            >
+              {showAfter ? "Show before" : "Show after"}
+            </div>
+          )}
+        </div>
         <div style={{
           position: "relative", alignSelf: "center",
           width: targetDisplay.w || PANEL_WIDTH, minHeight: 60,
@@ -976,7 +992,7 @@ export function SmashTab() {
             />
           ) : (
             <div style={{ padding: 24, fontSize: 10, opacity: 0.5 }}>
-              Click “Apply Smash” to preview the recolored target.
+              Pick a source and target layer — the recolored preview generates automatically.
             </div>
           )}
         </div>
@@ -1115,40 +1131,6 @@ export function SmashTab() {
                 value={richness} onChange={setRichness}
                 display={richness.toFixed(2)}
               />
-
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <div
-                  onClick={applySmash}
-                  title="Recolor the target using the current correspondence. After the first apply the preview updates live."
-                  style={{
-                    padding: "5px 12px", fontSize: 11, fontWeight: 600, borderRadius: 2,
-                    border: "1px solid #1473e6",
-                    background: "#1473e6", color: "#ffffff",
-                    cursor: "pointer", userSelect: "none",
-                  }}
-                >
-                  Apply Smash
-                </div>
-                {transferUrl && (
-                  <div
-                    onClick={() => setShowAfter(s => !s)}
-                    title="Swap the preview between the original target and the recolored result."
-                    style={{
-                      padding: "5px 10px", fontSize: 10, borderRadius: 2,
-                      border: "1px solid #4a4a4a", background: "#3a3a3a",
-                      color: "#cccccc", cursor: "pointer", userSelect: "none",
-                    }}
-                  >
-                    {showAfter ? "Show before" : "Show after"}
-                  </div>
-                )}
-                {hasApplied && (
-                  <span style={{ fontSize: 9, color: "#7dd87d" }}
-                    title="Preview updates automatically as you change controls.">
-                    live
-                  </span>
-                )}
-              </div>
 
               {/* Output name — base name applied to the written single layer
                   ("<name>") and / or pool group ("<name> · pools"). Persisted
