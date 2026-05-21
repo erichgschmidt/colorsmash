@@ -54,6 +54,9 @@ export interface AnchorAnalysis {
   // input so transferColors can read everything it needs off the anchor.
   targetX: number;
   targetY: number;
+  // The anchor's falloff radius at transfer time = the TARGET radius (the
+  // apply circle). The source sample radius is consumed at analysis time and
+  // not carried forward.
   radius: number;
   // Per-pixel local target labels at TARGET resolution. -1 outside the
   // anchor's reach OR transparent. Inside the falloff, holds a local target
@@ -87,7 +90,13 @@ export interface AnchorAnalysisInput {
   targetHeight: number;
   targetX: number;       // normalized 0..1 (center of the target-side circle)
   targetY: number;
-  radius: number;        // normalized 0..1 of max(width, height) on each side
+  // Decoupled radii: the SOURCE sample circle and the TARGET apply circle are
+  // sized independently. sourceRadius controls how much source structure the
+  // mini-Smash pulls in; targetRadius controls the apply/falloff reach (and is
+  // what transferColors uses for its per-pixel falloff geometry). Both are
+  // normalized 0..1 of max(width, height) on their respective sides.
+  sourceRadius: number;
+  targetRadius: number;
   // Global segmentation opts as a basis. The local pool count is derived by
   // multiplying poolCount by an anchor-detail-driven factor (see DETAIL_*).
   baseSegmentOpts: SegmentOptions;
@@ -158,7 +167,8 @@ function emptyAnalysis(input: AnchorAnalysisInput): AnchorAnalysis {
   return {
     targetX: input.targetX,
     targetY: input.targetY,
-    radius: input.radius,
+    // The anchor's falloff geometry uses the TARGET radius.
+    radius: input.targetRadius,
     localTargetLabels: new Int32Array(input.targetWidth * input.targetHeight).fill(-1),
     localMappingsByPool: new Map(),
     localDonorLabSamples: new Map(),
@@ -233,13 +243,15 @@ function collectLocalLValues(
 // exactly to what transferColors needs at draw time — a per-pixel target-
 // resolution label map plus a per-local-pool sub-mapping table.
 export function analyzeAnchor(input: AnchorAnalysisInput): AnchorAnalysis {
+  // Source pixels come from the SOURCE-radius circle; target pixels (and hence
+  // localTargetLabels) come from the independent TARGET-radius circle.
   const sourceIndices = collectIndicesInCircle(
     input.sourceRgba, input.sourceWidth, input.sourceHeight,
-    input.sourceX, input.sourceY, input.radius,
+    input.sourceX, input.sourceY, input.sourceRadius,
   );
   const targetIndices = collectIndicesInCircle(
     input.targetRgba, input.targetWidth, input.targetHeight,
-    input.targetX, input.targetY, input.radius,
+    input.targetX, input.targetY, input.targetRadius,
   );
 
   if (sourceIndices.length < MIN_PIXELS || targetIndices.length < MIN_PIXELS) {
@@ -315,7 +327,8 @@ export function analyzeAnchor(input: AnchorAnalysisInput): AnchorAnalysis {
   return {
     targetX: input.targetX,
     targetY: input.targetY,
-    radius: input.radius,
+    // The anchor's falloff geometry at transfer time uses the TARGET radius.
+    radius: input.targetRadius,
     localTargetLabels,
     localMappingsByPool,
     localDonorLabSamples,

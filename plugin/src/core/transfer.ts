@@ -48,7 +48,24 @@ export interface TransferOptions {
 export interface TransferAnchor {
   targetX: number;      // 0..1 normalized over target width
   targetY: number;      // 0..1 normalized over target height
-  radius: number;       // 0..1 normalized to max(width, height)
+  radius: number;       // 0..1 normalized to max(width, height) — the TARGET
+                        // (apply) radius; drives the per-pixel falloff geometry.
+  // ── Per-anchor correlation knobs ──────────────────────────────────────
+  // strength scales how much this anchor REPLACES the auto transfer, on top of
+  // the spatial falloff. The per-pixel replace weight is w = falloff*strength
+  // (clamped 0..1): finalDelta = autoDelta*(1−w) + anchorDelta*w. 1 (default)
+  // = today's behaviour (falloff alone gates the replace); 0.5 = the anchor
+  // only half-replaces even at its centre. Optional + defaults to 1.
+  strength?: number;
+  // Per-channel transfer locks, operating in LCh on the anchor's transferred
+  // result. Each gates whether the anchor moves that LCh dimension toward the
+  // source: transferValue → L, transferChroma → C, transferHue → H. A locked
+  // (false) channel keeps the target's OWN value for that dimension. All true
+  // (the default) = recompose the unchanged LCh = identity within float error,
+  // i.e. the pre-feature behaviour. Optional + each defaults to true.
+  transferValue?: boolean;
+  transferChroma?: boolean;
+  transferHue?: boolean;
   // Per-pixel local target labels at TARGET resolution. -1 outside the
   // anchor's reach OR transparent. Inside the falloff, holds a local target
   // pool id (its own id space, independent of the global pool ids).
@@ -584,7 +601,13 @@ export function transferColors(
     // pixel's local target label inside the anchor (which can be -1 even
     // when the falloff is > 0, e.g. transparent pixels or pixels whose
     // segmented sample was excluded); in that case we fall back to auto.
+    //
+    // `anchorReplaceW` is the per-pixel weight at which the anchor's delta
+    // REPLACES the auto delta: w = falloff*strength, clamped 0..1. It is 0
+    // when no anchor covers the pixel (so the auto path runs untouched). The
+    // rich auto path below scales its slice by (1 − anchorReplaceW).
     let dL: number, dA: number, dB: number;
+    let anchorReplaceW = 0;
     if (bestAnchor >= 0) {
       const anchor = activeAnchors[bestAnchor];
       const localLabel = anchor.localTargetLabels[i];
@@ -625,12 +648,41 @@ export function transferColors(
           }
         }
 
-        // Spatial lerp: at centre f=1 → pure local, at edge f=0 → pure auto.
-        const f = bestFall;
-        const inv = 1 - f;
-        dL = autoDL * inv + ldL * f;
-        dA = autoDA * inv + ldA * f;
-        dB = autoDB * inv + ldB * f;
+        // ── Per-channel transfer locks (Value / Chroma / Hue) ──
+        // The anchor's transferred Lab is (L+ldL, a+ldA, b+ldB). Decompose it
+        // and the ORIGINAL pixel into LCh, then keep the source's value /
+        // chroma / hue only where the matching lock is on (default), else
+        // hold the target's own. Recompose to a locked anchor result and
+        // re-derive the anchor delta from it. All-true reproduces the input
+        // delta within float error (identity recomposition).
+        const transferValue = anchor.transferValue ?? true;
+        const transferChroma = anchor.transferChroma ?? true;
+        const transferHue = anchor.transferHue ?? true;
+        if (!transferValue || !transferChroma || !transferHue) {
+          const at = a + ldA, bt = b + ldB;
+          const Lt = L + ldL;
+          const C0 = Math.hypot(a, b),  H0 = Math.atan2(b, a);
+          const Ct = Math.hypot(at, bt), Ht = Math.atan2(bt, at);
+          const Lf = transferValue  ? Lt : L;
+          const Cf = transferChroma ? Ct : C0;
+          const Hf = transferHue    ? Ht : H0;
+          const af = Cf * Math.cos(Hf), bf = Cf * Math.sin(Hf);
+          ldL = Lf - L;
+          ldA = af - a;
+          ldB = bf - b;
+        }
+
+        // Spatial lerp gated by falloff AND per-anchor strength. The replace
+        // weight w = falloff*strength: at w=1 → pure anchor delta, at w=0 →
+        // pure auto. strength 1 = today (falloff alone gates); strength 0.5 =
+        // half-replace even at the anchor centre.
+        const strengthA = clamp01(anchor.strength ?? 1);
+        const w = clamp01(bestFall * strengthA);
+        anchorReplaceW = w;
+        const inv = 1 - w;
+        dL = autoDL * inv + ldL * w;
+        dA = autoDA * inv + ldA * w;
+        dB = autoDB * inv + ldB * w;
       } else {
         dL = autoDL;
         dA = autoDA;
@@ -651,10 +703,13 @@ export function transferColors(
     //
     // SIMPLIFICATION: rich-Lab is computed from the AUTO donor only; any
     // anchor contribution stays in the sub-swatch delta path. To express
-    // that, the rich blend's weight is scaled by (1 − bestFall) — outside
-    // any anchor the auto is fully replaced; deeper inside an anchor the
-    // rich shift fades out and the local mini-Smash dominates.
-    const autoWeight = 1 - bestFall; // 1 outside anchors, 0 at anchor centre
+    // that, the rich blend's weight is scaled by the auto's surviving slice
+    // (1 − anchorReplaceW) — outside any anchor the auto is fully replaced;
+    // deeper inside an anchor (or at higher anchor strength) the rich shift
+    // fades out and the local mini-Smash dominates. anchorReplaceW is 0 when
+    // no anchor covers the pixel, so this is byte-identical to the pre-anchor
+    // path there.
+    const autoWeight = 1 - anchorReplaceW; // 1 outside anchors, →0 under a strong anchor
     if (richness > 0 && hasAuto && autoWeight > 0) {
       const donorId = donorByTarget.get(poolId);
       if (donorId !== undefined) {

@@ -230,14 +230,27 @@ export function SmashTab() {
   //      activeSource PERSISTS so subsequent target clicks spawn more anchors
   //      all sharing the same source point.
   // activeSource is replaced by another source-map click, or cleared via the
-  // × on its dot. Each anchor carries its OWN falloff radius; the shared
-  // `anchorRadius` state below seeds NEW anchors only.
+  // × on its dot. Each anchor carries its OWN per-side radii and correlation
+  // knobs; the shared `anchorRadius` state below seeds NEW anchors only.
   interface AnchorPair {
     sourceX: number;
     sourceY: number;
     targetX: number;
     targetY: number;
-    radius: number;
+    // Decoupled radii: sourceRadius sizes the SOURCE sample circle (how much
+    // source structure the mini-Smash pulls in); targetRadius sizes the TARGET
+    // apply circle (the per-pixel falloff reach). Seeded equally from
+    // `anchorRadius` on creation, then tuned per-anchor in the row below.
+    sourceRadius: number;
+    targetRadius: number;
+    // How much this anchor REPLACES the auto transfer, on top of the spatial
+    // falloff. 0..1, default 1 (falloff alone gates the replace).
+    strength: number;
+    // Per-channel transfer locks (LCh). When true (default) the anchor moves
+    // that dimension toward the source; when false it keeps the target's own.
+    transferValue: boolean;
+    transferChroma: boolean;
+    transferHue: boolean;
   }
   const [anchors, setAnchors] = useState<AnchorPair[]>([]);
   const [activeSource, setActiveSource] = useState<{ nx: number; ny: number } | null>(null);
@@ -249,6 +262,10 @@ export function SmashTab() {
   // inside each anchor's falloff. Higher = more sub-pools = richer local
   // transfer. See anchorAnalysis.ts for the detail→poolCount mapping.
   const [anchorDetail, setAnchorDetail] = useState(0.5);
+  // Single-accordion model for the per-anchor control rows: at most one anchor
+  // is expanded at a time. Tracked as an index (null = all collapsed) rather
+  // than a Set so it degrades gracefully as indices shift on removal.
+  const [expandedAnchor, setExpandedAnchor] = useState<number | null>(null);
 
   // ── Per-anchor mini-Smash analyses ──
   // Each anchor in the list above is fed through analyzeAnchor (which runs a
@@ -286,7 +303,8 @@ export function SmashTab() {
           targetWidth: target.segInput!.width,
           targetHeight: target.segInput!.height,
           targetX: a.targetX, targetY: a.targetY,
-          radius: a.radius,
+          sourceRadius: a.sourceRadius,
+          targetRadius: a.targetRadius,
           baseSegmentOpts,
           detail: anchorDetail,
         }));
@@ -303,12 +321,24 @@ export function SmashTab() {
     subPaletteSize, neutralProtection, poolContinuity,
   ]);
 
-  // The list passed into transferColors. Each AnchorAnalysis IS the
-  // TransferAnchor shape (geometry + localTargetLabels + per-pool mappings),
-  // so this is a straight pass-through.
+  // The list passed into transferColors. Each AnchorAnalysis carries the
+  // geometry (radius = the anchor's targetRadius) + localTargetLabels +
+  // per-pool mappings; here we merge in the per-anchor correlation knobs
+  // (strength + the three channel locks) from the matching AnchorPair. The
+  // analysis array and the anchors array are index-aligned (analyzeAnchor is
+  // mapped 1:1 over anchors), so anchors[i] supplies anchorAnalyses[i]'s knobs.
   const transferAnchors = useMemo<TransferAnchor[]>(
-    () => anchorAnalyses,
-    [anchorAnalyses],
+    () => anchorAnalyses.map((analysis, i) => {
+      const a = anchors[i];
+      return {
+        ...analysis,
+        strength: a?.strength ?? 1,
+        transferValue: a?.transferValue ?? true,
+        transferChroma: a?.transferChroma ?? true,
+        transferHue: a?.transferHue ?? true,
+      };
+    }),
+    [anchorAnalyses, anchors],
   );
 
   // Repeating distinguishable palette so multiple anchors on the maps don't
@@ -333,7 +363,8 @@ export function SmashTab() {
       anchorIndex: i,
       nx: a.sourceX,
       ny: a.sourceY,
-      radius: a.radius,
+      // Source dot ring shows the SOURCE sample radius.
+      radius: a.sourceRadius,
       color: colorForAnchor(i),
     }));
     if (activeSource) {
@@ -357,7 +388,8 @@ export function SmashTab() {
         anchorIndex: i,
         nx: a.targetX,
         ny: a.targetY,
-        radius: a.radius,
+        // Target dot ring shows the TARGET apply radius.
+        radius: a.targetRadius,
         color: colorForAnchor(i),
       })),
     [anchors],
@@ -610,9 +642,15 @@ export function SmashTab() {
       sourceY: activeSource.ny,
       targetX: nx,
       targetY: ny,
-      // Snapshot the current "default for new anchors" value — this becomes
-      // the anchor's own radius and can be re-tuned later via its row slider.
-      radius: anchorRadius,
+      // Snapshot the current "new-anchor radius" into BOTH the source and
+      // target radii — they start equal and are re-tuned per-anchor via the
+      // row sliders. Correlation knobs start at the full-transfer defaults.
+      sourceRadius: anchorRadius,
+      targetRadius: anchorRadius,
+      strength: 1,
+      transferValue: true,
+      transferChroma: true,
+      transferHue: true,
     };
     setAnchors(prev => [...prev, pair]);
     // activeSource intentionally NOT cleared — sticky source persists.
@@ -627,9 +665,11 @@ export function SmashTab() {
   const clearActiveSource = useCallback(() => {
     setActiveSource(null);
   }, []);
-  // Mutate a single anchor's radius (driven by the per-row slider).
-  const setAnchorRadiusAt = (index: number, radius: number) => {
-    setAnchors(prev => prev.map((a, i) => (i === index ? { ...a, radius } : a)));
+  // Mutate a single anchor's field (driven by the per-row controls). Generic
+  // patch keeps the six per-anchor knobs (two radii, strength, three locks)
+  // from each needing its own near-identical setter.
+  const patchAnchorAt = (index: number, patch: Partial<AnchorPair>) => {
+    setAnchors(prev => prev.map((a, i) => (i === index ? { ...a, ...patch } : a)));
   };
 
   // ── Drag handlers — repositioning existing anchor dots / activeSource ──
@@ -1248,6 +1288,7 @@ export function SmashTab() {
                     const color = colorForAnchor(i);
                     const analysis = anchorAnalyses[i];
                     const localPoolCount = analysis?.localMappingsByPool.size ?? 0;
+                    const expanded = expandedAnchor === i;
                     return (
                       <div
                         key={i}
@@ -1259,8 +1300,18 @@ export function SmashTab() {
                           borderRadius: 2,
                         }}
                       >
-                        {/* Top row — colour chip + label + local-pool count + remove */}
-                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        {/* Summary row — chevron + colour chip + label +
+                            local-pool count + remove. Click anywhere on the row
+                            (except ×) toggles this anchor's expansion. Single-
+                            accordion: expanding one collapses any other. */}
+                        <div
+                          onClick={() => setExpandedAnchor(prev => (prev === i ? null : i))}
+                          title={expanded ? "Collapse this anchor's controls." : "Expand to tune this anchor's radii, strength and channel locks."}
+                          style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none" }}
+                        >
+                          <span style={{ fontSize: 9, color: "#777", width: 8, flexShrink: 0 }}>
+                            {expanded ? "▾" : "▸"}
+                          </span>
                           <div style={{
                             width: 12, height: 12, borderRadius: "50%",
                             background: color, border: "1px solid #000",
@@ -1277,7 +1328,7 @@ export function SmashTab() {
                           </span>
                           <div style={{ flex: 1 }} />
                           <div
-                            onClick={() => removeAnchor(i)}
+                            onClick={e => { e.stopPropagation(); removeAnchor(i); }}
                             title="Remove this anchor."
                             style={{
                               padding: "1px 6px", fontSize: 11, lineHeight: "12px",
@@ -1289,24 +1340,57 @@ export function SmashTab() {
                             ×
                           </div>
                         </div>
-                        {/* Per-anchor radius — tunes ONLY this anchor's falloff. */}
-                        <div
-                          style={{ display: "flex", alignItems: "center", gap: 6 }}
-                          title="Falloff radius for THIS anchor only — how far its source pool reaches before fading back to the auto donor."
-                        >
-                          <span style={{ fontSize: 9, color: "#9a9aa8", width: 38, flexShrink: 0 }}>
-                            Radius
-                          </span>
-                          <input
-                            type="range"
-                            min={0.05} max={0.6} step={0.025} value={a.radius}
-                            onChange={e => setAnchorRadiusAt(i, parseFloat(e.target.value))}
-                            style={{ flex: 1, minWidth: 0, margin: 0, cursor: "pointer", height: 10 }}
-                          />
-                          <span style={{ fontSize: 9, width: 26, textAlign: "right", flexShrink: 0, opacity: 0.8 }}>
-                            {a.radius.toFixed(2)}
-                          </span>
-                        </div>
+
+                        {/* Expanded controls — the full per-anchor knob set.
+                            Source/target radii, strength, then the three LCh
+                            transfer locks. Only the expanded anchor shows them. */}
+                        {expanded && (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 2 }}>
+                            <AnchorSlider
+                              label="Source radius"
+                              title="Size of the SOURCE sample circle — how much source colour structure this anchor's mini-Smash pulls in."
+                              min={0.05} max={0.6} step={0.025}
+                              value={a.sourceRadius}
+                              onChange={v => patchAnchorAt(i, { sourceRadius: v })}
+                            />
+                            <AnchorSlider
+                              label="Target radius"
+                              title="Size of the TARGET apply circle — how far this anchor's transfer reaches before fading back to the auto donor."
+                              min={0.05} max={0.6} step={0.025}
+                              value={a.targetRadius}
+                              onChange={v => patchAnchorAt(i, { targetRadius: v })}
+                            />
+                            <AnchorSlider
+                              label="Strength"
+                              title="How much this anchor replaces the auto transfer, independent of radius. 1 = full replace at the centre; 0.5 = half-replace even at the centre."
+                              min={0} max={1} step={0.05}
+                              value={a.strength}
+                              onChange={v => patchAnchorAt(i, { strength: v })}
+                            />
+                            {/* Channel locks — which LCh dimensions this anchor
+                                moves toward the source. */}
+                            <div
+                              style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}
+                              title="Which colour dimensions this anchor transfers. Unchecking one keeps the target's own value for that dimension (e.g. Hue only = rotate hue toward the source, keep the target's lightness and chroma)."
+                            >
+                              <AnchorCheckbox
+                                label="Value"
+                                checked={a.transferValue}
+                                onChange={c => patchAnchorAt(i, { transferValue: c })}
+                              />
+                              <AnchorCheckbox
+                                label="Chroma"
+                                checked={a.transferChroma}
+                                onChange={c => patchAnchorAt(i, { transferChroma: c })}
+                              />
+                              <AnchorCheckbox
+                                label="Hue"
+                                checked={a.transferHue}
+                                onChange={c => patchAnchorAt(i, { transferHue: c })}
+                              />
+                            </div>
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -1860,6 +1944,51 @@ function CorrespondenceRow({
         </div>
       )}
     </div>
+  );
+}
+
+// ── Compact per-anchor slider — narrower label/readout than `Control`, sized
+// for the per-anchor accordion rows. Behaviour mirrors the old inline radius
+// slider so the dark theme stays consistent. ──
+function AnchorSlider(props: {
+  label: string; title: string;
+  min: number; max: number; step: number;
+  value: number; onChange: (n: number) => void;
+}) {
+  const { label, title, min, max, step, value, onChange } = props;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6 }} title={title}>
+      <span style={{ fontSize: 9, color: "#9a9aa8", width: 64, flexShrink: 0 }}>
+        {label}
+      </span>
+      <input
+        type="range"
+        min={min} max={max} step={step} value={value}
+        onChange={e => onChange(parseFloat(e.target.value))}
+        style={{ flex: 1, minWidth: 0, margin: 0, cursor: "pointer", height: 10 }}
+      />
+      <span style={{ fontSize: 9, width: 26, textAlign: "right", flexShrink: 0, opacity: 0.8 }}>
+        {value.toFixed(2)}
+      </span>
+    </div>
+  );
+}
+
+// ── Compact per-anchor checkbox (one of the three LCh transfer locks). ──
+function AnchorCheckbox(props: {
+  label: string; checked: boolean; onChange: (c: boolean) => void;
+}) {
+  const { label, checked, onChange } = props;
+  return (
+    <label style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 9, color: "#cccccc", cursor: "pointer" }}>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={e => onChange(e.target.checked)}
+        style={{ cursor: "pointer", margin: 0 }}
+      />
+      {label}
+    </label>
   );
 }
 

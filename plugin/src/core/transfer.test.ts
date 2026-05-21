@@ -440,6 +440,8 @@ describe("transferColors", () => {
     redAnchorLabels[1] = 0; // pixel x=1 belongs to local pool 0
     const redAnchor: TransferAnchor = {
       targetX: 1 / (width - 1), targetY: 0.5, radius: 0.15,
+      // Full-transfer defaults — preserve the pre-feature behaviour.
+      strength: 1, transferValue: true, transferChroma: true, transferHue: true,
       localTargetLabels: redAnchorLabels,
       localMappingsByPool: new Map([[
         0,
@@ -453,6 +455,7 @@ describe("transferColors", () => {
     blueAnchorLabels[10] = 0;
     const blueAnchor: TransferAnchor = {
       targetX: 10 / (width - 1), targetY: 0.5, radius: 0.15,
+      strength: 1, transferValue: true, transferChroma: true, transferHue: true,
       localTargetLabels: blueAnchorLabels,
       localMappingsByPool: new Map([[
         0,
@@ -700,6 +703,7 @@ describe("transferColors", () => {
 
     const anchor: TransferAnchor = {
       targetX: 0.5, targetY: 0.5, radius: 2.0, // huge radius — full coverage.
+      strength: 1, transferValue: true, transferChroma: true, transferHue: true,
       localTargetLabels: anchorLabels,
       localMappingsByPool: new Map([[
         0,
@@ -743,5 +747,181 @@ describe("transferColors", () => {
     const range = (xs: number[]) => Math.max(...xs) - Math.min(...xs);
     expect(range(richAs)).toBeGreaterThan(20);
     expect(range(richAs)).toBeGreaterThan(range(compAs) * 3);
+  });
+
+  it("anchor strength: a centre pixel lands between auto and full-anchor at strength 0.5", () => {
+    // Single 1×1 image: a gray target pool whose AUTO donor is green, plus an
+    // anchor at the centre (falloff = 1) whose local mini-Smash pushes toward
+    // red. At strength 1 the replace weight w = falloff*strength = 1 → pure
+    // anchor (red). At strength 0.5 → w = 0.5 → the per-pixel delta is exactly
+    // halfway between the auto (green) delta and the anchor (red) delta. So the
+    // strength-0.5 pixel must lie strictly between the auto-only and full-anchor
+    // results on the channels that distinguish them. Radius is held constant
+    // across all three runs, so this isolates strength from the falloff.
+    const width = 1;
+    const height = 1;
+    const target = fillRgba(width, height, [[140, 140, 140, 255]]);
+    const targetPool = makePool(0, [makeSub(140, 140, 140)]);
+    const targetResult = makeResult(width, height, [0], [targetPool]);
+    // Green auto donor.
+    const sourceResult = makeResult(1, 1, [10], [
+      makePool(10, [makeSub(40, 200, 40)]),
+    ]);
+    const sourceRgba = makeSourceRgba(1, 1, 40, 200, 40);
+    const correspondence: Correspondence = {
+      matches: [{ targetPoolId: 0, sourcePoolId: 10, score: 0 }],
+      unmatchedSourceIds: [],
+    };
+
+    // Anchor at the centre pixel pushing the gray sub-colour toward red.
+    const redLocalPool = makePool(0, [makeSub(220, 40, 40)]);
+    const anchorLabels = new Int32Array(width * height).fill(0);
+    const makeRedAnchor = (strength: number): TransferAnchor => ({
+      targetX: 0.5, targetY: 0.5, radius: 2.0, // huge → falloff ≈ 1 at the pixel
+      strength, transferValue: true, transferChroma: true, transferHue: true,
+      localTargetLabels: anchorLabels,
+      localMappingsByPool: new Map([[
+        0,
+        buildSubMappings(poolSubColors(targetPool), poolSubColors(redLocalPool)),
+      ]]),
+    });
+
+    // auto-only: no anchors → the green donor.
+    const autoOnly = transferColors(
+      target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
+      { strength: 1 },
+    );
+    // full anchor at strength 1 → red.
+    const full = transferColors(
+      target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
+      { strength: 1, anchors: [makeRedAnchor(1)] },
+    );
+    // half-strength anchor → between auto (green) and full (red).
+    const half = transferColors(
+      target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
+      { strength: 1, anchors: [makeRedAnchor(0.5)] },
+    );
+
+    // Red channel: auto (green donor) is low, full (red) is high → half between.
+    expect(half[0]).toBeGreaterThan(Math.min(autoOnly[0], full[0]));
+    expect(half[0]).toBeLessThan(Math.max(autoOnly[0], full[0]));
+    // Green channel: auto (green donor) is high, full (red) is low → half between.
+    expect(half[1]).toBeGreaterThan(Math.min(autoOnly[1], full[1]));
+    expect(half[1]).toBeLessThan(Math.max(autoOnly[1], full[1]));
+  });
+
+  it("channel locks: transferHue only moves hue, leaving value within tolerance", () => {
+    // An anchor with transferValue/Chroma OFF and transferHue ON should rotate
+    // the target's hue toward the source while keeping the target's own
+    // lightness (and chroma). Compare against a full-transfer anchor (all locks
+    // on) over the SAME local mapping: the full anchor drives L sharply (its
+    // donor is much darker), the hue-only anchor must NOT.
+    const width = 1;
+    const height = 1;
+    // Mid red target.
+    const target = fillRgba(width, height, [[200, 90, 90, 255]]);
+    const targetPool = makePool(0, [makeSub(200, 90, 90)]);
+    const targetResult = makeResult(width, height, [0], [targetPool]);
+    // Neutral auto donor so the auto path contributes ~no shift — the anchor
+    // owns the result. (The anchor sits at falloff 1, strength 1, so w=1.)
+    const sourceResult = makeResult(1, 1, [10], [
+      makePool(10, [makeSub(200, 90, 90)]),
+    ]);
+    const sourceRgba = makeSourceRgba(1, 1, 200, 90, 90);
+    const correspondence: Correspondence = {
+      matches: [{ targetPoolId: 0, sourcePoolId: 10, score: 0 }],
+      unmatchedSourceIds: [],
+    };
+
+    // Local donor is a DARK, COOL blue — very different L and hue from the
+    // target red. A full transfer drops L hard and swings hue; a hue-only lock
+    // must keep L (and chroma) but still swing hue.
+    const blueLocalPool = makePool(0, [makeSub(30, 60, 200)]);
+    const anchorLabels = new Int32Array(width * height).fill(0);
+    const makeAnchor = (
+      transferValue: boolean, transferChroma: boolean, transferHue: boolean,
+    ): TransferAnchor => ({
+      targetX: 0.5, targetY: 0.5, radius: 2.0,
+      strength: 1, transferValue, transferChroma, transferHue,
+      localTargetLabels: anchorLabels,
+      localMappingsByPool: new Map([[
+        0,
+        buildSubMappings(poolSubColors(targetPool), poolSubColors(blueLocalPool)),
+      ]]),
+    });
+
+    const fullAnchor = transferColors(
+      target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
+      { strength: 1, anchors: [makeAnchor(true, true, true)] },
+    );
+    const hueOnly = transferColors(
+      target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
+      { strength: 1, anchors: [makeAnchor(false, false, true)] },
+    );
+
+    const hueOf = (a: number, b: number) => Math.atan2(b, a);
+    const [origL, origA, origB] = rgbToLab(200, 90, 90);
+    const [fullL] = rgbToLab(fullAnchor[0], fullAnchor[1], fullAnchor[2]);
+    const [hueL, hueA, hueB] = rgbToLab(hueOnly[0], hueOnly[1], hueOnly[2]);
+
+    // Full transfer drives L far from the original (toward the dark donor).
+    expect(Math.abs(fullL - origL)).toBeGreaterThan(15);
+    // Hue-only KEEPS the target's lightness within a small tolerance (only
+    // 8-bit RGB round-tripping introduces drift).
+    expect(Math.abs(hueL - origL)).toBeLessThan(3);
+    // Hue-only KEEPS chroma within tolerance too (chroma lock is on/false →
+    // target's own chroma retained).
+    const origC = Math.hypot(origA, origB);
+    const hueC = Math.hypot(hueA, hueB);
+    expect(Math.abs(hueC - origC)).toBeLessThan(3);
+    // …but the HUE actually rotated toward the cool-blue source.
+    const origHue = hueOf(origA, origB);
+    const newHue = hueOf(hueA, hueB);
+    expect(Math.abs(newHue - origHue)).toBeGreaterThan(0.2); // radians
+  });
+
+  it("channel locks: transferValue only moves lightness, leaving hue within tolerance", () => {
+    // Mirror of the hue-only test for the value channel. Value-only should move
+    // L toward the donor but keep the target's own hue and chroma.
+    const width = 1;
+    const height = 1;
+    const target = fillRgba(width, height, [[200, 90, 90, 255]]);
+    const targetPool = makePool(0, [makeSub(200, 90, 90)]);
+    const targetResult = makeResult(width, height, [0], [targetPool]);
+    const sourceResult = makeResult(1, 1, [10], [
+      makePool(10, [makeSub(200, 90, 90)]),
+    ]);
+    const sourceRgba = makeSourceRgba(1, 1, 200, 90, 90);
+    const correspondence: Correspondence = {
+      matches: [{ targetPoolId: 0, sourcePoolId: 10, score: 0 }],
+      unmatchedSourceIds: [],
+    };
+
+    // Dark cool-blue donor again — distinct L AND hue.
+    const blueLocalPool = makePool(0, [makeSub(30, 60, 200)]);
+    const anchorLabels = new Int32Array(width * height).fill(0);
+    const anchor: TransferAnchor = {
+      targetX: 0.5, targetY: 0.5, radius: 2.0,
+      strength: 1, transferValue: true, transferChroma: false, transferHue: false,
+      localTargetLabels: anchorLabels,
+      localMappingsByPool: new Map([[
+        0,
+        buildSubMappings(poolSubColors(targetPool), poolSubColors(blueLocalPool)),
+      ]]),
+    };
+
+    const valueOnly = transferColors(
+      target, width, height, targetResult, sourceRgba, sourceResult, correspondence,
+      { strength: 1, anchors: [anchor] },
+    );
+
+    const [origL, origA, origB] = rgbToLab(200, 90, 90);
+    const [outL, outA, outB] = rgbToLab(valueOnly[0], valueOnly[1], valueOnly[2]);
+
+    // Value moved meaningfully toward the dark donor.
+    expect(Math.abs(outL - origL)).toBeGreaterThan(15);
+    // Hue stayed put (within tolerance) — chroma/hue locks held the target's a/b.
+    const hueOf = (a: number, b: number) => Math.atan2(b, a);
+    expect(Math.abs(hueOf(outA, outB) - hueOf(origA, origB))).toBeLessThan(0.1);
   });
 });

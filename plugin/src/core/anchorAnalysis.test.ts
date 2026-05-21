@@ -55,7 +55,8 @@ describe("analyzeAnchor", () => {
       targetWidth: width,
       targetHeight: height,
       targetX: 0.5, targetY: 0.5,
-      radius: 0.25,
+      sourceRadius: 0.25,
+      targetRadius: 0.25,
       baseSegmentOpts,
       detail: 0.5,
     });
@@ -107,6 +108,55 @@ describe("analyzeAnchor", () => {
     expect(foundNonEmpty).toBe(true);
   });
 
+  it("decouples source and target radii — a larger sourceRadius pulls in more source", () => {
+    // Source is two halves so a larger source circle straddles more colour
+    // structure; target is a single flat colour so it segments identically
+    // regardless of the source side. We hold the TARGET radius fixed and vary
+    // only the SOURCE radius, then compare how much source the mini-Smash drew
+    // in. The local donor Lab samples are a strided sample of the source pixels
+    // inside the source circle, so their total count is monotone with the
+    // number of source pixels covered — a clean proxy for "more source pulled".
+    const width = 64;
+    const height = 64;
+    const source = twoHalvesRgba(width, height, [200, 30, 30], [30, 30, 200]);
+    const target = twoHalvesRgba(width, height, [120, 160, 120], [120, 160, 120]);
+
+    const run = (sourceRadius: number) =>
+      analyzeAnchor({
+        sourceRgba: source,
+        sourceWidth: width,
+        sourceHeight: height,
+        sourceX: 0.5, sourceY: 0.5,
+        targetRgba: target,
+        targetWidth: width,
+        targetHeight: height,
+        targetX: 0.5, targetY: 0.5,
+        sourceRadius,
+        targetRadius: 0.35, // fixed across both runs
+        baseSegmentOpts,
+        detail: 0.5,
+      });
+
+    const totalDonorSamples = (a: ReturnType<typeof run>) => {
+      let n = 0;
+      for (const samples of a.localDonorLabSamples.values()) n += samples.length;
+      return n;
+    };
+
+    const small = run(0.1);
+    const large = run(0.45);
+
+    // Both runs produced a usable analysis (target side identical, so this
+    // isolates the source-radius effect).
+    expect(small.localMappingsByPool.size).toBeGreaterThan(0);
+    expect(large.localMappingsByPool.size).toBeGreaterThan(0);
+
+    // The bigger source circle pulled in strictly more source than the tiny
+    // one — proving sourceRadius drives source extraction independently of the
+    // (fixed) target radius.
+    expect(totalDonorSamples(large)).toBeGreaterThan(totalDonorSamples(small));
+  });
+
   it("returns an empty analysis when the falloff covers too few pixels", () => {
     const width = 8;
     const height = 8;
@@ -123,7 +173,8 @@ describe("analyzeAnchor", () => {
       targetWidth: width,
       targetHeight: height,
       targetX: 0.5, targetY: 0.5,
-      radius: 0.02,
+      sourceRadius: 0.02,
+      targetRadius: 0.02,
       baseSegmentOpts,
       detail: 0.5,
     });
