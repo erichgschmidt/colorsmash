@@ -116,6 +116,8 @@ export function SmashEditCanvas({
   const [draft, setDraft] = useState<Draft | null>(null);
   const draftRef = useRef<Draft | null>(null);
   draftRef.current = draft;
+  // Hovered polygon vertex (for the remove-vertex × badge).
+  const [hoverVertex, setHoverVertex] = useState<{ key: string; index: number } | null>(null);
 
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -520,17 +522,62 @@ export function SmashEditCanvas({
           const cenX = geom.ox + cx * geom.dw, cenY = geom.oy + cy * geom.dh;
           return (
             <Fragment key={p.key}>
+              {/* Edge-midpoint "+" handles — click to INSERT a vertex there. */}
+              {p.editable !== false && onSetPolyPoints && pp.map((pt, i) => {
+                const nxt = pp[(i + 1) % pp.length];
+                const mx = geom.ox + ((pt.x + nxt.x) / 2) * geom.dw;
+                const my = geom.oy + ((pt.y + nxt.y) / 2) * geom.dh;
+                return (
+                  <div key={`mid-${i}`}
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      const inserted = pp.slice();
+                      inserted.splice(i + 1, 0, { x: (pt.x + nxt.x) / 2, y: (pt.y + nxt.y) / 2 });
+                      if (view) onSetPolyPoints(view.id, p.key, inserted);
+                    }}
+                    title="Add a point on this edge"
+                    style={{
+                      position: "absolute", left: mx - 4, top: my - 4, width: 8, height: 8,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      borderRadius: "50%", background: "#1f1f1f", border: `1px dashed ${p.color}`,
+                      color: p.color, fontSize: 8, lineHeight: "8px", cursor: "copy", opacity: 0.7,
+                    }}>+</div>
+                );
+              })}
               {p.editable !== false && pp.map((pt, i) => {
                 const vx = geom.ox + pt.x * geom.dw, vy = geom.oy + pt.y * geom.dh;
+                const hovered = hoverVertex && hoverVertex.key === p.key && hoverVertex.index === i;
+                const canRemove = pp.length > 3 && onSetPolyPoints;
                 return (
-                  <div key={i}
-                    onPointerDown={(e) => { e.stopPropagation(); gestureRef.current = { kind: "polyVertex", key: p.key, index: i }; }}
-                    title="Drag to reshape"
-                    style={{
-                      position: "absolute", left: vx - 5, top: vy - 5, width: 10, height: 10,
-                      borderRadius: "50%", background: "#1f1f1f", border: `1px solid ${p.color}`,
-                      cursor: "grab",
-                    }} />
+                  <Fragment key={`v-${i}`}>
+                    <div
+                      onPointerDown={(e) => { e.stopPropagation(); gestureRef.current = { kind: "polyVertex", key: p.key, index: i }; }}
+                      onPointerEnter={() => setHoverVertex({ key: p.key, index: i })}
+                      onPointerLeave={() => setHoverVertex(h => (h && h.key === p.key && h.index === i ? null : h))}
+                      title="Drag to reshape"
+                      style={{
+                        position: "absolute", left: vx - 5, top: vy - 5, width: 10, height: 10,
+                        borderRadius: "50%", background: "#1f1f1f", border: `1px solid ${p.color}`,
+                        cursor: "grab",
+                      }} />
+                    {hovered && canRemove && (
+                      <div
+                        onPointerDown={(e) => {
+                          e.stopPropagation(); e.preventDefault();
+                          const trimmed = pp.filter((_, j) => j !== i);
+                          if (view) onSetPolyPoints!(view.id, p.key, trimmed);
+                          setHoverVertex(null);
+                        }}
+                        title="Remove this point"
+                        style={{
+                          position: "absolute", left: vx + 5, top: vy - 13, width: 12, height: 12,
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          background: "#3a2a2a", color: "#e8b0b0", border: `1px solid #6a4a4a`,
+                          borderRadius: "50%", fontSize: 10, lineHeight: "10px", fontWeight: 700,
+                          cursor: "pointer", userSelect: "none",
+                        }}>×</div>
+                    )}
+                  </Fragment>
                 );
               })}
               {p.movable !== false && (
@@ -580,8 +627,8 @@ export function SmashEditCanvas({
 
       <div style={{ fontSize: 9, color: "#888", lineHeight: 1.4 }}>
         {lassoActive
-          ? "Lasso mode: drag to draw a region around what you want · release to place · drag its vertices to reshape."
-          : "Drag to pan · +/− or the slider to zoom (no scroll-wheel in Photoshop) · drag a dot to move, the square handle to resize, the inner dot to feather."}
+          ? "Lasso mode: drag to draw a region · release to place · drag a vertex to reshape · click a dashed + on an edge to add a point · hover a vertex and click × to remove it."
+          : "Drag to pan · +/− or the slider to zoom (no scroll-wheel in Photoshop) · drag a dot to move, the square handle to resize, the inner dot to feather. Polygon: + on an edge adds a point, hover a vertex for ×."}
       </div>
     </div>
   );

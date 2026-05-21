@@ -281,6 +281,32 @@ export function reconcileMacroMatch(
   return out;
 }
 
+// Force tagged regions' pools into their assigned macro — AUTHORITATIVE: a
+// region the user explicitly assigned ("this is skin") outranks colour-based
+// placement, so an intersecting element isn't collapsed into the wrong group.
+// Each tag = the pool ids a split produced + the macro it's assigned to. Tags
+// for non-existent macros are ignored; last tag wins per pool. Applied after
+// seed/reconcile.
+export function applyRegionTags(
+  macros: MacroGroup[],
+  tags: { poolIds: number[]; macroId: number }[],
+): MacroGroup[] {
+  const validMacro = new Set(macros.map(m => m.id));
+  const force = new Map<number, number>(); // poolId -> macroId
+  for (const t of tags) {
+    if (!validMacro.has(t.macroId)) continue;
+    for (const pid of t.poolIds) force.set(pid, t.macroId);
+  }
+  if (force.size === 0) return macros;
+  return macros.map(m => {
+    const ids = m.poolIds.filter(id => !force.has(id) || force.get(id) === m.id);
+    for (const [pid, mid] of force) {
+      if (mid === m.id && !ids.includes(pid)) ids.push(pid);
+    }
+    return { ...m, poolIds: ids };
+  });
+}
+
 // ────────── membership suggestions (contamination / missing) ──────────
 
 export interface MacroSuggestion {

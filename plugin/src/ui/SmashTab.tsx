@@ -38,7 +38,7 @@ import { simplifyPolygon, polygonCentroid, type Pt } from "../core/regions";
 import { SmashMacroPanel } from "./SmashMacroPanel";
 import {
   seedMacroGroups, matchMacros, buildMacroConstrainedCorrespondence, macroInfoMap,
-  macroSuggestions, nearestMacroFor, reconcileMacros, reconcileMacroMatch,
+  macroSuggestions, nearestMacroFor, reconcileMacros, reconcileMacroMatch, applyRegionTags,
   type MacroGroup,
 } from "../core/macro";
 import { PoolMatch, Correspondence } from "../core/match";
@@ -626,6 +626,13 @@ export function SmashTab() {
     return `${sig(sourceSplits)}##${sig(targetSplits)}`;
   }, [sourceSplits, targetSplits]);
 
+  // Signature of target-split → macro tags, so a tag change re-runs the macro
+  // effect (re-applies region assignments) WITHOUT re-segmenting.
+  const targetTagSig = useMemo(
+    () => targetSplits.map(s => `${s.id}:${s.assignMacroId ?? ""}`).join("|"),
+    [targetSplits],
+  );
+
   // Segment both images whenever either input or any control changes. Work is
   // synchronous and can take a moment, so flip on "analyzing", yield a frame
   // for it to paint, then run both segmentations + the match.
@@ -710,17 +717,31 @@ export function SmashTab() {
     const sMacros = freshSeed
       ? seedMacroGroups(sourceResult.pools, macroCount)
       : reconcileMacros(sourceMacrosRef.current, sourceResult.pools, macroCount);
-    const tMacros = freshSeed
+    let tMacros = freshSeed
       ? seedMacroGroups(targetResult.pools, macroCount)
       : reconcileMacros(targetMacrosRef.current, targetResult.pools, macroCount);
     const mMatch = freshSeed
       ? matchMacros(sMacros, sourceResult.pools, tMacros, targetResult.pools)
       : reconcileMacroMatch(macroMatchRef.current, sMacros, sourceResult.pools, tMacros, targetResult.pools);
 
+    // Authoritative region→macro tags: force each assigned split's pools into
+    // its macro group (overrides colour-based placement). Re-applied every run
+    // so tagged regions stay put across re-segmentation.
+    const tags = targetSplits
+      .filter(s => s.assignMacroId != null)
+      .map(s => ({
+        poolIds: targetResult.pools
+          .filter(p => p.id >= s.baseId && p.id < s.baseId + SPLIT_ID_STRIDE)
+          .map(p => p.id),
+        macroId: s.assignMacroId!,
+      }));
+    if (tags.length > 0) tMacros = applyRegionTags(tMacros, tags);
+
     setSourceMacros(sMacros);
     setTargetMacros(tMacros);
     setMacroMatch(mMatch);
-  }, [sourceResult, targetResult, macroCount]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceResult, targetResult, macroCount, targetTagSig]);
 
   // ── Macro-constrained correspondence ───────────────────────────────
   // Rebuilt whenever the macros, the macro→macro match, or the segmentation
@@ -972,6 +993,11 @@ export function SmashTab() {
   const setPolyPoints = useCallback((side: "source" | "target", id: string, points: Pt[]) => {
     const c = polygonCentroid(points);
     patchSplit(side, id, { points, nx: c.x, ny: c.y });
+  }, [patchSplit]);
+  // Assign (or clear) a TARGET split's macro group — its pools are forced into
+  // that group (authoritative). null clears the assignment.
+  const setSplitMacro = useCallback((id: string, macroId: number | null) => {
+    patchSplit("target", id, { assignMacroId: macroId ?? undefined });
   }, [patchSplit]);
   const clearAllSplits = () => { setSourceSplits([]); setTargetSplits([]); };
 
@@ -1593,21 +1619,50 @@ export function SmashTab() {
                   ...targetSplits.map(s => ({ side: "target" as const, s })),
                 ].map(({ side, s }) => (
                   <div key={`${side}-${s.id}`} style={{
-                    display: "flex", alignItems: "center", gap: 6,
+                    display: "flex", flexDirection: "column", gap: 3,
                     fontSize: 9, color: "#cccccc",
                     background: "#1f1f1f", border: "1px solid #3a3a3a",
                     borderRadius: 2, padding: "3px 6px",
                   }}>
-                    <span style={{ width: 42, color: side === "source" ? "#8fb5e8" : "#e8b58f" }}>{side}</span>
-                    <span style={{ flex: 1 }}>
-                      {s.partCount}p · {s.points ? "lasso" : `r${s.radius.toFixed(2)}`} · f{(s.feather ?? 0).toFixed(2)}
-                    </span>
-                    <div onClick={() => patchSplit(side, s.id, { partCount: Math.max(2, s.partCount - 1) })}
-                      title="Fewer parts" style={{ padding: "0 7px", fontSize: 11, borderRadius: 2, border: "1px solid #4a4a4a", background: "#333", color: "#ddd", cursor: "pointer", userSelect: "none" }}>−</div>
-                    <div onClick={() => patchSplit(side, s.id, { partCount: Math.min(8, s.partCount + 1) })}
-                      title="More parts" style={{ padding: "0 7px", fontSize: 11, borderRadius: 2, border: "1px solid #4a4a4a", background: "#333", color: "#ddd", cursor: "pointer", userSelect: "none" }}>+</div>
-                    <div onClick={() => removeSplit(side, s.id)}
-                      title="Remove this split" style={{ padding: "0 7px", fontSize: 11, borderRadius: 2, border: "1px solid #6a4a4a", background: "#3a2a2a", color: "#e8b0b0", cursor: "pointer", userSelect: "none" }}>×</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ width: 42, color: side === "source" ? "#8fb5e8" : "#e8b58f" }}>{side}</span>
+                      <span style={{ flex: 1 }}>
+                        {s.partCount}p · {s.points ? "lasso" : `r${s.radius.toFixed(2)}`} · f{(s.feather ?? 0).toFixed(2)}
+                      </span>
+                      <div onClick={() => patchSplit(side, s.id, { partCount: Math.max(2, s.partCount - 1) })}
+                        title="Fewer parts" style={{ padding: "0 7px", fontSize: 11, borderRadius: 2, border: "1px solid #4a4a4a", background: "#333", color: "#ddd", cursor: "pointer", userSelect: "none" }}>−</div>
+                      <div onClick={() => patchSplit(side, s.id, { partCount: Math.min(8, s.partCount + 1) })}
+                        title="More parts" style={{ padding: "0 7px", fontSize: 11, borderRadius: 2, border: "1px solid #4a4a4a", background: "#333", color: "#ddd", cursor: "pointer", userSelect: "none" }}>+</div>
+                      <div onClick={() => removeSplit(side, s.id)}
+                        title="Remove this split" style={{ padding: "0 7px", fontSize: 11, borderRadius: 2, border: "1px solid #6a4a4a", background: "#3a2a2a", color: "#e8b0b0", cursor: "pointer", userSelect: "none" }}>×</div>
+                    </div>
+                    {/* TARGET splits can be assigned to a macro group — their
+                        pools are then forced into it (authoritative). */}
+                    {side === "target" && targetMacros.length > 0 && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                        <span style={{ opacity: 0.7 }}>group:</span>
+                        {targetMacros.map(m => {
+                          const info = targetMacroInfo.get(m.id);
+                          const sel = s.assignMacroId === m.id;
+                          return (
+                            <div key={m.id}
+                              onClick={() => setSplitMacro(s.id, sel ? null : m.id)}
+                              title={`Assign this region to ${m.name}`}
+                              style={{
+                                width: 14, height: 14, borderRadius: 3,
+                                background: info ? `rgb(${info.r}, ${info.g}, ${info.b})` : "#2a2a2a",
+                                border: sel ? "2px solid #1473e6" : "1px solid #000",
+                                cursor: "pointer", boxSizing: "border-box",
+                              }} />
+                          );
+                        })}
+                        <span style={{ opacity: 0.6 }}>
+                          {s.assignMacroId != null
+                            ? (targetMacros.find(m => m.id === s.assignMacroId)?.name ?? "")
+                            : "auto"}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

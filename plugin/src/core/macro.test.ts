@@ -20,6 +20,7 @@ import {
   nearestMacroFor,
   reconcileMacros,
   reconcileMacroMatch,
+  applyRegionTags,
 } from "./macro";
 import type { MacroGroup } from "./macro";
 import { matchPools } from "./match";
@@ -683,5 +684,45 @@ describe("reconcileMacroMatch", () => {
     for (const donor of out.values()) {
       expect([5, 6]).toContain(donor); // every donor is a real source macro
     }
+  });
+});
+
+describe("applyRegionTags", () => {
+  const macros: MacroGroup[] = [
+    { id: 0, name: "Skin", poolIds: [1, 2] },
+    { id: 1, name: "BG", poolIds: [3, 4] },
+  ];
+
+  it("forces a tagged pool into its assigned macro (authoritative)", () => {
+    // Pool 3 currently lives in BG (id 1); tag it into Skin (id 0).
+    const out = applyRegionTags(macros, [{ poolIds: [3], macroId: 0 }]);
+    const skin = out.find((m) => m.id === 0)!;
+    const bg = out.find((m) => m.id === 1)!;
+    expect(skin.poolIds).toContain(3);
+    expect(bg.poolIds).not.toContain(3);
+    // Untouched pools stay put; coverage unchanged overall.
+    expect(skin.poolIds).toContain(1);
+    expect(bg.poolIds).toContain(4);
+  });
+
+  it("adds a not-yet-present pool to its tagged macro", () => {
+    const out = applyRegionTags(macros, [{ poolIds: [99], macroId: 1 }]);
+    expect(out.find((m) => m.id === 1)!.poolIds).toContain(99);
+  });
+
+  it("ignores tags for non-existent macros and empty tag lists", () => {
+    expect(applyRegionTags(macros, [])).toBe(macros);
+    const out = applyRegionTags(macros, [{ poolIds: [1], macroId: 77 }]);
+    // macro 77 doesn't exist → pool 1 stays in Skin.
+    expect(out.find((m) => m.id === 0)!.poolIds).toContain(1);
+  });
+
+  it("last tag wins when a pool is tagged twice", () => {
+    const out = applyRegionTags(macros, [
+      { poolIds: [2], macroId: 1 },
+      { poolIds: [2], macroId: 0 },
+    ]);
+    expect(out.find((m) => m.id === 0)!.poolIds).toContain(2);
+    expect(out.find((m) => m.id === 1)!.poolIds).not.toContain(2);
   });
 });

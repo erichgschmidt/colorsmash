@@ -122,6 +122,10 @@ export interface SplitEdit {
   // covered pixels are those inside the polygon (radius is ignored); nx/ny is the
   // centroid for the move handle. Absent → a circle (nx/ny/radius).
   points?: Pt[];
+  // Optional macro-group assignment: the pools this split produces are forced
+  // into this macro id (authoritative). UI-level concern; segmentation ignores
+  // it. See macro.applyRegionTags.
+  assignMacroId?: number;
 }
 
 // Stable id space for split parts — far above normal pool ids (which stay small
