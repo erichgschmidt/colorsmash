@@ -24,9 +24,10 @@ export interface CanvasCircle {
   movable?: boolean;    // draggable centre (default true)
   resizable?: boolean;  // drag-handle on the ring
   removable?: boolean;  // × badge
-  // Optional inner ring (feather core) drawn as a faint solid circle, used to
-  // visualise a split's feather band. Fraction of `radius`, 0..1. 0 = none.
-  innerFrac?: number;
+  // Feather, 0..1 — when `featherable`, the circle draws a faint inner ring at
+  // radius·(1−feather) with its own drag handle; dragging it sets feather.
+  featherable?: boolean;
+  feather?: number;
 }
 
 export interface CanvasView {
@@ -49,6 +50,7 @@ interface Props {
   onMoveCircle: (viewId: string, key: string, nx: number, ny: number) => void;
   onResizeCircle: (viewId: string, key: string, radius: number) => void;
   onRemoveCircle: (viewId: string, key: string) => void;
+  onFeatherCircle?: (viewId: string, key: string, feather: number) => void;
   height?: number;
 }
 
@@ -59,11 +61,12 @@ const HANDLE = 11;       // fixed screen px for the centre handle hit area
 type Gesture =
   | { kind: "bg"; sx: number; sy: number; px: number; py: number; moved: boolean }
   | { kind: "move"; key: string; sx: number; sy: number; moved: boolean }
-  | { kind: "resize"; key: string };
+  | { kind: "resize"; key: string }
+  | { kind: "feather"; key: string };
 
 export function SmashEditCanvas({
   views, activeId, onActiveChange,
-  onMoveCircle, onResizeCircle, onRemoveCircle,
+  onMoveCircle, onResizeCircle, onRemoveCircle, onFeatherCircle,
   height = 280,
 }: Props) {
   const view = views.find(v => v.id === activeId) ?? views[0];
@@ -129,7 +132,7 @@ export function SmashEditCanvas({
         if (n && view) onMoveCircle(view.id, g.key, n.nx, n.ny);
         return;
       }
-      if (g.kind === "resize") {
+      if (g.kind === "resize" || g.kind === "feather") {
         const el = containerRef.current;
         if (!el || !view) return;
         const r = el.getBoundingClientRect();
@@ -139,8 +142,15 @@ export function SmashEditCanvas({
         const cxPx = geom.ox + c.nx * geom.dw;
         const cyPx = geom.oy + c.ny * geom.dh;
         const dist = Math.hypot(px - cxPx, py - cyPx);
-        const radius = geom.maxD > 0 ? clamp01(dist / geom.maxD) : c.radius;
-        onResizeCircle(view.id, g.key, radius);
+        if (g.kind === "resize") {
+          const radius = geom.maxD > 0 ? clamp01(dist / geom.maxD) : c.radius;
+          onResizeCircle(view.id, g.key, radius);
+        } else if (onFeatherCircle) {
+          // Inner handle distance vs the outer ring → feather = 1 − inner/outer.
+          const outerPx = c.radius * geom.maxD;
+          const feather = outerPx > 0 ? clamp01(1 - dist / outerPx) : 0;
+          onFeatherCircle(view.id, g.key, feather);
+        }
       }
     };
     const onUp = (e: PointerEvent) => {
@@ -158,7 +168,7 @@ export function SmashEditCanvas({
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
     };
-  }, [view, geom, toNorm, onMoveCircle, onResizeCircle]);
+  }, [view, geom, toNorm, onMoveCircle, onResizeCircle, onFeatherCircle]);
 
   // Keyboard zoom when hovered (mirrors Match).
   useEffect(() => {
@@ -267,6 +277,13 @@ export function SmashEditCanvas({
           const resizeAngle = -Math.PI / 4; // handle at upper-right of the ring
           const hx = cxPx + Math.cos(resizeAngle) * rPx;
           const hy = cyPx + Math.sin(resizeAngle) * rPx;
+          const feather = c.feather ?? 0;
+          const innerFrac = 1 - feather;
+          // Feather handle sits on the inner ring at lower-left (+135°).
+          const fAngle = (3 * Math.PI) / 4;
+          const fr = rPx * innerFrac;
+          const fhx = cxPx + Math.cos(fAngle) * fr;
+          const fhy = cyPx + Math.sin(fAngle) * fr;
           return (
             <Fragment key={c.key}>
               {/* outer ring */}
@@ -277,13 +294,13 @@ export function SmashEditCanvas({
                 border: c.dashed ? `1px dashed ${c.color}` : `1px solid ${c.color}`,
                 opacity: 0.9,
               }} />
-              {/* inner feather ring (faint) */}
-              {c.innerFrac != null && c.innerFrac > 0 && c.innerFrac < 1 && (
+              {/* inner feather ring (faint) — the core where the split applies
+                  fully; between it and the outer ring the recolor feathers. */}
+              {c.featherable && feather > 0 && (
                 <div style={{
                   position: "absolute", pointerEvents: "none",
-                  left: cxPx - rPx * c.innerFrac, top: cyPx - rPx * c.innerFrac,
-                  width: rPx * 2 * c.innerFrac, height: rPx * 2 * c.innerFrac,
-                  borderRadius: "50%", border: `1px solid ${c.color}`, opacity: 0.35,
+                  left: cxPx - fr, top: cyPx - fr, width: fr * 2, height: fr * 2,
+                  borderRadius: "50%", border: `1px solid ${c.color}`, opacity: 0.4,
                 }} />
               )}
               {/* centre handle (drag to move) */}
@@ -317,6 +334,23 @@ export function SmashEditCanvas({
                   }}
                 />
               )}
+              {/* feather handle on the inner ring — drag toward centre for a
+                  softer edge, toward the rim for a harder one. */}
+              {c.featherable && onFeatherCircle && (
+                <div
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    gestureRef.current = { kind: "feather", key: c.key };
+                  }}
+                  title="Drag to feather (soft edge)"
+                  style={{
+                    position: "absolute",
+                    left: fhx - 5, top: fhy - 5, width: 10, height: 10,
+                    borderRadius: "50%", background: c.color, border: "1px solid #000",
+                    opacity: 0.85, cursor: "move",
+                  }}
+                />
+              )}
               {/* remove badge */}
               {c.removable && (
                 <div
@@ -339,7 +373,8 @@ export function SmashEditCanvas({
 
       <div style={{ fontSize: 9, color: "#888", lineHeight: 1.4 }}>
         Drag the canvas to pan · +/− or the slider to zoom (no scroll-wheel in
-        Photoshop) · drag a dot to move, its square handle to resize.
+        Photoshop) · drag a dot to move, the square handle to resize, the inner
+        dot to feather.
       </div>
     </div>
   );

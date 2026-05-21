@@ -34,12 +34,6 @@ export interface TransferOptions {
                     //              pool's actual source pixels. Pulls the donor's
                     //              raw a/b chroma variation into the target
                     //              instead of the few sub-swatch averages.
-  // Per-pixel recolor-attenuation mask for feathered splits (length width*height,
-  // values 0..1). The final blend strength is scaled by this per pixel so a
-  // feathered split fades to the original toward its rim. Undefined = no feather
-  // (all pixels at 1). Build with clusters.buildSplitFeatherMask at the SAME
-  // resolution as the target buffer being transferred.
-  splitFeather?: Float32Array;
 }
 
 // A focal anchor is a pre-analysed local correspondence over a small region
@@ -772,7 +766,6 @@ export function transferColors(
   // preserveLuminance scales down the lightness delta only: =1 keeps the
   // target's original L (color-only shift), =0 applies the full L delta.
   const lScale = 1 - preserveLuminance;
-  const splitFeather = opts.splitFeather;
   for (let i = 0; i < pxCount; i++) {
     if (opaque[i] === 0) continue; // transparent pixels pass through unchanged
     const o = i * 4;
@@ -788,12 +781,10 @@ export function transferColors(
       b + deltaB[i],
     );
 
-    // Blend original → transferred by strength, attenuated per pixel by the
-    // split feather mask (1 everywhere unless a feathered split fades it down).
-    const s = splitFeather ? strength * splitFeather[i] : strength;
-    out[o] = clamp255(Math.round(r0 + (tr - r0) * s));
-    out[o + 1] = clamp255(Math.round(g0 + (tg - g0) * s));
-    out[o + 2] = clamp255(Math.round(b0 + (tb - b0) * s));
+    // Blend original → transferred by strength.
+    out[o] = clamp255(Math.round(r0 + (tr - r0) * strength));
+    out[o + 1] = clamp255(Math.round(g0 + (tg - g0) * strength));
+    out[o + 2] = clamp255(Math.round(b0 + (tb - b0) * strength));
     // out[o + 3] already equals the original alpha (out is a copy).
   }
 

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   segmentImage, expandPool, collapsePool,
-  applySplits, buildPoolsFromLabels, buildSplitFeatherMask,
+  applySplits, buildPoolsFromLabels, buildSplitBlendWeight,
   SPLIT_ID_BASE, SPLIT_ID_STRIDE,
 } from "./clusters";
 import type { SplitEdit } from "./clusters";
@@ -322,35 +322,34 @@ describe("buildPoolsFromLabels", () => {
   });
 });
 
-describe("buildSplitFeatherMask", () => {
+describe("buildSplitBlendWeight", () => {
   it("returns null when no split has feather", () => {
     const edits: SplitEdit[] = [
       { id: "a", nx: 0.5, ny: 0.5, radius: 0.3, partCount: 2, baseId: SPLIT_ID_BASE },
       { id: "b", nx: 0.2, ny: 0.2, radius: 0.2, partCount: 2, baseId: SPLIT_ID_BASE + SPLIT_ID_STRIDE, feather: 0 },
     ];
-    expect(buildSplitFeatherMask(32, 32, edits)).toBeNull();
+    expect(buildSplitBlendWeight(32, 32, edits)).toBeNull();
   });
 
-  it("ramps the outer band 1→0 and leaves the core + outside at 1", () => {
+  it("is 1 in the core, ramps 1→0 across the band, and 0 outside", () => {
     const W = 100, H = 100;
     // Centred split, radius 0.4 of maxEdge (=40px), feather 0.5 → inner 20px.
     const edits: SplitEdit[] = [
       { id: "a", nx: 0.5, ny: 0.5, radius: 0.4, partCount: 2, baseId: SPLIT_ID_BASE, feather: 0.5 },
     ];
-    const mask = buildSplitFeatherMask(W, H, edits)!;
-    expect(mask).not.toBeNull();
+    const w = buildSplitBlendWeight(W, H, edits)!;
+    expect(w).not.toBeNull();
 
-    const at = (x: number, y: number) => mask[y * W + x];
+    const at = (x: number, y: number) => w[y * W + x];
     const cx = 50, cy = 50;
-    // Centre (d=0, inside inner 20px) → full recolor.
+    // Core (d=0 and d≈18, inside inner 20px) → fully use the split result.
     expect(at(cx, cy)).toBeCloseTo(1, 5);
-    // Just inside inner radius (d≈18px) → still full.
     expect(at(cx + 18, cy)).toBeCloseTo(1, 5);
-    // Mid feather band (d≈30px, halfway inner→outer) → attenuated below 1, above 0.
+    // Mid band (d≈30px) → partial blend.
     const mid = at(cx + 30, cy);
     expect(mid).toBeGreaterThan(0);
     expect(mid).toBeLessThan(1);
-    // Far outside the outer radius (d≈45px) → untouched (full global transfer).
-    expect(at(cx + 45, cy)).toBeCloseTo(1, 5);
+    // Outside the outer radius (d≈45px) → use the base (no-split) result.
+    expect(at(cx + 45, cy)).toBeCloseTo(0, 5);
   });
 });

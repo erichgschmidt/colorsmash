@@ -442,24 +442,29 @@ export function applySplits(
   return { width, height, labels, pools };
 }
 
-// Build a per-pixel recolor-attenuation mask for feathered splits, or null when
-// no edit has feather. The transfer multiplies its blend strength by this mask,
-// so a value of 1 = full recolor and 0 = keep the original pixel. Each feathered
-// split ramps 1→0 (smoothstep) across its outer band [innerR, outerR]; pixels
-// inside innerR or outside outerR are left at 1. Overlapping feathers take the
-// strongest attenuation (min). Pure geometry → regenerate at any resolution
-// (preview vs full-res output) and it stays aligned.
-export function buildSplitFeatherMask(
+// Build a per-pixel SPLIT BLEND WEIGHT for feathered splits, or null when no
+// edit has feather (in which case the caller uses the plain split recolor — a
+// hard split needs no blend). The weight drives a composite of the WITH-splits
+// recolor over the WITHOUT-splits recolor: 1 = use the split result fully,
+// 0 = use the base (no-split) result. So a feathered split fades into what its
+// neighbourhood would look like WITHOUT the split — true feathering, not a fade
+// to the raw original.
+//
+// Per split: 1 inside the core radius·(1−feather); smoothstep 1→0 across the
+// outer band [innerR, outerR]; 0 beyond outerR. Multiple splits take the MAX so
+// every split's core stays fully applied even where another's feather overlaps.
+// Pure geometry → regenerate at any resolution (preview vs full-res output).
+export function buildSplitBlendWeight(
   width: number,
   height: number,
   edits: SplitEdit[],
 ): Float32Array | null {
-  const active = edits.filter((e) => (e.feather ?? 0) > 0);
-  if (active.length === 0) return null;
+  const anyFeather = edits.some((e) => (e.feather ?? 0) > 0);
+  if (!anyFeather) return null;
 
-  const mask = new Float32Array(width * height).fill(1);
+  const w = new Float32Array(width * height); // 0 everywhere (outside = base)
   const maxEdge = Math.max(width, height);
-  for (const e of active) {
+  for (const e of edits) {
     const feather = clamp01(e.feather ?? 0);
     const cx = e.nx * width;
     const cy = e.ny * height;
@@ -476,16 +481,21 @@ export function buildSplitFeatherMask(
       for (let x = x0; x <= x1; x++) {
         const dx = x - cx;
         const d = Math.sqrt(dx * dx + dy * dy);
-        if (d <= innerR || d >= outerR) continue; // full recolor / outside band
-        const t = (d - innerR) / band;            // 0 at inner → 1 at outer
-        const w = 1 - t;                           // 1 at inner → 0 at outer
-        const sw = w * w * (3 - 2 * w);            // smoothstep for a soft falloff
+        if (d >= outerR) continue;        // outside → leave at base (0)
+        let wt: number;
+        if (d <= innerR) {
+          wt = 1;                          // core → full split
+        } else {
+          const t = (d - innerR) / band;   // 0 at inner → 1 at outer
+          const s = 1 - t;                 // 1 at inner → 0 at outer
+          wt = s * s * (3 - 2 * s);        // smoothstep falloff
+        }
         const i = y * width + x;
-        if (sw < mask[i]) mask[i] = sw;
+        if (wt > w[i]) w[i] = wt;          // strongest split wins
       }
     }
   }
-  return mask;
+  return w;
 }
 
 // ────────── pass 1: segment a pixel set into pools ──────────
