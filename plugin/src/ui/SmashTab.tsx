@@ -38,7 +38,7 @@ import { simplifyPolygon, polygonCentroid, type Pt } from "../core/regions";
 import { SmashMacroPanel } from "./SmashMacroPanel";
 import {
   seedMacroGroups, matchMacros, buildMacroConstrainedCorrespondence, macroInfoMap,
-  macroSuggestions, nearestMacroFor,
+  macroSuggestions, nearestMacroFor, reconcileMacros, reconcileMacroMatch,
   type MacroGroup,
 } from "../core/macro";
 import { PoolMatch, Correspondence } from "../core/match";
@@ -303,6 +303,25 @@ export function SmashTab() {
   const [macroMatch, setMacroMatch] = useState<Map<number, number>>(new Map());
   // Which target macro's editor is open in the macro panel (single-accordion).
   const [expandedMacroId, setExpandedMacroId] = useState<number | null>(null);
+  // Latest macro state, mirrored into refs so the seed/reconcile effect can read
+  // the user's current groupings WITHOUT taking them as deps (which would loop).
+  const sourceMacrosRef = useRef(sourceMacros);
+  const targetMacrosRef = useRef(targetMacros);
+  const macroMatchRef = useRef(macroMatch);
+  sourceMacrosRef.current = sourceMacros;
+  targetMacrosRef.current = targetMacros;
+  macroMatchRef.current = macroMatch;
+  const lastMacroCountRef = useRef(macroCount);
+  // Segen inputs at the last macro seed — a change means the picked layer (or
+  // fidelity) changed, which should fresh-seed rather than reconcile.
+  const macroSeedInputsRef = useRef<{ s: unknown; t: unknown }>({ s: null, t: null });
+  // Previous segmentation (per side) for WARM-STARTING the next re-segmentation,
+  // which keeps pool ids stable across slider drags — the precondition for macro
+  // edits to persist. Reset when the picked layer (segInput) changes.
+  const prevSourceBaseRef = useRef<SegmentResult | null>(null);
+  const prevTargetBaseRef = useRef<SegmentResult | null>(null);
+  const prevSourceInputRef = useRef<unknown>(null);
+  const prevTargetInputRef = useRef<unknown>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [segError, setSegError] = useState<string | null>(null);
 
@@ -625,13 +644,22 @@ export function SmashTab() {
       if (cancelled) return;
       try {
         const opts = { poolCount, edgePreservation, regionCleanup, colorVsValueBias, subPaletteSize, neutralProtection, poolContinuity };
-        const sBase = segmentImage(source.segInput!.data, source.segInput!.width, source.segInput!.height, opts);
-        const tBase = segmentImage(target.segInput!.data, target.segInput!.width, target.segInput!.height, opts);
+        // Warm-start each side from its previous segmentation so pool ids stay
+        // stable across slider drags (the precondition for macro persistence) —
+        // but only when the SAME layer is still picked; a new layer starts cold.
+        const sWarm = prevSourceInputRef.current === source.segInput ? prevSourceBaseRef.current ?? undefined : undefined;
+        const tWarm = prevTargetInputRef.current === target.segInput ? prevTargetBaseRef.current ?? undefined : undefined;
+        const sBase = segmentImage(source.segInput!.data, source.segInput!.width, source.segInput!.height, opts, sWarm);
+        const tBase = segmentImage(target.segInput!.data, target.segInput!.width, target.segInput!.height, opts, tWarm);
         // Re-apply manual split edits onto the fresh segmentation. Pure geometry
         // → deterministic, so the splits persist across this re-segmentation.
         const sRes = applySplits(sBase, source.segInput!.data, sourceSplits, opts);
         const tRes = applySplits(tBase, target.segInput!.data, targetSplits, opts);
         if (!cancelled) {
+          prevSourceBaseRef.current = sBase;
+          prevTargetBaseRef.current = tBase;
+          prevSourceInputRef.current = source.segInput;
+          prevTargetInputRef.current = target.segInput;
           setSourceResult(sRes);
           setTargetResult(tRes);
           setTargetBase(tBase); // no-split base, for feather blending
@@ -656,20 +684,36 @@ export function SmashTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source.segInput, target.segInput, poolCount, edgePreservation, regionCleanup, colorVsValueBias, neutralProtection, poolContinuity, subPaletteSize, splitGeomSig]);
 
-  // ── Macro seeding ──────────────────────────────────────────────────
-  // Auto-cluster each side's pools into ~macroCount macro groups and auto-match
-  // them. Runs when the segmentation results or the macro count change — NOT on
-  // a transfer-slider change, and not on a hand-edit (those update the macro
-  // state directly and are preserved until the next re-seed). Re-seeding resets
-  // any manual membership/donor edits, which is the intended "fresh start".
+  // ── Macro seeding + persistence ────────────────────────────────────
+  // On a re-segmentation we RECONCILE the user's existing macro groups against
+  // the new pools (keep names/membership/donors, drop dead pools, fold new pools
+  // into their nearest group) rather than re-seeding from scratch — so hand-edits
+  // survive slider drags. A change to the macro COUNT (or no prior macros) forces
+  // a fresh seed. Reads prior macro state via refs so editing it doesn't loop.
   useEffect(() => {
     if (!sourceResult || !targetResult) {
       setSourceMacros([]); setTargetMacros([]); setMacroMatch(new Map());
       return;
     }
-    const sMacros = seedMacroGroups(sourceResult.pools, macroCount);
-    const tMacros = seedMacroGroups(targetResult.pools, macroCount);
-    const mMatch = matchMacros(sMacros, sourceResult.pools, tMacros, targetResult.pools);
+    const inputChanged = macroSeedInputsRef.current.s !== source.segInput
+      || macroSeedInputsRef.current.t !== target.segInput;
+    macroSeedInputsRef.current = { s: source.segInput, t: target.segInput };
+    const freshSeed = macroCount !== lastMacroCountRef.current
+      || inputChanged
+      || sourceMacrosRef.current.length === 0
+      || targetMacrosRef.current.length === 0;
+    lastMacroCountRef.current = macroCount;
+
+    const sMacros = freshSeed
+      ? seedMacroGroups(sourceResult.pools, macroCount)
+      : reconcileMacros(sourceMacrosRef.current, sourceResult.pools, macroCount);
+    const tMacros = freshSeed
+      ? seedMacroGroups(targetResult.pools, macroCount)
+      : reconcileMacros(targetMacrosRef.current, targetResult.pools, macroCount);
+    const mMatch = freshSeed
+      ? matchMacros(sMacros, sourceResult.pools, tMacros, targetResult.pools)
+      : reconcileMacroMatch(macroMatchRef.current, sMacros, sourceResult.pools, tMacros, targetResult.pools);
+
     setSourceMacros(sMacros);
     setTargetMacros(tMacros);
     setMacroMatch(mMatch);

@@ -216,6 +216,71 @@ export function matchMacros(
   return out;
 }
 
+// ────────── persistence (reconcile across re-segmentation) ──────────
+
+// Carry the user's macro groups across a re-segmentation instead of re-seeding
+// from scratch. Keeps each macro's id / name / membership, drops pool ids that
+// no longer exist, and folds any NEW pools (present but in no macro) into their
+// nearest macro by aggregate colour. Falls back to a fresh seed when there's no
+// usable prior (first run, or every prior pool vanished). Pairs with warm-
+// started segmentation, which keeps pool ids stable enough for this to be
+// meaningful. macroMatch is reconciled separately (reconcileMacroMatch).
+export function reconcileMacros(prev: MacroGroup[], pools: Pool[], k: number): MacroGroup[] {
+  if (prev.length === 0) return seedMacroGroups(pools, k);
+  const present = new Set(pools.map(p => p.id));
+  const byId = mapById(pools);
+
+  let macros = prev.map(m => ({ ...m, poolIds: m.poolIds.filter(id => present.has(id)) }));
+  const nonEmpty = macros.filter(m => m.poolIds.length > 0);
+  if (nonEmpty.length === 0) return seedMacroGroups(pools, k);
+
+  const assigned = new Set<number>();
+  for (const m of macros) for (const id of m.poolIds) assigned.add(id);
+  const orphans = pools.filter(p => !assigned.has(p.id));
+
+  if (orphans.length > 0) {
+    // Stable aggregates (computed once, before adding orphans) for nearest-macro.
+    const aggs = nonEmpty.map(m => ({ id: m.id, d: macroDescriptor(m.poolIds, byId) }));
+    const indexById = new Map(macros.map((m, i) => [m.id, i]));
+    for (const orphan of orphans) {
+      let bestId = aggs[0].id, bestD = Infinity;
+      for (const a of aggs) {
+        const dist = labDistance(orphan.descriptor, a.d.labL, a.d.labA, a.d.labB);
+        if (dist < bestD) { bestD = dist; bestId = a.id; }
+      }
+      const mi = indexById.get(bestId)!;
+      macros[mi] = { ...macros[mi], poolIds: [...macros[mi].poolIds, orphan.id] };
+    }
+  }
+
+  return macros.filter(m => m.poolIds.length > 0);
+}
+
+// Carry the macro→macro donor mapping across a re-segmentation: keep each target
+// macro's chosen donor when both that target macro and its donor source macro
+// still exist; auto-match (matchMacros) any target macro left without a valid
+// donor. So manual donor picks persist while new/changed groups get sensible
+// defaults.
+export function reconcileMacroMatch(
+  prev: Map<number, number>,
+  sourceMacros: MacroGroup[], sourcePools: Pool[],
+  targetMacros: MacroGroup[], targetPools: Pool[],
+): Map<number, number> {
+  const validSrc = new Set(sourceMacros.map(m => m.id));
+  const out = new Map<number, number>();
+  const unmatched: MacroGroup[] = [];
+  for (const tm of targetMacros) {
+    const d = prev.get(tm.id);
+    if (d != null && validSrc.has(d)) out.set(tm.id, d);
+    else unmatched.push(tm);
+  }
+  if (unmatched.length > 0) {
+    const auto = matchMacros(sourceMacros, sourcePools, unmatched, targetPools);
+    for (const [t, s] of auto) out.set(t, s);
+  }
+  return out;
+}
+
 // ────────── membership suggestions (contamination / missing) ──────────
 
 export interface MacroSuggestion {

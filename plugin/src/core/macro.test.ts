@@ -18,6 +18,8 @@ import {
   buildMacroConstrainedCorrespondence,
   macroSuggestions,
   nearestMacroFor,
+  reconcileMacros,
+  reconcileMacroMatch,
 } from "./macro";
 import type { MacroGroup } from "./macro";
 import { matchPools } from "./match";
@@ -520,5 +522,166 @@ describe("macroSuggestions / nearestMacroFor", () => {
   it("nearestMacroFor returns null when there is no other macro", () => {
     const single: MacroGroup[] = [{ id: 0, name: "Only", poolIds: [1, 2, 3] }];
     expect(nearestMacroFor(1, single, pools, 0)).toBeNull();
+  });
+});
+
+// ────────── 7. reconcileMacros: carry macros across re-segmentation ──────────
+
+describe("reconcileMacros", () => {
+  // Two well-separated families: a warm/red "Skin" macro (pools 1,2) and a dark
+  // "BG" macro (pool 3). Colours kept far apart so nearest-macro is unambiguous.
+  const warm1 = { labL: 60, labA: 35, labB: 28, weight: 0.3 };
+  const warm2 = { labL: 58, labA: 38, labB: 25, weight: 0.25 };
+  const dark3 = { labL: 12, labA: 2, labB: -3, weight: 0.2 };
+
+  const basePools = (): Pool[] => [
+    makePool(1, warm1),
+    makePool(2, warm2),
+    makePool(3, dark3),
+  ];
+  const prevSkinBG = (): MacroGroup[] => [
+    { id: 0, name: "Skin", poolIds: [1, 2] },
+    { id: 1, name: "BG", poolIds: [3] },
+  ];
+
+  it("empty prev → falls back to seedMacroGroups (length, full coverage)", () => {
+    const pools = basePools();
+    const seeded = seedMacroGroups(pools, 2);
+    const reconciled = reconcileMacros([], pools, 2);
+    expect(reconciled).toHaveLength(seeded.length);
+    expect(reconciled.length).toBe(Math.min(2, pools.length));
+    expect(allIds(reconciled)).toEqual([1, 2, 3]); // every pool covered
+  });
+
+  it("keeps macro names + ids and membership when pools are unchanged", () => {
+    const macros = reconcileMacros(prevSkinBG(), basePools(), 2);
+    expect(macros.map((m) => m.id)).toEqual([0, 1]);
+    expect(macros.map((m) => m.name)).toEqual(["Skin", "BG"]);
+    const skin = macros.find((m) => m.id === 0)!;
+    const bg = macros.find((m) => m.id === 1)!;
+    expect([...skin.poolIds].sort((a, b) => a - b)).toEqual([1, 2]);
+    expect(bg.poolIds).toEqual([3]);
+  });
+
+  it("drops a vanished pool from its macro", () => {
+    // Pool 2 is gone from the re-segmentation.
+    const pools = [makePool(1, warm1), makePool(3, dark3)];
+    const macros = reconcileMacros(prevSkinBG(), pools, 2);
+    const skin = macros.find((m) => m.id === 0)!;
+    expect(skin.poolIds).toEqual([1]); // 2 dropped
+    // Total membership equals the set of present pools.
+    expect(allIds(macros)).toEqual([1, 3]);
+  });
+
+  it("assigns a new red orphan to Skin and a new dark orphan to BG", () => {
+    const pools = [
+      ...basePools(),
+      makePool(9, { labL: 59, labA: 36, labB: 27, weight: 0.05 }), // red orphan
+      makePool(8, { labL: 14, labA: 1, labB: -2, weight: 0.05 }), // dark orphan
+    ];
+    const macros = reconcileMacros(prevSkinBG(), pools, 2);
+    const skin = macros.find((m) => m.id === 0)!;
+    const bg = macros.find((m) => m.id === 1)!;
+    expect(skin.poolIds).toContain(9); // red → Skin
+    expect(bg.poolIds).toContain(8); // dark → BG
+    expect(skin.poolIds).not.toContain(8);
+    expect(bg.poolIds).not.toContain(9);
+  });
+
+  it("drops an emptied macro while other macros remain", () => {
+    // All of BG's pools (3) vanish; the warm pools survive, so Skin remains and
+    // the now-empty BG macro is removed.
+    const pools = [makePool(1, warm1), makePool(2, warm2)];
+    const macros = reconcileMacros(prevSkinBG(), pools, 2);
+    expect(macros.map((m) => m.id)).toEqual([0]); // only Skin survives
+    expect(macros.find((m) => m.id === 1)).toBeUndefined();
+    expect(allIds(macros)).toEqual([1, 2]); // remaining macro covers all present
+  });
+
+  it("every present pool appears in exactly one macro (coverage + no dupes)", () => {
+    // Mixed case: a dropped pool (2), a surviving pool, plus two orphans.
+    const pools = [
+      makePool(1, warm1),
+      makePool(3, dark3),
+      makePool(9, { labL: 59, labA: 36, labB: 27, weight: 0.05 }), // red orphan
+      makePool(8, { labL: 14, labA: 1, labB: -2, weight: 0.05 }), // dark orphan
+    ];
+    const macros = reconcileMacros(prevSkinBG(), pools, 2);
+    const flat = macros.flatMap((m) => m.poolIds);
+    expect(new Set(flat).size).toBe(flat.length); // no duplicates
+    expect([...flat].sort((a, b) => a - b)).toEqual([1, 3, 8, 9]); // all present covered
+  });
+
+  it("fresh seed when every prior pool vanished", () => {
+    // None of prev's pools (1,2,3) survive; only brand-new pools remain.
+    const pools = [
+      makePool(50, { labL: 50, labA: 0, labB: 0, weight: 0.5 }),
+      makePool(51, { labL: 20, labA: 0, labB: 0, weight: 0.5 }),
+    ];
+    const macros = reconcileMacros(prevSkinBG(), pools, 2);
+    const seeded = seedMacroGroups(pools, 2);
+    expect(macros).toHaveLength(seeded.length);
+    expect(allIds(macros)).toEqual([50, 51]); // fresh coverage of the new pools
+  });
+});
+
+// ────────── 8. reconcileMacroMatch: carry donor mapping across re-seg ──────────
+
+describe("reconcileMacroMatch", () => {
+  // Source macros: skin (warm) id 5, BG (dark) id 6 — non-zero ids on purpose.
+  const sourcePools = [
+    makePool(500, { labL: 60, labA: 20, labB: 22, weight: 0.5 }), // src skin
+    makePool(600, { labL: 16, labA: 1, labB: -2, weight: 0.5 }), // src BG dark
+  ];
+  const sourceMacros: MacroGroup[] = [
+    { id: 5, name: "Src Skin", poolIds: [500] },
+    { id: 6, name: "Src BG", poolIds: [600] },
+  ];
+  // Target macros: skin id 0, BG id 1.
+  const targetPools = [
+    makePool(200, { labL: 58, labA: 18, labB: 20, weight: 0.5 }), // tgt skin
+    makePool(210, { labL: 15, labA: 1, labB: -2, weight: 0.5 }), // tgt BG dark
+  ];
+  const targetMacros: MacroGroup[] = [
+    { id: 0, name: "Tgt Skin", poolIds: [200] },
+    { id: 1, name: "Tgt BG", poolIds: [210] },
+  ];
+
+  it("keeps a valid prev donor and re-matches an invalid one", () => {
+    // Target 0 → source 5 is valid (both exist) → kept.
+    // Target 1 → source 99 is invalid (no such source macro) → re-matched.
+    const prev = new Map<number, number>([
+      [0, 5],
+      [1, 99],
+    ]);
+    const out = reconcileMacroMatch(
+      prev,
+      sourceMacros,
+      sourcePools,
+      targetMacros,
+      targetPools,
+    );
+    expect(out.get(0)).toBe(5); // kept verbatim
+    const donor1 = out.get(1)!;
+    expect([5, 6]).toContain(donor1); // re-matched to a real source macro
+    expect(donor1).not.toBe(99); // the stale donor is gone
+    // The dark BG target should auto-match the dark BG source (id 6).
+    expect(donor1).toBe(6);
+  });
+
+  it("returns exactly one entry per target macro", () => {
+    const prev = new Map<number, number>([[0, 5]]); // target 1 left to auto-match
+    const out = reconcileMacroMatch(
+      prev,
+      sourceMacros,
+      sourcePools,
+      targetMacros,
+      targetPools,
+    );
+    expect(out.size).toBe(targetMacros.length);
+    expect([...out.keys()].sort((a, b) => a - b)).toEqual([0, 1]);
+    for (const donor of out.values()) {
+      expect([5, 6]).toContain(donor); // every donor is a real source macro
+    }
   });
 });
