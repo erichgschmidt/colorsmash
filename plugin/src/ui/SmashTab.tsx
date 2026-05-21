@@ -1310,7 +1310,7 @@ export function SmashTab() {
               </div>
             );
           })}
-          {(sourceSplits.length + targetSplits.length) > 0 && (
+          {poolMapTool === "split" && (sourceSplits.length + targetSplits.length) > 0 && (
             <>
               <div style={{ flex: 1 }} />
               <span style={{ fontSize: 9, color: "#999" }}>
@@ -1385,6 +1385,177 @@ export function SmashTab() {
             )}
           </div>
         )}
+
+        {/* Anchor controls — unified with the tool toggle (the radius / detail
+            sliders + per-anchor list used to live down in the Correspondence
+            tab, which read as two disconnected places). Shown only in Anchor
+            mode. */}
+        {poolMapTool === "anchor" && (
+          <div style={{
+            display: "flex", flexDirection: "column", gap: 6,
+            padding: 8, background: "#181d24",
+            border: "1px solid #2c3a4a", borderRadius: 3,
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{
+                fontSize: 10,
+                color: activeSource
+                  ? "#d8c87d"
+                  : anchors.length > 0
+                    ? "#7dd87d"
+                    : "#9a9aa8",
+              }}>
+                {activeSource
+                  ? anchors.length === 0
+                    ? "Active source ready — click TARGET to drop an anchor (source stays loaded)."
+                    : `Active source ready — click TARGET to drop another anchor (${anchors.length} so far). Drag dots to reposition · × to remove.`
+                  : anchors.length === 0
+                    ? "0 anchors — click the SOURCE map/canvas to start one."
+                    : anchors.length === 1
+                      ? "1 anchor active — click SOURCE to load another. Drag dots to reposition · × to remove."
+                      : `${anchors.length} anchors active — click SOURCE to load another. Drag dots to reposition · × to remove.`}
+              </span>
+              <div style={{ flex: 1 }} />
+              {(anchors.length > 0 || activeSource) && (
+                <div
+                  onClick={clearAllAnchors}
+                  title="Remove every focal anchor and clear the active source."
+                  style={{
+                    padding: "3px 8px", fontSize: 10, borderRadius: 2,
+                    border: "1px solid #4a4a4a", background: "#3a3a3a",
+                    color: "#cccccc", cursor: "pointer", userSelect: "none",
+                  }}
+                >
+                  Clear all
+                </div>
+              )}
+            </div>
+            {/* "New-anchor radius" only seeds NEW anchors; existing anchors keep
+                their per-row radius (or drag the handle on the canvas). */}
+            <Control
+              label="New-anchor radius"
+              title="Default falloff radius applied to NEWLY-created anchors only. Existing anchors keep their own radius — tune each individually with its row slider or by dragging its handle on the canvas."
+              min={0.05} max={0.6} step={0.025}
+              value={anchorRadius} onChange={setAnchorRadius}
+              display={anchorRadius.toFixed(2)}
+            />
+            <Control
+              label="Anchor detail"
+              title="How densely the mini-Smash inside each anchor analyses local colour structure. Higher = more sub-pools inside the anchor's region = richer local transfer."
+              min={0} max={1} step={0.05}
+              value={anchorDetail} onChange={setAnchorDetail}
+              display={anchorDetail.toFixed(2)}
+            />
+            {anchorAnalyzing && (
+              <span style={{ fontSize: 9, color: "#9a9aa8" }}>analyzing anchors…</span>
+            )}
+            {anchors.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                {anchors.map((a, i) => {
+                  const color = colorForAnchor(i);
+                  const analysis = anchorAnalyses[i];
+                  const localPoolCount = analysis?.localMappingsByPool.size ?? 0;
+                  const expanded = expandedAnchor === i;
+                  return (
+                    <div
+                      key={i}
+                      style={{
+                        display: "flex", flexDirection: "column", gap: 3,
+                        padding: "3px 6px",
+                        background: "#1f1f1f",
+                        border: "1px solid #3a3a3a",
+                        borderRadius: 2,
+                      }}
+                    >
+                      <div
+                        onClick={() => setExpandedAnchor(prev => (prev === i ? null : i))}
+                        title={expanded ? "Collapse this anchor's controls." : "Expand to tune this anchor's radii, strength and channel locks."}
+                        style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none" }}
+                      >
+                        <span style={{ fontSize: 9, color: "#777", width: 8, flexShrink: 0 }}>
+                          {expanded ? "▾" : "▸"}
+                        </span>
+                        <div style={{
+                          width: 12, height: 12, borderRadius: "50%",
+                          background: color, border: "1px solid #000",
+                          flexShrink: 0,
+                        }} title={`anchor ${i + 1}`} />
+                        <span style={{ fontSize: 10, color: "#cccccc" }}>
+                          anchor {i + 1}
+                        </span>
+                        <span
+                          style={{ fontSize: 9, color: "#777" }}
+                          title="Number of local target pools the mini-Smash inside this anchor produced."
+                        >
+                          {localPoolCount > 0 ? `${localPoolCount} local pools` : "—"}
+                        </span>
+                        <div style={{ flex: 1 }} />
+                        <div
+                          onClick={e => { e.stopPropagation(); removeAnchor(i); }}
+                          title="Remove this anchor."
+                          style={{
+                            padding: "1px 6px", fontSize: 11, lineHeight: "12px",
+                            borderRadius: 2,
+                            border: "1px solid #4a4a4a", background: "#3a3a3a",
+                            color: "#cccccc", cursor: "pointer", userSelect: "none",
+                          }}
+                        >
+                          ×
+                        </div>
+                      </div>
+
+                      {expanded && (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 2 }}>
+                          <AnchorSlider
+                            label="Source radius"
+                            title="Size of the SOURCE sample circle — how much source colour structure this anchor's mini-Smash pulls in."
+                            min={0.05} max={0.6} step={0.025}
+                            value={a.sourceRadius}
+                            onChange={v => patchAnchorAt(i, { sourceRadius: v })}
+                          />
+                          <AnchorSlider
+                            label="Target radius"
+                            title="Size of the TARGET apply circle — how far this anchor's transfer reaches before fading back to the auto donor."
+                            min={0.05} max={0.6} step={0.025}
+                            value={a.targetRadius}
+                            onChange={v => patchAnchorAt(i, { targetRadius: v })}
+                          />
+                          <AnchorSlider
+                            label="Strength"
+                            title="How much this anchor replaces the auto transfer, independent of radius. 1 = full replace at the centre; 0.5 = half-replace even at the centre."
+                            min={0} max={1} step={0.05}
+                            value={a.strength}
+                            onChange={v => patchAnchorAt(i, { strength: v })}
+                          />
+                          <div
+                            style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}
+                            title="Which colour dimensions this anchor transfers. Unchecking one keeps the target's own value for that dimension (e.g. Hue only = rotate hue toward the source, keep the target's lightness and chroma)."
+                          >
+                            <AnchorCheckbox
+                              label="Value"
+                              checked={a.transferValue}
+                              onChange={c => patchAnchorAt(i, { transferValue: c })}
+                            />
+                            <AnchorCheckbox
+                              label="Chroma"
+                              checked={a.transferChroma}
+                              onChange={c => patchAnchorAt(i, { transferChroma: c })}
+                            />
+                            <AnchorCheckbox
+                              label="Hue"
+                              checked={a.transferHue}
+                              onChange={c => patchAnchorAt(i, { transferHue: c })}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Big editing canvas: Source / Target / Output tabs with zoom + pan and
@@ -1405,35 +1576,57 @@ export function SmashTab() {
         <div style={{ fontSize: 10, color: "#d8867d" }}>Segmentation failed: {segError}</div>
       )}
 
-      {/* ── Tab strip: switch between the Controls surface (segmentation +
-            transfer) and the Correspondence surface (list + focal anchors).
-            Styled distinctly from the Section chips so it reads as a tab
-            control, not another collapsible. ── */}
-      <div style={{ display: "flex", gap: 4 }}>
-        {([
-          { id: "controls" as const, label: "Controls" },
-          { id: "correspondence" as const, label: "Correspondence" },
-        ]).map(t => {
-          const active = innerTab === t.id;
-          return (
-            <div
-              key={t.id}
-              onClick={() => setInnerTab(t.id)}
-              style={{
-                flex: 1, textAlign: "center",
-                padding: "5px 8px", fontSize: 11, fontWeight: 600,
-                letterSpacing: 0.3, borderRadius: 3,
-                border: `1px solid ${active ? "#1473e6" : "#444"}`,
-                background: active ? "#1473e6" : "#2c2c2c",
-                color: active ? "#ffffff" : "#aaaaaa",
-                cursor: "pointer", userSelect: "none",
-              }}
-            >
-              {t.label}
-            </div>
-          );
-        })}
+      {/* ── Tab strip: Controls (segmentation + transfer) vs Correspondence
+            (donor list). The "Output to document" action sits to the RIGHT of
+            the tabs as an always-accessible button — it doesn't belong to
+            either tab. ── */}
+      <div style={{ display: "flex", gap: 4, alignItems: "stretch" }}>
+        <div style={{ display: "flex", gap: 4, flex: 1, minWidth: 0 }}>
+          {([
+            { id: "controls" as const, label: "Controls" },
+            { id: "correspondence" as const, label: "Correspond" },
+          ]).map(t => {
+            const active = innerTab === t.id;
+            return (
+              <div
+                key={t.id}
+                onClick={() => setInnerTab(t.id)}
+                style={{
+                  flex: 1, textAlign: "center",
+                  padding: "5px 8px", fontSize: 11, fontWeight: 600,
+                  letterSpacing: 0.3, borderRadius: 3,
+                  border: `1px solid ${active ? "#1473e6" : "#444"}`,
+                  background: active ? "#1473e6" : "#2c2c2c",
+                  color: active ? "#ffffff" : "#aaaaaa",
+                  cursor: "pointer", userSelect: "none",
+                }}
+              >
+                {t.label}
+              </div>
+            );
+          })}
+        </div>
+        {/* Always-accessible Output action. Mode + name live in Controls →
+            OUTPUT; this just runs it. Big blue when ready. */}
+        <div
+          onClick={canOutput ? outputToDocument : undefined}
+          title="Output to document — run the transfer at full resolution and add the result as a layer / pool group (mode + name in Controls → Output)."
+          style={{
+            flexShrink: 0, padding: "5px 14px", fontSize: 11, fontWeight: 700,
+            letterSpacing: 0.3, borderRadius: 3,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            border: `1px solid ${canOutput ? "#1473e6" : "#3a3a3a"}`,
+            background: canOutput ? "#1473e6" : "#262626",
+            color: canOutput ? "#ffffff" : "#666666",
+            cursor: canOutput ? "pointer" : "default", userSelect: "none",
+          }}
+        >
+          {outputting ? "Working…" : "Output ▸"}
+        </div>
       </div>
+      {outputError && (
+        <div style={{ fontSize: 10, color: "#d8867d" }}>Output failed: {outputError}</div>
+      )}
 
       {/* ── Controls tab: segmentation sliders (usable always — they drive the
             segmentation that happens before `ready`) plus the color-transfer
@@ -1564,32 +1757,18 @@ export function SmashTab() {
                 />
               </div>
 
-              {/* Output the smashed result back into the target document at its
-                  full resolution. The dropdown next to the button selects
-                  between a single recolored layer (today's behaviour), a
-                  per-pool layer group (each pool becomes a hand-editable
-                  transparent layer inside one group), or both. Custom
-                  Dropdown — see Dropdown.tsx for why we avoid native <select>
-                  in the panel. */}
+              {/* Output mode picker. The Output ACTION lives in the tab strip
+                  (always accessible); this just configures what it writes:
+                  a single recolored layer, a per-pool group (each pool a
+                  hand-editable transparent layer), or both. Custom Dropdown —
+                  see Dropdown.tsx for why we avoid native <select> here. */}
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <div
-                  onClick={canOutput ? outputToDocument : undefined}
-                  title="Run the transfer at the target document's full resolution and add the result as a new layer (or per-pool group, depending on the mode picker)."
-                  style={{
-                    padding: "5px 12px", fontSize: 11, fontWeight: 600, borderRadius: 2,
-                    border: "1px solid #4a4a4a",
-                    background: canOutput ? "#3a3a3a" : "#2a2a2a",
-                    color: canOutput ? "#cccccc" : "#666666",
-                    cursor: canOutput ? "pointer" : "default", userSelect: "none",
-                  }}
-                >
-                  {outputting ? "Working…" : "Output to document"}
-                </div>
+                <span style={{ fontSize: 10, color: "#cccccc" }}>Output mode:</span>
                 <Dropdown<OutputMode>
                   value={outputMode}
                   onChange={setOutputMode}
-                  title="What 'Output to document' writes. Single = one recolored layer. Pool group = one transparent layer per pool, wrapped in a group (hand-editable region by region). Both = single layer plus the group."
-                  style={{ minWidth: 130 }}
+                  title="What the Output button (top-right) writes. Single = one recolored layer. Pool group = one transparent layer per pool, wrapped in a group (hand-editable region by region). Both = single layer plus the group."
+                  style={{ flex: 1, minWidth: 130 }}
                   options={[
                     { value: "single", label: "Single layer" },
                     { value: "group",  label: "Pool group" },
@@ -1603,12 +1782,6 @@ export function SmashTab() {
                   Transfer failed: {transferError}
                 </div>
               )}
-
-              {outputError && (
-                <div style={{ fontSize: 10, color: "#d8867d" }}>
-                  Output failed: {outputError}
-                </div>
-              )}
             </>
           ) : (
             <div style={{ fontSize: 10, color: "#9a9aa8" }}>
@@ -1618,8 +1791,9 @@ export function SmashTab() {
         </Section>
       )}
 
-      {/* ── Correspondence tab: target→source list with sort + scroll, plus
-            the focal-anchors subsection. Gated on `ready`. ── */}
+      {/* ── Correspondence tab: the target→source donor list with sort +
+            scroll. (Anchor + split editing now lives up by the tool toggle.)
+            Gated on `ready`. ── */}
       {innerTab === "correspondence" && (
         ready ? (
           <Section title="CORRESPONDENCE">
@@ -1664,184 +1838,6 @@ export function SmashTab() {
               >
                 Reset to auto
               </div>
-            </div>
-
-            {/* ── Focal anchors (list of pairs) ──
-                Drop pairs by clicking the SOURCE map then the TARGET map. Each
-                completed anchor pulls pixels inside its target falloff toward
-                the source pool picked at click time. Multiple anchors blend
-                additively; overlapping anchors are renormalized to sum 1. */}
-            <div style={SUB_HEADER}>FOCAL ANCHORS</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{
-                  fontSize: 10,
-                  color: activeSource
-                    ? "#d8c87d"
-                    : anchors.length > 0
-                      ? "#7dd87d"
-                      : "#9a9aa8",
-                }}>
-                  {activeSource
-                    ? anchors.length === 0
-                      ? "Active source ready — click TARGET to drop an anchor (source stays loaded)."
-                      : `Active source ready — click TARGET to drop another anchor (${anchors.length} so far). Drag dots to reposition · × to remove.`
-                    : anchors.length === 0
-                      ? "0 anchors — click the SOURCE map to start one."
-                      : anchors.length === 1
-                        ? "1 anchor active — click SOURCE to load another. Drag dots to reposition · × to remove."
-                        : `${anchors.length} anchors active — click SOURCE to load another. Drag dots to reposition · × to remove.`}
-                </span>
-                <div style={{ flex: 1 }} />
-                {(anchors.length > 0 || activeSource) && (
-                  <div
-                    onClick={clearAllAnchors}
-                    title="Remove every focal anchor and clear the active source."
-                    style={{
-                      padding: "3px 8px", fontSize: 10, borderRadius: 2,
-                      border: "1px solid #4a4a4a", background: "#3a3a3a",
-                      color: "#cccccc", cursor: "pointer", userSelect: "none",
-                    }}
-                  >
-                    Clear all
-                  </div>
-                )}
-              </div>
-              {/* Always-visible anchor config. "New-anchor radius" only seeds
-                  NEW anchors; existing anchors keep their per-row radius. Both
-                  knobs are useful BEFORE any anchor is placed (set defaults),
-                  so we don't gate them on anchors.length / activeSource. */}
-              <Control
-                label="New-anchor radius"
-                title="Default falloff radius applied to NEWLY-created anchors only. Existing anchors keep their own radius — tune each one individually with its row slider below."
-                min={0.05} max={0.6} step={0.025}
-                value={anchorRadius} onChange={setAnchorRadius}
-                display={anchorRadius.toFixed(2)}
-              />
-              <Control
-                label="Anchor detail"
-                title="How densely the mini-Smash inside each anchor analyses local colour structure. Higher = more sub-pools inside the anchor's region = richer local transfer."
-                min={0} max={1} step={0.05}
-                value={anchorDetail} onChange={setAnchorDetail}
-                display={anchorDetail.toFixed(2)}
-              />
-              {anchorAnalyzing && (
-                <span style={{ fontSize: 9, color: "#9a9aa8" }}>analyzing anchors…</span>
-              )}
-              {anchors.length > 0 && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                  {anchors.map((a, i) => {
-                    const color = colorForAnchor(i);
-                    const analysis = anchorAnalyses[i];
-                    const localPoolCount = analysis?.localMappingsByPool.size ?? 0;
-                    const expanded = expandedAnchor === i;
-                    return (
-                      <div
-                        key={i}
-                        style={{
-                          display: "flex", flexDirection: "column", gap: 3,
-                          padding: "3px 6px",
-                          background: "#1f1f1f",
-                          border: "1px solid #3a3a3a",
-                          borderRadius: 2,
-                        }}
-                      >
-                        {/* Summary row — chevron + colour chip + label +
-                            local-pool count + remove. Click anywhere on the row
-                            (except ×) toggles this anchor's expansion. Single-
-                            accordion: expanding one collapses any other. */}
-                        <div
-                          onClick={() => setExpandedAnchor(prev => (prev === i ? null : i))}
-                          title={expanded ? "Collapse this anchor's controls." : "Expand to tune this anchor's radii, strength and channel locks."}
-                          style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none" }}
-                        >
-                          <span style={{ fontSize: 9, color: "#777", width: 8, flexShrink: 0 }}>
-                            {expanded ? "▾" : "▸"}
-                          </span>
-                          <div style={{
-                            width: 12, height: 12, borderRadius: "50%",
-                            background: color, border: "1px solid #000",
-                            flexShrink: 0,
-                          }} title={`anchor ${i + 1}`} />
-                          <span style={{ fontSize: 10, color: "#cccccc" }}>
-                            anchor {i + 1}
-                          </span>
-                          <span
-                            style={{ fontSize: 9, color: "#777" }}
-                            title="Number of local target pools the mini-Smash inside this anchor produced."
-                          >
-                            {localPoolCount > 0 ? `${localPoolCount} local pools` : "—"}
-                          </span>
-                          <div style={{ flex: 1 }} />
-                          <div
-                            onClick={e => { e.stopPropagation(); removeAnchor(i); }}
-                            title="Remove this anchor."
-                            style={{
-                              padding: "1px 6px", fontSize: 11, lineHeight: "12px",
-                              borderRadius: 2,
-                              border: "1px solid #4a4a4a", background: "#3a3a3a",
-                              color: "#cccccc", cursor: "pointer", userSelect: "none",
-                            }}
-                          >
-                            ×
-                          </div>
-                        </div>
-
-                        {/* Expanded controls — the full per-anchor knob set.
-                            Source/target radii, strength, then the three LCh
-                            transfer locks. Only the expanded anchor shows them. */}
-                        {expanded && (
-                          <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 2 }}>
-                            <AnchorSlider
-                              label="Source radius"
-                              title="Size of the SOURCE sample circle — how much source colour structure this anchor's mini-Smash pulls in."
-                              min={0.05} max={0.6} step={0.025}
-                              value={a.sourceRadius}
-                              onChange={v => patchAnchorAt(i, { sourceRadius: v })}
-                            />
-                            <AnchorSlider
-                              label="Target radius"
-                              title="Size of the TARGET apply circle — how far this anchor's transfer reaches before fading back to the auto donor."
-                              min={0.05} max={0.6} step={0.025}
-                              value={a.targetRadius}
-                              onChange={v => patchAnchorAt(i, { targetRadius: v })}
-                            />
-                            <AnchorSlider
-                              label="Strength"
-                              title="How much this anchor replaces the auto transfer, independent of radius. 1 = full replace at the centre; 0.5 = half-replace even at the centre."
-                              min={0} max={1} step={0.05}
-                              value={a.strength}
-                              onChange={v => patchAnchorAt(i, { strength: v })}
-                            />
-                            {/* Channel locks — which LCh dimensions this anchor
-                                moves toward the source. */}
-                            <div
-                              style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}
-                              title="Which colour dimensions this anchor transfers. Unchecking one keeps the target's own value for that dimension (e.g. Hue only = rotate hue toward the source, keep the target's lightness and chroma)."
-                            >
-                              <AnchorCheckbox
-                                label="Value"
-                                checked={a.transferValue}
-                                onChange={c => patchAnchorAt(i, { transferValue: c })}
-                              />
-                              <AnchorCheckbox
-                                label="Chroma"
-                                checked={a.transferChroma}
-                                onChange={c => patchAnchorAt(i, { transferChroma: c })}
-                              />
-                              <AnchorCheckbox
-                                label="Hue"
-                                checked={a.transferHue}
-                                onChange={c => patchAnchorAt(i, { transferHue: c })}
-                              />
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
             </div>
 
             {/* Correspondence list — scrollable, capped height. Hover a row
