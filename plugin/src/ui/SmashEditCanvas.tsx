@@ -51,6 +51,11 @@ interface Props {
   onResizeCircle: (viewId: string, key: string, radius: number) => void;
   onRemoveCircle: (viewId: string, key: string) => void;
   onFeatherCircle?: (viewId: string, key: string, feather: number) => void;
+  // When set, the header shows an eye toggle. While hidden, circle overlays
+  // aren't drawn and placing/dragging is suppressed — so you can judge the
+  // recolored result (or outline over it) cleanly.
+  overlaysHidden?: boolean;
+  onToggleOverlays?: () => void;
   height?: number;
 }
 
@@ -67,6 +72,7 @@ type Gesture =
 export function SmashEditCanvas({
   views, activeId, onActiveChange,
   onMoveCircle, onResizeCircle, onRemoveCircle, onFeatherCircle,
+  overlaysHidden = false, onToggleOverlays,
   height = 280,
 }: Props) {
   const view = views.find(v => v.id === activeId) ?? views[0];
@@ -156,7 +162,7 @@ export function SmashEditCanvas({
     const onUp = (e: PointerEvent) => {
       const g = gestureRef.current;
       gestureRef.current = null;
-      if (g && g.kind === "bg" && !g.moved && view?.onPlace) {
+      if (g && g.kind === "bg" && !g.moved && view?.onPlace && !overlaysHidden) {
         const n = toNorm(e.clientX, e.clientY);
         if (n) view.onPlace(n.nx, n.ny);
       }
@@ -168,7 +174,7 @@ export function SmashEditCanvas({
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
     };
-  }, [view, geom, toNorm, onMoveCircle, onResizeCircle, onFeatherCircle]);
+  }, [view, geom, toNorm, onMoveCircle, onResizeCircle, onFeatherCircle, overlaysHidden]);
 
   // Keyboard zoom when hovered (mirrors Match).
   useEffect(() => {
@@ -233,6 +239,13 @@ export function SmashEditCanvas({
           <div onClick={() => zoom < 8 && setZoom(z => Math.min(8, z + 0.25))} title="Zoom in (+)"
             style={btn(zoom < 8)}>+</div>
           <span style={{ minWidth: 30, textAlign: "right", opacity: 0.7 }}>{Math.round(zoom * 100)}%</span>
+          {onToggleOverlays && (
+            <div onClick={onToggleOverlays}
+              title={overlaysHidden ? "Show region overlays (anchors / splits)" : "Hide region overlays — judge or outline over the clean image"}
+              style={{ height: 16, padding: "0 5px", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: overlaysHidden ? "#666" : "#ddd", border: `1px solid ${overlaysHidden ? "#555" : "#888"}`, borderRadius: 2, cursor: "pointer", userSelect: "none", boxSizing: "border-box" }}>
+              {overlaysHidden ? "◌" : "◉"}
+            </div>
+          )}
           <div onClick={() => !atDefault && resetZoom()} title="Reset zoom + pan (0)"
             style={{ height: 16, padding: "0 5px", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: atDefault ? "#666" : "#ddd", border: "1px solid #888", borderRadius: 2, cursor: atDefault ? "default" : "pointer", userSelect: "none", boxSizing: "border-box" }}>1:1</div>
         </div>
@@ -269,7 +282,7 @@ export function SmashEditCanvas({
         )}
 
         {/* Circle overlays */}
-        {view?.url && view.circles.map(c => {
+        {view?.url && !overlaysHidden && view.circles.map(c => {
           const cxPx = geom.ox + c.nx * geom.dw;
           const cyPx = geom.oy + c.ny * geom.dh;
           const rPx = c.radius * geom.maxD;

@@ -376,6 +376,9 @@ export function SmashTab() {
   const [splitParts, setSplitParts] = useState(2);
   // Which image the big editing canvas shows: source / target / output(after).
   const [canvasTab, setCanvasTab] = useState<"source" | "target" | "output">("target");
+  // Region overlays (anchor/split circles) on the canvas — toggle off to judge
+  // or outline over the clean recolored image on the Output tab.
+  const [showOverlays, setShowOverlays] = useState(true);
 
   // ── Per-anchor mini-Smash analyses ──
   // Each anchor in the list above is fed through analyzeAnchor (which runs a
@@ -1152,9 +1155,12 @@ export function SmashTab() {
       onPlace: targetResult ? handleTargetMapClick : undefined,
     },
     {
+      // Output shows the recolored result and carries the TARGET-side circles
+      // so you can outline/adjust splits + anchors over the detailed image.
       id: "output", label: "Output",
       url: transferUrl, imgW: targetResult?.width ?? 1, imgH: targetResult?.height ?? 1,
-      circles: [], placeholder: "Set source + target — the recolored output appears here.",
+      circles: targetCircles, placeholder: "Set source + target — the recolored output appears here.",
+      onPlace: targetResult ? handleTargetMapClick : undefined,
     },
   ], [sourceCutoutUrl, targetCutoutUrl, transferUrl,
       sourceCircles, targetCircles, sourceResult, targetResult,
@@ -1570,6 +1576,8 @@ export function SmashTab() {
         onResizeCircle={onCanvasResize}
         onRemoveCircle={onCanvasRemove}
         onFeatherCircle={onCanvasFeather}
+        overlaysHidden={!showOverlays}
+        onToggleOverlays={() => setShowOverlays(v => !v)}
       />
 
       {segError && (
