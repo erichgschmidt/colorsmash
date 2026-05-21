@@ -32,6 +32,11 @@ export interface SmashMacroPanelProps {
   suggestionsFor: (targetMacroId: number) => MacroSuggestion;
   onAddPoolToMacro: (poolId: number, macroId: number) => void; // +candidate into this macro
   onRemovePoolFromMacro: (poolId: number, fromMacroId: number) => void; // -member (parent rehomes)
+  // Per-macro pool-count override (the finishing pass): how finely this macro
+  // re-segments its own pixels. undefined = use the global count.
+  globalPoolCount: number;
+  macroPoolCount: (macroId: number) => number | undefined;
+  onSetMacroPoolCount: (macroId: number, n: number | null) => void; // null = use global
   expandedMacroId: number | null; // which macro's editor is open (single-accordion)
   onToggleExpand: (id: number | null) => void;
 }
@@ -125,6 +130,9 @@ export function SmashMacroPanel(props: SmashMacroPanelProps) {
     suggestionsFor,
     onAddPoolToMacro,
     onRemovePoolFromMacro,
+    globalPoolCount,
+    macroPoolCount,
+    onSetMacroPoolCount,
     expandedMacroId,
     onToggleExpand,
   } = props;
@@ -258,6 +266,9 @@ export function SmashMacroPanel(props: SmashMacroPanelProps) {
                   onSetDonor={onSetDonor}
                   onAddPoolToMacro={onAddPoolToMacro}
                   onRemovePoolFromMacro={onRemovePoolFromMacro}
+                  globalPoolCount={globalPoolCount}
+                  poolCountOverride={macroPoolCount(macro.id)}
+                  onSetPoolCount={onSetMacroPoolCount}
                 />
               )}
             </div>
@@ -281,6 +292,9 @@ interface ExpandedEditorProps {
   onSetDonor: (targetMacroId: number, sourceMacroId: number) => void;
   onAddPoolToMacro: (poolId: number, macroId: number) => void;
   onRemovePoolFromMacro: (poolId: number, fromMacroId: number) => void;
+  globalPoolCount: number;
+  poolCountOverride: number | undefined;
+  onSetPoolCount: (macroId: number, n: number | null) => void;
 }
 
 function ExpandedEditor(props: ExpandedEditorProps) {
@@ -295,12 +309,41 @@ function ExpandedEditor(props: ExpandedEditorProps) {
     onSetDonor,
     onAddPoolToMacro,
     onRemovePoolFromMacro,
+    globalPoolCount,
+    poolCountOverride,
+    onSetPoolCount,
   } = props;
 
   const contaminating = new Set(sug.contaminating);
+  const effectivePoolCount = poolCountOverride ?? globalPoolCount;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 2 }}>
+      {/* Per-macro detail: how finely THIS group re-segments its own pixels.
+          Override the global pool count (e.g. more pools for skin gradients,
+          fewer for a flat background). "auto" = use the global count. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ ...labelStyle, flex: 1 }} title="How finely this group re-segments its own pixels (its pool count). Overrides the global Pool count.">
+          Detail (pools)
+        </span>
+        <div onClick={() => onSetPoolCount(macro.id, Math.max(1, effectivePoolCount - 1))}
+          title="Fewer pools in this group"
+          style={{ padding: "0 7px", fontSize: 12, borderRadius: 2, border: "1px solid #4a4a4a", background: "#3a3a3a", color: "#ddd", cursor: "pointer", userSelect: "none" }}>−</div>
+        <span style={{ fontSize: 11, color: poolCountOverride != null ? "#ffd591" : "#888", minWidth: 14, textAlign: "center" }}>
+          {effectivePoolCount}
+        </span>
+        <div onClick={() => onSetPoolCount(macro.id, Math.min(12, effectivePoolCount + 1))}
+          title="More pools in this group"
+          style={{ padding: "0 7px", fontSize: 12, borderRadius: 2, border: "1px solid #4a4a4a", background: "#3a3a3a", color: "#ddd", cursor: "pointer", userSelect: "none" }}>+</div>
+        {poolCountOverride != null ? (
+          <div onClick={() => onSetPoolCount(macro.id, null)}
+            title="Use the global pool count"
+            style={{ padding: "0 6px", fontSize: 9, borderRadius: 2, border: "1px solid #4a4a4a", background: "#2c2c2c", color: "#aaa", cursor: "pointer", userSelect: "none" }}>auto</div>
+        ) : (
+          <span style={{ fontSize: 9, color: "#666" }}>auto</span>
+        )}
+      </div>
+
       {/* Donor group picker */}
       <div style={labelStyle}>Donor group</div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>

@@ -30,7 +30,8 @@ import { downsampleToMaxEdge } from "../core/downsample";
 import { rgbaToPngDataUrl } from "./encodePng";
 import { matchStyles } from "./MatchSliders";
 import {
-  segmentImage, applySplits, buildSplitBlendWeight, SegmentResult, Pool,
+  segmentImage, applySplits, buildSplitBlendWeight, refineMacros,
+  SegmentResult, SegmentOptions, Pool,
   SplitEdit, SPLIT_ID_BASE, SPLIT_ID_STRIDE,
 } from "../core/clusters";
 import { SmashEditCanvas, CanvasView, CanvasCircle, CanvasPoly } from "./SmashEditCanvas";
@@ -286,7 +287,10 @@ export function SmashTab() {
 
   // ── Segmentation results + analyzing state ─────────────────────────
   const [sourceResult, setSourceResult] = useState<SegmentResult | null>(null);
-  const [targetResult, setTargetResult] = useState<SegmentResult | null>(null);
+  // BASE target segmentation (post-split, pre per-macro refine). The macro panel
+  // + membership/persistence key off this; `targetResult` (a memo below) is the
+  // REFINED result everything downstream actually uses.
+  const [targetMembership, setTargetMembership] = useState<SegmentResult | null>(null);
   // The target segmentation BEFORE splits are applied — kept so feathered
   // splits can blend their recolor over the "no-split" recolor (true feather).
   const [targetBase, setTargetBase] = useState<SegmentResult | null>(null);
@@ -303,6 +307,10 @@ export function SmashTab() {
   const [macroMatch, setMacroMatch] = useState<Map<number, number>>(new Map());
   // Which target macro's editor is open in the macro panel (single-accordion).
   const [expandedMacroId, setExpandedMacroId] = useState<number | null>(null);
+  // Per-macro segmentation overrides (the finishing pass): target macro id →
+  // partial opts merged over the global ones. Each customised macro re-segments
+  // its own pixels with these. Empty = every macro uses the global segmentation.
+  const [perMacroOpts, setPerMacroOpts] = useState<Map<number, Partial<SegmentOptions>>>(new Map());
   // Latest macro state, mirrored into refs so the seed/reconcile effect can read
   // the user's current groupings WITHOUT taking them as deps (which would loop).
   const sourceMacrosRef = useRef(sourceMacros);
@@ -639,7 +647,7 @@ export function SmashTab() {
   useEffect(() => {
     if (!source.segInput || !target.segInput) {
       setSourceResult(null);
-      setTargetResult(null);
+      setTargetMembership(null);
       setTargetBase(null);
       setSourceMacros([]);
       setTargetMacros([]);
@@ -671,7 +679,7 @@ export function SmashTab() {
           prevSourceInputRef.current = source.segInput;
           prevTargetInputRef.current = target.segInput;
           setSourceResult(sRes);
-          setTargetResult(tRes);
+          setTargetMembership(tRes);
           setTargetBase(tBase); // no-split base, for feather blending
         }
         // Macro seeding + the macro-constrained correspondence are derived in
@@ -681,7 +689,7 @@ export function SmashTab() {
       } catch (e: any) {
         if (!cancelled) {
           setSourceResult(null);
-          setTargetResult(null);
+          setTargetMembership(null);
           setTargetBase(null);
           setSegError(e?.message ?? String(e));
         }
@@ -701,7 +709,7 @@ export function SmashTab() {
   // survive slider drags. A change to the macro COUNT (or no prior macros) forces
   // a fresh seed. Reads prior macro state via refs so editing it doesn't loop.
   useEffect(() => {
-    if (!sourceResult || !targetResult) {
+    if (!sourceResult || !targetMembership) {
       setSourceMacros([]); setTargetMacros([]); setMacroMatch(new Map());
       return;
     }
@@ -718,11 +726,11 @@ export function SmashTab() {
       ? seedMacroGroups(sourceResult.pools, macroCount)
       : reconcileMacros(sourceMacrosRef.current, sourceResult.pools, macroCount);
     let tMacros = freshSeed
-      ? seedMacroGroups(targetResult.pools, macroCount)
-      : reconcileMacros(targetMacrosRef.current, targetResult.pools, macroCount);
+      ? seedMacroGroups(targetMembership.pools, macroCount)
+      : reconcileMacros(targetMacrosRef.current, targetMembership.pools, macroCount);
     const mMatch = freshSeed
-      ? matchMacros(sMacros, sourceResult.pools, tMacros, targetResult.pools)
-      : reconcileMacroMatch(macroMatchRef.current, sMacros, sourceResult.pools, tMacros, targetResult.pools);
+      ? matchMacros(sMacros, sourceResult.pools, tMacros, targetMembership.pools)
+      : reconcileMacroMatch(macroMatchRef.current, sMacros, sourceResult.pools, tMacros, targetMembership.pools);
 
     // Authoritative region→macro tags: force each assigned split's pools into
     // its macro group (overrides colour-based placement). Re-applied every run
@@ -730,7 +738,7 @@ export function SmashTab() {
     const tags = targetSplits
       .filter(s => s.assignMacroId != null)
       .map(s => ({
-        poolIds: targetResult.pools
+        poolIds: targetMembership.pools
           .filter(p => p.id >= s.baseId && p.id < s.baseId + SPLIT_ID_STRIDE)
           .map(p => p.id),
         macroId: s.assignMacroId!,
@@ -741,7 +749,28 @@ export function SmashTab() {
     setTargetMacros(tMacros);
     setMacroMatch(mMatch);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceResult, targetResult, macroCount, targetTagSig]);
+  }, [sourceResult, targetMembership, macroCount, targetTagSig]);
+
+  // ── Per-macro refinement → the REFINED target result everything downstream
+  //    uses. When no macro has an override this is the base membership (identity,
+  //    cheap). Each customised macro re-segments its own pixels with its own
+  //    options (the finishing pass). `txTargetMacros` carries the refined pool
+  //    ids for the correspondence; the macro PANEL stays on base membership. ──
+  const segOptsMemo = useMemo<SegmentOptions>(() => ({
+    poolCount, edgePreservation, regionCleanup, colorVsValueBias, subPaletteSize, neutralProtection, poolContinuity,
+  }), [poolCount, edgePreservation, regionCleanup, colorVsValueBias, subPaletteSize, neutralProtection, poolContinuity]);
+  const perMacroOptsSig = useMemo(
+    () => [...perMacroOpts.entries()].map(([id, o]) => `${id}:${JSON.stringify(o)}`).sort().join("|"),
+    [perMacroOpts],
+  );
+  const refinedTarget = useMemo(() => {
+    if (!targetMembership) return null;
+    if (perMacroOpts.size === 0 || !target.segInput) return { result: targetMembership, macros: targetMacros };
+    return refineMacros(targetMembership, target.segInput.data, targetMacros, segOptsMemo, perMacroOpts);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetMembership, targetMacros, segOptsMemo, perMacroOptsSig, target.segInput]);
+  const targetResult = refinedTarget ? refinedTarget.result : null;
+  const txTargetMacros = refinedTarget ? refinedTarget.macros : targetMacros;
 
   // ── Macro-constrained correspondence ───────────────────────────────
   // Rebuilt whenever the macros, the macro→macro match, or the segmentation
@@ -749,17 +778,19 @@ export function SmashTab() {
   // editable per-pool `matches` to this auto result (manual per-pool remaps are
   // intentionally cleared when the macro foundation changes).
   useEffect(() => {
-    if (!sourceResult || !targetResult || sourceMacros.length === 0 || targetMacros.length === 0) {
+    if (!sourceResult || !targetResult || sourceMacros.length === 0 || txTargetMacros.length === 0) {
       setMatches([]); setAutoMatches([]); setSelectedTargetId(null);
       return;
     }
+    // Correspondence runs on the REFINED target pools + refined macros, so each
+    // refined sub-pool gets a donor from its macro's matched source macro.
     const corr = buildMacroConstrainedCorrespondence(
-      sourceMacros, sourceResult.pools, targetMacros, targetResult.pools, macroMatch,
+      sourceMacros, sourceResult.pools, txTargetMacros, targetResult.pools, macroMatch,
     );
     setMatches(corr.matches.map(m => ({ ...m })));
     setAutoMatches(corr.matches.map(m => ({ ...m })));
     setSelectedTargetId(null);
-  }, [sourceMacros, targetMacros, macroMatch, sourceResult, targetResult]);
+  }, [sourceMacros, txTargetMacros, macroMatch, sourceResult, targetResult]);
 
   // ── Lookups ────────────────────────────────────────────────────────
   const sourcePoolsById = useMemo(() => {
@@ -1230,10 +1261,10 @@ export function SmashTab() {
     [targetPools, sortMode],
   );
 
-  // ── Macro-group display + edit ─────────────────────────────────────
+  // ── Macro-group display + edit (operates on BASE membership) ───────
   const targetMacroInfo = useMemo(
-    () => macroInfoMap(targetMacros, targetResult?.pools ?? []),
-    [targetMacros, targetResult],
+    () => macroInfoMap(targetMacros, targetMembership?.pools ?? []),
+    [targetMacros, targetMembership],
   );
   const sourceMacroInfo = useMemo(
     () => macroInfoMap(sourceMacros, sourceResult?.pools ?? []),
@@ -1255,10 +1286,10 @@ export function SmashTab() {
   // "−remove" a member → rehome it to the nearest OTHER macro (every pool must
   // belong to exactly one macro).
   const removePoolFromMacro = useCallback((poolId: number, fromMacroId: number) => {
-    if (!targetResult) return;
-    const dest = nearestMacroFor(poolId, targetMacros, targetResult.pools, fromMacroId);
+    if (!targetMembership) return;
+    const dest = nearestMacroFor(poolId, targetMacros, targetMembership.pools, fromMacroId);
     if (dest != null) movePoolToMacro(poolId, dest);
-  }, [targetMacros, targetResult, movePoolToMacro]);
+  }, [targetMacros, targetMembership, movePoolToMacro]);
   const setMacroDonor = useCallback((targetMacroId: number, sourceMacroId: number) => {
     setMacroMatch(prev => {
       const next = new Map(prev);
@@ -1266,17 +1297,32 @@ export function SmashTab() {
       return next;
     });
   }, []);
-  // Color + weight chip for a TARGET pool (member / candidate display).
+  // Per-macro pool-count override (the finishing pass): how finely THIS macro
+  // re-segments its own pixels. undefined = use the global pool count.
+  const macroPoolCount = useCallback(
+    (id: number) => perMacroOpts.get(id)?.poolCount,
+    [perMacroOpts],
+  );
+  const setMacroPoolCount = useCallback((id: number, n: number | null) => {
+    setPerMacroOpts(prev => {
+      const next = new Map(prev);
+      const cur: Partial<SegmentOptions> = { ...(next.get(id) ?? {}) };
+      if (n == null) delete cur.poolCount; else cur.poolCount = n;
+      if (Object.keys(cur).length === 0) next.delete(id); else next.set(id, cur);
+      return next;
+    });
+  }, []);
+  // Color + weight chip for a TARGET pool (member / candidate display) — base.
   const targetPoolChip = useCallback((poolId: number) => {
-    const p = targetResult?.pools.find(pp => pp.id === poolId);
+    const p = targetMembership?.pools.find(pp => pp.id === poolId);
     if (!p) return undefined;
     return { r: p.descriptor.r, g: p.descriptor.g, b: p.descriptor.b, weightPct: Math.round(p.descriptor.weight * 100) };
-  }, [targetResult]);
-  // Contamination / missing suggestions for one target macro.
+  }, [targetMembership]);
+  // Contamination / missing suggestions for one target macro (base membership).
   const suggestionsFor = useCallback((macroId: number) => {
-    if (!targetResult) return { contaminating: [], candidates: [] };
-    return macroSuggestions(macroId, targetMacros, targetResult.pools);
-  }, [targetMacros, targetResult]);
+    if (!targetMembership) return { contaminating: [], candidates: [] };
+    return macroSuggestions(macroId, targetMacros, targetMembership.pools);
+  }, [targetMacros, targetMembership]);
 
   // ── Editing-canvas circles + views (source / target / output) ──────
   // Circles unify anchors + splits behind one move/resize/remove protocol; the
@@ -2103,6 +2149,9 @@ export function SmashTab() {
               suggestionsFor={suggestionsFor}
               onAddPoolToMacro={movePoolToMacro}
               onRemovePoolFromMacro={removePoolFromMacro}
+              globalPoolCount={poolCount}
+              macroPoolCount={macroPoolCount}
+              onSetMacroPoolCount={setMacroPoolCount}
               expandedMacroId={expandedMacroId}
               onToggleExpand={setExpandedMacroId}
             />

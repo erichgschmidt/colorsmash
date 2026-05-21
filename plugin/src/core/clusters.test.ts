@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   segmentImage, expandPool, collapsePool,
   applySplits, buildPoolsFromLabels, buildSplitBlendWeight,
+  refineMacros,
   SPLIT_ID_BASE, SPLIT_ID_STRIDE,
+  MACRO_REFINE_BASE, MACRO_REFINE_STRIDE,
 } from "./clusters";
 import type { SplitEdit } from "./clusters";
 
@@ -412,5 +414,202 @@ describe("polygon (lasso) splits", () => {
     expect(nearEdge).toBeLessThan(1);
     // Outside the polygon → base (0).
     expect(at(50, 95)).toBeCloseTo(0, 5);
+  });
+});
+
+describe("refineMacros", () => {
+  // A full SegmentOptions object — every field present so merged overrides only
+  // change what they intend to.
+  const OPTS = {
+    poolCount: 2, edgePreservation: 0.5, regionCleanup: 0.2,
+    colorVsValueBias: 0.5, subPaletteSize: 3, neutralProtection: 0,
+    poolContinuity: 0,
+  };
+
+  // 64×64 image with four clearly-distinct coloured quadrants — rich internal
+  // colour structure for a refine pass to subdivide.
+  function quadImage() {
+    const W = 64, H = 64;
+    const img = makeImage(W, H, (x, y) => {
+      const right = x >= W / 2, bottom = y >= H / 2;
+      if (!right && !bottom) return [220, 40, 40];   // red
+      if (right && !bottom) return [40, 220, 40];    // green
+      if (!right && bottom) return [40, 40, 220];    // blue
+      return [220, 220, 40];                         // yellow
+    });
+    return { img, W, H };
+  }
+
+  // The reserved refined-id range for a given macro id.
+  const refineLo = (macroId: number) => MACRO_REFINE_BASE + macroId * MACRO_REFINE_STRIDE;
+  const refineHi = (macroId: number) => refineLo(macroId) + MACRO_REFINE_STRIDE;
+  const inRefineRange = (id: number, macroId: number) =>
+    id >= refineLo(macroId) && id < refineHi(macroId);
+
+  it("empty perMacroOpts returns the SAME base object and the same macros (identity)", () => {
+    const { img, W, H } = quadImage();
+    const base = segmentImage(img, W, H, OPTS);
+    const macros = [{ id: 0, poolIds: base.pools.map((p) => p.id) }];
+
+    const out = refineMacros(base, img, macros, OPTS, new Map());
+    expect(out.result).toBe(base);          // identity — no copy made
+    expect(out.macros).toBe(macros);        // macros passed straight through
+  });
+
+  it("a poolCount override re-segments ONLY that macro's pixels into more pools", () => {
+    const { img, W, H } = quadImage();
+    // Base at poolCount 2 → the four quadrants collapse into 2 pools.
+    const base = segmentImage(img, W, H, OPTS);
+    const basePoolIds = base.pools.map((p) => p.id);
+
+    // One macro covering EVERYTHING.
+    const macros = [{ id: 0, poolIds: [...basePoolIds] }];
+    const before = macros[0].poolIds.length;
+
+    // Refine macro 0 with a higher pool count → it should resolve more pools.
+    const perMacroOpts = new Map([[0, { poolCount: 4 }]]);
+    const out = refineMacros(base, img, macros, OPTS, perMacroOpts);
+
+    const m0 = out.macros.find((m) => m.id === 0)!;
+    // More pool ids than before, ≥3 of them, all in macro 0's reserved range.
+    expect(m0.poolIds.length).toBeGreaterThan(before);
+    expect(m0.poolIds.length).toBeGreaterThanOrEqual(3);
+    for (const id of m0.poolIds) expect(inRefineRange(id, 0)).toBe(true);
+
+    // The pool descriptors in the result that belong to macro 0 are also in range.
+    const refinedPools = out.result.pools.filter((p) => inRefineRange(p.id, 0));
+    expect(refinedPools.length).toBeGreaterThanOrEqual(3);
+
+    // A NEW result object, not the base.
+    expect(out.result).not.toBe(base);
+  });
+
+  it("refined pixels get reserved ids; pixels outside the refined macro are unchanged", () => {
+    const { img, W, H } = quadImage();
+    // Base at poolCount 4 so every quadrant is its own pool.
+    const base = segmentImage(img, W, H, { ...OPTS, poolCount: 4 });
+
+    // Macro 0 = the RED quadrant (top-left) only. Find which base pool owns it.
+    const redIdx = (H / 4) * W + (W / 4);
+    const redPoolId = base.labels[redIdx];
+    expect(redPoolId).toBeGreaterThanOrEqual(0);
+
+    // Macro 1 = a different quadrant (green, top-right) — left untouched.
+    const greenIdx = (H / 4) * W + (3 * W / 4);
+    const greenPoolId = base.labels[greenIdx];
+
+    const macros = [
+      { id: 0, poolIds: [redPoolId] },
+      { id: 1, poolIds: [greenPoolId] },
+    ];
+    const perMacroOpts = new Map([[0, { poolCount: 2 }]]);
+    const out = refineMacros(base, img, macros, OPTS, perMacroOpts);
+
+    // The red pixel's label is now a refined id in macro 0's range.
+    expect(inRefineRange(out.result.labels[redIdx], 0)).toBe(true);
+
+    // The green pixel (outside the refined macro) keeps its original base id.
+    expect(out.result.labels[greenIdx]).toBe(greenPoolId);
+
+    // Macro 1, which had no override, keeps its poolIds unchanged.
+    const m1 = out.macros.find((m) => m.id === 1)!;
+    expect(m1.poolIds).toEqual([greenPoolId]);
+
+    // Every pixel that was NOT red is byte-for-byte unchanged from the base.
+    for (let i = 0; i < base.labels.length; i++) {
+      if (base.labels[i] === redPoolId) continue;
+      expect(out.result.labels[i]).toBe(base.labels[i]);
+    }
+  });
+
+  it("the result's pool weights still sum to ~1", () => {
+    const { img, W, H } = quadImage();
+    const base = segmentImage(img, W, H, OPTS);
+    const macros = [{ id: 0, poolIds: base.pools.map((p) => p.id) }];
+    const out = refineMacros(base, img, macros, OPTS, new Map([[0, { poolCount: 4 }]]));
+
+    const total = out.result.pools.reduce((s, p) => s + p.descriptor.weight, 0);
+    expect(total).toBeCloseTo(1, 5);
+  });
+
+  it("preserves split pools inside a refined macro (split ids are not re-segmented)", () => {
+    const { img, W, H } = quadImage();
+    const base = segmentImage(img, W, H, { ...OPTS, poolCount: 4 });
+
+    // Carve a split inside the RED quadrant (top-left) — a small circle.
+    const edit: SplitEdit = {
+      id: "s1", nx: 0.25, ny: 0.25, radius: 0.12, partCount: 2,
+      baseId: SPLIT_ID_BASE,
+    };
+    const withSplit = applySplits(base, img, [edit], { ...OPTS, poolCount: 4 });
+
+    // Collect the split pool ids that landed (≥ SPLIT_ID_BASE) and a sample
+    // pixel that belongs to a split pool.
+    const splitIds = withSplit.pools
+      .filter((p) => p.id >= SPLIT_ID_BASE)
+      .map((p) => p.id);
+    expect(splitIds.length).toBeGreaterThanOrEqual(1);
+    let splitPixel = -1;
+    for (let i = 0; i < withSplit.labels.length; i++) {
+      if (withSplit.labels[i] >= SPLIT_ID_BASE) { splitPixel = i; break; }
+    }
+    expect(splitPixel).toBeGreaterThanOrEqual(0);
+
+    // Macro 0 owns the red quadrant's base pools PLUS the split pools.
+    // Base pool ids still present in the red region (some pixels weren't covered
+    // by the split circle, so the red base pool typically survives too).
+    const redBaseIds = new Set<number>();
+    for (let y = 0; y < H / 2; y++) {
+      for (let x = 0; x < W / 2; x++) {
+        const id = withSplit.labels[y * W + x];
+        if (id >= 0 && id < SPLIT_ID_BASE) redBaseIds.add(id);
+      }
+    }
+    const macros = [{
+      id: 0,
+      poolIds: [...redBaseIds, ...splitIds],
+    }];
+
+    const out = refineMacros(withSplit, img, macros, { ...OPTS, poolCount: 4 },
+      new Map([[0, { poolCount: 3 }]]));
+
+    // The split pixel is still owned by a split-range id (NOT re-segmented).
+    expect(out.result.labels[splitPixel]).toBeGreaterThanOrEqual(SPLIT_ID_BASE);
+
+    // Every split id stays in macro 0's poolIds.
+    const m0 = out.macros.find((m) => m.id === 0)!;
+    for (const sid of splitIds) expect(m0.poolIds).toContain(sid);
+    // …and macro 0 also gained refined-range pools for its non-split pixels.
+    expect(m0.poolIds.some((id) => inRefineRange(id, 0))).toBe(true);
+
+    // No split pixel anywhere was relabelled out of the split range.
+    for (let i = 0; i < withSplit.labels.length; i++) {
+      if (withSplit.labels[i] >= SPLIT_ID_BASE) {
+        expect(out.result.labels[i]).toBe(withSplit.labels[i]);
+      }
+    }
+  });
+
+  it("a macro NOT in perMacroOpts keeps its poolIds unchanged", () => {
+    const { img, W, H } = quadImage();
+    const base = segmentImage(img, W, H, { ...OPTS, poolCount: 4 });
+
+    const redIdx = (H / 4) * W + (W / 4);
+    const greenIdx = (H / 4) * W + (3 * W / 4);
+    const redPoolId = base.labels[redIdx];
+    const greenPoolId = base.labels[greenIdx];
+
+    const macros = [
+      { id: 0, poolIds: [redPoolId] },
+      { id: 1, poolIds: [greenPoolId] },
+    ];
+    // Only macro 0 is refined.
+    const out = refineMacros(base, img, macros, { ...OPTS, poolCount: 4 },
+      new Map([[0, { poolCount: 2 }]]));
+
+    const m1 = out.macros.find((m) => m.id === 1)!;
+    expect(m1.poolIds).toEqual([greenPoolId]);
+    // The input macros array was not mutated.
+    expect(macros[1].poolIds).toEqual([greenPoolId]);
   });
 });

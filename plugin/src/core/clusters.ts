@@ -134,6 +134,12 @@ export interface SplitEdit {
 export const SPLIT_ID_BASE = 1_000_000;
 export const SPLIT_ID_STRIDE = 1_000;
 
+// Stable id space for per-macro REFINED pools (refineMacros). Far above split
+// ids; each macro gets MACRO_REFINE_BASE + macroId·STRIDE, deterministic so the
+// refined pool ids stay stable across re-segmentation.
+export const MACRO_REFINE_BASE = 5_000_000;
+export const MACRO_REFINE_STRIDE = 100_000;
+
 // ────────── Tuning constants ──────────
 
 // Pool k-means runs over SLIC superpixels, not raw pixels — this is the unit
@@ -523,6 +529,62 @@ export function buildSplitBlendWeight(
     }
   }
   return w;
+}
+
+// ────────── per-macro refinement (the finishing pass) ──────────
+
+// Re-segment each macro's OWN pixels with its OWN options — the finishing pass.
+// A macro can want a different segmentation than the global one (smooth, high
+// pool-count for skin; high edge-preservation for a patterned shirt). For every
+// macro with an override, we gather its member pixels (excluding any explicit
+// split pools, which stay intact) and re-run the segmenter with the merged opts,
+// relabelling into a stable reserved id range. Macros without an override keep
+// their pools. Returns a NEW result (refined labels + rebuilt pools) and the
+// macros with their poolIds updated to the refined pools.
+//
+// Deterministic for a fixed input → stable refined pool ids across re-runs.
+export function refineMacros<M extends { id: number; poolIds: number[] }>(
+  base: SegmentResult,
+  rgba: Uint8Array,
+  macros: M[],
+  globalOpts: SegmentOptions,
+  perMacroOpts: Map<number, Partial<SegmentOptions>>,
+): { result: SegmentResult; macros: M[] } {
+  if (!perMacroOpts || perMacroOpts.size === 0) return { result: base, macros };
+  const { width, height } = base;
+  const labels = base.labels.slice();
+  const outMacros = macros.map(m => ({ ...m, poolIds: [...m.poolIds] }));
+
+  for (const m of outMacros) {
+    const override = perMacroOpts.get(m.id);
+    if (!override) continue;
+    const merged: SegmentOptions = { ...globalOpts, ...override };
+    const memberSet = new Set(m.poolIds);
+
+    // Member pixels, excluding split pools (kept intact) and transparent.
+    const indices: number[] = [];
+    for (let i = 0; i < labels.length; i++) {
+      const id = labels[i];
+      if (id < 0 || id >= SPLIT_ID_BASE) continue;
+      if (!memberSet.has(id)) continue;
+      if (rgba[i * 4 + 3] < 128) continue;
+      indices.push(i);
+    }
+    if (indices.length < 1) continue;
+
+    const idStart = MACRO_REFINE_BASE + m.id * MACRO_REFINE_STRIDE;
+    const { assignment } = segmentPixelSet(rgba, width, height, indices, merged, idStart);
+    const refinedIds = new Set<number>();
+    for (let j = 0; j < indices.length; j++) {
+      if (assignment[j] >= 0) { labels[indices[j]] = assignment[j]; refinedIds.add(assignment[j]); }
+    }
+    // Updated membership: split pools stay; the macro's base pools are replaced
+    // by the refined pool ids.
+    m.poolIds = [...m.poolIds.filter(id => id >= SPLIT_ID_BASE), ...refinedIds];
+  }
+
+  const pools = buildPoolsFromLabels(rgba, width, height, labels, globalOpts.subPaletteSize);
+  return { result: { width, height, labels, pools }, macros: outMacros };
 }
 
 // ────────── pass 1: segment a pixel set into pools ──────────
