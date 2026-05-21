@@ -33,7 +33,8 @@ import {
   segmentImage, applySplits, buildSplitBlendWeight, SegmentResult, Pool,
   SplitEdit, SPLIT_ID_BASE, SPLIT_ID_STRIDE,
 } from "../core/clusters";
-import { SmashEditCanvas, CanvasView, CanvasCircle } from "./SmashEditCanvas";
+import { SmashEditCanvas, CanvasView, CanvasCircle, CanvasPoly } from "./SmashEditCanvas";
+import { simplifyPolygon, polygonCentroid, type Pt } from "../core/regions";
 import { SmashMacroPanel } from "./SmashMacroPanel";
 import {
   seedMacroGroups, matchMacros, buildMacroConstrainedCorrespondence, macroInfoMap,
@@ -388,7 +389,7 @@ export function SmashTab() {
   // up with them rather than inside a tab. The two tools are mutually exclusive
   // in the UI — only the active tool's circles are shown/placeable, so the
   // anchor vs split workflows don't visually collide.
-  const [poolMapTool, setPoolMapTool] = useState<"anchor" | "split">("anchor");
+  const [poolMapTool, setPoolMapTool] = useState<"anchor" | "split" | "lasso">("anchor");
   // New splits drop at a default radius/feather (a sensible fraction of the
   // document); the user then drags the radius + feather handles on the canvas
   // to dial them in. Only the part count is chosen up front.
@@ -531,15 +532,17 @@ export function SmashTab() {
   // the split list), dashed amber to read as "selection edit", distinct from
   // the per-anchor coloured rings.
   const SPLIT_COLOR = "#f5a623";
+  // Small-map split rings show CIRCLE splits only; polygon (lasso) splits are
+  // edited on the big canvas where their vertices are reachable.
   const sourceSplitDots = useMemo<PoolMapDot[]>(
-    () => sourceSplits.map((s) => ({
+    () => sourceSplits.filter(s => !s.points).map((s) => ({
       kind: "split", nx: s.nx, ny: s.ny, radius: s.radius,
       color: SPLIT_COLOR, dashed: true,
     })),
     [sourceSplits],
   );
   const targetSplitDots = useMemo<PoolMapDot[]>(
-    () => targetSplits.map((s) => ({
+    () => targetSplits.filter(s => !s.points).map((s) => ({
       kind: "split", nx: s.nx, ny: s.ny, radius: s.radius,
       color: SPLIT_COLOR, dashed: true,
     })),
@@ -894,6 +897,21 @@ export function SmashTab() {
     if (side === "source") setSourceSplits(prev => [...prev, edit(prev)]);
     else setTargetSplits(prev => [...prev, edit(prev)]);
   }, [splitParts]);
+  // Lasso → polygon split. The freehand path is RDP-simplified to a handful of
+  // editable vertices; the split carries `points` so applySplits rasterizes the
+  // polygon instead of a circle. Centroid drives the move handle.
+  const addPolySplit = useCallback((side: "source" | "target", raw: Pt[]) => {
+    const pts = simplifyPolygon(raw, 0.012);
+    if (pts.length < 3) return;
+    const c = polygonCentroid(pts);
+    const edit = (list: SplitEdit[]): SplitEdit => ({
+      id: `${side}-poly-${Date.now().toString(36)}-${list.length}`,
+      nx: c.x, ny: c.y, radius: DEFAULT_SPLIT_RADIUS, partCount: splitParts,
+      baseId: nextSplitBaseId(list), feather: DEFAULT_SPLIT_FEATHER, points: pts,
+    });
+    if (side === "source") setSourceSplits(prev => [...prev, edit(prev)]);
+    else setTargetSplits(prev => [...prev, edit(prev)]);
+  }, [splitParts]);
   const removeSplit = useCallback((side: "source" | "target", id: string) => {
     if (side === "source") setSourceSplits(prev => prev.filter(s => s.id !== id));
     else setTargetSplits(prev => prev.filter(s => s.id !== id));
@@ -903,17 +921,23 @@ export function SmashTab() {
     if (side === "source") setSourceSplits(map);
     else setTargetSplits(map);
   }, []);
+  // Reshape a polygon split (vertex drag / move) — also re-derive its centroid.
+  const setPolyPoints = useCallback((side: "source" | "target", id: string, points: Pt[]) => {
+    const c = polygonCentroid(points);
+    patchSplit(side, id, { points, nx: c.x, ny: c.y });
+  }, [patchSplit]);
   const clearAllSplits = () => { setSourceSplits([]); setTargetSplits([]); };
 
   // Pool-map click dispatchers — route to the anchor or split workflow based on
-  // the active tool. The pane only knows "a click happened here".
+  // the active tool. (Lasso is drag-driven on the canvas, so a plain click does
+  // nothing in lasso mode.) The pane only knows "a click happened here".
   const handleSourceMapClick = useCallback((nx: number, ny: number) => {
     if (poolMapTool === "split") addSplit("source", nx, ny);
-    else handleAnchorSourceClick(nx, ny);
+    else if (poolMapTool === "anchor") handleAnchorSourceClick(nx, ny);
   }, [poolMapTool, addSplit, handleAnchorSourceClick]);
   const handleTargetMapClick = useCallback((nx: number, ny: number) => {
     if (poolMapTool === "split") addSplit("target", nx, ny);
-    else handleAnchorTargetClick(nx, ny);
+    else if (poolMapTool === "anchor") handleAnchorTargetClick(nx, ny);
   }, [poolMapTool, addSplit, handleAnchorTargetClick]);
 
   const clearAllAnchors = () => {
@@ -1219,11 +1243,16 @@ export function SmashTab() {
         color: ACTIVE_SOURCE_COLOR, dashed: true, movable: true, resizable: true, removable: true,
       });
     } else {
-      for (const s of sourceSplits) arr.push({
-        key: `sS:${s.id}`, nx: s.nx, ny: s.ny, radius: s.radius,
-        color: SPLIT_COLOR, dashed: true, movable: true, resizable: true, removable: true,
-        featherable: true, feather: s.feather ?? 0,
-      });
+      // split + lasso tools: show CIRCLE splits as rings (polygons render
+      // separately as SVG outlines, see sourcePolys).
+      for (const s of sourceSplits) {
+        if (s.points) continue;
+        arr.push({
+          key: `sS:${s.id}`, nx: s.nx, ny: s.ny, radius: s.radius,
+          color: SPLIT_COLOR, dashed: true, movable: true, resizable: true, removable: true,
+          featherable: true, feather: s.feather ?? 0,
+        });
+      }
     }
     return arr;
   }, [poolMapTool, anchors, activeSource, anchorRadius, sourceSplits]);
@@ -1236,42 +1265,67 @@ export function SmashTab() {
         color: colorForAnchor(i), movable: true, resizable: true, removable: true,
       }));
     } else {
-      for (const s of targetSplits) arr.push({
-        key: `sT:${s.id}`, nx: s.nx, ny: s.ny, radius: s.radius,
-        color: SPLIT_COLOR, dashed: true, movable: true, resizable: true, removable: true,
-        featherable: true, feather: s.feather ?? 0,
-      });
+      for (const s of targetSplits) {
+        if (s.points) continue;
+        arr.push({
+          key: `sT:${s.id}`, nx: s.nx, ny: s.ny, radius: s.radius,
+          color: SPLIT_COLOR, dashed: true, movable: true, resizable: true, removable: true,
+          featherable: true, feather: s.feather ?? 0,
+        });
+      }
     }
     return arr;
   }, [poolMapTool, anchors, targetSplits]);
 
+  // Polygon (lasso) split overlays — shown in split/lasso modes only.
+  const splitToolActive = poolMapTool === "split" || poolMapTool === "lasso";
+  const sourcePolys = useMemo<CanvasPoly[]>(() => {
+    if (!splitToolActive) return [];
+    return sourceSplits.filter(s => s.points).map(s => ({
+      key: `pS:${s.id}`, points: s.points!, color: SPLIT_COLOR,
+      movable: true, editable: true, removable: true,
+    }));
+  }, [splitToolActive, sourceSplits]);
+  const targetPolys = useMemo<CanvasPoly[]>(() => {
+    if (!splitToolActive) return [];
+    return targetSplits.filter(s => s.points).map(s => ({
+      key: `pT:${s.id}`, points: s.points!, color: SPLIT_COLOR,
+      movable: true, editable: true, removable: true,
+    }));
+  }, [splitToolActive, targetSplits]);
+
   // The canvas Source/Target tabs show the POOL-MAP cutouts (the segmentation
   // breakdown, including splits) so the user watches regions form in real time;
   // the Output tab shows the recolored result.
+  const lasso = poolMapTool === "lasso";
   const canvasViews = useMemo<CanvasView[]>(() => [
     {
       id: "source", label: "Source",
       url: sourceCutoutUrl, imgW: sourceResult?.width ?? 1, imgH: sourceResult?.height ?? 1,
-      circles: sourceCircles, placeholder: "Pick a source layer.",
-      onPlace: sourceResult ? handleSourceMapClick : undefined,
+      circles: sourceCircles, polys: sourcePolys, placeholder: "Pick a source layer.",
+      onPlace: sourceResult && !lasso ? handleSourceMapClick : undefined,
+      onLasso: sourceResult && lasso ? (pts => addPolySplit("source", pts)) : undefined,
     },
     {
       id: "target", label: "Target",
       url: targetCutoutUrl, imgW: targetResult?.width ?? 1, imgH: targetResult?.height ?? 1,
-      circles: targetCircles, placeholder: "Pick a target layer.",
-      onPlace: targetResult ? handleTargetMapClick : undefined,
+      circles: targetCircles, polys: targetPolys, placeholder: "Pick a target layer.",
+      onPlace: targetResult && !lasso ? handleTargetMapClick : undefined,
+      onLasso: targetResult && lasso ? (pts => addPolySplit("target", pts)) : undefined,
     },
     {
-      // Output shows the recolored result and carries the TARGET-side circles
+      // Output shows the recolored result and carries the TARGET-side overlays
       // so you can outline/adjust splits + anchors over the detailed image.
       id: "output", label: "Output",
       url: transferUrl, imgW: targetResult?.width ?? 1, imgH: targetResult?.height ?? 1,
-      circles: targetCircles, placeholder: "Set source + target — the recolored output appears here.",
-      onPlace: targetResult ? handleTargetMapClick : undefined,
+      circles: targetCircles, polys: targetPolys,
+      placeholder: "Set source + target — the recolored output appears here.",
+      onPlace: targetResult && !lasso ? handleTargetMapClick : undefined,
+      onLasso: targetResult && lasso ? (pts => addPolySplit("target", pts)) : undefined,
     },
-  ], [sourceCutoutUrl, targetCutoutUrl, transferUrl,
-      sourceCircles, targetCircles, sourceResult, targetResult,
-      handleSourceMapClick, handleTargetMapClick]);
+  ], [sourceCutoutUrl, targetCutoutUrl, transferUrl, lasso,
+      sourceCircles, targetCircles, sourcePolys, targetPolys, sourceResult, targetResult,
+      handleSourceMapClick, handleTargetMapClick, addPolySplit]);
 
   const decodeKey = (key: string): { tag: string; id: string } => {
     const sep = key.indexOf(":");
@@ -1306,6 +1360,16 @@ export function SmashTab() {
     if (tag === "sS") patchSplit("source", id, { feather });
     else if (tag === "sT") patchSplit("target", id, { feather });
   }, [patchSplit]);
+  const onCanvasSetPoly = useCallback((_view: string, key: string, points: Pt[]) => {
+    const { tag, id } = decodeKey(key);
+    if (tag === "pS") setPolyPoints("source", id, points);
+    else if (tag === "pT") setPolyPoints("target", id, points);
+  }, [setPolyPoints]);
+  const onCanvasRemovePoly = useCallback((_view: string, key: string) => {
+    const { tag, id } = decodeKey(key);
+    if (tag === "pS") removeSplit("source", id);
+    else if (tag === "pT") removeSplit("target", id);
+  }, [removeSplit]);
 
   return (
     <div style={{ padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1366,9 +1430,9 @@ export function SmashTab() {
             display={sourceMapDisplay}
             analyzing={analyzing}
             placeholder={source.snapError ?? "Pick a source layer."}
-            onPlaceNormalized={sourceResult ? handleSourceMapClick : undefined}
+            onPlaceNormalized={sourceResult && poolMapTool !== "lasso" ? handleSourceMapClick : undefined}
             anchorDots={poolMapTool === "anchor" ? sourceAnchorDots : []}
-            splitDots={poolMapTool === "split" ? sourceSplitDots : []}
+            splitDots={splitToolActive ? sourceSplitDots : []}
             onMoveAnchor={moveAnchorSource}
             onMoveActiveSource={moveActiveSource}
             onRemoveAnchor={removeAnchor}
@@ -1382,9 +1446,9 @@ export function SmashTab() {
             display={targetMapDisplay}
             analyzing={analyzing}
             placeholder={target.snapError ?? "Pick a target layer."}
-            onPlaceNormalized={targetResult ? handleTargetMapClick : undefined}
+            onPlaceNormalized={targetResult && poolMapTool !== "lasso" ? handleTargetMapClick : undefined}
             anchorDots={poolMapTool === "anchor" ? targetAnchorDots : []}
-            splitDots={poolMapTool === "split" ? targetSplitDots : []}
+            splitDots={splitToolActive ? targetSplitDots : []}
             onMoveAnchor={moveAnchorTarget}
             onRemoveAnchor={removeAnchor}
           />
@@ -1402,6 +1466,7 @@ export function SmashTab() {
           {([
             { id: "anchor" as const, label: "Anchor" },
             { id: "split" as const, label: "Split" },
+            { id: "lasso" as const, label: "Lasso" },
           ]).map(t => {
             const active = poolMapTool === t.id;
             return (
@@ -1410,7 +1475,9 @@ export function SmashTab() {
                 onClick={() => setPoolMapTool(t.id)}
                 title={t.id === "anchor"
                   ? "Click the source then target maps to drop a focal anchor (mini-Smash region)."
-                  : "Click a pool map to drop a split circle — it re-clusters that area into edge-following sub-pools you can map to separate donors."}
+                  : t.id === "split"
+                    ? "Click a pool map to drop a split circle — it re-clusters that area into edge-following sub-pools you can map to separate donors."
+                    : "Drag on the big canvas to lasso an organic region — it becomes an editable polygon split (drag its vertices to reshape)."}
                 style={{
                   padding: "3px 12px", fontSize: 10, fontWeight: 600, borderRadius: 3,
                   border: `1px solid ${active ? "#f5a623" : "#444"}`,
@@ -1423,7 +1490,7 @@ export function SmashTab() {
               </div>
             );
           })}
-          {poolMapTool === "split" && (sourceSplits.length + targetSplits.length) > 0 && (
+          {splitToolActive && (sourceSplits.length + targetSplits.length) > 0 && (
             <>
               <div style={{ flex: 1 }} />
               <span style={{ fontSize: 9, color: "#999" }}>
@@ -1444,21 +1511,21 @@ export function SmashTab() {
           )}
         </div>
 
-        {poolMapTool === "split" && (
+        {splitToolActive && (
           <div style={{
             display: "flex", flexDirection: "column", gap: 6,
             padding: 8, background: "#241f16",
             border: "1px solid #4a3a1a", borderRadius: 3,
           }}>
             <div style={{ fontSize: 9, color: "#cdb892", lineHeight: 1.4 }}>
-              Click the Source/Target canvas (or a small pool map) to drop a
-              split. The circle re-clusters that area into edge-following
-              sub-pools — un-merges things the sliders fuse (e.g. a face in
-              shadow from a collar in shadow). Each part shows up in the
-              correspondence list to map to its own donor. New splits drop at a
-              default size — then <b>drag the circle to move it, its square
-              handle to resize, and the inner dot to set feather</b>. Splits
-              persist when you change segmentation controls.
+              {lasso
+                ? "Lasso mode: drag on the big canvas to draw an organic region — it becomes an editable polygon split (drag its vertices to reshape, its centre dot to move). "
+                : "Click the Source/Target canvas (or a small pool map) to drop a split circle — drag it to move, the square handle to resize, the inner dot to feather. "}
+              Each split re-clusters that area into edge-following sub-pools
+              (un-merges things the sliders fuse, e.g. a face in shadow from a
+              collar in shadow) and shows up in the correspondence list to map
+              to its own donor. Splits persist when you change segmentation
+              controls.
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: 10, color: "#cccccc", flex: 1 }}
@@ -1485,7 +1552,9 @@ export function SmashTab() {
                     borderRadius: 2, padding: "3px 6px",
                   }}>
                     <span style={{ width: 42, color: side === "source" ? "#8fb5e8" : "#e8b58f" }}>{side}</span>
-                    <span style={{ flex: 1 }}>{s.partCount}p · r{s.radius.toFixed(2)} · f{(s.feather ?? 0).toFixed(2)}</span>
+                    <span style={{ flex: 1 }}>
+                      {s.partCount}p · {s.points ? "lasso" : `r${s.radius.toFixed(2)}`} · f{(s.feather ?? 0).toFixed(2)}
+                    </span>
                     <div onClick={() => patchSplit(side, s.id, { partCount: Math.max(2, s.partCount - 1) })}
                       title="Fewer parts" style={{ padding: "0 7px", fontSize: 11, borderRadius: 2, border: "1px solid #4a4a4a", background: "#333", color: "#ddd", cursor: "pointer", userSelect: "none" }}>−</div>
                     <div onClick={() => patchSplit(side, s.id, { partCount: Math.min(8, s.partCount + 1) })}
@@ -1683,6 +1752,8 @@ export function SmashTab() {
         onResizeCircle={onCanvasResize}
         onRemoveCircle={onCanvasRemove}
         onFeatherCircle={onCanvasFeather}
+        onSetPolyPoints={onCanvasSetPoly}
+        onRemovePoly={onCanvasRemovePoly}
         overlaysHidden={!showOverlays}
         onToggleOverlays={() => setShowOverlays(v => !v)}
       />

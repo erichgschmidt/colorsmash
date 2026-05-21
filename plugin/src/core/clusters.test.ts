@@ -353,3 +353,64 @@ describe("buildSplitBlendWeight", () => {
     expect(at(cx + 45, cy)).toBeCloseTo(0, 5);
   });
 });
+
+describe("polygon (lasso) splits", () => {
+  const OPTS = {
+    poolCount: 1, edgePreservation: 0.5, regionCleanup: 0.2,
+    colorVsValueBias: 0.5, subPaletteSize: 3, neutralProtection: 0,
+    poolContinuity: 0,
+  };
+
+  it("applySplits relabels pixels INSIDE the polygon, not outside", () => {
+    const W = 64, H = 64;
+    // Two near-shadow halves fused at poolCount=1 (same as the circle test).
+    const img = makeImage(W, H, (x) => (x < W / 2 ? [60, 58, 70] : [58, 64, 60]));
+    const base = segmentImage(img, W, H, OPTS);
+    expect(base.pools.length).toBe(1);
+
+    // A polygon covering only the LEFT-CENTRE area (a diamond around (0.25,0.5)).
+    const edit: SplitEdit = {
+      id: "poly1", nx: 0.25, ny: 0.5, radius: 0, partCount: 2,
+      baseId: SPLIT_ID_BASE,
+      points: [
+        { x: 0.10, y: 0.5 }, { x: 0.25, y: 0.30 },
+        { x: 0.40, y: 0.5 }, { x: 0.25, y: 0.70 },
+      ],
+    };
+    const out = applySplits(base, img, [edit], OPTS);
+
+    // A pixel well inside the diamond got a split-range id…
+    const insideIdx = (H / 2) * W + Math.round(0.25 * W);
+    expect(out.labels[insideIdx]).toBeGreaterThanOrEqual(SPLIT_ID_BASE);
+    // …a pixel far outside (right half) kept its base id.
+    const outsideIdx = (H / 2) * W + Math.round(0.85 * W);
+    expect(out.labels[outsideIdx]).toBeLessThan(SPLIT_ID_BASE);
+    // Pool weights still sum to ~1.
+    const total = out.pools.reduce((s, p) => s + p.descriptor.weight, 0);
+    expect(total).toBeCloseTo(1, 5);
+  });
+
+  it("buildSplitBlendWeight gives a polygon split an inward feather (1 core → 0 edge → 0 outside)", () => {
+    const W = 100, H = 100;
+    const edit: SplitEdit = {
+      id: "poly1", nx: 0.5, ny: 0.5, radius: 0, partCount: 2,
+      baseId: SPLIT_ID_BASE, feather: 0.6,
+      // Big centred square [0.2..0.8].
+      points: [
+        { x: 0.2, y: 0.2 }, { x: 0.8, y: 0.2 },
+        { x: 0.8, y: 0.8 }, { x: 0.2, y: 0.8 },
+      ],
+    };
+    const w = buildSplitBlendWeight(W, H, [edit])!;
+    expect(w).not.toBeNull();
+    const at = (x: number, y: number) => w[y * W + x];
+    // Deep centre → full split.
+    expect(at(50, 50)).toBeCloseTo(1, 5);
+    // Just inside an edge → partial (feathered).
+    const nearEdge = at(50, 78);
+    expect(nearEdge).toBeGreaterThanOrEqual(0);
+    expect(nearEdge).toBeLessThan(1);
+    // Outside the polygon → base (0).
+    expect(at(50, 95)).toBeCloseTo(0, 5);
+  });
+});

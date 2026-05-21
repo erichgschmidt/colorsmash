@@ -25,6 +25,7 @@ import { labelComponents, mergeSmallIslands } from "./cutwise/islands";
 import type { Cluster, MergeParams } from "./cutwise/islands";
 import { smoothLabels } from "./cutwise/smooth";
 import { slic } from "./slic";
+import { polygonPixelIndices, polygonEdgeDistancePx, polygonBBox, type Pt } from "./regions";
 
 // ────────── Public interface ──────────
 
@@ -107,16 +108,20 @@ export interface SegmentResult {
 // SPLIT_ID_STRIDE so they never collide with normal pool ids or each other.
 export interface SplitEdit {
   id: string;          // UI key (not the pool id space)
-  nx: number;          // normalized circle centre X, 0..1
-  ny: number;          // normalized circle centre Y, 0..1
-  radius: number;      // normalized radius as a fraction of max(width,height), 0..1
+  nx: number;          // normalized centre X, 0..1 (circle centre / polygon centroid)
+  ny: number;          // normalized centre Y, 0..1
+  radius: number;      // normalized radius as a fraction of max(width,height), 0..1 (circle only)
   partCount: number;   // how many sub-pools to split the covered pixels into (≥2)
   baseId: number;      // start of this edit's reserved pool-id range
   // Soft edge, 0..1 (optional, default 0 = hard). The split still relabels every
-  // pixel inside the full radius; feather only attenuates the RECOLOR in an outer
-  // band [radius·(1−feather), radius] so the split fades into the original toward
-  // its rim instead of swapping donor abruptly. See buildSplitFeatherMask.
+  // covered pixel; feather only attenuates the RECOLOR in an inner band toward
+  // the shape's edge so the split fades into the original instead of swapping
+  // donor abruptly. See buildSplitBlendWeight.
   feather?: number;
+  // Optional polygon (lasso/vector) shape in normalized coords. When present the
+  // covered pixels are those inside the polygon (radius is ignored); nx/ny is the
+  // centroid for the move handle. Absent → a circle (nx/ny/radius).
+  points?: Pt[];
 }
 
 // Stable id space for split parts — far above normal pool ids (which stay small
@@ -403,38 +408,43 @@ export function applySplits(
 
   for (const edit of edits) {
     const parts = Math.max(2, Math.floor(edit.partCount));
-    const cx = edit.nx * width;
-    const cy = edit.ny * height;
-    const rPx = Math.max(1, edit.radius * maxEdge);
-    const r2 = rPx * rPx;
 
-    const x0 = Math.max(0, Math.floor(cx - rPx));
-    const x1 = Math.min(width - 1, Math.ceil(cx + rPx));
-    const y0 = Math.max(0, Math.floor(cy - rPx));
-    const y1 = Math.min(height - 1, Math.ceil(cy + rPx));
-
-    const circle: number[] = [];
-    for (let y = y0; y <= y1; y++) {
-      const dy = y - cy;
-      for (let x = x0; x <= x1; x++) {
-        const dx = x - cx;
-        if (dx * dx + dy * dy > r2) continue;
-        const i = y * width + x;
-        if (rgba[i * 4 + 3] < 128) continue;
-        circle.push(i);
+    // Covered opaque pixels — inside the polygon (lasso) or the circle.
+    let covered: number[];
+    if (edit.points && edit.points.length >= 3) {
+      covered = polygonPixelIndices(edit.points, width, height)
+        .filter(i => rgba[i * 4 + 3] >= 128);
+    } else {
+      const cx = edit.nx * width, cy = edit.ny * height;
+      const rPx = Math.max(1, edit.radius * maxEdge);
+      const r2 = rPx * rPx;
+      const x0 = Math.max(0, Math.floor(cx - rPx));
+      const x1 = Math.min(width - 1, Math.ceil(cx + rPx));
+      const y0 = Math.max(0, Math.floor(cy - rPx));
+      const y1 = Math.min(height - 1, Math.ceil(cy + rPx));
+      covered = [];
+      for (let y = y0; y <= y1; y++) {
+        const dy = y - cy;
+        for (let x = x0; x <= x1; x++) {
+          const dx = x - cx;
+          if (dx * dx + dy * dy > r2) continue;
+          const i = y * width + x;
+          if (rgba[i * 4 + 3] < 128) continue;
+          covered.push(i);
+        }
       }
     }
-    if (circle.length < parts) continue;
+    if (covered.length < parts) continue;
 
     // Cold segmentation of the masked subset into `parts` pools, ids starting
     // at the edit's reserved baseId (deterministic → stable across re-segments).
     const { assignment } = segmentPixelSet(
-      rgba, width, height, circle,
+      rgba, width, height, covered,
       { ...opts, poolCount: parts },
       edit.baseId,
     );
-    for (let j = 0; j < circle.length; j++) {
-      if (assignment[j] >= 0) labels[circle[j]] = assignment[j];
+    for (let j = 0; j < covered.length; j++) {
+      if (assignment[j] >= 0) labels[covered[j]] = assignment[j];
     }
   }
 
@@ -464,8 +474,28 @@ export function buildSplitBlendWeight(
 
   const w = new Float32Array(width * height); // 0 everywhere (outside = base)
   const maxEdge = Math.max(width, height);
+  const smoothstep = (s: number) => s * s * (3 - 2 * s);
+
   for (const e of edits) {
     const feather = clamp01(e.feather ?? 0);
+
+    if (e.points && e.points.length >= 3) {
+      // Polygon: inward feather. The band width scales with the polygon's
+      // smaller bbox dimension, so feather reads consistently regardless of size.
+      const bb = polygonBBox(e.points);
+      const bw = (bb.x1 - bb.x0) * width, bh = (bb.y1 - bb.y0) * height;
+      const band = Math.max(1, feather * 0.5 * Math.min(bw, bh));
+      const inside = polygonPixelIndices(e.points, width, height);
+      for (const i of inside) {
+        const px = (i % width) + 0.5, py = ((i / width) | 0) + 0.5;
+        const d = polygonEdgeDistancePx(e.points, px, py, width, height);
+        const wt = feather <= 0 ? 1 : (d >= band ? 1 : smoothstep(d / band));
+        if (wt > w[i]) w[i] = wt;
+      }
+      continue;
+    }
+
+    // Circle: 1 in the core, smoothstep 1→0 across the outer band.
     const cx = e.nx * width;
     const cy = e.ny * height;
     const outerR = Math.max(1, e.radius * maxEdge);
@@ -482,14 +512,7 @@ export function buildSplitBlendWeight(
         const dx = x - cx;
         const d = Math.sqrt(dx * dx + dy * dy);
         if (d >= outerR) continue;        // outside → leave at base (0)
-        let wt: number;
-        if (d <= innerR) {
-          wt = 1;                          // core → full split
-        } else {
-          const t = (d - innerR) / band;   // 0 at inner → 1 at outer
-          const s = 1 - t;                 // 1 at inner → 0 at outer
-          wt = s * s * (3 - 2 * s);        // smoothstep falloff
-        }
+        const wt = d <= innerR ? 1 : smoothstep(1 - (d - innerR) / band);
         const i = y * width + x;
         if (wt > w[i]) w[i] = wt;          // strongest split wins
       }

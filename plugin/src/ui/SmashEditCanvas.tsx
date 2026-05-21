@@ -13,6 +13,7 @@
 // an image-space reach).
 
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { Pt } from "../core/regions";
 
 export interface CanvasCircle {
   key: string;
@@ -30,6 +31,17 @@ export interface CanvasCircle {
   feather?: number;
 }
 
+// A polygon (lasso/vector) overlay — outline + draggable vertices + a centroid
+// move handle. Normalized points.
+export interface CanvasPoly {
+  key: string;
+  points: Pt[];
+  color: string;
+  movable?: boolean;    // centroid drag translates the whole polygon
+  editable?: boolean;   // per-vertex drag handles
+  removable?: boolean;  // × badge near the centroid
+}
+
 export interface CanvasView {
   id: string;
   label: string;
@@ -37,10 +49,15 @@ export interface CanvasView {
   imgW: number;
   imgH: number;
   circles: CanvasCircle[];
+  polys?: CanvasPoly[];
   placeholder: string;
   // True click on empty canvas (debounced vs pan/drag). Omitted = view is
   // read-only (e.g. the Output tab).
   onPlace?: (nx: number, ny: number) => void;
+  // When set, dragging on empty canvas draws a freehand lasso (pan is suspended);
+  // on release the collected normalized path is handed back to be simplified
+  // into a polygon region.
+  onLasso?: (points: Pt[]) => void;
 }
 
 interface Props {
@@ -51,6 +68,10 @@ interface Props {
   onResizeCircle: (viewId: string, key: string, radius: number) => void;
   onRemoveCircle: (viewId: string, key: string) => void;
   onFeatherCircle?: (viewId: string, key: string, feather: number) => void;
+  // Polygon editing: replace a polygon's points (vertex drag / centroid move),
+  // and remove a polygon.
+  onSetPolyPoints?: (viewId: string, key: string, points: Pt[]) => void;
+  onRemovePoly?: (viewId: string, key: string) => void;
   // When set, the header shows an eye toggle. While hidden, circle overlays
   // aren't drawn and placing/dragging is suppressed — so you can judge the
   // recolored result (or outline over it) cleanly.
@@ -67,11 +88,15 @@ type Gesture =
   | { kind: "bg"; sx: number; sy: number; px: number; py: number; moved: boolean }
   | { kind: "move"; key: string; sx: number; sy: number; moved: boolean }
   | { kind: "resize"; key: string }
-  | { kind: "feather"; key: string };
+  | { kind: "feather"; key: string }
+  | { kind: "lasso" }
+  | { kind: "polyMove"; key: string; startNX: number; startNY: number; start: Pt[] }
+  | { kind: "polyVertex"; key: string; index: number };
 
 export function SmashEditCanvas({
   views, activeId, onActiveChange,
   onMoveCircle, onResizeCircle, onRemoveCircle, onFeatherCircle,
+  onSetPolyPoints, onRemovePoly,
   overlaysHidden = false, onToggleOverlays,
   height = 280,
 }: Props) {
@@ -86,6 +111,9 @@ export function SmashEditCanvas({
   const hoverRef = useRef(false);
   const gestureRef = useRef<Gesture | null>(null);
   const [, force] = useState(0); // re-render on gesture transitions when needed
+  // In-progress freehand lasso path (normalized), rendered live while drawing.
+  const [lassoPts, setLassoPts] = useState<Pt[] | null>(null);
+  const lassoActive = !!view?.onLasso && !overlaysHidden;
 
   // Measure container width (panel width is stable; re-measure on window resize
   // and tab change in case layout shifts).
@@ -157,6 +185,30 @@ export function SmashEditCanvas({
           const feather = outerPx > 0 ? clamp01(1 - dist / outerPx) : 0;
           onFeatherCircle(view.id, g.key, feather);
         }
+        return;
+      }
+      if (g.kind === "lasso") {
+        const n = toNorm(e.clientX, e.clientY);
+        if (n) setLassoPts(prev => [...(prev ?? []), { x: n.nx, y: n.ny }]);
+        return;
+      }
+      if (g.kind === "polyMove") {
+        if (!view || !onSetPolyPoints) return;
+        const n = toNorm(e.clientX, e.clientY);
+        if (!n) return;
+        const dnx = n.nx - g.startNX, dny = n.ny - g.startNY;
+        const moved = g.start.map(p => ({ x: clamp01(p.x + dnx), y: clamp01(p.y + dny) }));
+        onSetPolyPoints(view.id, g.key, moved);
+        return;
+      }
+      if (g.kind === "polyVertex") {
+        if (!view || !onSetPolyPoints) return;
+        const poly = view.polys?.find(p => p.key === g.key);
+        const n = toNorm(e.clientX, e.clientY);
+        if (!poly || !n) return;
+        const pts = poly.points.map((p, i) => (i === g.index ? { x: n.nx, y: n.ny } : p));
+        onSetPolyPoints(view.id, g.key, pts);
+        return;
       }
     };
     const onUp = (e: PointerEvent) => {
@@ -166,6 +218,12 @@ export function SmashEditCanvas({
         const n = toNorm(e.clientX, e.clientY);
         if (n) view.onPlace(n.nx, n.ny);
       }
+      if (g && g.kind === "lasso" && view?.onLasso) {
+        setLassoPts(prev => {
+          if (prev && prev.length >= 3) view.onLasso!(prev);
+          return null;
+        });
+      }
       force(x => x + 1);
     };
     window.addEventListener("pointermove", onMove);
@@ -174,7 +232,7 @@ export function SmashEditCanvas({
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
     };
-  }, [view, geom, toNorm, onMoveCircle, onResizeCircle, onFeatherCircle, overlaysHidden]);
+  }, [view, geom, toNorm, onMoveCircle, onResizeCircle, onFeatherCircle, onSetPolyPoints, overlaysHidden]);
 
   // Keyboard zoom when hovered (mirrors Match).
   useEffect(() => {
@@ -189,6 +247,13 @@ export function SmashEditCanvas({
   }, []);
 
   const onBgDown = (e: React.PointerEvent) => {
+    if (lassoActive) {
+      // Start a freehand lasso instead of a pan. Seed with the first point.
+      const n = toNorm(e.clientX, e.clientY);
+      gestureRef.current = { kind: "lasso" };
+      setLassoPts(n ? [{ x: n.nx, y: n.ny }] : []);
+      return;
+    }
     gestureRef.current = { kind: "bg", sx: e.clientX, sy: e.clientY, px: pan.x, py: pan.y, moved: false };
   };
   const resetZoom = () => { setZoom(1); setPan({ x: 0, y: 0 }); };
@@ -382,12 +447,92 @@ export function SmashEditCanvas({
             </Fragment>
           );
         })}
+
+        {/* Polygon (lasso) outlines — SVG, visual only. */}
+        {view?.url && !overlaysHidden && view.polys && view.polys.length > 0 && (
+          <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
+            {view.polys.map(p => {
+              const pts = p.points
+                .map(pt => `${geom.ox + pt.x * geom.dw},${geom.oy + pt.y * geom.dh}`)
+                .join(" ");
+              return (
+                <polygon key={p.key} points={pts} fill={p.color} fillOpacity={0.12}
+                  stroke={p.color} strokeWidth={1} strokeDasharray="4 3" opacity={0.95} />
+              );
+            })}
+          </svg>
+        )}
+
+        {/* Polygon handles — vertices (edit), centroid (move), remove badge. */}
+        {view?.url && !overlaysHidden && view.polys && view.polys.map(p => {
+          let cx = 0, cy = 0;
+          for (const pt of p.points) { cx += pt.x; cy += pt.y; }
+          cx /= p.points.length || 1; cy /= p.points.length || 1;
+          const cenX = geom.ox + cx * geom.dw, cenY = geom.oy + cy * geom.dh;
+          return (
+            <Fragment key={p.key}>
+              {p.editable !== false && p.points.map((pt, i) => {
+                const vx = geom.ox + pt.x * geom.dw, vy = geom.oy + pt.y * geom.dh;
+                return (
+                  <div key={i}
+                    onPointerDown={(e) => { e.stopPropagation(); gestureRef.current = { kind: "polyVertex", key: p.key, index: i }; }}
+                    title="Drag to reshape"
+                    style={{
+                      position: "absolute", left: vx - 5, top: vy - 5, width: 10, height: 10,
+                      borderRadius: "50%", background: "#1f1f1f", border: `1px solid ${p.color}`,
+                      cursor: "grab",
+                    }} />
+                );
+              })}
+              {p.movable !== false && (
+                <div
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    const n = toNorm(e.clientX, e.clientY);
+                    if (!n) return;
+                    gestureRef.current = { kind: "polyMove", key: p.key, startNX: n.nx, startNY: n.ny, start: p.points.map(q => ({ ...q })) };
+                  }}
+                  title="Drag to move the whole region"
+                  style={{
+                    position: "absolute", left: cenX - HANDLE, top: cenY - HANDLE,
+                    width: HANDLE * 2, height: HANDLE * 2,
+                    display: "flex", alignItems: "center", justifyContent: "center", cursor: "grab",
+                  }}
+                >
+                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: p.color, border: "1px solid #000", pointerEvents: "none" }} />
+                </div>
+              )}
+              {p.removable && (
+                <div
+                  onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); if (view) onRemovePoly?.(view.id, p.key); }}
+                  title="Remove region"
+                  style={{
+                    position: "absolute", left: cenX + 6, top: cenY - 16, width: 13, height: 13,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    background: "#1f1f1f", color: "#fff", border: `1px solid ${p.color}`,
+                    borderRadius: "50%", fontSize: 10, lineHeight: "10px", fontWeight: 700,
+                    cursor: "pointer", userSelect: "none",
+                  }}
+                >×</div>
+              )}
+            </Fragment>
+          );
+        })}
+
+        {/* In-progress freehand lasso */}
+        {lassoPts && lassoPts.length > 0 && (
+          <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
+            <polyline
+              points={lassoPts.map(pt => `${geom.ox + pt.x * geom.dw},${geom.oy + pt.y * geom.dh}`).join(" ")}
+              fill="#f5a62322" stroke="#f5a623" strokeWidth={1.5} />
+          </svg>
+        )}
       </div>
 
       <div style={{ fontSize: 9, color: "#888", lineHeight: 1.4 }}>
-        Drag the canvas to pan · +/− or the slider to zoom (no scroll-wheel in
-        Photoshop) · drag a dot to move, the square handle to resize, the inner
-        dot to feather.
+        {lassoActive
+          ? "Lasso mode: drag to draw a region around what you want · release to place · drag its vertices to reshape."
+          : "Drag to pan · +/− or the slider to zoom (no scroll-wheel in Photoshop) · drag a dot to move, the square handle to resize, the inner dot to feather."}
       </div>
     </div>
   );
