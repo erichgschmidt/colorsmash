@@ -214,6 +214,52 @@ function buildPoolMapUrl(
   return rgbaToPngDataUrl(rgba, width, height);
 }
 
+// A cutout pool map for the editing canvas that VISUALISES split feather. Each
+// pixel gets its (split-aware) pool's own colour, but inside a split's feather
+// band the colour is blended toward the underlying pre-split pool's colour by
+// the same weight the recolor uses (`blend`: 1 = full split, 0 = surrounding).
+// So the Target cutout shows the soft falloff and updates live as feather is
+// dragged — instead of a hard circle. `blend`/`base` null → plain hard cutout.
+function buildCutoutMapUrl(
+  result: SegmentResult | null,
+  base: SegmentResult | null,
+  blend: Float32Array | null,
+): string | null {
+  if (!result) return null;
+  const { width, height, labels, pools } = result;
+  const byId = new Map<number, Pool>();
+  for (const p of pools) {
+    byId.set(p.id, p);
+    if (p.subPools) for (const c of p.subPools) byId.set(c.id, c);
+  }
+  const baseById = new Map<number, Pool>();
+  if (base) for (const p of base.pools) {
+    baseById.set(p.id, p);
+    if (p.subPools) for (const c of p.subPools) baseById.set(c.id, c);
+  }
+  const rgba = new Uint8Array(width * height * 4);
+  for (let i = 0; i < labels.length; i++) {
+    const pool = byId.get(labels[i]);
+    const o = i * 4;
+    let r = 0, g = 0, b = 0;
+    if (pool) { r = pool.descriptor.r; g = pool.descriptor.g; b = pool.descriptor.b; }
+    if (blend && base) {
+      const w = blend[i];
+      if (w < 1) {
+        const bp = baseById.get(base.labels[i]);
+        if (bp) {
+          const br = bp.descriptor.r, bg = bp.descriptor.g, bb = bp.descriptor.b;
+          r = Math.round(br + (r - br) * w);
+          g = Math.round(bg + (g - bg) * w);
+          b = Math.round(bb + (b - bb) * w);
+        }
+      }
+    }
+    rgba[o] = r; rgba[o + 1] = g; rgba[o + 2] = b; rgba[o + 3] = 255;
+  }
+  return rgbaToPngDataUrl(rgba, width, height);
+}
+
 export function SmashTab() {
   // ── Shared segmentation controls (applied to BOTH images) ──────────
   const [poolCount, setPoolCount] = useState(6);
@@ -1030,6 +1076,24 @@ export function SmashTab() {
   // key encodes which entity it maps back to. Anchor source/target points and
   // their radii, the sticky activeSource, and split circles all become
   // drag-to-move / drag-to-resize on the big canvas.
+  // Blend-weight mask for the target's feathered splits — 1 in each split core,
+  // ramping to 0 across the feather band, 0 outside. Drives the canvas cutout's
+  // feather visualisation (same weight the recolor uses). Null = no feather.
+  const targetBlendWeight = useMemo(
+    () => (targetResult ? buildSplitBlendWeight(targetResult.width, targetResult.height, targetSplits) : null),
+    [targetResult, targetSplits],
+  );
+  // Canvas cutouts: plain for Source, feather-aware for Target so the soft
+  // falloff is visible (and live) on the Target tab instead of a hard circle.
+  const sourceCutoutUrl = useMemo(
+    () => buildCutoutMapUrl(sourceResult, null, null),
+    [sourceResult],
+  );
+  const targetCutoutUrl = useMemo(
+    () => buildCutoutMapUrl(targetResult, targetBase, targetBlendWeight),
+    [targetResult, targetBase, targetBlendWeight],
+  );
+
   // Tool isolation: in "anchor" mode the canvas shows only anchor + activeSource
   // circles; in "split" mode only split circles. So the two workflows never
   // visually overlap and a click only ever creates the active tool's thing.
@@ -1077,13 +1141,13 @@ export function SmashTab() {
   const canvasViews = useMemo<CanvasView[]>(() => [
     {
       id: "source", label: "Source",
-      url: sourceMapUrl, imgW: sourceResult?.width ?? 1, imgH: sourceResult?.height ?? 1,
+      url: sourceCutoutUrl, imgW: sourceResult?.width ?? 1, imgH: sourceResult?.height ?? 1,
       circles: sourceCircles, placeholder: "Pick a source layer.",
       onPlace: sourceResult ? handleSourceMapClick : undefined,
     },
     {
       id: "target", label: "Target",
-      url: targetMapUrl, imgW: targetResult?.width ?? 1, imgH: targetResult?.height ?? 1,
+      url: targetCutoutUrl, imgW: targetResult?.width ?? 1, imgH: targetResult?.height ?? 1,
       circles: targetCircles, placeholder: "Pick a target layer.",
       onPlace: targetResult ? handleTargetMapClick : undefined,
     },
@@ -1092,7 +1156,7 @@ export function SmashTab() {
       url: transferUrl, imgW: targetResult?.width ?? 1, imgH: targetResult?.height ?? 1,
       circles: [], placeholder: "Set source + target — the recolored output appears here.",
     },
-  ], [sourceMapUrl, targetMapUrl, transferUrl,
+  ], [sourceCutoutUrl, targetCutoutUrl, transferUrl,
       sourceCircles, targetCircles, sourceResult, targetResult,
       handleSourceMapClick, handleTargetMapClick]);
 
