@@ -418,6 +418,9 @@ export function SmashTab() {
   // Region overlays (anchor/split circles) on the canvas — toggle off to judge
   // or outline over the clean recolored image on the Output tab.
   const [showOverlays, setShowOverlays] = useState(true);
+  // Performance: false = a drag updates only the overlay and the heavy pipeline
+  // recomputes on release (default, smooth); true = live continuous recompute.
+  const [liveDrag, setLiveDrag] = useState(false);
 
   // ── Per-anchor mini-Smash analyses ──
   // Each anchor in the list above is fed through analyzeAnchor (which runs a
@@ -1800,6 +1803,8 @@ export function SmashTab() {
         onRemovePoly={onCanvasRemovePoly}
         overlaysHidden={!showOverlays}
         onToggleOverlays={() => setShowOverlays(v => !v)}
+        liveDrag={liveDrag}
+        onToggleLiveDrag={() => setLiveDrag(v => !v)}
       />
 
       {segError && (

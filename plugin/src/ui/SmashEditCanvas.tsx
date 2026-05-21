@@ -77,6 +77,12 @@ interface Props {
   // recolored result (or outline over it) cleanly.
   overlaysHidden?: boolean;
   onToggleOverlays?: () => void;
+  // Performance: when false (default), a drag updates only the cheap overlay and
+  // the expensive pipeline (re-segment / transfer) runs ONCE on release. When
+  // true, every pointer-move commits live (continuous recompute). Header shows a
+  // ⚡ toggle when onToggleLiveDrag is provided.
+  liveDrag?: boolean;
+  onToggleLiveDrag?: () => void;
   height?: number;
 }
 
@@ -98,9 +104,18 @@ export function SmashEditCanvas({
   onMoveCircle, onResizeCircle, onRemoveCircle, onFeatherCircle,
   onSetPolyPoints, onRemovePoly,
   overlaysHidden = false, onToggleOverlays,
+  liveDrag = false, onToggleLiveDrag,
   height = 280,
 }: Props) {
   const view = views.find(v => v.id === activeId) ?? views[0];
+
+  // In-progress drag draft (performance mode): the live geometry of the item
+  // being dragged, rendered locally so the heavy pipeline isn't recomputed until
+  // release. null when idle or in live mode.
+  type Draft = { key: string; kind: Gesture["kind"]; nx?: number; ny?: number; radius?: number; feather?: number; points?: Pt[] };
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const draftRef = useRef<Draft | null>(null);
+  draftRef.current = draft;
 
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -163,7 +178,10 @@ export function SmashEditCanvas({
         const dx = e.clientX - g.sx, dy = e.clientY - g.sy;
         if (!g.moved && Math.hypot(dx, dy) > PLACE_DRAG_PX) g.moved = true;
         const n = toNorm(e.clientX, e.clientY);
-        if (n && view) onMoveCircle(view.id, g.key, n.nx, n.ny);
+        if (n && view) {
+          if (liveDrag) onMoveCircle(view.id, g.key, n.nx, n.ny);
+          else setDraft({ key: g.key, kind: "move", nx: n.nx, ny: n.ny });
+        }
         return;
       }
       if (g.kind === "resize" || g.kind === "feather") {
@@ -178,12 +196,14 @@ export function SmashEditCanvas({
         const dist = Math.hypot(px - cxPx, py - cyPx);
         if (g.kind === "resize") {
           const radius = geom.maxD > 0 ? clamp01(dist / geom.maxD) : c.radius;
-          onResizeCircle(view.id, g.key, radius);
-        } else if (onFeatherCircle) {
+          if (liveDrag) onResizeCircle(view.id, g.key, radius);
+          else setDraft({ key: g.key, kind: "resize", radius });
+        } else {
           // Inner handle distance vs the outer ring → feather = 1 − inner/outer.
           const outerPx = c.radius * geom.maxD;
           const feather = outerPx > 0 ? clamp01(1 - dist / outerPx) : 0;
-          onFeatherCircle(view.id, g.key, feather);
+          if (liveDrag) onFeatherCircle?.(view.id, g.key, feather);
+          else setDraft({ key: g.key, kind: "feather", feather });
         }
         return;
       }
@@ -193,21 +213,24 @@ export function SmashEditCanvas({
         return;
       }
       if (g.kind === "polyMove") {
-        if (!view || !onSetPolyPoints) return;
+        if (!view) return;
         const n = toNorm(e.clientX, e.clientY);
         if (!n) return;
         const dnx = n.nx - g.startNX, dny = n.ny - g.startNY;
         const moved = g.start.map(p => ({ x: clamp01(p.x + dnx), y: clamp01(p.y + dny) }));
-        onSetPolyPoints(view.id, g.key, moved);
+        if (liveDrag) onSetPolyPoints?.(view.id, g.key, moved);
+        else setDraft({ key: g.key, kind: "polyMove", points: moved });
         return;
       }
       if (g.kind === "polyVertex") {
-        if (!view || !onSetPolyPoints) return;
+        if (!view) return;
         const poly = view.polys?.find(p => p.key === g.key);
         const n = toNorm(e.clientX, e.clientY);
         if (!poly || !n) return;
-        const pts = poly.points.map((p, i) => (i === g.index ? { x: n.nx, y: n.ny } : p));
-        onSetPolyPoints(view.id, g.key, pts);
+        const src = (draftRef.current && draftRef.current.key === g.key && draftRef.current.points) ? draftRef.current.points : poly.points;
+        const pts = src.map((p, i) => (i === g.index ? { x: n.nx, y: n.ny } : p));
+        if (liveDrag) onSetPolyPoints?.(view.id, g.key, pts);
+        else setDraft({ key: g.key, kind: "polyVertex", points: pts });
         return;
       }
     };
@@ -224,6 +247,15 @@ export function SmashEditCanvas({
           return null;
         });
       }
+      // Performance mode: commit the deferred draft once, on release.
+      const d = draftRef.current;
+      if (!liveDrag && g && d && view) {
+        if (d.kind === "move" && d.nx != null && d.ny != null) onMoveCircle(view.id, d.key, d.nx, d.ny);
+        else if (d.kind === "resize" && d.radius != null) onResizeCircle(view.id, d.key, d.radius);
+        else if (d.kind === "feather" && d.feather != null) onFeatherCircle?.(view.id, d.key, d.feather);
+        else if ((d.kind === "polyMove" || d.kind === "polyVertex") && d.points) onSetPolyPoints?.(view.id, d.key, d.points);
+      }
+      if (d) setDraft(null);
       force(x => x + 1);
     };
     window.addEventListener("pointermove", onMove);
@@ -232,7 +264,7 @@ export function SmashEditCanvas({
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
     };
-  }, [view, geom, toNorm, onMoveCircle, onResizeCircle, onFeatherCircle, onSetPolyPoints, overlaysHidden]);
+  }, [view, geom, toNorm, onMoveCircle, onResizeCircle, onFeatherCircle, onSetPolyPoints, overlaysHidden, liveDrag]);
 
   // Keyboard zoom when hovered (mirrors Match).
   useEffect(() => {
@@ -304,6 +336,15 @@ export function SmashEditCanvas({
           <div onClick={() => zoom < 8 && setZoom(z => Math.min(8, z + 0.25))} title="Zoom in (+)"
             style={btn(zoom < 8)}>+</div>
           <span style={{ minWidth: 30, textAlign: "right", opacity: 0.7 }}>{Math.round(zoom * 100)}%</span>
+          {onToggleLiveDrag && (
+            <div onClick={onToggleLiveDrag}
+              title={liveDrag
+                ? "Live drag: recomputes continuously while you drag (smoother result, heavier). Click for performance mode."
+                : "Performance: dragging updates only the outline; the recolor recomputes when you release. Click for live drag."}
+              style={{ height: 16, padding: "0 5px", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: liveDrag ? "#7dd87d" : "#f5a623", border: `1px solid ${liveDrag ? "#3a5a3a" : "#5a4416"}`, borderRadius: 2, cursor: "pointer", userSelect: "none", boxSizing: "border-box" }}>
+              {liveDrag ? "live" : "⚡"}
+            </div>
+          )}
           {onToggleOverlays && (
             <div onClick={onToggleOverlays}
               title={overlaysHidden ? "Show region overlays (anchors / splits)" : "Hide region overlays — judge or outline over the clean image"}
@@ -348,14 +389,20 @@ export function SmashEditCanvas({
 
         {/* Circle overlays */}
         {view?.url && !overlaysHidden && view.circles.map(c => {
-          const cxPx = geom.ox + c.nx * geom.dw;
-          const cyPx = geom.oy + c.ny * geom.dh;
-          const rPx = c.radius * geom.maxD;
+          // Performance mode: render the dragged circle from its live draft so
+          // it follows the cursor without committing to the heavy pipeline.
+          const d = draft && draft.key === c.key ? draft : null;
+          const nx = d?.nx ?? c.nx;
+          const ny = d?.ny ?? c.ny;
+          const radius = d?.radius ?? c.radius;
+          const cxPx = geom.ox + nx * geom.dw;
+          const cyPx = geom.oy + ny * geom.dh;
+          const rPx = radius * geom.maxD;
           const movable = c.movable !== false;
           const resizeAngle = -Math.PI / 4; // handle at upper-right of the ring
           const hx = cxPx + Math.cos(resizeAngle) * rPx;
           const hy = cyPx + Math.sin(resizeAngle) * rPx;
-          const feather = c.feather ?? 0;
+          const feather = d?.feather ?? c.feather ?? 0;
           const innerFrac = 1 - feather;
           // Feather handle sits on the inner ring at lower-left (+135°).
           const fAngle = (3 * Math.PI) / 4;
@@ -452,7 +499,8 @@ export function SmashEditCanvas({
         {view?.url && !overlaysHidden && view.polys && view.polys.length > 0 && (
           <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
             {view.polys.map(p => {
-              const pts = p.points
+              const dp = (draft && draft.key === p.key && draft.points) ? draft.points : p.points;
+              const pts = dp
                 .map(pt => `${geom.ox + pt.x * geom.dw},${geom.oy + pt.y * geom.dh}`)
                 .join(" ");
               return (
@@ -465,13 +513,14 @@ export function SmashEditCanvas({
 
         {/* Polygon handles — vertices (edit), centroid (move), remove badge. */}
         {view?.url && !overlaysHidden && view.polys && view.polys.map(p => {
+          const pp = (draft && draft.key === p.key && draft.points) ? draft.points : p.points;
           let cx = 0, cy = 0;
-          for (const pt of p.points) { cx += pt.x; cy += pt.y; }
-          cx /= p.points.length || 1; cy /= p.points.length || 1;
+          for (const pt of pp) { cx += pt.x; cy += pt.y; }
+          cx /= pp.length || 1; cy /= pp.length || 1;
           const cenX = geom.ox + cx * geom.dw, cenY = geom.oy + cy * geom.dh;
           return (
             <Fragment key={p.key}>
-              {p.editable !== false && p.points.map((pt, i) => {
+              {p.editable !== false && pp.map((pt, i) => {
                 const vx = geom.ox + pt.x * geom.dw, vy = geom.oy + pt.y * geom.dh;
                 return (
                   <div key={i}
@@ -490,7 +539,7 @@ export function SmashEditCanvas({
                     e.stopPropagation();
                     const n = toNorm(e.clientX, e.clientY);
                     if (!n) return;
-                    gestureRef.current = { kind: "polyMove", key: p.key, startNX: n.nx, startNY: n.ny, start: p.points.map(q => ({ ...q })) };
+                    gestureRef.current = { kind: "polyMove", key: p.key, startNX: n.nx, startNY: n.ny, start: pp.map(q => ({ ...q })) };
                   }}
                   title="Drag to move the whole region"
                   style={{
