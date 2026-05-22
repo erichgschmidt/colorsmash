@@ -256,9 +256,11 @@ export function SmashMacroPanel(props: SmashMacroPanelProps) {
 
       {/* Hint */}
       <div style={{ fontSize: 9, color: "#999" }}>
-        Drag a chip between groups, or use a group's ⊙ (add) / ⊖ (remove)
-        eyedropper then click the colour on the canvas. Amber = looks out of
-        place; dotted = also fits a nearby group.
+        Drag a chip between groups, or arm a group's ⊙ (add) / ⊖ (remove)
+        eyedropper and keep clicking colours on the canvas — it stays armed
+        (Alt-click does the opposite; Esc stops). The canvas dims to show the
+        armed group's coverage. Amber = looks out of place; dotted = also fits a
+        nearby group.
       </div>
 
       {/* Empty state / bins */}
@@ -373,8 +375,8 @@ export function SmashMacroPanel(props: SmashMacroPanelProps) {
                   );
                   return (
                     <>
-                      {btn("⊙", "add", "Add a colour to this group — then click it on the canvas")}
-                      {btn("⊖", "subtract", "Remove a colour from this group — then click it on the canvas (it rehomes to its best-fit other group)")}
+                      {btn("⊙", "add", "Add colours to this group — arm, then keep clicking on the canvas (stays armed; Alt-click removes; Esc stops)")}
+                      {btn("⊖", "subtract", "Remove colours from this group — arm, then keep clicking on the canvas; each rehomes to its best-fit other group (stays armed; Alt-click adds; Esc stops)")}
                     </>
                   );
                 })()}

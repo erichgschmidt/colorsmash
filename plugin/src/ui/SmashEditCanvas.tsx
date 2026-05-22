@@ -51,9 +51,15 @@ export interface CanvasView {
   circles: CanvasCircle[];
   polys?: CanvasPoly[];
   placeholder: string;
+  // Optional highlight image drawn ON TOP of `url` at the same transform (its
+  // own alpha controls the wash/dim). Used for the macro-group silhouette so the
+  // active group "pops" and its gaps are visible while eyedropping. pointerEvents
+  // are disabled so it never intercepts placement clicks.
+  overlayUrl?: string | null;
   // True click on empty canvas (debounced vs pan/drag). Omitted = view is
-  // read-only (e.g. the Output tab).
-  onPlace?: (nx: number, ny: number) => void;
+  // read-only (e.g. the Output tab). `opts.alt` carries the Alt modifier so the
+  // caller can invert an armed eyedropper (add ⇄ subtract) for that one click.
+  onPlace?: (nx: number, ny: number, opts?: { alt?: boolean }) => void;
   // When set, dragging on empty canvas draws a freehand lasso (pan is suspended);
   // on release the collected normalized path is handed back to be simplified
   // into a polygon region.
@@ -241,7 +247,7 @@ export function SmashEditCanvas({
       gestureRef.current = null;
       if (g && g.kind === "bg" && !g.moved && view?.onPlace && !overlaysHidden) {
         const n = toNorm(e.clientX, e.clientY);
-        if (n) view.onPlace(n.nx, n.ny);
+        if (n) view.onPlace(n.nx, n.ny, { alt: e.altKey });
       }
       if (g && g.kind === "lasso" && view?.onLasso) {
         setLassoPts(prev => {
@@ -387,6 +393,20 @@ export function SmashEditCanvas({
             position: "absolute", inset: 0, display: "flex", alignItems: "center",
             justifyContent: "center", fontSize: 10, opacity: 0.5, color: "#ccc",
           }}>{view?.placeholder ?? "—"}</div>
+        )}
+
+        {/* Group-silhouette highlight (its own alpha dims the rest / washes the
+            group). Hidden with the eye toggle so the clean result stays judgeable. */}
+        {view?.url && view.overlayUrl && !overlaysHidden && (
+          <img
+            src={view.overlayUrl}
+            draggable={false}
+            style={{
+              position: "absolute",
+              left: geom.ox, top: geom.oy, width: geom.dw, height: geom.dh,
+              imageRendering: "pixelated", display: "block", pointerEvents: "none",
+            }}
+          />
         )}
 
         {/* Circle overlays */}

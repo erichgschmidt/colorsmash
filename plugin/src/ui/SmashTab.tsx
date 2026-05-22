@@ -338,6 +338,12 @@ export function SmashTab() {
   // lasso "exclude colour" flow.
   const [eyedropMacro, setEyedropMacro] =
     useState<{ id: number; mode: "add" | "subtract" } | null>(null);
+  // Esc disarms the sticky eyedropper (otherwise it stays armed across clicks).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setEyedropMacro(null); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
   // Latest macro state, mirrored into refs so the seed/reconcile effect can read
   // the user's current groupings WITHOUT taking them as deps (which would loop).
   const sourceMacrosRef = useRef(sourceMacros);
@@ -1168,22 +1174,27 @@ export function SmashTab() {
     if (poolMapTool === "split") addSplit("source", nx, ny);
     else if (poolMapTool === "anchor") handleAnchorSourceClick(nx, ny);
   }, [poolMapTool, addSplit, handleAnchorSourceClick]);
-  const handleTargetMapClick = useCallback((nx: number, ny: number) => {
+  const handleTargetMapClick = useCallback((nx: number, ny: number, opts?: { alt?: boolean }) => {
     // Macro eyedropper — the primary grouping gesture. ADD pulls the pool under
     // the cursor INTO the armed group (out of whatever group held it, keeping
     // exactly-one-membership); SUBTRACT rehomes it to its best-fit OTHER group.
-    // Inlined (rather than calling movePoolToMacro/removePoolFromMacro, which are
-    // declared later) to avoid a render-time TDZ on those callbacks.
+    // The tool is STICKY (stays armed so you can keep clicking); toggle the
+    // group's ⊙/⊖ or press Esc to disarm. Alt-click inverts the armed mode for
+    // that one click. Inlined (rather than calling movePoolToMacro/
+    // removePoolFromMacro, declared later) to avoid a render-time TDZ.
     if (eyedropMacro && targetMembership) {
       const { width, height, labels } = targetMembership;
       const px = Math.min(width - 1, Math.max(0, Math.floor(nx * width)));
       const py = Math.min(height - 1, Math.max(0, Math.floor(ny * height)));
       const poolId = labels[py * width + px];
       if (poolId >= 0) {
+        const mode = opts?.alt
+          ? (eyedropMacro.mode === "add" ? "subtract" : "add")
+          : eyedropMacro.mode;
         // Resolve the destination group: ADD → the armed group; SUBTRACT → the
         // nearest OTHER group, but only if the pool is actually a member.
         let dest: number | null = null;
-        if (eyedropMacro.mode === "add") {
+        if (mode === "add") {
           dest = eyedropMacro.id;
         } else {
           const inGroup = targetMacros.find(m => m.id === eyedropMacro.id)?.poolIds.includes(poolId);
@@ -1199,7 +1210,7 @@ export function SmashTab() {
           })));
         }
       }
-      setEyedropMacro(null);
+      // Sticky: stay armed for the next click.
       return;
     }
     // Eyedropper: a click samples the colour under it and excludes it from the
@@ -1540,6 +1551,34 @@ export function SmashTab() {
     [targetResult, targetBase, targetBlendWeight],
   );
 
+  // Group-silhouette overlay for the editing canvas. While a group is "active"
+  // (its eyedropper is armed, or its detail panel is expanded) we dim every
+  // pixel that ISN'T in the group and lay a faint swatch-colour wash over the
+  // ones that ARE — so the group's coverage (and its gaps) are obvious, and the
+  // shape grows/shrinks live as you eyedrop-add/remove. Built over BASE
+  // membership (groups are keyed on base pool ids) and shown on the Target +
+  // Output canvas tabs. null when no group is active.
+  const activeGroupId = eyedropMacro?.id ?? expandedMacroId;
+  const groupSilhouetteUrl = useMemo(() => {
+    if (activeGroupId == null || !targetMembership) return null;
+    const group = targetMacros.find(m => m.id === activeGroupId);
+    if (!group) return null;
+    const member = new Set(group.poolIds);
+    const info = targetMacroInfo.get(activeGroupId);
+    const tr = info?.r ?? 255, tg = info?.g ?? 255, tb = info?.b ?? 255;
+    const { width, height, labels } = targetMembership;
+    const rgba = new Uint8Array(width * height * 4);
+    for (let i = 0; i < labels.length; i++) {
+      const o = i * 4;
+      if (member.has(labels[i])) {
+        rgba[o] = tr; rgba[o + 1] = tg; rgba[o + 2] = tb; rgba[o + 3] = 40; // group: faint wash
+      } else {
+        rgba[o] = 0; rgba[o + 1] = 0; rgba[o + 2] = 0; rgba[o + 3] = 140; // rest: dimmed
+      }
+    }
+    return rgbaToPngDataUrl(rgba, width, height);
+  }, [activeGroupId, targetMembership, targetMacros, targetMacroInfo]);
+
   // Tool isolation: in "anchor" mode the canvas shows only anchor + activeSource
   // circles; in "split" mode only split circles. So the two workflows never
   // visually overlap and a click only ever creates the active tool's thing.
@@ -1621,6 +1660,7 @@ export function SmashTab() {
     {
       id: "target", label: "Target",
       url: targetCutoutUrl, imgW: targetResult?.width ?? 1, imgH: targetResult?.height ?? 1,
+      overlayUrl: groupSilhouetteUrl,
       circles: targetCircles, polys: targetPolys, placeholder: "Pick a target layer.",
       // Eyedrop modes (split exclusion OR macro add/subtract) force a click to
       // sample, no lasso/place, regardless of tool.
@@ -1632,12 +1672,13 @@ export function SmashTab() {
       // so you can outline/adjust splits + anchors over the detailed image.
       id: "output", label: "Output",
       url: transferUrl, imgW: targetResult?.width ?? 1, imgH: targetResult?.height ?? 1,
+      overlayUrl: groupSilhouetteUrl,
       circles: targetCircles, polys: targetPolys,
       placeholder: "Set source + target — the recolored output appears here.",
       onPlace: targetResult && (eyedropSplitId || eyedropMacro != null || !lasso) ? handleTargetMapClick : undefined,
       onLasso: targetResult && lasso && !eyedropSplitId && eyedropMacro == null ? (pts => addPolySplit("target", pts)) : undefined,
     },
-  ], [sourceCutoutUrl, targetCutoutUrl, transferUrl, lasso, eyedropSplitId, eyedropMacro,
+  ], [sourceCutoutUrl, targetCutoutUrl, transferUrl, groupSilhouetteUrl, lasso, eyedropSplitId, eyedropMacro,
       sourceCircles, targetCircles, sourcePolys, targetPolys, sourceResult, targetResult,
       handleSourceMapClick, handleTargetMapClick, addPolySplit]);
 
@@ -2573,7 +2614,7 @@ function PoolMapPane({
   placeholder: string;
   // Click-on-empty-area handler (true "place new" click — debounced against
   // stray drag motion).
-  onPlaceNormalized?: (nx: number, ny: number) => void;
+  onPlaceNormalized?: (nx: number, ny: number, opts?: { alt?: boolean }) => void;
   // Anchor overlays — every dot+ring this map should render. Order is the
   // pair index, so callers control colour pairing across the two maps.
   anchorDots?: PoolMapDot[];
@@ -2675,7 +2716,7 @@ function PoolMapPane({
           const dy = e.clientY - dragging.startY;
           if (Math.hypot(dx, dy) <= PLACE_TOLERANCE_PX) {
             const norm = toNormalized(e.clientX, e.clientY);
-            if (norm) onPlaceNormalized?.(norm.nx, norm.ny);
+            if (norm) onPlaceNormalized?.(norm.nx, norm.ny, { alt: e.altKey });
           }
         }
       } else if (dragging.mode === "dragAnchor") {
