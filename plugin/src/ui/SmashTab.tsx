@@ -1400,6 +1400,22 @@ export function SmashTab() {
     if (!targetMembership) return { contaminating: [], candidates: [] };
     return macroSuggestions(macroId, targetMacros, targetMembership.pools);
   }, [targetMacros, targetMembership]);
+  // For the grouping board: member pool ids that look out of place per group…
+  const contaminatedFor = useCallback(
+    (macroId: number) => suggestionsFor(macroId).contaminating,
+    [suggestionsFor],
+  );
+  // …and pools that ALSO sit near another group (candidates anywhere) → borderline.
+  const borderlinePools = useMemo(() => {
+    const set = new Set<number>();
+    if (!targetMembership) return set;
+    for (const m of targetMacros) {
+      for (const c of macroSuggestions(m.id, targetMacros, targetMembership.pools).candidates) {
+        set.add(c.poolId);
+      }
+    }
+    return set;
+  }, [targetMacros, targetMembership]);
 
   // ── Editing-canvas circles + views (source / target / output) ──────
   // Circles unify anchors + splits behind one move/resize/remove protocol; the
@@ -2277,10 +2293,11 @@ export function SmashTab() {
               onReseed={setMacroCount}
               onRenameMacro={renameMacro}
               onSetDonor={setMacroDonor}
-              targetPoolChip={targetPoolChip}
-              suggestionsFor={suggestionsFor}
-              onAddPoolToMacro={movePoolToMacro}
-              onRemovePoolFromMacro={removePoolFromMacro}
+              onMovePool={movePoolToMacro}
+              onAutoRehome={removePoolFromMacro}
+              poolChip={targetPoolChip}
+              contaminatedFor={contaminatedFor}
+              borderlinePools={borderlinePools}
               globalPoolCount={poolCount}
               macroPoolCount={macroPoolCount}
               onSetMacroPoolCount={setMacroPoolCount}

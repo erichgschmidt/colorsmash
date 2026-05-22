@@ -1,15 +1,21 @@
-// SmashMacroPanel — the macro-groups foundation view for the Smash tab.
+// SmashMacroPanel — the macro-GROUPS board for the Smash tab.
 //
-// Lists each TARGET macro group (the semantic foundation) and lets the user
-// EDIT membership and the per-macro donor. Expanding a group opens an inline
-// editor: pick a donor source macro, add/remove member pools, and act on
-// contamination ("looks out of place") / nearby-candidate suggestions.
+// Renders the TARGET image's macro groups as vertical BINS. The user drags
+// colour chips (pools) between bins to reassign them, picks a per-group donor,
+// renames groups, and overrides per-group detail (pool count). Amber chips look
+// out of place (drag them out or click "!" to auto-rehome); dotted chips also
+// fit a nearby group.
 //
-// Pure presentation: all state lives upstream; this component only renders
-// props and calls back on user intent.
+// UXP NOTE: HTML5 drag-and-drop is unreliable in UXP's Chromium, so dragging is
+// done manually with pointer events + window listeners and a floating ghost.
+// Bin hit-testing is done by comparing the cursor to each bin's bounding rect.
+//
+// Pure presentation: all persistent state lives upstream; this component only
+// renders props, owns transient drag state, and calls back on user intent.
 
 import * as React from "react";
-import type { MacroGroup, MacroInfo, MacroSuggestion } from "../core/macro";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { MacroGroup, MacroInfo } from "../core/macro";
 
 export interface PoolChip {
   r: number;
@@ -19,30 +25,33 @@ export interface PoolChip {
 }
 
 export interface SmashMacroPanelProps {
-  targetMacros: MacroGroup[]; // ordered weight-desc; { id, name, poolIds }
+  targetMacros: MacroGroup[]; // groups, weight-desc; { id, name, poolIds }
   targetMacroInfo: Map<number, MacroInfo>; // by target macro id
   sourceMacros: MacroGroup[]; // donor groups (for the donor picker)
   sourceMacroInfo: Map<number, MacroInfo>;
-  macroMatch: Map<number, number>; // targetMacroId -> sourceMacroId (editable via onSetDonor)
+  macroMatch: Map<number, number>; // targetMacroId -> sourceMacroId
   macroCount: number;
-  onReseed: (k: number) => void; // call with clamped value 2..8
+  onReseed: (k: number) => void; // clamp 2..8 before calling
   onRenameMacro: (id: number, name: string) => void;
   onSetDonor: (targetMacroId: number, sourceMacroId: number) => void;
-  targetPoolChip: (poolId: number) => PoolChip | undefined; // color+weight% for a target pool
-  suggestionsFor: (targetMacroId: number) => MacroSuggestion;
-  onAddPoolToMacro: (poolId: number, macroId: number) => void; // +candidate into this macro
-  onRemovePoolFromMacro: (poolId: number, fromMacroId: number) => void; // -member (parent rehomes)
-  // Per-macro pool-count override (the finishing pass): how finely this macro
-  // re-segments its own pixels. undefined = use the global count.
+  onMovePool: (poolId: number, toMacroId: number) => void; // drag-reassign
+  onAutoRehome: (poolId: number, fromMacroId: number) => void; // send to best-fit other group
+  poolChip: (poolId: number) => PoolChip | undefined; // color+weight% of a pool
+  contaminatedFor: (macroId: number) => number[]; // member pool ids that look out of place
+  borderlinePools: Set<number>; // pools that ALSO sit near another group
   globalPoolCount: number;
-  macroPoolCount: (macroId: number) => number | undefined;
+  macroPoolCount: (macroId: number) => number | undefined; // per-group override; undefined = global
   onSetMacroPoolCount: (macroId: number, n: number | null) => void; // null = use global
-  expandedMacroId: number | null; // which macro's editor is open (single-accordion)
+  expandedMacroId: number | null; // which group's detail panel is open
   onToggleExpand: (id: number | null) => void;
 }
 
 const MIN_K = 2;
 const MAX_K = 8;
+const MIN_DETAIL = 1;
+const MAX_DETAIL = 12;
+
+// ────────── styles ──────────
 
 const stepperStyle: React.CSSProperties = {
   padding: "1px 9px",
@@ -55,7 +64,7 @@ const stepperStyle: React.CSSProperties = {
   userSelect: "none",
 };
 
-const miniBtnStyle: React.CSSProperties = {
+const miniStepStyle: React.CSSProperties = {
   padding: "0 7px",
   fontSize: 12,
   borderRadius: 2,
@@ -66,17 +75,9 @@ const miniBtnStyle: React.CSSProperties = {
   userSelect: "none",
 };
 
-const summarySwatch: React.CSSProperties = {
+const groupSwatch: React.CSSProperties = {
   width: 14,
   height: 14,
-  flex: "0 0 auto",
-  borderRadius: 3,
-  border: "1px solid #000",
-};
-
-const poolSwatch: React.CSSProperties = {
-  width: 12,
-  height: 12,
   flex: "0 0 auto",
   borderRadius: 3,
   border: "1px solid #000",
@@ -96,9 +97,6 @@ const nameInputStyle: React.CSSProperties = {
 
 const labelStyle: React.CSSProperties = { fontSize: 9, color: "#999" };
 
-const rgbCss = (c: { r: number; g: number; b: number } | undefined): string =>
-  c ? `rgb(${c.r}, ${c.g}, ${c.b})` : "#2a2a2a";
-
 const contamBadge: React.CSSProperties = {
   fontSize: 9,
   color: "#1a1a1a",
@@ -112,8 +110,22 @@ const contamBadge: React.CSSProperties = {
   justifyContent: "center",
 };
 
-// Stop the name input from toggling the accordion when interacted with.
+const rgbCss = (c: { r: number; g: number; b: number } | undefined): string =>
+  c ? `rgb(${c.r}, ${c.g}, ${c.b})` : "#2a2a2a";
+
+// Stop an interaction from bubbling to the bin (toggle / drag start).
 const stop = (e: React.SyntheticEvent) => e.stopPropagation();
+
+interface DragState {
+  poolId: number;
+  fromMacroId: number;
+}
+
+interface Ghost {
+  x: number;
+  y: number;
+  color: string;
+}
 
 export function SmashMacroPanel(props: SmashMacroPanelProps) {
   const {
@@ -126,10 +138,11 @@ export function SmashMacroPanel(props: SmashMacroPanelProps) {
     onReseed,
     onRenameMacro,
     onSetDonor,
-    targetPoolChip,
-    suggestionsFor,
-    onAddPoolToMacro,
-    onRemovePoolFromMacro,
+    onMovePool,
+    onAutoRehome,
+    poolChip,
+    contaminatedFor,
+    borderlinePools,
     globalPoolCount,
     macroPoolCount,
     onSetMacroPoolCount,
@@ -137,16 +150,84 @@ export function SmashMacroPanel(props: SmashMacroPanelProps) {
     onToggleExpand,
   } = props;
 
+  // Transient drag state.
+  const [dragging, setDragging] = useState<DragState | null>(null);
+  const [hoverMacroId, setHoverMacroId] = useState<number | null>(null);
+  const [ghost, setGhost] = useState<Ghost | null>(null);
+
+  // Bin elements, keyed by macro id, for cursor hit-testing during a drag.
+  const binRefs = useRef<Map<number, HTMLDivElement | null>>(new Map());
+  const setBinRef = useCallback(
+    (id: number) => (el: HTMLDivElement | null) => {
+      binRefs.current.set(id, el);
+    },
+    [],
+  );
+
+  // Which bin (if any) sits under the given client point.
+  const binUnderPoint = useCallback((x: number, y: number): number | null => {
+    for (const [id, el] of binRefs.current) {
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return id;
+    }
+    return null;
+  }, []);
+
+  // Begin a manual drag from a chip. Wires window pointermove/up for the
+  // duration of the gesture; cleanup runs on pointerup (or unmount).
+  const beginDrag = useCallback(
+    (e: React.PointerEvent, poolId: number, fromMacroId: number) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const chip = poolChip(poolId);
+      const color = rgbCss(chip);
+      setDragging({ poolId, fromMacroId });
+      setGhost({ x: e.clientX, y: e.clientY, color });
+      setHoverMacroId(null);
+
+      const onMove = (ev: PointerEvent) => {
+        setGhost({ x: ev.clientX, y: ev.clientY, color });
+        setHoverMacroId(binUnderPoint(ev.clientX, ev.clientY));
+      };
+      const onUp = (ev: PointerEvent) => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        const overId = binUnderPoint(ev.clientX, ev.clientY);
+        // Only reassign when dropped on a DIFFERENT, real bin.
+        if (overId != null && overId !== fromMacroId) {
+          onMovePool(poolId, overId);
+        }
+        setDragging(null);
+        setGhost(null);
+        setHoverMacroId(null);
+      };
+
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    },
+    [poolChip, binUnderPoint, onMovePool],
+  );
+
+  // Safety net: clear any dangling drag state if the component unmounts mid-drag.
+  useEffect(() => {
+    return () => {
+      setDragging(null);
+      setGhost(null);
+      setHoverMacroId(null);
+    };
+  }, []);
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-      {/* Header row: label + count stepper */}
+      {/* Header: label + count stepper */}
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <span style={{ flex: 1, fontSize: 10, fontWeight: "bold", color: "#cccccc" }}>
-          MACRO GROUPS
+          GROUPS
         </span>
         <div
           onClick={() => onReseed(Math.max(MIN_K, macroCount - 1))}
-          title="Fewer macro groups"
+          title="Fewer groups"
           style={stepperStyle}
         >
           −
@@ -156,7 +237,7 @@ export function SmashMacroPanel(props: SmashMacroPanelProps) {
         </span>
         <div
           onClick={() => onReseed(Math.min(MAX_K, macroCount + 1))}
-          title="More macro groups"
+          title="More groups"
           style={stepperStyle}
         >
           +
@@ -165,14 +246,14 @@ export function SmashMacroPanel(props: SmashMacroPanelProps) {
 
       {/* Hint */}
       <div style={{ fontSize: 9, color: "#999" }}>
-        Each target group only draws donors from its matched source group. Expand
-        a group to fix its members or change its donor.
+        Drag a colour chip to another group to reassign it. Amber = looks out of
+        place; dotted = also fits a nearby group.
       </div>
 
-      {/* Cards — one per target macro, or an empty-state line */}
+      {/* Empty state / bins */}
       {targetMacros.length === 0 ? (
         <div style={{ fontSize: 10, color: "#9a9aa8" }}>
-          Macro groups appear once both images are segmented.
+          Groups appear once both images are segmented.
         </div>
       ) : (
         targetMacros.map((macro) => {
@@ -180,23 +261,29 @@ export function SmashMacroPanel(props: SmashMacroPanelProps) {
           const donorId = macroMatch.get(macro.id);
           const donorInfo = donorId != null ? sourceMacroInfo.get(donorId) : undefined;
           const expanded = expandedMacroId === macro.id;
-          const sug = suggestionsFor(macro.id);
-          const contamCount = sug.contaminating.length;
+          const contaminated = contaminatedFor(macro.id);
+          const contamSet = new Set(contaminated);
+          const isDropTarget =
+            dragging != null &&
+            hoverMacroId === macro.id &&
+            dragging.fromMacroId !== macro.id;
 
           return (
             <div
               key={macro.id}
+              ref={setBinRef(macro.id)}
               style={{
                 display: "flex",
                 flexDirection: "column",
                 gap: 3,
-                background: "#1f1f1f",
-                border: "1px solid #3a3a3a",
+                background: isDropTarget ? "#20303f" : "#1f1f1f",
+                border: isDropTarget ? "1px solid #1473e6" : "1px solid #3a3a3a",
                 borderRadius: 2,
-                padding: "3px 6px",
+                padding: 4,
+                marginBottom: 4,
               }}
             >
-              {/* Summary row — clickable to toggle expand */}
+              {/* Header — clickable to toggle this group's detail */}
               <div
                 onClick={() => onToggleExpand(expanded ? null : macro.id)}
                 style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}
@@ -205,17 +292,15 @@ export function SmashMacroPanel(props: SmashMacroPanelProps) {
                   {expanded ? "▾" : "▸"}
                 </span>
 
-                {/* Target swatch */}
                 <div
-                  title="Target macro group — rename to label it"
-                  style={{ ...summarySwatch, background: rgbCss(info) }}
+                  title="Target group — rename to label it"
+                  style={{ ...groupSwatch, background: rgbCss(info) }}
                 />
 
-                {/* Editable name (must not toggle the accordion) */}
                 <input
                   type="text"
                   value={macro.name}
-                  title="Target macro group — rename to label it"
+                  title="Target group — rename to label it"
                   onChange={(e) => onRenameMacro(macro.id, e.target.value)}
                   onClick={stop}
                   onPointerDown={stop}
@@ -223,124 +308,227 @@ export function SmashMacroPanel(props: SmashMacroPanelProps) {
                   style={nameInputStyle}
                 />
 
-                {/* Weight · pool count */}
                 {info && (
                   <span style={{ fontSize: 9, color: "#777", whiteSpace: "nowrap" }}>
                     {Math.round(info.weight * 100)}% · {info.poolCount}p
                   </span>
                 )}
 
-                {/* Match arrow */}
-                <span style={{ fontSize: 10, color: "#777" }}>→</span>
-
-                {/* Matched donor swatch (read in summary; edited when expanded) */}
                 {donorInfo ? (
                   <div
                     title="Matched donor group (source)"
-                    style={{ ...summarySwatch, background: rgbCss(donorInfo) }}
+                    style={{ ...groupSwatch, background: rgbCss(donorInfo) }}
                   />
                 ) : (
-                  <span title="Matched donor group (source)" style={{ fontSize: 10, color: "#777" }}>
+                  <span
+                    title="Matched donor group (source)"
+                    style={{ fontSize: 10, color: "#777", width: 14, textAlign: "center" }}
+                  >
                     —
                   </span>
                 )}
 
-                {/* Contamination badge */}
-                {contamCount > 0 && (
-                  <span title={`${contamCount} members look out of place`} style={contamBadge}>
+                {contaminated.length > 0 && (
+                  <span
+                    title={`${contaminated.length} members look out of place`}
+                    style={contamBadge}
+                  >
                     !
                   </span>
                 )}
               </div>
 
-              {/* Expanded inline editor */}
+              {/* Chips — one per member pool; drag a chip to another bin to move it */}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 3, minHeight: 18 }}>
+                {macro.poolIds.map((poolId) => {
+                  const chip = poolChip(poolId);
+                  const isContam = contamSet.has(poolId);
+                  const isBorderline = !isContam && borderlinePools.has(poolId);
+                  const beingDragged =
+                    dragging != null && dragging.poolId === poolId;
+
+                  const border = isContam
+                    ? "2px solid #f5a623"
+                    : isBorderline
+                      ? "1px dashed #888"
+                      : "1px solid #000";
+                  const title = isContam
+                    ? "Looks out of place — drag it out or click ! to auto-rehome"
+                    : isBorderline
+                      ? "Also fits a nearby group"
+                      : chip
+                        ? `${chip.weightPct}%`
+                        : "pool";
+
+                  return (
+                    <div
+                      key={poolId}
+                      title={title}
+                      onPointerDown={(e) => beginDrag(e, poolId, macro.id)}
+                      style={{
+                        position: "relative",
+                        width: 16,
+                        height: 16,
+                        flex: "0 0 auto",
+                        borderRadius: 3,
+                        border,
+                        background: rgbCss(chip),
+                        cursor: "grab",
+                        opacity: beingDragged ? 0.4 : 1,
+                      }}
+                    >
+                      {isContam && (
+                        <span
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onAutoRehome(poolId, macro.id);
+                          }}
+                          onPointerDown={stop}
+                          onMouseDown={stop}
+                          title="Auto-rehome to best-fit group"
+                          style={{
+                            position: "absolute",
+                            top: -5,
+                            right: -5,
+                            width: 11,
+                            height: 11,
+                            borderRadius: "50%",
+                            background: "#f5a623",
+                            color: "#1a1a1a",
+                            fontSize: 8,
+                            lineHeight: "11px",
+                            textAlign: "center",
+                            cursor: "pointer",
+                          }}
+                        >
+                          !
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Detail panel */}
               {expanded && (
-                <ExpandedEditor
-                  macro={macro}
-                  donorId={donorId}
+                <DetailPanel
+                  macroId={macro.id}
                   sourceMacros={sourceMacros}
                   sourceMacroInfo={sourceMacroInfo}
-                  sug={sug}
-                  targetMacros={targetMacros}
-                  targetPoolChip={targetPoolChip}
-                  onSetDonor={onSetDonor}
-                  onAddPoolToMacro={onAddPoolToMacro}
-                  onRemovePoolFromMacro={onRemovePoolFromMacro}
+                  donorId={donorId}
                   globalPoolCount={globalPoolCount}
                   poolCountOverride={macroPoolCount(macro.id)}
-                  onSetPoolCount={onSetMacroPoolCount}
+                  onSetMacroPoolCount={onSetMacroPoolCount}
+                  onSetDonor={onSetDonor}
                 />
               )}
             </div>
           );
         })
       )}
+
+      {/* Floating drag ghost (follows the cursor; ignores pointer events) */}
+      {ghost && (
+        <div
+          style={{
+            position: "fixed",
+            left: ghost.x + 8,
+            top: ghost.y + 8,
+            width: 18,
+            height: 18,
+            borderRadius: 3,
+            background: ghost.color,
+            border: "1px solid #000",
+            boxShadow: "0 2px 6px rgba(0,0,0,0.6)",
+            opacity: 0.85,
+            pointerEvents: "none",
+            zIndex: 9999,
+          }}
+        />
+      )}
     </div>
   );
 }
 
-// ────────── expanded inline editor ──────────
+// ────────── per-group detail panel ──────────
 
-interface ExpandedEditorProps {
-  macro: MacroGroup;
-  donorId: number | undefined;
+interface DetailPanelProps {
+  macroId: number;
   sourceMacros: MacroGroup[];
   sourceMacroInfo: Map<number, MacroInfo>;
-  sug: MacroSuggestion;
-  targetMacros: MacroGroup[];
-  targetPoolChip: (poolId: number) => PoolChip | undefined;
-  onSetDonor: (targetMacroId: number, sourceMacroId: number) => void;
-  onAddPoolToMacro: (poolId: number, macroId: number) => void;
-  onRemovePoolFromMacro: (poolId: number, fromMacroId: number) => void;
+  donorId: number | undefined;
   globalPoolCount: number;
   poolCountOverride: number | undefined;
-  onSetPoolCount: (macroId: number, n: number | null) => void;
+  onSetMacroPoolCount: (macroId: number, n: number | null) => void;
+  onSetDonor: (targetMacroId: number, sourceMacroId: number) => void;
 }
 
-function ExpandedEditor(props: ExpandedEditorProps) {
+function DetailPanel(props: DetailPanelProps) {
   const {
-    macro,
-    donorId,
+    macroId,
     sourceMacros,
     sourceMacroInfo,
-    sug,
-    targetMacros,
-    targetPoolChip,
-    onSetDonor,
-    onAddPoolToMacro,
-    onRemovePoolFromMacro,
+    donorId,
     globalPoolCount,
     poolCountOverride,
-    onSetPoolCount,
+    onSetMacroPoolCount,
+    onSetDonor,
   } = props;
 
-  const contaminating = new Set(sug.contaminating);
-  const effectivePoolCount = poolCountOverride ?? globalPoolCount;
+  const overridden = poolCountOverride != null;
+  const effective = poolCountOverride ?? globalPoolCount;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 2 }}>
-      {/* Per-macro detail: how finely THIS group re-segments its own pixels.
-          Override the global pool count (e.g. more pools for skin gradients,
-          fewer for a flat background). "auto" = use the global count. */}
+      {/* Per-group detail (pool count) override */}
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <span style={{ ...labelStyle, flex: 1 }} title="How finely this group re-segments its own pixels (its pool count). Overrides the global Pool count.">
+        <span
+          style={{ ...labelStyle, flex: 1 }}
+          title="How finely this group re-segments its own pixels (its pool count). Overrides the global Pool count."
+        >
           Detail (pools)
         </span>
-        <div onClick={() => onSetPoolCount(macro.id, Math.max(1, effectivePoolCount - 1))}
+        <div
+          onClick={() => onSetMacroPoolCount(macroId, Math.max(MIN_DETAIL, effective - 1))}
           title="Fewer pools in this group"
-          style={{ padding: "0 7px", fontSize: 12, borderRadius: 2, border: "1px solid #4a4a4a", background: "#3a3a3a", color: "#ddd", cursor: "pointer", userSelect: "none" }}>−</div>
-        <span style={{ fontSize: 11, color: poolCountOverride != null ? "#ffd591" : "#888", minWidth: 14, textAlign: "center" }}>
-          {effectivePoolCount}
+          style={miniStepStyle}
+        >
+          −
+        </div>
+        <span
+          style={{
+            fontSize: 11,
+            color: overridden ? "#ffd591" : "#888",
+            minWidth: 14,
+            textAlign: "center",
+          }}
+        >
+          {effective}
         </span>
-        <div onClick={() => onSetPoolCount(macro.id, Math.min(12, effectivePoolCount + 1))}
+        <div
+          onClick={() => onSetMacroPoolCount(macroId, Math.min(MAX_DETAIL, effective + 1))}
           title="More pools in this group"
-          style={{ padding: "0 7px", fontSize: 12, borderRadius: 2, border: "1px solid #4a4a4a", background: "#3a3a3a", color: "#ddd", cursor: "pointer", userSelect: "none" }}>+</div>
-        {poolCountOverride != null ? (
-          <div onClick={() => onSetPoolCount(macro.id, null)}
+          style={miniStepStyle}
+        >
+          +
+        </div>
+        {overridden && (
+          <div
+            onClick={() => onSetMacroPoolCount(macroId, null)}
             title="Use the global pool count"
-            style={{ padding: "0 6px", fontSize: 9, borderRadius: 2, border: "1px solid #4a4a4a", background: "#2c2c2c", color: "#aaa", cursor: "pointer", userSelect: "none" }}>auto</div>
-        ) : (
-          <span style={{ fontSize: 9, color: "#666" }}>auto</span>
+            style={{
+              padding: "0 6px",
+              fontSize: 9,
+              borderRadius: 2,
+              border: "1px solid #4a4a4a",
+              background: "#2c2c2c",
+              color: "#aaa",
+              cursor: "pointer",
+              userSelect: "none",
+            }}
+          >
+            auto
+          </div>
         )}
       </div>
 
@@ -353,7 +541,7 @@ function ExpandedEditor(props: ExpandedEditorProps) {
           return (
             <div
               key={sm.id}
-              onClick={() => onSetDonor(macro.id, sm.id)}
+              onClick={() => onSetDonor(macroId, sm.id)}
               title={sm.name}
               style={{
                 display: "flex",
@@ -367,7 +555,16 @@ function ExpandedEditor(props: ExpandedEditorProps) {
                 background: selected ? "#22364f" : "transparent",
               }}
             >
-              <div style={{ ...poolSwatch, background: rgbCss(sInfo) }} />
+              <div
+                style={{
+                  width: 12,
+                  height: 12,
+                  flex: "0 0 auto",
+                  borderRadius: 3,
+                  border: "1px solid #000",
+                  background: rgbCss(sInfo),
+                }}
+              />
               <span style={{ fontSize: 9, color: "#aaa" }}>
                 {sInfo ? Math.round(sInfo.weight * 100) : 0}%
               </span>
@@ -375,73 +572,6 @@ function ExpandedEditor(props: ExpandedEditorProps) {
           );
         })}
       </div>
-
-      {/* Members */}
-      <div style={labelStyle}>Members</div>
-      {macro.poolIds.map((poolId) => {
-        const chip = targetPoolChip(poolId);
-        const flagged = contaminating.has(poolId);
-        return (
-          <div
-            key={poolId}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              borderLeft: flagged ? "2px solid #f5a623" : "2px solid transparent",
-              paddingLeft: 2,
-            }}
-          >
-            <div style={{ ...poolSwatch, background: rgbCss(chip) }} />
-            <span style={{ fontSize: 9, color: "#aaa" }}>{chip ? chip.weightPct : 0}%</span>
-            {flagged && (
-              <span title="Looks out of place — consider removing" style={contamBadge}>
-                !
-              </span>
-            )}
-            <span style={{ flex: 1 }} />
-            <div
-              onClick={() => onRemovePoolFromMacro(poolId, macro.id)}
-              title="Remove from this group"
-              style={miniBtnStyle}
-            >
-              −
-            </div>
-          </div>
-        );
-      })}
-
-      {/* Add nearby — only when there are candidates */}
-      {sug.candidates.length > 0 && (
-        <>
-          <div style={labelStyle}>Add nearby</div>
-          {sug.candidates.map((cand) => {
-            const chip = targetPoolChip(cand.poolId);
-            const fromName =
-              targetMacros.find((m) => m.id === cand.fromMacroId)?.name ?? `Macro${cand.fromMacroId}`;
-            return (
-              <div
-                key={cand.poolId}
-                style={{ display: "flex", alignItems: "center", gap: 6 }}
-              >
-                <div style={{ ...poolSwatch, background: rgbCss(chip) }} />
-                <span style={{ fontSize: 9, color: "#aaa" }}>{chip ? chip.weightPct : 0}%</span>
-                <span style={{ fontSize: 9, color: "#777", whiteSpace: "nowrap" }}>
-                  from {fromName}
-                </span>
-                <span style={{ flex: 1 }} />
-                <div
-                  onClick={() => onAddPoolToMacro(cand.poolId, macro.id)}
-                  title="Add to this group"
-                  style={miniBtnStyle}
-                >
-                  +
-                </div>
-              </div>
-            );
-          })}
-        </>
-      )}
     </div>
   );
 }
