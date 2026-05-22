@@ -44,6 +44,10 @@ export interface SmashMacroPanelProps {
   onSetMacroPoolCount: (macroId: number, n: number | null) => void; // null = use global
   expandedMacroId: number | null; // which group's detail panel is open
   onToggleExpand: (id: number | null) => void;
+  // Eyedropper add: the group awaiting a canvas click (its ⊙ is lit). Click a
+  // group's ⊙ to arm it, then click the colour on the canvas to add it here.
+  eyedropMacroId?: number | null;
+  onEyedropMacro?: (id: number | null) => void;
 }
 
 const MIN_K = 2;
@@ -148,6 +152,8 @@ export function SmashMacroPanel(props: SmashMacroPanelProps) {
     onSetMacroPoolCount,
     expandedMacroId,
     onToggleExpand,
+    eyedropMacroId,
+    onEyedropMacro,
   } = props;
 
   // Transient drag state.
@@ -335,6 +341,22 @@ export function SmashMacroPanel(props: SmashMacroPanelProps) {
                   >
                     !
                   </span>
+                )}
+                {onEyedropMacro && (
+                  <span
+                    onClick={(e) => { e.stopPropagation(); onEyedropMacro(eyedropMacroId === macro.id ? null : macro.id); }}
+                    onPointerDown={stop}
+                    onMouseDown={stop}
+                    title="Add a colour to this group — then click it on the canvas"
+                    style={{
+                      flex: "0 0 auto", width: 15, height: 15, borderRadius: 3,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      fontSize: 10, lineHeight: "15px", userSelect: "none", cursor: "pointer",
+                      border: `1px solid ${eyedropMacroId === macro.id ? "#1473e6" : "#4a4a4a"}`,
+                      background: eyedropMacroId === macro.id ? "#22364f" : "#3a3a3a",
+                      color: "#ddd",
+                    }}
+                  >⊙</span>
                 )}
               </div>
 

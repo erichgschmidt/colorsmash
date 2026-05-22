@@ -319,6 +319,9 @@ export function SmashTab() {
   const [exclEditSplitId, setExclEditSplitId] = useState<string | null>(null);
   const [exclTargetGroup, setExclTargetGroup] = useState<number | null>(null);
   const [eyedropSplitId, setEyedropSplitId] = useState<string | null>(null);
+  // Grouping board: the macro awaiting an eyedropper click (click the canvas to
+  // add the colour under the cursor to this group).
+  const [macroEyedropId, setMacroEyedropId] = useState<number | null>(null);
   // Latest macro state, mirrored into refs so the seed/reconcile effect can read
   // the user's current groupings WITHOUT taking them as deps (which would loop).
   const sourceMacrosRef = useRef(sourceMacros);
@@ -1094,6 +1097,49 @@ export function SmashTab() {
     });
   }, [targetSplits, patchSplit]);
 
+  // "Auto" cleanup for a region: keep its DOMINANT colour, subtract the colours
+  // that contaminate it (far from the dominant in Lab) — each sent to its
+  // best-fit group — then re-snap a clean outline. Also tidies a sloppy lasso.
+  const AUTO_CLEAN_LAB = 26;
+  const autoCleanRegion = useCallback((splitId: string) => {
+    const seg = target.segInput;
+    const split = targetSplits.find(s => s.id === splitId);
+    if (!seg || !split || !targetMembership) return;
+    const regionPools = targetMembership.pools.filter(
+      p => p.id >= split.baseId && p.id < split.baseId + SPLIT_ID_STRIDE,
+    );
+    const newExcl: ColorExclusion[] = [];
+    if (regionPools.length > 0) {
+      const dominant = regionPools.reduce((a, b) =>
+        b.descriptor.pixelCount > a.descriptor.pixelCount ? b : a);
+      const dL = dominant.descriptor.labL, dA = dominant.descriptor.labA, dB = dominant.descriptor.labB;
+      let base = nextExclBaseId();
+      for (const p of regionPools) {
+        if (p.id === dominant.id) continue;
+        const dl = p.descriptor.labL - dL, da = p.descriptor.labA - dA, db = p.descriptor.labB - dB;
+        if (Math.sqrt(dl * dl + da * da + db * db) <= AUTO_CLEAN_LAB) continue; // close to dominant → keep
+        const macroId = nearestMacroFor(p.id, targetMacros, targetMembership.pools, -1) ?? targetMacros[0]?.id ?? 0;
+        newExcl.push({
+          id: `auto-${Date.now().toString(36)}-${newExcl.length}`,
+          labL: p.descriptor.labL, labA: p.descriptor.labA, labB: p.descriptor.labB,
+          tol: DEFAULT_EXCL_TOL, exclBaseId: base, macroId,
+        });
+        base += EXCL_ID_STRIDE;
+      }
+    }
+    const patch: Partial<SplitEdit> = { colorExclusions: newExcl };
+    if (split.points && split.points.length >= 3) {
+      const mask = keptRegionMask({ ...split, colorExclusions: newExcl }, seg.data, seg.width, seg.height);
+      const outline = traceMaskOutline(mask, seg.width, seg.height, 0.012);
+      if (outline.length >= 3) {
+        patch.points = outline;
+        const c = polygonCentroid(outline);
+        patch.nx = c.x; patch.ny = c.y;
+      }
+    }
+    patchSplit("target", splitId, patch);
+  }, [target.segInput, targetSplits, targetMembership, targetMacros, patchSplit]);
+
   const clearAllSplits = () => { setSourceSplits([]); setTargetSplits([]); };
 
   // Pool-map click dispatchers — route to the anchor or split workflow based on
@@ -1104,6 +1150,24 @@ export function SmashTab() {
     else if (poolMapTool === "anchor") handleAnchorSourceClick(nx, ny);
   }, [poolMapTool, addSplit, handleAnchorSourceClick]);
   const handleTargetMapClick = useCallback((nx: number, ny: number) => {
+    // Macro eyedropper: add the pool under the cursor to the awaiting group
+    // (and out of whatever group held it — exactly-one-membership).
+    if (macroEyedropId != null && targetMembership) {
+      const { width, height, labels } = targetMembership;
+      const px = Math.min(width - 1, Math.max(0, Math.floor(nx * width)));
+      const py = Math.min(height - 1, Math.max(0, Math.floor(ny * height)));
+      const poolId = labels[py * width + px];
+      if (poolId >= 0) {
+        setTargetMacros(prev => prev.map(m => ({
+          ...m,
+          poolIds: m.id === macroEyedropId
+            ? (m.poolIds.includes(poolId) ? m.poolIds : [...m.poolIds, poolId])
+            : m.poolIds.filter(id => id !== poolId),
+        })));
+      }
+      setMacroEyedropId(null);
+      return;
+    }
     // Eyedropper: a click samples the colour under it and excludes it from the
     // awaiting split (→ the chosen group), instead of placing a split/anchor.
     if (eyedropSplitId && target.segInput) {
@@ -1119,7 +1183,7 @@ export function SmashTab() {
     }
     if (poolMapTool === "split") addSplit("target", nx, ny);
     else if (poolMapTool === "anchor") handleAnchorTargetClick(nx, ny);
-  }, [eyedropSplitId, target.segInput, exclTargetGroup, targetMacros, addExclusion, poolMapTool, addSplit, handleAnchorTargetClick]);
+  }, [macroEyedropId, targetMembership, eyedropSplitId, target.segInput, exclTargetGroup, targetMacros, addExclusion, poolMapTool, addSplit, handleAnchorTargetClick]);
 
   const clearAllAnchors = () => {
     setAnchors([]);
@@ -1522,9 +1586,10 @@ export function SmashTab() {
       id: "target", label: "Target",
       url: targetCutoutUrl, imgW: targetResult?.width ?? 1, imgH: targetResult?.height ?? 1,
       circles: targetCircles, polys: targetPolys, placeholder: "Pick a target layer.",
-      // Eyedrop mode forces a click to sample (no lasso/place) regardless of tool.
-      onPlace: targetResult && (eyedropSplitId || !lasso) ? handleTargetMapClick : undefined,
-      onLasso: targetResult && lasso && !eyedropSplitId ? (pts => addPolySplit("target", pts)) : undefined,
+      // Eyedrop modes (split exclusion OR macro add) force a click to sample, no
+      // lasso/place, regardless of tool.
+      onPlace: targetResult && (eyedropSplitId || macroEyedropId != null || !lasso) ? handleTargetMapClick : undefined,
+      onLasso: targetResult && lasso && !eyedropSplitId && macroEyedropId == null ? (pts => addPolySplit("target", pts)) : undefined,
     },
     {
       // Output shows the recolored result and carries the TARGET-side overlays
@@ -1533,10 +1598,10 @@ export function SmashTab() {
       url: transferUrl, imgW: targetResult?.width ?? 1, imgH: targetResult?.height ?? 1,
       circles: targetCircles, polys: targetPolys,
       placeholder: "Set source + target — the recolored output appears here.",
-      onPlace: targetResult && (eyedropSplitId || !lasso) ? handleTargetMapClick : undefined,
-      onLasso: targetResult && lasso && !eyedropSplitId ? (pts => addPolySplit("target", pts)) : undefined,
+      onPlace: targetResult && (eyedropSplitId || macroEyedropId != null || !lasso) ? handleTargetMapClick : undefined,
+      onLasso: targetResult && lasso && !eyedropSplitId && macroEyedropId == null ? (pts => addPolySplit("target", pts)) : undefined,
     },
-  ], [sourceCutoutUrl, targetCutoutUrl, transferUrl, lasso, eyedropSplitId,
+  ], [sourceCutoutUrl, targetCutoutUrl, transferUrl, lasso, eyedropSplitId, macroEyedropId,
       sourceCircles, targetCircles, sourcePolys, targetPolys, sourceResult, targetResult,
       handleSourceMapClick, handleTargetMapClick, addPolySplit]);
 
@@ -1833,8 +1898,20 @@ export function SmashTab() {
                                 style={{ padding: "1px 6px", borderRadius: 2, border: `1px solid ${eyedropSplitId === s.id ? "#1473e6" : "#4a4a4a"}`, background: eyedropSplitId === s.id ? "#22364f" : "#3a3a3a", color: "#ddd", cursor: "pointer", userSelect: "none" }}>
                                 ⊙ {eyedropSplitId === s.id ? "click canvas…" : "eyedrop"}
                               </div>
+                              <div onClick={() => autoCleanRegion(s.id)}
+                                title="Auto: keep the region's dominant colour, subtract the contaminating ones (→ best-fit group), and re-snap a clean outline."
+                                style={{ padding: "1px 6px", borderRadius: 2, border: "1px solid #4a4a4a", background: "#3a3a3a", color: "#ddd", cursor: "pointer", userSelect: "none" }}>
+                                ✦ auto clean
+                              </div>
                               <span style={{ opacity: 0.7 }}>or:</span>
-                              {(targetMembership?.pools.filter(p => p.id >= s.baseId && p.id < s.baseId + SPLIT_ID_STRIDE) ?? []).map(p => (
+                              {(targetMembership?.pools.filter(p =>
+                                p.id >= s.baseId && p.id < s.baseId + SPLIT_ID_STRIDE
+                                // Hide colours already excluded — they've been removed, not "disabled".
+                                && !(s.colorExclusions ?? []).some(e => {
+                                  const dl = p.descriptor.labL - e.labL, da = p.descriptor.labA - e.labA, db = p.descriptor.labB - e.labB;
+                                  return dl * dl + da * da + db * db <= e.tol * e.tol;
+                                })
+                              ) ?? []).map(p => (
                                 <div key={p.id}
                                   onClick={() => addExclusion(s.id, [p.descriptor.labL, p.descriptor.labA, p.descriptor.labB], exclTargetGroup ?? targetMacros[0]?.id ?? 0)}
                                   title="Exclude this colour from the region"
@@ -2303,6 +2380,8 @@ export function SmashTab() {
               onSetMacroPoolCount={setMacroPoolCount}
               expandedMacroId={expandedMacroId}
               onToggleExpand={setExpandedMacroId}
+              eyedropMacroId={macroEyedropId}
+              onEyedropMacro={setMacroEyedropId}
             />
 
             {/* Donor-preview toggle + sort selector + reset */}
