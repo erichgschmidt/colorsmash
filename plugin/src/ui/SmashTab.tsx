@@ -1365,8 +1365,10 @@ export function SmashTab() {
     return poolSubPalette(target.segInput.data, targetMembership.labels, loupe.poolId, loupeParts);
   }, [loupe, targetMembership, target.segInput, loupeParts]);
 
-  // Magnified crop around the held point (hybrid loupe). null when zoom is off.
-  const loupeCropUrl = useMemo(() => {
+  // Magnified crop around the held point (hybrid loupe). Carries its SOURCE rect
+  // (x0,y0,cw,ch into the preview image) so a click on the crop can be mapped
+  // back to an exact image pixel and sampled. null when zoom is off.
+  const loupeCrop = useMemo(() => {
     if (!loupe || !loupeZoom || !target.segInput) return null;
     const { data, width, height } = target.segInput;
     const half = Math.max(4, Math.round(Math.min(width, height) * 0.06));
@@ -1380,42 +1382,84 @@ export function SmashTab() {
       const so = ((y0 + y) * width + (x0 + x)) * 4, dpos = (y * cw + x) * 4;
       crop[dpos] = data[so]; crop[dpos + 1] = data[so + 1]; crop[dpos + 2] = data[so + 2]; crop[dpos + 3] = 255;
     }
-    return rgbaToPngDataUrl(crop, cw, ch);
+    return { url: rgbaToPngDataUrl(crop, cw, ch), x0, y0, cw, ch };
   }, [loupe, loupeZoom, target.segInput]);
 
-  // Carve a picked sub-colour into the armed group: add a colour exclusion to the
-  // pool's "pool split" (create it on first pick). The loupe stays open so you
-  // can pull out several sub-shades in one sitting.
-  const commitLoupePick = useCallback((sw: LoupeSwatch) => {
+  // Carve a colour into (add) or out of (remove) the armed group via a colour
+  // exclusion on the pool's "pool split". ADD appends an exclusion (creating the
+  // pool split on first add); REMOVE drops the nearest matching exclusion (and
+  // the whole pool split once its last exclusion is gone). The loupe stays open
+  // so you can dial several shades in one sitting. Used by both the pre-clustered
+  // swatches and a direct click on the magnified crop (Ctrl/click add · Alt remove).
+  const commitLoupeColor = useCallback((lab: [number, number, number], mode: "add" | "remove") => {
     if (!loupe || !eyedropMacro) return;
-    const macroId = eyedropMacro.id;
     const poolId = loupe.poolId;
-    setTargetSplits(prev => {
-      let maxExcl = EXCL_ID_BASE - EXCL_ID_STRIDE;
-      for (const s of [...sourceSplits, ...prev]) {
-        for (const e of s.colorExclusions ?? []) maxExcl = Math.max(maxExcl, e.exclBaseId);
-      }
-      const exclBaseId = maxExcl + EXCL_ID_STRIDE;
-      const ex: ColorExclusion = {
-        id: `lp-${Date.now().toString(36)}-${exclBaseId}`,
-        labL: sw.labL, labA: sw.labA, labB: sw.labB,
-        tol: DEFAULT_EXCL_TOL, exclBaseId, macroId,
-      };
-      const existing = prev.find(s => s.poolId === poolId);
-      if (existing) {
-        return prev.map(s => s.id === existing.id
-          ? { ...s, colorExclusions: [...(s.colorExclusions ?? []), ex] } : s);
-      }
-      let maxBase = SPLIT_ID_BASE - SPLIT_ID_STRIDE;
-      for (const s of prev) maxBase = Math.max(maxBase, s.baseId);
-      const edit: SplitEdit = {
-        id: `loupe-${Date.now().toString(36)}`,
-        nx: loupe.nx, ny: loupe.ny, radius: 0, partCount: 2,
-        baseId: maxBase + SPLIT_ID_STRIDE, poolId, colorExclusions: [ex],
-      };
-      return [...prev, edit];
-    });
+    if (mode === "add") {
+      const macroId = eyedropMacro.id;
+      setTargetSplits(prev => {
+        let maxExcl = EXCL_ID_BASE - EXCL_ID_STRIDE;
+        for (const s of [...sourceSplits, ...prev]) {
+          for (const e of s.colorExclusions ?? []) maxExcl = Math.max(maxExcl, e.exclBaseId);
+        }
+        const exclBaseId = maxExcl + EXCL_ID_STRIDE;
+        const ex: ColorExclusion = {
+          id: `lp-${Date.now().toString(36)}-${exclBaseId}`,
+          labL: lab[0], labA: lab[1], labB: lab[2],
+          tol: DEFAULT_EXCL_TOL, exclBaseId, macroId,
+        };
+        const existing = prev.find(s => s.poolId === poolId);
+        if (existing) {
+          return prev.map(s => s.id === existing.id
+            ? { ...s, colorExclusions: [...(s.colorExclusions ?? []), ex] } : s);
+        }
+        let maxBase = SPLIT_ID_BASE - SPLIT_ID_STRIDE;
+        for (const s of prev) maxBase = Math.max(maxBase, s.baseId);
+        const edit: SplitEdit = {
+          id: `loupe-${Date.now().toString(36)}`,
+          nx: loupe.nx, ny: loupe.ny, radius: 0, partCount: 2,
+          baseId: maxBase + SPLIT_ID_STRIDE, poolId, colorExclusions: [ex],
+        };
+        return [...prev, edit];
+      });
+    } else {
+      // Remove: drop the nearest matching exclusion (within ~2× tol) on this
+      // pool's split; remove the split entirely once it has no exclusions left.
+      setTargetSplits(prev => {
+        const existing = prev.find(s => s.poolId === poolId);
+        if (!existing || !(existing.colorExclusions?.length)) return prev;
+        let bestId: string | null = null, bestD = Infinity;
+        for (const e of existing.colorExclusions) {
+          const dl = e.labL - lab[0], da = e.labA - lab[1], db = e.labB - lab[2];
+          const d = dl * dl + da * da + db * db;
+          if (d < bestD) { bestD = d; bestId = e.id; }
+        }
+        const tol = DEFAULT_EXCL_TOL * 2;
+        if (bestId == null || bestD > tol * tol) return prev;
+        const nextExcl = existing.colorExclusions.filter(e => e.id !== bestId);
+        if (nextExcl.length === 0) return prev.filter(s => s.id !== existing.id);
+        return prev.map(s => s.id === existing.id ? { ...s, colorExclusions: nextExcl } : s);
+      });
+    }
   }, [loupe, eyedropMacro, sourceSplits]);
+
+  // Sample the exact pixel under a click on the magnified crop, then add/remove
+  // its colour (Ctrl/plain = add, Alt = remove). Maps the click through the
+  // crop's `contain` letterboxing back to a source pixel.
+  const onLoupeCropClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (!loupeCrop || !target.segInput) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const { x0, y0, cw, ch } = loupeCrop;
+    const scale = Math.min(rect.width / cw, rect.height / ch) || 1;
+    const offX = (rect.width - cw * scale) / 2, offY = (rect.height - ch * scale) / 2;
+    let lx = Math.floor((e.clientX - rect.left - offX) / scale);
+    let ly = Math.floor((e.clientY - rect.top - offY) / scale);
+    lx = Math.max(0, Math.min(cw - 1, lx));
+    ly = Math.max(0, Math.min(ch - 1, ly));
+    const { data, width } = target.segInput;
+    const o = ((y0 + ly) * width + (x0 + lx)) * 4;
+    const lab = rgbToLab(data[o], data[o + 1], data[o + 2]) as [number, number, number];
+    commitLoupeColor(lab, e.altKey ? "remove" : "add");
+  }, [loupeCrop, target.segInput, commitLoupeColor]);
 
   // ── Macro locks (preserve pixel territory across control tweaks) ──────
   const toggleMacroLock = useCallback((id: number) => {
@@ -1441,7 +1485,7 @@ export function SmashTab() {
     let t = loupe.sy + 12;
     if (vh > 0 && h > 0) t = Math.min(t, vh - h - 8);
     setLoupeTop(Math.max(8, t));
-  }, [loupe, loupeZoom, loupeParts, loupeSwatches.length, loupeCropUrl]);
+  }, [loupe, loupeZoom, loupeParts, loupeSwatches.length, loupeCrop]);
 
   const clearAllAnchors = () => {
     setAnchors([]);
@@ -2783,10 +2827,13 @@ export function SmashTab() {
                 style={{ fontSize: 11, padding: "1px 6px", borderRadius: 2, cursor: "pointer", userSelect: "none",
                   border: "1px solid #4a4a4a", background: "#3a3a3a", color: "#ddd" }}>×</div>
             </div>
-            {loupeZoom && loupeCropUrl && (
-              <div style={{ position: "relative", width: "100%", height: 96, background: "#111", borderRadius: 3, overflow: "hidden" }}>
-                <img src={loupeCropUrl} draggable={false}
-                  style={{ width: "100%", height: "100%", objectFit: "contain", imageRendering: "pixelated" }} />
+            {loupeZoom && loupeCrop && (
+              <div
+                onClick={onLoupeCropClick}
+                title="Click a spot to sample that exact pixel — Ctrl/click adds it to the group, Alt removes it"
+                style={{ position: "relative", width: "100%", height: 96, background: "#111", borderRadius: 3, overflow: "hidden", cursor: "crosshair" }}>
+                <img src={loupeCrop.url} draggable={false}
+                  style={{ width: "100%", height: "100%", objectFit: "contain", imageRendering: "pixelated", pointerEvents: "none" }} />
                 <div style={{ position: "absolute", left: "50%", top: "50%", width: 9, height: 9, marginLeft: -5, marginTop: -5,
                   border: "1px solid #fff", borderRadius: "50%", boxShadow: "0 0 0 1px #000", pointerEvents: "none" }} />
               </div>
@@ -2801,15 +2848,17 @@ export function SmashTab() {
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
               {loupeSwatches.map((sw, i) => (
-                <div key={i} onClick={() => commitLoupePick(sw)}
-                  title={`Pull this shade into ${armed?.name ?? "group"} (${Math.round(sw.share * 100)}%)`}
+                <div key={i}
+                  onClick={(e) => commitLoupeColor([sw.labL, sw.labA, sw.labB], e.altKey ? "remove" : "add")}
+                  title={`${Math.round(sw.share * 100)}% · Ctrl/click adds to ${armed?.name ?? "group"}, Alt removes`}
                   style={{ width: 26, height: 26, borderRadius: 4, cursor: "pointer",
                     background: `rgb(${sw.r}, ${sw.g}, ${sw.b})`, border: "1px solid #000",
                     boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.15)" }} />
               ))}
             </div>
             <div style={{ fontSize: 8, color: "#888", lineHeight: 1.4 }}>
-              Click a shade to pull it into the group. Stays open for more · Esc closes.
+              Click the crop to sample an exact pixel, or a swatch for a sub-shade.
+              Ctrl/click adds · Alt removes. Stays open for more · Esc closes.
             </div>
           </div>
         );
