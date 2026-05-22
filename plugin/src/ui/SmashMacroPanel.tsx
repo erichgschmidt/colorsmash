@@ -44,10 +44,13 @@ export interface SmashMacroPanelProps {
   onSetMacroPoolCount: (macroId: number, n: number | null) => void; // null = use global
   expandedMacroId: number | null; // which group's detail panel is open
   onToggleExpand: (id: number | null) => void;
-  // Eyedropper add: the group awaiting a canvas click (its ⊙ is lit). Click a
-  // group's ⊙ to arm it, then click the colour on the canvas to add it here.
+  // Eyedropper: the group awaiting a canvas click (its ⊙/⊖ is lit) and which
+  // mode is armed. Click a group's ⊙ (add) or ⊖ (subtract) to arm it, then click
+  // a colour on the canvas: ADD pulls that pool into this group; SUBTRACT sends
+  // it to its best-fit OTHER group.
   eyedropMacroId?: number | null;
-  onEyedropMacro?: (id: number | null) => void;
+  eyedropMode?: "add" | "subtract";
+  onEyedropMacro?: (id: number | null, mode: "add" | "subtract") => void;
 }
 
 const MIN_K = 2;
@@ -153,6 +156,7 @@ export function SmashMacroPanel(props: SmashMacroPanelProps) {
     expandedMacroId,
     onToggleExpand,
     eyedropMacroId,
+    eyedropMode = "add",
     onEyedropMacro,
   } = props;
 
@@ -252,7 +256,8 @@ export function SmashMacroPanel(props: SmashMacroPanelProps) {
 
       {/* Hint */}
       <div style={{ fontSize: 9, color: "#999" }}>
-        Drag a colour chip to another group to reassign it. Amber = looks out of
+        Drag a chip between groups, or use a group's ⊙ (add) / ⊖ (remove)
+        eyedropper then click the colour on the canvas. Amber = looks out of
         place; dotted = also fits a nearby group.
       </div>
 
@@ -342,22 +347,37 @@ export function SmashMacroPanel(props: SmashMacroPanelProps) {
                     !
                   </span>
                 )}
-                {onEyedropMacro && (
-                  <span
-                    onClick={(e) => { e.stopPropagation(); onEyedropMacro(eyedropMacroId === macro.id ? null : macro.id); }}
-                    onPointerDown={stop}
-                    onMouseDown={stop}
-                    title="Add a colour to this group — then click it on the canvas"
-                    style={{
-                      flex: "0 0 auto", width: 15, height: 15, borderRadius: 3,
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      fontSize: 10, lineHeight: "15px", userSelect: "none", cursor: "pointer",
-                      border: `1px solid ${eyedropMacroId === macro.id ? "#1473e6" : "#4a4a4a"}`,
-                      background: eyedropMacroId === macro.id ? "#22364f" : "#3a3a3a",
-                      color: "#ddd",
-                    }}
-                  >⊙</span>
-                )}
+                {onEyedropMacro && (() => {
+                  const armed = (m: "add" | "subtract") =>
+                    eyedropMacroId === macro.id && eyedropMode === m;
+                  const btn = (
+                    glyph: string, m: "add" | "subtract", title: string,
+                  ) => (
+                    <span
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onEyedropMacro(armed(m) ? null : macro.id, m);
+                      }}
+                      onPointerDown={stop}
+                      onMouseDown={stop}
+                      title={title}
+                      style={{
+                        flex: "0 0 auto", width: 15, height: 15, borderRadius: 3,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        fontSize: 10, lineHeight: "15px", userSelect: "none", cursor: "pointer",
+                        border: `1px solid ${armed(m) ? "#1473e6" : "#4a4a4a"}`,
+                        background: armed(m) ? "#22364f" : "#3a3a3a",
+                        color: "#ddd",
+                      }}
+                    >{glyph}</span>
+                  );
+                  return (
+                    <>
+                      {btn("⊙", "add", "Add a colour to this group — then click it on the canvas")}
+                      {btn("⊖", "subtract", "Remove a colour from this group — then click it on the canvas (it rehomes to its best-fit other group)")}
+                    </>
+                  );
+                })()}
               </div>
 
               {/* Chips — one per member pool; drag a chip to another bin to move it */}

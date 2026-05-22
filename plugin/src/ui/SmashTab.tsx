@@ -65,6 +65,18 @@ const POOL_MAP_W = (PANEL_WIDTH - 6) / 2;
 const DEFAULT_SPLIT_RADIUS = 0.18;
 const DEFAULT_SPLIT_FEATHER = 0.35;
 
+// ── Region-tool gating ──
+// The macro-GROUP + eyedropper paradigm is the primary (and, for now, the ONLY)
+// user-facing way to organise pools. The freehand region tools — focal anchors,
+// split circles, and the lasso→polygon editor — are PAUSED: their engine
+// (applySplits, core/regions.ts, anchorAnalysis) stays tested and intact, but
+// their UI is hidden behind this flag while we prove the eyedropper paradigm
+// stands on its own. Flip to `true` to bring the region tools back for later
+// refinement work. Typed `boolean` (not the literal `false`) on purpose so
+// control-flow analysis treats the gated branches as reachable — keeps the
+// engine handlers from tripping noUnusedLocals.
+const ADVANCED_REGION_TOOLS: boolean = false;
+
 // Composite two equally-sized RGBA buffers per pixel by a 0..1 weight:
 // out = base·(1−w) + full·w. Alpha is taken from `full`. Used to feather a
 // split's recolor (full = with-splits) over the base recolor (without-splits).
@@ -319,9 +331,13 @@ export function SmashTab() {
   const [exclEditSplitId, setExclEditSplitId] = useState<string | null>(null);
   const [exclTargetGroup, setExclTargetGroup] = useState<number | null>(null);
   const [eyedropSplitId, setEyedropSplitId] = useState<string | null>(null);
-  // Grouping board: the macro awaiting an eyedropper click (click the canvas to
-  // add the colour under the cursor to this group).
-  const [macroEyedropId, setMacroEyedropId] = useState<number | null>(null);
+  // Grouping board eyedropper: the group + mode awaiting a canvas/map click (its
+  // ⊙ add or ⊖ subtract button is lit). ADD pulls the pool under the cursor INTO
+  // the group (out of whatever held it); SUBTRACT rehomes it to its best-fit
+  // OTHER group. This is the primary grouping gesture and replaces the paused
+  // lasso "exclude colour" flow.
+  const [eyedropMacro, setEyedropMacro] =
+    useState<{ id: number; mode: "add" | "subtract" } | null>(null);
   // Latest macro state, mirrored into refs so the seed/reconcile effect can read
   // the user's current groupings WITHOUT taking them as deps (which would loop).
   const sourceMacrosRef = useRef(sourceMacros);
@@ -1146,26 +1162,44 @@ export function SmashTab() {
   // the active tool. (Lasso is drag-driven on the canvas, so a plain click does
   // nothing in lasso mode.) The pane only knows "a click happened here".
   const handleSourceMapClick = useCallback((nx: number, ny: number) => {
+    // Region tools paused → the source map has no eyedropper yet, so a click
+    // does nothing. (Source-side grouping is a planned follow-up.)
+    if (!ADVANCED_REGION_TOOLS) return;
     if (poolMapTool === "split") addSplit("source", nx, ny);
     else if (poolMapTool === "anchor") handleAnchorSourceClick(nx, ny);
   }, [poolMapTool, addSplit, handleAnchorSourceClick]);
   const handleTargetMapClick = useCallback((nx: number, ny: number) => {
-    // Macro eyedropper: add the pool under the cursor to the awaiting group
-    // (and out of whatever group held it — exactly-one-membership).
-    if (macroEyedropId != null && targetMembership) {
+    // Macro eyedropper — the primary grouping gesture. ADD pulls the pool under
+    // the cursor INTO the armed group (out of whatever group held it, keeping
+    // exactly-one-membership); SUBTRACT rehomes it to its best-fit OTHER group.
+    // Inlined (rather than calling movePoolToMacro/removePoolFromMacro, which are
+    // declared later) to avoid a render-time TDZ on those callbacks.
+    if (eyedropMacro && targetMembership) {
       const { width, height, labels } = targetMembership;
       const px = Math.min(width - 1, Math.max(0, Math.floor(nx * width)));
       const py = Math.min(height - 1, Math.max(0, Math.floor(ny * height)));
       const poolId = labels[py * width + px];
       if (poolId >= 0) {
-        setTargetMacros(prev => prev.map(m => ({
-          ...m,
-          poolIds: m.id === macroEyedropId
-            ? (m.poolIds.includes(poolId) ? m.poolIds : [...m.poolIds, poolId])
-            : m.poolIds.filter(id => id !== poolId),
-        })));
+        // Resolve the destination group: ADD → the armed group; SUBTRACT → the
+        // nearest OTHER group, but only if the pool is actually a member.
+        let dest: number | null = null;
+        if (eyedropMacro.mode === "add") {
+          dest = eyedropMacro.id;
+        } else {
+          const inGroup = targetMacros.find(m => m.id === eyedropMacro.id)?.poolIds.includes(poolId);
+          if (inGroup) dest = nearestMacroFor(poolId, targetMacros, targetMembership.pools, eyedropMacro.id);
+        }
+        if (dest != null) {
+          const to = dest;
+          setTargetMacros(prev => prev.map(m => ({
+            ...m,
+            poolIds: m.id === to
+              ? (m.poolIds.includes(poolId) ? m.poolIds : [...m.poolIds, poolId])
+              : m.poolIds.filter(id => id !== poolId),
+          })));
+        }
       }
-      setMacroEyedropId(null);
+      setEyedropMacro(null);
       return;
     }
     // Eyedropper: a click samples the colour under it and excludes it from the
@@ -1181,9 +1215,11 @@ export function SmashTab() {
       setEyedropSplitId(null);
       return;
     }
+    // Region tools paused → a plain click neither places an anchor nor a split.
+    if (!ADVANCED_REGION_TOOLS) return;
     if (poolMapTool === "split") addSplit("target", nx, ny);
     else if (poolMapTool === "anchor") handleAnchorTargetClick(nx, ny);
-  }, [macroEyedropId, targetMembership, eyedropSplitId, target.segInput, exclTargetGroup, targetMacros, addExclusion, poolMapTool, addSplit, handleAnchorTargetClick]);
+  }, [eyedropMacro, targetMembership, eyedropSplitId, target.segInput, exclTargetGroup, targetMacros, addExclusion, poolMapTool, addSplit, handleAnchorTargetClick]);
 
   const clearAllAnchors = () => {
     setAnchors([]);
@@ -1586,10 +1622,10 @@ export function SmashTab() {
       id: "target", label: "Target",
       url: targetCutoutUrl, imgW: targetResult?.width ?? 1, imgH: targetResult?.height ?? 1,
       circles: targetCircles, polys: targetPolys, placeholder: "Pick a target layer.",
-      // Eyedrop modes (split exclusion OR macro add) force a click to sample, no
-      // lasso/place, regardless of tool.
-      onPlace: targetResult && (eyedropSplitId || macroEyedropId != null || !lasso) ? handleTargetMapClick : undefined,
-      onLasso: targetResult && lasso && !eyedropSplitId && macroEyedropId == null ? (pts => addPolySplit("target", pts)) : undefined,
+      // Eyedrop modes (split exclusion OR macro add/subtract) force a click to
+      // sample, no lasso/place, regardless of tool.
+      onPlace: targetResult && (eyedropSplitId || eyedropMacro != null || !lasso) ? handleTargetMapClick : undefined,
+      onLasso: targetResult && lasso && !eyedropSplitId && eyedropMacro == null ? (pts => addPolySplit("target", pts)) : undefined,
     },
     {
       // Output shows the recolored result and carries the TARGET-side overlays
@@ -1598,10 +1634,10 @@ export function SmashTab() {
       url: transferUrl, imgW: targetResult?.width ?? 1, imgH: targetResult?.height ?? 1,
       circles: targetCircles, polys: targetPolys,
       placeholder: "Set source + target — the recolored output appears here.",
-      onPlace: targetResult && (eyedropSplitId || macroEyedropId != null || !lasso) ? handleTargetMapClick : undefined,
-      onLasso: targetResult && lasso && !eyedropSplitId && macroEyedropId == null ? (pts => addPolySplit("target", pts)) : undefined,
+      onPlace: targetResult && (eyedropSplitId || eyedropMacro != null || !lasso) ? handleTargetMapClick : undefined,
+      onLasso: targetResult && lasso && !eyedropSplitId && eyedropMacro == null ? (pts => addPolySplit("target", pts)) : undefined,
     },
-  ], [sourceCutoutUrl, targetCutoutUrl, transferUrl, lasso, eyedropSplitId, macroEyedropId,
+  ], [sourceCutoutUrl, targetCutoutUrl, transferUrl, lasso, eyedropSplitId, eyedropMacro,
       sourceCircles, targetCircles, sourcePolys, targetPolys, sourceResult, targetResult,
       handleSourceMapClick, handleTargetMapClick, addPolySplit]);
 
@@ -1733,11 +1769,12 @@ export function SmashTab() {
         </div>
       </div>
 
-      {/* ── Pool-map tool selector + split controls. Lives in the persistent
-            area because it governs clicks on the always-visible pool maps:
-            "Anchor" drops focal anchors (existing flow); "Split" drops an
-            intelligent-split circle that re-clusters that area into
-            edge-following sub-pools. ── */}
+      {/* ── Region tools (PAUSED) — Anchor / Split / Lasso. Hidden behind
+            ADVANCED_REGION_TOOLS while the macro-group + eyedropper paradigm is
+            the primary grouping path. The engine (applySplits / regions /
+            anchorAnalysis) stays intact; only this UI is gated. Flip the flag
+            to bring these back for later refinement work. ── */}
+      {ADVANCED_REGION_TOOLS && (
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontSize: 10, color: "#cccccc" }}>Click maps to:</span>
@@ -2112,6 +2149,7 @@ export function SmashTab() {
           </div>
         )}
       </div>
+      )}
 
       {/* Big editing canvas: Source / Target / Output tabs with zoom + pan and
           draggable/resizable circle overlays. Replaces the old before/after
@@ -2380,8 +2418,10 @@ export function SmashTab() {
               onSetMacroPoolCount={setMacroPoolCount}
               expandedMacroId={expandedMacroId}
               onToggleExpand={setExpandedMacroId}
-              eyedropMacroId={macroEyedropId}
-              onEyedropMacro={setMacroEyedropId}
+              eyedropMacroId={eyedropMacro?.id ?? null}
+              eyedropMode={eyedropMacro?.mode ?? "add"}
+              onEyedropMacro={(id, mode) =>
+                setEyedropMacro(id == null ? null : { id, mode })}
             />
 
             {/* Donor-preview toggle + sort selector + reset */}
