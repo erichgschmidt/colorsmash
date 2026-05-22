@@ -42,6 +42,7 @@ import { SmashMacroPanel } from "./SmashMacroPanel";
 import {
   seedMacroGroups, matchMacros, buildMacroConstrainedCorrespondence, macroInfoMap,
   macroSuggestions, nearestMacroFor, reconcileMacros, reconcileMacroMatch, applyRegionTags,
+  lockTerritoryTags,
   type MacroGroup,
 } from "../core/macro";
 import { PoolMatch, Correspondence } from "../core/match";
@@ -413,6 +414,13 @@ export function SmashTab() {
     useState<{ poolId: number; nx: number; ny: number; sx: number; sy: number } | null>(null);
   const [loupeParts, setLoupeParts] = useState(5); // sub-swatches the loupe shows
   const [loupeZoom, setLoupeZoom] = useState(true); // hybrid: show the zoom crop
+  // LOCKED macros: their PIXEL TERRITORY is preserved across re-segmentation, so
+  // tweaking the controls (pool count, edge preservation, …) reshuffles only the
+  // UNLOCKED groups — the locked selections don't reset. Read in the reconcile
+  // effect via a ref so toggling a lock doesn't re-run it.
+  const [lockedMacros, setLockedMacros] = useState<Set<number>>(new Set());
+  const lockedRef = useRef(lockedMacros);
+  lockedRef.current = lockedMacros;
   // Esc disarms the sticky eyedropper and closes the loupe.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -440,6 +448,10 @@ export function SmashTab() {
   const prevTargetBaseRef = useRef<SegmentResult | null>(null);
   const prevSourceInputRef = useRef<unknown>(null);
   const prevTargetInputRef = useRef<unknown>(null);
+  // Previous TARGET membership labels — the basis for preserving locked macros'
+  // pixel territory across the next re-segmentation. Updated at the end of the
+  // macro reconcile effect (so it pairs with targetMacrosRef = previous macros).
+  const prevTargetLabelsRef = useRef<ArrayLike<number> | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [segError, setSegError] = useState<string | null>(null);
 
@@ -839,6 +851,9 @@ export function SmashTab() {
       || sourceMacrosRef.current.length === 0
       || targetMacrosRef.current.length === 0;
     lastMacroCountRef.current = macroCount;
+    // A fresh seed rebuilds the group structure from scratch, so any locks (keyed
+    // on the old group ids) no longer mean anything — drop them.
+    if (freshSeed && lockedRef.current.size > 0) setLockedMacros(new Set());
 
     const sMacros = freshSeed
       ? seedMacroGroups(sourceResult.pools, macroCount)
@@ -856,7 +871,13 @@ export function SmashTab() {
     const poolsInRange = (baseId: number, stride: number) => targetMembership.pools
       .filter(p => p.id >= baseId && p.id < baseId + stride)
       .map(p => p.id);
-    const tags: { poolIds: number[]; macroId: number }[] = [];
+    // Locked-territory tags FIRST (preserve each locked group's pixels), so an
+    // explicit split/exclusion assignment below can still override a boundary
+    // pool. Skipped on a fresh seed (no prior territory to preserve).
+    const lockTags = (!freshSeed && prevTargetLabelsRef.current)
+      ? lockTerritoryTags(prevTargetLabelsRef.current, targetMacrosRef.current, lockedRef.current, targetMembership.labels)
+      : [];
+    const tags: { poolIds: number[]; macroId: number }[] = [...lockTags];
     for (const s of targetSplits) {
       if (s.assignMacroId != null) {
         tags.push({ poolIds: poolsInRange(s.baseId, SPLIT_ID_STRIDE), macroId: s.assignMacroId });
@@ -871,6 +892,9 @@ export function SmashTab() {
     setSourceMacros(sMacros);
     setTargetMacros(tMacros);
     setMacroMatch(mMatch);
+    // Remember this run's labels so the NEXT re-seg can preserve locked territory
+    // (pairs with targetMacrosRef, which now holds these macros after render).
+    prevTargetLabelsRef.current = targetMembership.labels;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceResult, targetMembership, macroCount, targetTagSig]);
 
@@ -1385,6 +1409,19 @@ export function SmashTab() {
       return [...prev, edit];
     });
   }, [loupe, eyedropMacro, sourceSplits]);
+
+  // ── Macro locks (preserve pixel territory across control tweaks) ──────
+  const toggleMacroLock = useCallback((id: number) => {
+    setLockedMacros(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+  const lockAllMacros = useCallback(() => {
+    setLockedMacros(new Set(targetMacrosRef.current.map(m => m.id)));
+  }, []);
+  const unlockAllMacros = useCallback(() => setLockedMacros(new Set()), []);
 
   const clearAllAnchors = () => {
     setAnchors([]);
@@ -2674,6 +2711,10 @@ export function SmashTab() {
               eyedropMode={eyedropMacro?.mode ?? "add"}
               onEyedropMacro={(id, mode) =>
                 setEyedropMacro(id == null ? null : { id, mode })}
+              lockedMacros={lockedMacros}
+              onToggleLock={toggleMacroLock}
+              onLockAll={lockAllMacros}
+              onUnlockAll={unlockAllMacros}
             />
 
             {/* Donor-preview toggle + sort selector + reset */}

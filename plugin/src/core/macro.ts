@@ -307,6 +307,57 @@ export function applyRegionTags(
   });
 }
 
+// Preserve LOCKED macros' PIXEL TERRITORY across a re-segmentation. Each locked
+// macro owned a set of pixels last time (prevLabels ∈ its prev poolIds). After
+// re-seg the pools change (split/merge/renumber — especially on a pool-count
+// change), so we re-assign by territory: a NEW pool joins a locked macro when the
+// MAJORITY of that pool's pixels fall in that macro's old territory. Pools not
+// majority-owned by any locked macro are left for normal reconcile (they "smash
+// around" freely). Returns authoritative tags for applyRegionTags; [] when there
+// is nothing locked or the label maps don't line up (e.g. the image changed).
+export function lockTerritoryTags(
+  prevLabels: ArrayLike<number>,
+  prevMacros: { id: number; poolIds: number[] }[],
+  lockedIds: Set<number>,
+  newLabels: ArrayLike<number>,
+): { poolIds: number[]; macroId: number }[] {
+  if (lockedIds.size === 0 || prevLabels.length !== newLabels.length) return [];
+  // prev pool id → locked macro id (only for locked macros).
+  const prevPoolToLocked = new Map<number, number>();
+  for (const m of prevMacros) {
+    if (!lockedIds.has(m.id)) continue;
+    for (const pid of m.poolIds) prevPoolToLocked.set(pid, m.id);
+  }
+  if (prevPoolToLocked.size === 0) return [];
+
+  const total = new Map<number, number>();              // new pool → total pixels
+  const claim = new Map<number, Map<number, number>>(); // new pool → (locked macro → overlap)
+  for (let i = 0; i < newLabels.length; i++) {
+    const np = newLabels[i];
+    if (np < 0) continue;
+    total.set(np, (total.get(np) ?? 0) + 1);
+    const lm = prevPoolToLocked.get(prevLabels[i]);
+    if (lm == null) continue;
+    let c = claim.get(np);
+    if (!c) { c = new Map(); claim.set(np, c); }
+    c.set(lm, (c.get(lm) ?? 0) + 1);
+  }
+
+  const byMacro = new Map<number, number[]>();
+  for (const [np, c] of claim) {
+    let bestMacro = -1, bestCount = 0;
+    for (const [lm, cnt] of c) if (cnt > bestCount) { bestCount = cnt; bestMacro = lm; }
+    if (bestMacro >= 0 && bestCount > (total.get(np) ?? 0) * 0.5) {
+      const arr = byMacro.get(bestMacro) ?? [];
+      arr.push(np);
+      byMacro.set(bestMacro, arr);
+    }
+  }
+  const tags: { poolIds: number[]; macroId: number }[] = [];
+  for (const [macroId, poolIds] of byMacro) tags.push({ poolIds, macroId });
+  return tags;
+}
+
 // ────────── membership suggestions (contamination / missing) ──────────
 
 export interface MacroSuggestion {

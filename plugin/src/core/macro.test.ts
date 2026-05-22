@@ -21,6 +21,7 @@ import {
   reconcileMacros,
   reconcileMacroMatch,
   applyRegionTags,
+  lockTerritoryTags,
 } from "./macro";
 import type { MacroGroup } from "./macro";
 import { matchPools } from "./match";
@@ -724,5 +725,50 @@ describe("applyRegionTags", () => {
     ]);
     expect(out.find((m) => m.id === 0)!.poolIds).toContain(2);
     expect(out.find((m) => m.id === 1)!.poolIds).not.toContain(2);
+  });
+});
+
+describe("lockTerritoryTags — preserve locked pixel territory", () => {
+  // A 4-pixel row. prev labels: pools 0,0,1,1 (left pair pool 0, right pair 1).
+  // prev macros: Skin {0}, BG {1}.
+  const prevMacros: MacroGroup[] = [
+    { id: 0, name: "Skin", poolIds: [0] },
+    { id: 1, name: "BG", poolIds: [1] },
+  ];
+
+  it("returns [] when nothing is locked", () => {
+    const tags = lockTerritoryTags([0, 0, 1, 1], prevMacros, new Set(), [5, 5, 6, 6]);
+    expect(tags).toEqual([]);
+  });
+
+  it("returns [] when the label maps differ in length", () => {
+    const tags = lockTerritoryTags([0, 0, 1, 1], prevMacros, new Set([0]), [5, 5, 6]);
+    expect(tags).toEqual([]);
+  });
+
+  it("tags a new pool to the locked macro when it majority-overlaps that territory", () => {
+    // After re-seg the LEFT territory (was pool 0) is now pool 5; right is pool 6.
+    // Lock Skin (0) → pool 5 must be forced into macro 0; pool 6 untagged (BG free).
+    const tags = lockTerritoryTags([0, 0, 1, 1], prevMacros, new Set([0]), [5, 5, 6, 6]);
+    expect(tags).toEqual([{ poolIds: [5], macroId: 0 }]);
+  });
+
+  it("requires a strict majority (>50%) of a pool's pixels in the territory", () => {
+    // New pool 9 spans both territories 2-2. Locked Skin owns only half → no tag.
+    const tags = lockTerritoryTags([0, 0, 1, 1], prevMacros, new Set([0]), [9, 9, 9, 9]);
+    expect(tags).toEqual([]);
+  });
+
+  it("assigns a straddling pool to whichever locked territory owns the majority", () => {
+    // Pool 7 covers 3 left + 1 right; both macros locked → goes to Skin (0).
+    const tags = lockTerritoryTags([0, 0, 0, 1], prevMacros, new Set([0, 1]), [7, 7, 7, 7]);
+    expect(tags).toEqual([{ poolIds: [7], macroId: 0 }]);
+  });
+
+  it("preserves both locked territories when pools renumber", () => {
+    const tags = lockTerritoryTags([0, 0, 1, 1], prevMacros, new Set([0, 1]), [8, 8, 9, 9]);
+    const byMacro = new Map(tags.map((t) => [t.macroId, t.poolIds]));
+    expect(byMacro.get(0)).toEqual([8]);
+    expect(byMacro.get(1)).toEqual([9]);
   });
 });

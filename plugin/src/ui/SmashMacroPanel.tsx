@@ -51,6 +51,13 @@ export interface SmashMacroPanelProps {
   eyedropMacroId?: number | null;
   eyedropMode?: "add" | "subtract";
   onEyedropMacro?: (id: number | null, mode: "add" | "subtract") => void;
+  // Locked groups: their pixel territory is preserved across re-segmentation, so
+  // tweaking the controls reshuffles only the UNLOCKED groups. A 🔒 toggle per
+  // group header + lock-all / unlock-all convenience.
+  lockedMacros?: Set<number>;
+  onToggleLock?: (id: number) => void;
+  onLockAll?: () => void;
+  onUnlockAll?: () => void;
 }
 
 const MIN_K = 2;
@@ -158,7 +165,13 @@ export function SmashMacroPanel(props: SmashMacroPanelProps) {
     eyedropMacroId,
     eyedropMode = "add",
     onEyedropMacro,
+    lockedMacros,
+    onToggleLock,
+    onLockAll,
+    onUnlockAll,
   } = props;
+  const anyLocked = !!lockedMacros && lockedMacros.size > 0;
+  const allLocked = !!lockedMacros && targetMacros.length > 0 && lockedMacros.size >= targetMacros.length;
 
   // Transient drag state.
   const [dragging, setDragging] = useState<DragState | null>(null);
@@ -235,6 +248,22 @@ export function SmashMacroPanel(props: SmashMacroPanelProps) {
         <span style={{ flex: 1, fontSize: 10, fontWeight: "bold", color: "#cccccc" }}>
           GROUPS
         </span>
+        {onLockAll && onUnlockAll && targetMacros.length > 0 && (
+          <div
+            onClick={() => (allLocked ? onUnlockAll() : onLockAll())}
+            title={allLocked
+              ? "Unlock all groups"
+              : "Lock all groups — preserve every group's pixels while you tweak the controls"}
+            style={{
+              fontSize: 9, padding: "2px 7px", borderRadius: 2, cursor: "pointer", userSelect: "none",
+              border: `1px solid ${anyLocked ? "#d8a13a" : "#4a4a4a"}`,
+              background: anyLocked ? "#3a2f16" : "#3a3a3a",
+              color: anyLocked ? "#ffd591" : "#ccc",
+            }}
+          >
+            {allLocked ? "🔓 all" : "🔒 all"}
+          </div>
+        )}
         <div
           onClick={() => onReseed(Math.max(MIN_K, macroCount - 1))}
           title="Fewer groups"
@@ -259,8 +288,9 @@ export function SmashMacroPanel(props: SmashMacroPanelProps) {
         Drag a chip between groups, or arm a group's ⊙ (add) / ⊖ (remove)
         eyedropper and keep clicking colours on the canvas — it stays armed
         (Alt-click does the opposite; Esc stops). The canvas dims to show the
-        armed group's coverage. Amber = looks out of place; dotted = also fits a
-        nearby group.
+        armed group's coverage. 🔒 a group to pin its pixels so tweaking the
+        controls reshuffles only the unlocked groups. Amber = looks out of place;
+        dotted = also fits a nearby group.
       </div>
 
       {/* Empty state / bins */}
@@ -274,6 +304,7 @@ export function SmashMacroPanel(props: SmashMacroPanelProps) {
           const donorId = macroMatch.get(macro.id);
           const donorInfo = donorId != null ? sourceMacroInfo.get(donorId) : undefined;
           const expanded = expandedMacroId === macro.id;
+          const locked = !!lockedMacros?.has(macro.id);
           const contaminated = contaminatedFor(macro.id);
           const contamSet = new Set(contaminated);
           const isDropTarget =
@@ -289,8 +320,10 @@ export function SmashMacroPanel(props: SmashMacroPanelProps) {
                 display: "flex",
                 flexDirection: "column",
                 gap: 3,
-                background: isDropTarget ? "#20303f" : "#1f1f1f",
-                border: isDropTarget ? "1px solid #1473e6" : "1px solid #3a3a3a",
+                background: isDropTarget ? "#20303f" : locked ? "#241f14" : "#1f1f1f",
+                border: isDropTarget
+                  ? "1px solid #1473e6"
+                  : locked ? "1px solid #6a5320" : "1px solid #3a3a3a",
                 borderRadius: 2,
                 padding: 4,
                 marginBottom: 4,
@@ -348,6 +381,24 @@ export function SmashMacroPanel(props: SmashMacroPanelProps) {
                   >
                     !
                   </span>
+                )}
+                {onToggleLock && (
+                  <span
+                    onClick={(e) => { e.stopPropagation(); onToggleLock(macro.id); }}
+                    onPointerDown={stop}
+                    onMouseDown={stop}
+                    title={locked
+                      ? "Locked — this group's pixels stay put while you tweak the controls. Click to unlock."
+                      : "Lock this group's pixels so tweaking the controls doesn't reset it"}
+                    style={{
+                      flex: "0 0 auto", width: 15, height: 15, borderRadius: 3,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      fontSize: 10, lineHeight: "15px", userSelect: "none", cursor: "pointer",
+                      border: `1px solid ${locked ? "#d8a13a" : "#4a4a4a"}`,
+                      background: locked ? "#3a2f16" : "#3a3a3a",
+                      color: locked ? "#ffd591" : "#bbb",
+                    }}
+                  >{locked ? "🔒" : "🔓"}</span>
                 )}
                 {onEyedropMacro && (() => {
                   const armed = (m: "add" | "subtract") =>
