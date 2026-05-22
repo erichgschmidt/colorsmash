@@ -13,7 +13,7 @@
 // Segmentation runs in a deferred effect so the "analyzing…" state can paint
 // before the synchronous segment work blocks the main thread.
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   app, readLayerPixels, writePixelLayer, writePoolGroupLayers, executeAsModal,
   setGroupName,
@@ -414,6 +414,13 @@ export function SmashTab() {
     useState<{ poolId: number; nx: number; ny: number; sx: number; sy: number } | null>(null);
   const [loupeParts, setLoupeParts] = useState(5); // sub-swatches the loupe shows
   const [loupeZoom, setLoupeZoom] = useState(true); // hybrid: show the zoom crop
+  // The loupe floats over the panel; it spans the (narrow) panel width and sits
+  // near the held point vertically. `loupeTop` is measured against the real panel
+  // viewport (NOT window.innerHeight, which is unreliable in UXP and used to pin
+  // the loupe to the top-left). loupePanelRef measures the rendered panel height
+  // so it never overflows the bottom.
+  const loupePanelRef = useRef<HTMLDivElement>(null);
+  const [loupeTop, setLoupeTop] = useState(8);
   // LOCKED macros: their PIXEL TERRITORY is preserved across re-segmentation, so
   // tweaking the controls (pool count, edge preservation, …) reshuffles only the
   // UNLOCKED groups — the locked selections don't reset. Read in the reconcile
@@ -1423,6 +1430,19 @@ export function SmashTab() {
   }, []);
   const unlockAllMacros = useCallback(() => setLockedMacros(new Set()), []);
 
+  // Place the loupe vertically near the held point, clamped to the panel so it
+  // never runs off the bottom. Measured from the rendered panel + the real
+  // viewport height (document.documentElement) — robust where window.innerHeight
+  // is not. Runs before paint so there's no jump.
+  useLayoutEffect(() => {
+    if (!loupe) return;
+    const vh = document.documentElement?.clientHeight || 0;
+    const h = loupePanelRef.current?.offsetHeight ?? 0;
+    let t = loupe.sy + 12;
+    if (vh > 0 && h > 0) t = Math.min(t, vh - h - 8);
+    setLoupeTop(Math.max(8, t));
+  }, [loupe, loupeZoom, loupeParts, loupeSwatches.length, loupeCropUrl]);
+
   const clearAllAnchors = () => {
     setAnchors([]);
     setActiveSource(null);
@@ -2404,62 +2424,6 @@ export function SmashTab() {
         onHold={eyedropMacro != null && targetMembership && canvasTab !== "source" ? handleCanvasHold : undefined}
       />
 
-      {/* Magnify loupe — floats at the held point; pick a sub-shade to carve it
-          into the armed group. Hybrid (zoom) toggle shows a magnified crop. */}
-      {loupe && eyedropMacro && loupeSwatches.length > 0 && (() => {
-        const armed = targetMacros.find(m => m.id === eyedropMacro.id);
-        const x = Math.min(loupe.sx + 14, window.innerWidth - 226);
-        const y = Math.min(loupe.sy + 14, window.innerHeight - 210);
-        return (
-          <div style={{
-            position: "fixed", left: Math.max(4, x), top: Math.max(4, y), zIndex: 10000, width: 210,
-            background: "#202020", border: "1px solid #1473e6", borderRadius: 4,
-            boxShadow: "0 4px 16px rgba(0,0,0,0.6)", padding: 8,
-            display: "flex", flexDirection: "column", gap: 6,
-          }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 10, fontWeight: 700, color: "#cfe1ff", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                Refine → {armed?.name ?? "group"}
-              </span>
-              <div onClick={() => setLoupeZoom(v => !v)} title="Toggle the magnified crop (hybrid vs palette-only)"
-                style={{ fontSize: 10, padding: "1px 5px", borderRadius: 2, cursor: "pointer", userSelect: "none",
-                  border: `1px solid ${loupeZoom ? "#1473e6" : "#4a4a4a"}`, background: loupeZoom ? "#22364f" : "#3a3a3a", color: "#ddd" }}>🔍</div>
-              <div onClick={() => setLoupe(null)} title="Close (Esc)"
-                style={{ fontSize: 11, padding: "1px 6px", borderRadius: 2, cursor: "pointer", userSelect: "none",
-                  border: "1px solid #4a4a4a", background: "#3a3a3a", color: "#ddd" }}>×</div>
-            </div>
-            {loupeZoom && loupeCropUrl && (
-              <div style={{ position: "relative", width: "100%", height: 96, background: "#111", borderRadius: 3, overflow: "hidden" }}>
-                <img src={loupeCropUrl} draggable={false}
-                  style={{ width: "100%", height: "100%", objectFit: "contain", imageRendering: "pixelated" }} />
-                <div style={{ position: "absolute", left: "50%", top: "50%", width: 9, height: 9, marginLeft: -5, marginTop: -5,
-                  border: "1px solid #fff", borderRadius: "50%", boxShadow: "0 0 0 1px #000", pointerEvents: "none" }} />
-              </div>
-            )}
-            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 9, color: "#bbb" }}>
-              <span style={{ flex: 1 }}>Sub-colours</span>
-              <div onClick={() => setLoupeParts(p => Math.max(2, p - 1))}
-                style={{ padding: "0 7px", border: "1px solid #4a4a4a", background: "#3a3a3a", color: "#ddd", borderRadius: 2, cursor: "pointer", userSelect: "none" }}>−</div>
-              <span style={{ minWidth: 12, textAlign: "center", color: "#eee" }}>{loupeParts}</span>
-              <div onClick={() => setLoupeParts(p => Math.min(8, p + 1))}
-                style={{ padding: "0 7px", border: "1px solid #4a4a4a", background: "#3a3a3a", color: "#ddd", borderRadius: 2, cursor: "pointer", userSelect: "none" }}>+</div>
-            </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-              {loupeSwatches.map((sw, i) => (
-                <div key={i} onClick={() => commitLoupePick(sw)}
-                  title={`Pull this shade into ${armed?.name ?? "group"} (${Math.round(sw.share * 100)}%)`}
-                  style={{ width: 26, height: 26, borderRadius: 4, cursor: "pointer",
-                    background: `rgb(${sw.r}, ${sw.g}, ${sw.b})`, border: "1px solid #000",
-                    boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.15)" }} />
-              ))}
-            </div>
-            <div style={{ fontSize: 8, color: "#888", lineHeight: 1.4 }}>
-              Click a shade to pull it into the group. Stays open for more · Esc closes.
-            </div>
-          </div>
-        );
-      })()}
-
       {segError && (
         <div style={{ fontSize: 10, color: "#d8867d" }}>Segmentation failed: {segError}</div>
       )}
@@ -2795,6 +2759,61 @@ export function SmashTab() {
           </div>
         )
       )}
+
+      {/* Magnify loupe — LAST in the DOM so it always paints over the rest of the
+          panel. Spans the (narrow) panel width and sits near the held point
+          vertically (loupeTop, measured so it never overflows the bottom). */}
+      {loupe && eyedropMacro && loupeSwatches.length > 0 && (() => {
+        const armed = targetMacros.find(m => m.id === eyedropMacro.id);
+        return (
+          <div ref={loupePanelRef} style={{
+            position: "fixed", left: 6, right: 6, top: loupeTop, zIndex: 99999,
+            background: "#202020", border: "1px solid #1473e6", borderRadius: 4,
+            boxShadow: "0 4px 16px rgba(0,0,0,0.6)", padding: 8,
+            display: "flex", flexDirection: "column", gap: 6,
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: "#cfe1ff", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                Refine → {armed?.name ?? "group"}
+              </span>
+              <div onClick={() => setLoupeZoom(v => !v)} title="Toggle the magnified crop (hybrid vs palette-only)"
+                style={{ fontSize: 10, padding: "1px 5px", borderRadius: 2, cursor: "pointer", userSelect: "none",
+                  border: `1px solid ${loupeZoom ? "#1473e6" : "#4a4a4a"}`, background: loupeZoom ? "#22364f" : "#3a3a3a", color: "#ddd" }}>🔍</div>
+              <div onClick={() => setLoupe(null)} title="Close (Esc)"
+                style={{ fontSize: 11, padding: "1px 6px", borderRadius: 2, cursor: "pointer", userSelect: "none",
+                  border: "1px solid #4a4a4a", background: "#3a3a3a", color: "#ddd" }}>×</div>
+            </div>
+            {loupeZoom && loupeCropUrl && (
+              <div style={{ position: "relative", width: "100%", height: 96, background: "#111", borderRadius: 3, overflow: "hidden" }}>
+                <img src={loupeCropUrl} draggable={false}
+                  style={{ width: "100%", height: "100%", objectFit: "contain", imageRendering: "pixelated" }} />
+                <div style={{ position: "absolute", left: "50%", top: "50%", width: 9, height: 9, marginLeft: -5, marginTop: -5,
+                  border: "1px solid #fff", borderRadius: "50%", boxShadow: "0 0 0 1px #000", pointerEvents: "none" }} />
+              </div>
+            )}
+            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 9, color: "#bbb" }}>
+              <span style={{ flex: 1 }}>Sub-colours</span>
+              <div onClick={() => setLoupeParts(p => Math.max(2, p - 1))}
+                style={{ padding: "0 7px", border: "1px solid #4a4a4a", background: "#3a3a3a", color: "#ddd", borderRadius: 2, cursor: "pointer", userSelect: "none" }}>−</div>
+              <span style={{ minWidth: 12, textAlign: "center", color: "#eee" }}>{loupeParts}</span>
+              <div onClick={() => setLoupeParts(p => Math.min(8, p + 1))}
+                style={{ padding: "0 7px", border: "1px solid #4a4a4a", background: "#3a3a3a", color: "#ddd", borderRadius: 2, cursor: "pointer", userSelect: "none" }}>+</div>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+              {loupeSwatches.map((sw, i) => (
+                <div key={i} onClick={() => commitLoupePick(sw)}
+                  title={`Pull this shade into ${armed?.name ?? "group"} (${Math.round(sw.share * 100)}%)`}
+                  style={{ width: 26, height: 26, borderRadius: 4, cursor: "pointer",
+                    background: `rgb(${sw.r}, ${sw.g}, ${sw.b})`, border: "1px solid #000",
+                    boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.15)" }} />
+              ))}
+            </div>
+            <div style={{ fontSize: 8, color: "#888", lineHeight: 1.4 }}>
+              Click a shade to pull it into the group. Stays open for more · Esc closes.
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
