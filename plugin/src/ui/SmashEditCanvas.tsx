@@ -89,12 +89,17 @@ interface Props {
   // ⚡ toggle when onToggleLiveDrag is provided.
   liveDrag?: boolean;
   onToggleLiveDrag?: () => void;
+  // Press-and-hold on the image (no drag) for ~HOLD_MS fires this with the held
+  // point + screen coords — used to open the magnify/sub-palette loupe. A quick
+  // tap still fires onPlace; a drag pans. Omitted = no hold gesture.
+  onHold?: (nx: number, ny: number, clientX: number, clientY: number) => void;
   height?: number;
 }
 
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
 const PLACE_DRAG_PX = 4; // movement that turns a tap into a pan
 const HANDLE = 11;       // fixed screen px for the centre handle hit area
+const HOLD_MS = 280;     // press-and-hold (no drag) before the loupe fires
 
 type Gesture =
   | { kind: "bg"; sx: number; sy: number; px: number; py: number; moved: boolean }
@@ -111,6 +116,7 @@ export function SmashEditCanvas({
   onSetPolyPoints, onRemovePoly,
   overlaysHidden = false, onToggleOverlays,
   liveDrag = false, onToggleLiveDrag,
+  onHold,
   height = 280,
 }: Props) {
   const view = views.find(v => v.id === activeId) ?? views[0];
@@ -133,6 +139,10 @@ export function SmashEditCanvas({
   const containerRef = useRef<HTMLDivElement>(null);
   const hoverRef = useRef(false);
   const gestureRef = useRef<Gesture | null>(null);
+  // Press-and-hold (loupe) bookkeeping: a pending timer and a flag set when the
+  // hold fired so the subsequent pointerup doesn't ALSO place.
+  const holdTimerRef = useRef<number | null>(null);
+  const heldRef = useRef(false);
   const [, force] = useState(0); // re-render on gesture transitions when needed
   // In-progress freehand lasso path (normalized), rendered live while drawing.
   const [lassoPts, setLassoPts] = useState<Pt[] | null>(null);
@@ -178,7 +188,11 @@ export function SmashEditCanvas({
       if (!g) return;
       if (g.kind === "bg") {
         const dx = e.clientX - g.sx, dy = e.clientY - g.sy;
-        if (!g.moved && Math.hypot(dx, dy) > PLACE_DRAG_PX) g.moved = true;
+        if (!g.moved && Math.hypot(dx, dy) > PLACE_DRAG_PX) {
+          g.moved = true;
+          // Became a pan → cancel the pending hold/loupe.
+          if (holdTimerRef.current != null) { clearTimeout(holdTimerRef.current); holdTimerRef.current = null; }
+        }
         if (g.moved) setPan({ x: g.px + dx, y: g.py + dy });
         return;
       }
@@ -245,10 +259,14 @@ export function SmashEditCanvas({
     const onUp = (e: PointerEvent) => {
       const g = gestureRef.current;
       gestureRef.current = null;
-      if (g && g.kind === "bg" && !g.moved && view?.onPlace && !overlaysHidden) {
+      // Any pending hold timer is moot now.
+      if (holdTimerRef.current != null) { clearTimeout(holdTimerRef.current); holdTimerRef.current = null; }
+      // A completed hold (loupe opened) swallows the click — don't also place.
+      if (g && g.kind === "bg" && !g.moved && !heldRef.current && view?.onPlace && !overlaysHidden) {
         const n = toNorm(e.clientX, e.clientY);
         if (n) view.onPlace(n.nx, n.ny, { alt: e.altKey });
       }
+      heldRef.current = false;
       if (g && g.kind === "lasso" && view?.onLasso) {
         setLassoPts(prev => {
           if (prev && prev.length >= 3) view.onLasso!(prev);
@@ -295,6 +313,20 @@ export function SmashEditCanvas({
       return;
     }
     gestureRef.current = { kind: "bg", sx: e.clientX, sy: e.clientY, px: pan.x, py: pan.y, moved: false };
+    // Arm the press-and-hold loupe: if the pointer stays put for HOLD_MS, fire
+    // onHold (and suppress the click-place on release). A pan cancels it.
+    heldRef.current = false;
+    if (onHold && !overlaysHidden) {
+      const cx = e.clientX, cy = e.clientY;
+      holdTimerRef.current = window.setTimeout(() => {
+        holdTimerRef.current = null;
+        const g = gestureRef.current;
+        if (g && g.kind === "bg" && !g.moved) {
+          const n = toNorm(cx, cy);
+          if (n) { heldRef.current = true; onHold(n.nx, n.ny, cx, cy); }
+        }
+      }, HOLD_MS);
+    }
   };
   const resetZoom = () => { setZoom(1); setPan({ x: 0, y: 0 }); };
   const atDefault = zoom === 1 && pan.x === 0 && pan.y === 0;

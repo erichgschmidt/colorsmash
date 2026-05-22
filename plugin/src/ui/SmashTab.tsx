@@ -282,6 +282,74 @@ function buildCutoutMapUrl(
   return rgbaToPngDataUrl(rgba, width, height);
 }
 
+// One swatch of a pool's sub-palette, for the magnify loupe.
+interface LoupeSwatch {
+  r: number; g: number; b: number;
+  labL: number; labA: number; labB: number;
+  share: number; // fraction of the pool's sampled pixels in this sub-cluster
+}
+
+// Quick sub-palette of a single pool for the loupe: cluster the pool's pixels
+// (sampled for speed) into ≤k colour groups with a few Lloyd's k-means passes on
+// CIE Lab, returned largest-share first. Display only — the picked swatch's Lab
+// seeds a colour exclusion that does the real, persistent carve.
+function poolSubPalette(
+  rgba: Uint8Array, labels: ArrayLike<number>, poolId: number, k: number, sampleCap = 1500,
+): LoupeSwatch[] {
+  const samp: [number, number, number][] = [];
+  let count = 0;
+  for (let i = 0; i < labels.length; i++) {
+    if (labels[i] !== poolId || rgba[i * 4 + 3] < 128) continue;
+    count++;
+  }
+  if (count === 0) return [];
+  const step = Math.max(1, Math.floor(count / sampleCap));
+  let seen = 0;
+  for (let i = 0; i < labels.length; i++) {
+    if (labels[i] !== poolId || rgba[i * 4 + 3] < 128) continue;
+    if (seen++ % step !== 0) continue;
+    const o = i * 4;
+    samp.push(rgbToLab(rgba[o], rgba[o + 1], rgba[o + 2]) as [number, number, number]);
+  }
+  const n = samp.length;
+  if (n === 0) return [];
+  const kk = Math.max(1, Math.min(k, n));
+  // Seed centroids spread along the lightness axis (deterministic).
+  const byL = samp.slice().sort((a, b) => a[0] - b[0]);
+  const cents: [number, number, number][] = [];
+  for (let c = 0; c < kk; c++) cents.push([...byL[Math.floor(((c + 0.5) / kk) * n)]]);
+  const assign = new Int32Array(n);
+  for (let iter = 0; iter < 8; iter++) {
+    for (let i = 0; i < n; i++) {
+      let best = 0, bd = Infinity;
+      for (let c = 0; c < kk; c++) {
+        const dl = samp[i][0] - cents[c][0], da = samp[i][1] - cents[c][1], db = samp[i][2] - cents[c][2];
+        const d = dl * dl + da * da + db * db;
+        if (d < bd) { bd = d; best = c; }
+      }
+      assign[i] = best;
+    }
+    const sum = Array.from({ length: kk }, () => [0, 0, 0, 0]);
+    for (let i = 0; i < n; i++) {
+      const c = assign[i];
+      sum[c][0] += samp[i][0]; sum[c][1] += samp[i][1]; sum[c][2] += samp[i][2]; sum[c][3]++;
+    }
+    for (let c = 0; c < kk; c++) if (sum[c][3] > 0) {
+      cents[c][0] = sum[c][0] / sum[c][3]; cents[c][1] = sum[c][1] / sum[c][3]; cents[c][2] = sum[c][2] / sum[c][3];
+    }
+  }
+  const counts = new Array(kk).fill(0);
+  for (let i = 0; i < n; i++) counts[assign[i]]++;
+  const out: LoupeSwatch[] = [];
+  for (let c = 0; c < kk; c++) {
+    if (counts[c] === 0) continue;
+    const [r, g, b] = labToRgb(cents[c][0], cents[c][1], cents[c][2]);
+    out.push({ r, g, b, labL: cents[c][0], labA: cents[c][1], labB: cents[c][2], share: counts[c] / n });
+  }
+  out.sort((a, b) => b.share - a.share);
+  return out;
+}
+
 export function SmashTab() {
   // ── Shared segmentation controls (applied to BOTH images) ──────────
   const [poolCount, setPoolCount] = useState(6);
@@ -338,9 +406,18 @@ export function SmashTab() {
   // lasso "exclude colour" flow.
   const [eyedropMacro, setEyedropMacro] =
     useState<{ id: number; mode: "add" | "subtract" } | null>(null);
-  // Esc disarms the sticky eyedropper (otherwise it stays armed across clicks).
+  // Magnify loupe (press-and-hold to refine): the base pool being drilled into +
+  // where it opened (normalized + screen coords). Its sub-palette is derived from
+  // this; picking a swatch carves that sub-colour into the armed group.
+  const [loupe, setLoupe] =
+    useState<{ poolId: number; nx: number; ny: number; sx: number; sy: number } | null>(null);
+  const [loupeParts, setLoupeParts] = useState(5); // sub-swatches the loupe shows
+  const [loupeZoom, setLoupeZoom] = useState(true); // hybrid: show the zoom crop
+  // Esc disarms the sticky eyedropper and closes the loupe.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setEyedropMacro(null); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { setEyedropMacro(null); setLoupe(null); }
+    };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, []);
@@ -667,7 +744,7 @@ export function SmashTab() {
       .map(e => `${e.id},${e.labL.toFixed(1)},${e.labA.toFixed(1)},${e.labB.toFixed(1)},${e.tol},${e.exclBaseId}`)
       .join(",");
     const sig = (arr: SplitEdit[]) => arr.map(s =>
-      `${s.id}:${s.nx.toFixed(4)}:${s.ny.toFixed(4)}:${s.radius.toFixed(4)}:${s.partCount}:${s.baseId}:[${exSig(s)}]`,
+      `${s.id}:${s.nx.toFixed(4)}:${s.ny.toFixed(4)}:${s.radius.toFixed(4)}:${s.partCount}:${s.baseId}:${s.poolId ?? ""}:[${exSig(s)}]`,
     ).join("|");
     return `${sig(sourceSplits)}##${sig(targetSplits)}`;
   }, [sourceSplits, targetSplits]);
@@ -1231,6 +1308,83 @@ export function SmashTab() {
     if (poolMapTool === "split") addSplit("target", nx, ny);
     else if (poolMapTool === "anchor") handleAnchorTargetClick(nx, ny);
   }, [eyedropMacro, targetMembership, eyedropSplitId, target.segInput, exclTargetGroup, targetMacros, addExclusion, poolMapTool, addSplit, handleAnchorTargetClick]);
+
+  // ── Magnify loupe (press-and-hold to refine) ──────────────────────────
+  // Press-and-hold on a TARGET/Output spot (eyedropper armed) opens a loupe that
+  // breaks the BASE pool under the cursor into a finer sub-palette. Picking a
+  // swatch carves that sub-colour into the armed group via a colour exclusion on
+  // a per-pool "pool split" — so a too-general pool can be refined in place.
+  const handleCanvasHold = useCallback((nx: number, ny: number, sx: number, sy: number) => {
+    const seg = target.segInput;
+    if (!targetMembership || !seg || !eyedropMacro) return;
+    const { width, height, labels } = targetMembership;
+    const px = Math.min(width - 1, Math.max(0, Math.floor(nx * width)));
+    const py = Math.min(height - 1, Math.max(0, Math.floor(ny * height)));
+    const poolId = labels[py * width + px];
+    // Only BASE pools can be drilled (a pool split covers base.labels === poolId;
+    // split/exclusion sub-pools don't exist in the no-split base).
+    if (poolId < 0 || poolId >= SPLIT_ID_BASE) return;
+    setLoupe({ poolId, nx, ny, sx, sy });
+  }, [target.segInput, targetMembership, eyedropMacro]);
+
+  // Sub-palette shown in the loupe — recomputed when the pool or part-count
+  // changes. Reads remaining (post-existing-exclusion) pixels of the pool.
+  const loupeSwatches = useMemo<LoupeSwatch[]>(() => {
+    if (!loupe || !targetMembership || !target.segInput) return [];
+    return poolSubPalette(target.segInput.data, targetMembership.labels, loupe.poolId, loupeParts);
+  }, [loupe, targetMembership, target.segInput, loupeParts]);
+
+  // Magnified crop around the held point (hybrid loupe). null when zoom is off.
+  const loupeCropUrl = useMemo(() => {
+    if (!loupe || !loupeZoom || !target.segInput) return null;
+    const { data, width, height } = target.segInput;
+    const half = Math.max(4, Math.round(Math.min(width, height) * 0.06));
+    const cx = Math.round(loupe.nx * width), cy = Math.round(loupe.ny * height);
+    const x0 = Math.max(0, cx - half), y0 = Math.max(0, cy - half);
+    const x1 = Math.min(width - 1, cx + half), y1 = Math.min(height - 1, cy + half);
+    const cw = x1 - x0 + 1, ch = y1 - y0 + 1;
+    if (cw < 1 || ch < 1) return null;
+    const crop = new Uint8Array(cw * ch * 4);
+    for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) {
+      const so = ((y0 + y) * width + (x0 + x)) * 4, dpos = (y * cw + x) * 4;
+      crop[dpos] = data[so]; crop[dpos + 1] = data[so + 1]; crop[dpos + 2] = data[so + 2]; crop[dpos + 3] = 255;
+    }
+    return rgbaToPngDataUrl(crop, cw, ch);
+  }, [loupe, loupeZoom, target.segInput]);
+
+  // Carve a picked sub-colour into the armed group: add a colour exclusion to the
+  // pool's "pool split" (create it on first pick). The loupe stays open so you
+  // can pull out several sub-shades in one sitting.
+  const commitLoupePick = useCallback((sw: LoupeSwatch) => {
+    if (!loupe || !eyedropMacro) return;
+    const macroId = eyedropMacro.id;
+    const poolId = loupe.poolId;
+    setTargetSplits(prev => {
+      let maxExcl = EXCL_ID_BASE - EXCL_ID_STRIDE;
+      for (const s of [...sourceSplits, ...prev]) {
+        for (const e of s.colorExclusions ?? []) maxExcl = Math.max(maxExcl, e.exclBaseId);
+      }
+      const exclBaseId = maxExcl + EXCL_ID_STRIDE;
+      const ex: ColorExclusion = {
+        id: `lp-${Date.now().toString(36)}-${exclBaseId}`,
+        labL: sw.labL, labA: sw.labA, labB: sw.labB,
+        tol: DEFAULT_EXCL_TOL, exclBaseId, macroId,
+      };
+      const existing = prev.find(s => s.poolId === poolId);
+      if (existing) {
+        return prev.map(s => s.id === existing.id
+          ? { ...s, colorExclusions: [...(s.colorExclusions ?? []), ex] } : s);
+      }
+      let maxBase = SPLIT_ID_BASE - SPLIT_ID_STRIDE;
+      for (const s of prev) maxBase = Math.max(maxBase, s.baseId);
+      const edit: SplitEdit = {
+        id: `loupe-${Date.now().toString(36)}`,
+        nx: loupe.nx, ny: loupe.ny, radius: 0, partCount: 2,
+        baseId: maxBase + SPLIT_ID_STRIDE, poolId, colorExclusions: [ex],
+      };
+      return [...prev, edit];
+    });
+  }, [loupe, eyedropMacro, sourceSplits]);
 
   const clearAllAnchors = () => {
     setAnchors([]);
@@ -2210,7 +2364,64 @@ export function SmashTab() {
         onToggleOverlays={() => setShowOverlays(v => !v)}
         liveDrag={liveDrag}
         onToggleLiveDrag={() => setLiveDrag(v => !v)}
+        onHold={eyedropMacro != null && targetMembership && canvasTab !== "source" ? handleCanvasHold : undefined}
       />
+
+      {/* Magnify loupe — floats at the held point; pick a sub-shade to carve it
+          into the armed group. Hybrid (zoom) toggle shows a magnified crop. */}
+      {loupe && eyedropMacro && loupeSwatches.length > 0 && (() => {
+        const armed = targetMacros.find(m => m.id === eyedropMacro.id);
+        const x = Math.min(loupe.sx + 14, window.innerWidth - 226);
+        const y = Math.min(loupe.sy + 14, window.innerHeight - 210);
+        return (
+          <div style={{
+            position: "fixed", left: Math.max(4, x), top: Math.max(4, y), zIndex: 10000, width: 210,
+            background: "#202020", border: "1px solid #1473e6", borderRadius: 4,
+            boxShadow: "0 4px 16px rgba(0,0,0,0.6)", padding: 8,
+            display: "flex", flexDirection: "column", gap: 6,
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: "#cfe1ff", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                Refine → {armed?.name ?? "group"}
+              </span>
+              <div onClick={() => setLoupeZoom(v => !v)} title="Toggle the magnified crop (hybrid vs palette-only)"
+                style={{ fontSize: 10, padding: "1px 5px", borderRadius: 2, cursor: "pointer", userSelect: "none",
+                  border: `1px solid ${loupeZoom ? "#1473e6" : "#4a4a4a"}`, background: loupeZoom ? "#22364f" : "#3a3a3a", color: "#ddd" }}>🔍</div>
+              <div onClick={() => setLoupe(null)} title="Close (Esc)"
+                style={{ fontSize: 11, padding: "1px 6px", borderRadius: 2, cursor: "pointer", userSelect: "none",
+                  border: "1px solid #4a4a4a", background: "#3a3a3a", color: "#ddd" }}>×</div>
+            </div>
+            {loupeZoom && loupeCropUrl && (
+              <div style={{ position: "relative", width: "100%", height: 96, background: "#111", borderRadius: 3, overflow: "hidden" }}>
+                <img src={loupeCropUrl} draggable={false}
+                  style={{ width: "100%", height: "100%", objectFit: "contain", imageRendering: "pixelated" }} />
+                <div style={{ position: "absolute", left: "50%", top: "50%", width: 9, height: 9, marginLeft: -5, marginTop: -5,
+                  border: "1px solid #fff", borderRadius: "50%", boxShadow: "0 0 0 1px #000", pointerEvents: "none" }} />
+              </div>
+            )}
+            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 9, color: "#bbb" }}>
+              <span style={{ flex: 1 }}>Sub-colours</span>
+              <div onClick={() => setLoupeParts(p => Math.max(2, p - 1))}
+                style={{ padding: "0 7px", border: "1px solid #4a4a4a", background: "#3a3a3a", color: "#ddd", borderRadius: 2, cursor: "pointer", userSelect: "none" }}>−</div>
+              <span style={{ minWidth: 12, textAlign: "center", color: "#eee" }}>{loupeParts}</span>
+              <div onClick={() => setLoupeParts(p => Math.min(8, p + 1))}
+                style={{ padding: "0 7px", border: "1px solid #4a4a4a", background: "#3a3a3a", color: "#ddd", borderRadius: 2, cursor: "pointer", userSelect: "none" }}>+</div>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+              {loupeSwatches.map((sw, i) => (
+                <div key={i} onClick={() => commitLoupePick(sw)}
+                  title={`Pull this shade into ${armed?.name ?? "group"} (${Math.round(sw.share * 100)}%)`}
+                  style={{ width: 26, height: 26, borderRadius: 4, cursor: "pointer",
+                    background: `rgb(${sw.r}, ${sw.g}, ${sw.b})`, border: "1px solid #000",
+                    boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.15)" }} />
+              ))}
+            </div>
+            <div style={{ fontSize: 8, color: "#888", lineHeight: 1.4 }}>
+              Click a shade to pull it into the group. Stays open for more · Esc closes.
+            </div>
+          </div>
+        );
+      })()}
 
       {segError && (
         <div style={{ fontSize: 10, color: "#d8867d" }}>Segmentation failed: {segError}</div>

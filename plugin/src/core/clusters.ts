@@ -122,6 +122,13 @@ export interface SplitEdit {
   // covered pixels are those inside the polygon (radius is ignored); nx/ny is the
   // centroid for the move handle. Absent → a circle (nx/ny/radius).
   points?: Pt[];
+  // Optional POOL split: when set, the covered pixels are ALL opaque pixels whose
+  // BASE label is this pool id (geometry — nx/ny/radius/points — is ignored). The
+  // remaining (non-excluded) pixels KEEP their original label, so a pool split is
+  // purely a carrier for colorExclusions: it carves specific sub-colours of one
+  // pool out to other groups (the "magnify loupe" refinement) without disturbing
+  // the rest of the pool. A pool split with no exclusions is a no-op.
+  poolId?: number;
   // Optional macro-group assignment: the pools this split produces are forced
   // into this macro id (authoritative). UI-level concern; segmentation ignores
   // it. See macro.applyRegionTags.
@@ -490,10 +497,20 @@ export function applySplits(
   const labels = base.labels.slice();
 
   for (const edit of edits) {
-    const parts = Math.max(2, Math.floor(edit.partCount));
+    const isPoolSplit = edit.poolId != null;
 
-    // Covered opaque pixels — inside the polygon (lasso) or the circle.
-    const covered = coveredOpaquePixels(edit, rgba, width, height);
+    // Covered opaque pixels — all pixels of one BASE pool (pool split), or inside
+    // the polygon (lasso) / circle (region split).
+    let covered: number[];
+    if (isPoolSplit) {
+      const pid = edit.poolId!;
+      covered = [];
+      for (let i = 0; i < base.labels.length; i++) {
+        if (base.labels[i] === pid && rgba[i * 4 + 3] >= 128) covered.push(i);
+      }
+    } else {
+      covered = coveredOpaquePixels(edit, rgba, width, height);
+    }
     if (covered.length < 1) continue;
 
     // Subtract excluded colours: partition `covered` into KEPT (the region) and
@@ -530,6 +547,11 @@ export function applySplits(
       }
     }
 
+    // Pool split: the kept (non-excluded) pixels stay as their original pool —
+    // we only carved colours out via exclusions, so there's nothing to re-cluster.
+    if (isPoolSplit) continue;
+
+    const parts = Math.max(2, Math.floor(edit.partCount));
     if (kept.length < parts) continue;
 
     // Cold segmentation of the kept subset into `parts` pools, ids starting at

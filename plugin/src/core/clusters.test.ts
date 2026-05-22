@@ -669,3 +669,77 @@ describe("colour exclusion (subtract a colour from a region)", () => {
     expect(mask[32 * W + 52]).toBe(1); // blue → kept
   });
 });
+
+describe("pool split (magnify loupe carve)", () => {
+  const OPTS = {
+    poolCount: 1, edgePreservation: 0.5, regionCleanup: 0.2,
+    colorVsValueBias: 0.5, subPaletteSize: 3, neutralProtection: 0,
+    poolContinuity: 0,
+  };
+
+  // Left half red, right half blue.
+  function twoToneImage() {
+    const W = 64, H = 64;
+    const img = makeImage(W, H, (x) => (x < W / 2 ? [200, 40, 40] : [40, 40, 200]));
+    return { img, W, H };
+  }
+
+  it("carves the excluded sub-colour out and leaves the rest of the pool's id intact", () => {
+    const { img, W, H } = twoToneImage();
+    const base = segmentImage(img, W, H, OPTS); // poolCount 1 → both halves fuse
+    expect(base.pools.length).toBe(1);
+    const poolId = base.pools[0].id;
+
+    const split: SplitEdit = {
+      id: "lp1", nx: 0.5, ny: 0.5, radius: 0, partCount: 2,
+      baseId: SPLIT_ID_BASE, poolId,
+      colorExclusions: [
+        { id: "ex1", labL: 53, labA: 61, labB: 46, tol: 40, exclBaseId: EXCL_ID_BASE, macroId: 1 },
+      ],
+    };
+    const out = applySplits(base, img, [split], OPTS);
+
+    const leftIdx = 32 * W + 12;  // red → carved into the exclusion range
+    const rightIdx = 32 * W + 52; // blue → kept, keeps the ORIGINAL pool id
+    expect(out.labels[leftIdx]).toBeGreaterThanOrEqual(EXCL_ID_BASE);
+    expect(out.labels[leftIdx]).toBeLessThan(EXCL_ID_BASE + EXCL_ID_STRIDE);
+    // A pool split does NOT re-cluster the kept pixels into the split range.
+    expect(out.labels[rightIdx]).toBe(poolId);
+    expect(out.labels[rightIdx]).toBeLessThan(SPLIT_ID_BASE);
+
+    const totalWeight = out.pools.reduce((s, p) => s + p.descriptor.weight, 0);
+    expect(totalWeight).toBeCloseTo(1, 5);
+  });
+
+  it("a pool split with no exclusions is a no-op", () => {
+    const { img, W, H } = twoToneImage();
+    const base = segmentImage(img, W, H, OPTS);
+    const poolId = base.pools[0].id;
+    const split: SplitEdit = {
+      id: "lp2", nx: 0.5, ny: 0.5, radius: 0, partCount: 2,
+      baseId: SPLIT_ID_BASE, poolId,
+    };
+    const out = applySplits(base, img, [split], OPTS);
+    expect(Array.from(out.labels)).toEqual(Array.from(base.labels));
+  });
+
+  it("touches only the named pool, leaving other pools alone", () => {
+    const { img, W, H } = twoToneImage();
+    const base = segmentImage(img, W, H, { ...OPTS, poolCount: 2 });
+    const leftIdx = 32 * W + 12, rightIdx = 32 * W + 52;
+    const redPool = base.labels[leftIdx];
+    const bluePool = base.labels[rightIdx];
+    expect(redPool).not.toBe(bluePool);
+
+    const split: SplitEdit = {
+      id: "lp3", nx: 0.5, ny: 0.5, radius: 0, partCount: 2,
+      baseId: SPLIT_ID_BASE, poolId: redPool,
+      colorExclusions: [
+        { id: "ex1", labL: 53, labA: 61, labB: 46, tol: 40, exclBaseId: EXCL_ID_BASE, macroId: 1 },
+      ],
+    };
+    const out = applySplits(base, img, [split], OPTS);
+    expect(out.labels[rightIdx]).toBe(bluePool); // blue pool untouched
+    expect(out.labels[leftIdx]).toBeGreaterThanOrEqual(EXCL_ID_BASE); // red carved
+  });
+});
